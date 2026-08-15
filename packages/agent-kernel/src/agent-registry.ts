@@ -4,6 +4,8 @@ import type { AgentSessionEventV1, CandidateId, RunId } from "@mn/agent-protocol
 
 import type { AgentSession as Session } from "@mn/agent-session";
 
+import { withAgentRunLease } from "./run-lease.js";
+
 export type AgentRunReason = "completed" | "cancelled" | "budget-exceeded" | "error";
 
 export interface AgentRunInput {
@@ -64,21 +66,11 @@ export interface RoutedAgentRunInput extends AgentRunInput {
 }
 
 export class AgentKernel {
-  private readonly activeSessionIds = new Set<string>();
-
   constructor(private readonly registry: AgentRegistry) {}
 
   async run(input: RoutedAgentRunInput): Promise<AgentRunResult> {
     const executor = this.registry.require(input.agentId);
     const sessionId = input.session.header.sessionId;
-    if (this.activeSessionIds.has(sessionId)) {
-      throw new Error(`session "${sessionId}" already has an active agent run`);
-    }
-    this.activeSessionIds.add(sessionId);
-    try {
-      return await executor.run(input);
-    } finally {
-      this.activeSessionIds.delete(sessionId);
-    }
+    return withAgentRunLease(sessionId, "kernel", () => executor.run(input));
   }
 }

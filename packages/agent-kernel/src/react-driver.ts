@@ -21,6 +21,7 @@ import { projectSession } from "@mn/agent-session";
 import type { ToolRegistry } from "@mn/agent-tools";
 
 import type { AgentRunInput, AgentRunResult } from "./agent-registry.js";
+import { withAgentRunLease } from "./run-lease.js";
 import type { StaticSystemPrompt } from "./system-prompt.js";
 import { runToolStep } from "./tool-step.js";
 
@@ -52,7 +53,11 @@ export class ReactDriver {
     private readonly systemPrompt: StaticSystemPrompt
   ) {}
 
-  async run(input: AgentRunInput): Promise<AgentRunResult> {
+  run(input: AgentRunInput): Promise<AgentRunResult> {
+    return withAgentRunLease(input.session.header.sessionId, "driver", () => this.runExclusive(input));
+  }
+
+  private async runExclusive(input: AgentRunInput): Promise<AgentRunResult> {
     const maxSteps = input.maxSteps ?? DEFAULT_MAX_STEPS;
     const maxToolCalls = input.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
     assertBudget("maxSteps", maxSteps, false);

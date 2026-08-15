@@ -37,6 +37,30 @@ export class ToolExecutionError extends Error {
   }
 }
 
+function snapshotToolInvocation(invocation: ToolInvocation): ToolInvocation {
+  if (invocation === null || typeof invocation !== "object" || Array.isArray(invocation)) {
+    throw new ToolExecutionError("Invalid tool invocation", "INVALID_ARGUMENTS");
+  }
+  const name = invocation.name;
+  const argumentsJson = invocation.arguments;
+  const suppliedContext = invocation.context;
+  if (suppliedContext === null || typeof suppliedContext !== "object" || Array.isArray(suppliedContext)) {
+    throw new ToolExecutionError("Invalid tool invocation", "INVALID_ARGUMENTS");
+  }
+  const sessionId = suppliedContext.sessionId;
+  const signal = suppliedContext.signal;
+  if (typeof name !== "string" || typeof argumentsJson !== "string"
+    || typeof sessionId !== "string" || sessionId.length === 0
+    || (signal !== undefined && !(signal instanceof AbortSignal))) {
+    throw new ToolExecutionError("Invalid tool invocation", "INVALID_ARGUMENTS");
+  }
+  const context = deepFreeze({
+    sessionId,
+    ...(signal === undefined ? {} : { signal })
+  });
+  return deepFreeze({ name, arguments: argumentsJson, context });
+}
+
 function assertToolNotCancelled(signal: AbortSignal | undefined): void {
   if (signal?.aborted === true) {
     throw new ToolExecutionError("Tool execution cancelled", "TOOL_CANCELLED");
@@ -92,7 +116,8 @@ export class ToolRegistry {
   }
 
   execute(invocation: ToolInvocation): Promise<JsonValue> {
-    const operation = this.tail.then(() => this.executeSerial(invocation));
+    const snapshot = snapshotToolInvocation(invocation);
+    const operation = this.tail.then(() => this.executeSerial(snapshot));
     this.tail = operation.then(() => undefined, () => undefined);
     return operation;
   }
@@ -118,14 +143,6 @@ export class ToolRegistry {
     }
     deepFreeze(authorizationArgs);
     deepFreeze(handlerArgs);
-    const authorizationContext = deepFreeze({
-      sessionId: invocationContext.sessionId,
-      ...(signal === undefined ? {} : { signal })
-    });
-    const handlerContext = deepFreeze({
-      sessionId: invocationContext.sessionId,
-      ...(signal === undefined ? {} : { signal })
-    });
     assertToolNotCancelled(signal);
     let decision: "approve" | "deny";
     try {
@@ -133,7 +150,7 @@ export class ToolRegistry {
         name: tool.name,
         risk: tool.risk,
         args: authorizationArgs,
-        context: authorizationContext
+        context: invocationContext
       })).decision;
     } catch {
       assertToolNotCancelled(signal);
@@ -143,13 +160,12 @@ export class ToolRegistry {
     if (decision !== "approve") throw new ToolExecutionError("Tool execution denied", "TOOL_DENIED");
     assertToolNotCancelled(signal);
     try {
-      const result = await tool.execute(handlerArgs, handlerContext);
+      const result = await tool.execute(handlerArgs, invocationContext);
       assertToolNotCancelled(signal);
       const snapshot = snapshotJsonValue(result);
       if (snapshot === undefined) throw new Error("non-JSON tool result");
       return snapshot;
     } catch (error: unknown) {
-      if (error instanceof ToolExecutionError && error.code === "TOOL_CANCELLED") throw error;
       assertToolNotCancelled(signal);
       throw new ToolExecutionError("Tool execution failed", "TOOL_EXECUTION_FAILED");
     }

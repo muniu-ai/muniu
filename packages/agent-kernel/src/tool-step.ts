@@ -99,7 +99,9 @@ export async function runToolStep(options: ToolStepOptions): Promise<ToolStepRes
     });
     text = JSON.stringify(result);
   } catch (cause: unknown) {
-    const code = cause instanceof ToolExecutionError ? cause.code : "TOOL_EXECUTION_FAILED";
+    const code = cause instanceof ToolExecutionError && String(cause.code) !== "TOOL_CANCELLED"
+      ? cause.code
+      : "TOOL_EXECUTION_FAILED";
     error = { name: "ToolExecutionError", code };
     text = `Tool execution failed (${code}).`;
   }

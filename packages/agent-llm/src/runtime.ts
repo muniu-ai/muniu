@@ -20,6 +20,10 @@ function safeProviderFailure(failure: LlmFailure): LlmFailure {
   };
 }
 
+function isAborted(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true;
+}
+
 export class LlmRuntime {
   private readonly adapters = new Map<string, LlmAdapter>();
   private sealed = false;
@@ -53,9 +57,28 @@ export class LlmRuntime {
   async *stream(request: LlmRequest): AsyncIterable<StreamChunk> {
     const adapter = this.adapters.get(request.provider);
     if (adapter === undefined) throw new Error(`LLM adapter "${request.provider}" is not registered`);
+    const signal = request.signal;
     let terminalEmitted = false;
+    if (isAborted(signal)) {
+      terminalEmitted = true;
+      yield {
+        type: "error",
+        error: { code: "LLM_CANCELLED", message: "Model stream cancelled" }
+      };
+      yield { type: "finish", reason: "cancelled" };
+      return;
+    }
     try {
       for await (const chunk of adapter.stream(request)) {
+        if (isAborted(signal)) {
+          terminalEmitted = true;
+          yield {
+            type: "error",
+            error: { code: "LLM_CANCELLED", message: "Model stream cancelled" }
+          };
+          yield { type: "finish", reason: "cancelled" };
+          return;
+        }
         if (chunk.type === "error") {
           yield { type: "error", error: safeProviderFailure(chunk.error) };
           terminalEmitted = true;
@@ -66,7 +89,7 @@ export class LlmRuntime {
         yield chunk;
         if (chunk.type === "finish") return;
       }
-      if (request.signal?.aborted === true) {
+      if (isAborted(signal)) {
         yield {
           type: "error",
           error: { code: "LLM_CANCELLED", message: "Model stream cancelled" }
@@ -79,7 +102,7 @@ export class LlmRuntime {
       yield { type: "finish", reason: "stop" };
     } catch {
       if (terminalEmitted) return;
-      const cancelled = request.signal?.aborted === true;
+      const cancelled = isAborted(signal);
       yield {
         type: "error",
         error: {

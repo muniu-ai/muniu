@@ -231,6 +231,86 @@ test("LLM runtime emits one cancelled terminal when an aborted stream exhausts n
   assert.equal(chunks.filter((chunk) => chunk.type === "finish").length, 1);
 });
 
+test("LLM runtime does not dispatch a pre-aborted request", async () => {
+  const controller = new AbortController();
+  controller.abort();
+  let dispatches = 0;
+  const runtime = new LlmRuntime();
+  runtime.register({
+    id: "pre-abort",
+    stream(): AsyncIterable<StreamChunk> {
+      dispatches += 1;
+      throw new Error("pre-aborted adapter must not be called");
+    }
+  });
+
+  const chunks = await collect(runtime.stream({
+    ...request,
+    provider: "pre-abort",
+    signal: controller.signal
+  }));
+  assert.equal(dispatches, 0);
+  assert.deepEqual(chunks, [
+    { type: "error", error: { code: "LLM_CANCELLED", message: "Model stream cancelled" } },
+    { type: "finish", reason: "cancelled" }
+  ]);
+});
+
+test("LLM runtime drops a chunk completed after mid-stream abort and closes the adapter iterator", async () => {
+  const controller = new AbortController();
+  let secondNextStarted!: () => void;
+  const secondNext = new Promise<void>((resolve) => { secondNextStarted = resolve; });
+  let releaseSecondNext!: () => void;
+  const secondNextGate = new Promise<void>((resolve) => { releaseSecondNext = resolve; });
+  let nextCalls = 0;
+  let closeCalls = 0;
+  const runtime = new LlmRuntime();
+  runtime.register({
+    id: "mid-abort",
+    stream(): AsyncIterable<StreamChunk> {
+      const iterator: AsyncIterableIterator<StreamChunk> = {
+        async next() {
+          nextCalls += 1;
+          if (nextCalls === 1) {
+            return { done: false, value: { type: "text-delta", index: 0, text: "accepted" } };
+          }
+          if (nextCalls === 2) {
+            secondNextStarted();
+            await secondNextGate;
+            return { done: false, value: { type: "text-delta", index: 0, text: "must-drop" } };
+          }
+          return { done: false, value: { type: "finish", reason: "stop" } };
+        },
+        async return() {
+          closeCalls += 1;
+          return { done: true, value: undefined };
+        },
+        [Symbol.asyncIterator]() { return this; }
+      };
+      return iterator;
+    }
+  });
+
+  const collecting = collect(runtime.stream({
+    ...request,
+    provider: "mid-abort",
+    signal: controller.signal
+  }));
+  await secondNext;
+  controller.abort();
+  releaseSecondNext();
+  const chunks = await collecting;
+
+  assert.deepEqual(chunks, [
+    { type: "text-delta", index: 0, text: "accepted" },
+    { type: "error", error: { code: "LLM_CANCELLED", message: "Model stream cancelled" } },
+    { type: "finish", reason: "cancelled" }
+  ]);
+  assert.equal(nextCalls, 2);
+  assert.equal(closeCalls, 1);
+  assert.equal(chunks.filter((chunk) => chunk.type === "finish").length, 1);
+});
+
 test("LLM runtime seals a stable adapter facade and its original disposer", async () => {
   let streamed = "none";
   let disposed = "none";

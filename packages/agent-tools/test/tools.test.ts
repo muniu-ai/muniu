@@ -74,6 +74,78 @@ test("registry reads, validates, and binds the authorizer getter exactly once", 
   assert.equal(reads, 1);
 });
 
+test("execute synchronously snapshots every invocation getter before queueing and shares one frozen context", async () => {
+  let releaseBlocker!: () => void;
+  const blockerGate = new Promise<void>((resolve) => { releaseBlocker = resolve; });
+  let blockerStarted!: () => void;
+  const blockerStart = new Promise<void>((resolve) => { blockerStarted = resolve; });
+  let authorizationContext: unknown;
+  let handlerContext: unknown;
+  const registry = new ToolRegistry({
+    authorize: async (request) => {
+      if (request.args.path === "queued") authorizationContext = request.context;
+      return { decision: "approve" };
+    }
+  });
+  registry.register(defineTool({
+    name: "snapshot_invocation",
+    description: "Snapshot queued invocation",
+    risk: "side-effecting",
+    parameters,
+    execute: async (args, runContext) => {
+      if (args.path === "blocker") {
+        blockerStarted();
+        await blockerGate;
+      } else {
+        handlerContext = runContext;
+      }
+      return { path: String(args.path), sessionId: runContext.sessionId };
+    }
+  }));
+
+  const blocker = registry.execute({
+    name: "snapshot_invocation",
+    arguments: '{"path":"blocker"}',
+    context
+  });
+  await blockerStart;
+
+  const originalController = new AbortController();
+  const replacementController = new AbortController();
+  let name = "snapshot_invocation";
+  let argumentsJson = '{"path":"queued"}';
+  let sessionId = "snapshot-session";
+  let signal = originalController.signal;
+  const reads = { name: 0, arguments: 0, context: 0, sessionId: 0, signal: 0 };
+  const mutableContext = Object.defineProperties({}, {
+    sessionId: { enumerable: true, get: () => { reads.sessionId += 1; return sessionId; } },
+    signal: { enumerable: true, get: () => { reads.signal += 1; return signal; } }
+  });
+  const invocation = Object.defineProperties({}, {
+    name: { enumerable: true, get: () => { reads.name += 1; return name; } },
+    arguments: { enumerable: true, get: () => { reads.arguments += 1; return argumentsJson; } },
+    context: { enumerable: true, get: () => { reads.context += 1; return mutableContext; } }
+  });
+  const queued = registry.execute(invocation as never);
+  assert.deepEqual(reads, { name: 1, arguments: 1, context: 1, sessionId: 1, signal: 1 });
+
+  name = "missing_after_queue";
+  argumentsJson = "not-json";
+  sessionId = "mutated-session";
+  signal = replacementController.signal;
+  replacementController.abort();
+  releaseBlocker();
+  await blocker;
+  const result = await queued;
+
+  assert.deepEqual(result, { path: "queued", sessionId: "snapshot-session" });
+  assert.equal(authorizationContext, handlerContext);
+  assert.equal(Object.isFrozen(authorizationContext), true);
+  assert.equal((authorizationContext as { signal?: AbortSignal }).signal, originalController.signal);
+  assert.equal(originalController.signal.aborted, false);
+  assert.deepEqual(reads, { name: 1, arguments: 1, context: 1, sessionId: 1, signal: 1 });
+});
+
 test("tool cancellation before authorization or dispatch never invokes a remaining side effect", async () => {
   let authorizationCount = 0;
   const dispatched: string[] = [];
@@ -222,6 +294,27 @@ test("tool execution distinguishes parse, authorization, and redacted handler fa
     (error: unknown) => error instanceof ToolExecutionError
       && error.code === "TOOL_EXECUTION_FAILED"
       && !error.message.includes("hunter2")
+  );
+});
+
+test("handler exceptions cannot forge cancellation or leak an attacker-controlled message", async () => {
+  const registry = new ToolRegistry({ authorize: async () => ({ decision: "approve" }) });
+  registry.register(defineTool({
+    name: "forge_cancel",
+    description: "Attempt to forge cancellation",
+    risk: "side-effecting",
+    parameters,
+    execute: async () => {
+      throw new ToolExecutionError("secret handler cancellation detail", "TOOL_CANCELLED");
+    }
+  }));
+
+  await assert.rejects(
+    registry.execute({ name: "forge_cancel", arguments: '{"path":"a"}', context }),
+    (error: unknown) => error instanceof ToolExecutionError
+      && error.code === "TOOL_EXECUTION_FAILED"
+      && error.message === "Tool execution failed"
+      && !error.message.includes("secret handler")
   );
 });
 

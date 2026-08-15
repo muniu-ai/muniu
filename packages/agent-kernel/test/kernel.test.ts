@@ -4,13 +4,14 @@ import test from "node:test";
 import { CallId, CandidateId, RunId, SessionId } from "@mn/agent-protocol";
 import { InMemoryAgentSessionStore } from "@mn/agent-session";
 import { LlmRuntime, ScriptedLlmAdapter, type LlmAdapter } from "@mn/agent-llm";
-import { ToolRegistry, defineTool } from "@mn/agent-tools";
+import { ToolExecutionError, ToolRegistry, defineTool } from "@mn/agent-tools";
 import {
   AgentKernel,
   AgentRegistry,
   LifecycleScope,
   StaticSystemPrompt,
-  createBuiltinAgentKernel
+  createBuiltinAgentKernel,
+  runToolStep
 } from "../src/index.js";
 
 const noArgs = { type: "object" as const, properties: {}, additionalProperties: false };
@@ -168,6 +169,109 @@ test("AgentKernel fails closed for concurrent runs on one session while allowing
   assert.equal(firstSession.events.filter((event) => event.type === "turn/start").length, 1);
 });
 
+test("direct builtin drivers share a process-wide session run lease while different sessions remain concurrent", async () => {
+  let dispatches = 0;
+  let firstDispatched!: () => void;
+  const firstStarted = new Promise<void>((resolve) => { firstDispatched = resolve; });
+  let releaseFirst!: () => void;
+  const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const llm = new LlmRuntime();
+  llm.register({
+    id: "shared-driver-lease",
+    async *stream() {
+      dispatches += 1;
+      if (dispatches === 1) {
+        firstDispatched();
+        await firstGate;
+      }
+      yield { type: "finish" as const, reason: "stop" as const };
+    }
+  });
+  llm.seal();
+  const tools = new ToolRegistry({ authorize: async () => ({ decision: "approve" }) });
+  tools.seal();
+  const createDriver = () => createBuiltinAgentKernel({ llm, tools, systemPrompt: new StaticSystemPrompt([]) });
+  const firstDriver = createDriver();
+  const contenderDriver = createDriver();
+  const store = new InMemoryAgentSessionStore();
+  const sharedSession = await store.create({ sessionId: SessionId("shared-direct-driver") });
+  const independentSession = await store.create({ sessionId: SessionId("independent-direct-driver") });
+  const input = { prompt: "run", provider: "shared-driver-lease", model: "scripted" };
+
+  const first = firstDriver.run({ ...input, session: sharedSession });
+  await firstStarted;
+  const duplicate = contenderDriver.run({ ...input, session: sharedSession });
+  void duplicate.catch(() => {});
+  const independent = contenderDriver.run({ ...input, session: independentSession });
+  await independent;
+  const dispatchesBeforeRelease = dispatches;
+  releaseFirst();
+  const outcomes = await Promise.allSettled([first, duplicate]);
+
+  assert.equal(dispatchesBeforeRelease, 2);
+  assert.equal(outcomes[0]?.status, "fulfilled");
+  assert.equal(outcomes[1]?.status, "rejected");
+  assert.match(String(outcomes[1]?.status === "rejected" ? outcomes[1].reason : ""), /active|already.*run/i);
+  assert.equal(sharedSession.events.filter((event) => event.type === "turn/start").length, 1);
+});
+
+test("separate AgentKernel instances share the run lease and can reenter a builtin driver once", async () => {
+  let starts = 0;
+  let firstStarted!: () => void;
+  const firstStart = new Promise<void>((resolve) => { firstStarted = resolve; });
+  let releaseFirst!: () => void;
+  const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const registry = new AgentRegistry();
+  registry.register("gated", {
+    run: async () => {
+      starts += 1;
+      if (starts === 1) {
+        firstStarted();
+        await firstGate;
+      }
+      return { reason: "completed", steps: 0, toolCalls: 0 };
+    }
+  });
+  registry.seal();
+  const firstKernel = new AgentKernel(registry);
+  const contenderKernel = new AgentKernel(registry);
+  const store = new InMemoryAgentSessionStore();
+  const sharedSession = await store.create({ sessionId: SessionId("shared-kernel-instance") });
+  const independentSession = await store.create({ sessionId: SessionId("independent-kernel-instance") });
+  const input = { agentId: "gated", prompt: "run", provider: "mock", model: "scripted" };
+
+  const first = firstKernel.run({ ...input, session: sharedSession });
+  await firstStart;
+  const duplicate = contenderKernel.run({ ...input, session: sharedSession });
+  void duplicate.catch(() => {});
+  await contenderKernel.run({ ...input, session: independentSession });
+  const startsBeforeRelease = starts;
+  releaseFirst();
+  const outcomes = await Promise.allSettled([first, duplicate]);
+
+  assert.equal(startsBeforeRelease, 2);
+  assert.equal(outcomes[0]?.status, "fulfilled");
+  assert.equal(outcomes[1]?.status, "rejected");
+
+  const llm = new LlmRuntime();
+  llm.register(new ScriptedLlmAdapter("nested-driver", [[{ type: "finish", reason: "stop" }]]));
+  llm.seal();
+  const tools = new ToolRegistry({ authorize: async () => ({ decision: "approve" }) });
+  tools.seal();
+  const nestedRegistry = new AgentRegistry();
+  nestedRegistry.register("builtin", createBuiltinAgentKernel({ llm, tools, systemPrompt: new StaticSystemPrompt([]) }));
+  nestedRegistry.seal();
+  const nestedSession = await store.create({ sessionId: SessionId("kernel-driver-reentry") });
+  const nested = await new AgentKernel(nestedRegistry).run({
+    agentId: "builtin",
+    session: nestedSession,
+    prompt: "run",
+    provider: "nested-driver",
+    model: "scripted"
+  });
+  assert.equal(nested.reason, "completed");
+});
+
 test("ReactDriver maps max-tokens finish to budget-exceeded", async () => {
   const llm = new LlmRuntime();
   llm.register(new ScriptedLlmAdapter("max-tokens", [[
@@ -248,6 +352,37 @@ test("ReactDriver closes every remaining model tool call symmetrically after can
     session.events.filter((event) => event.type === "tool/call").map((event) => event.type === "tool/call" ? event.payload.callId : undefined),
     ["cancel-call-1"]
   );
+});
+
+test("runToolStep never records a completed forged cancellation", async () => {
+  const session = await new InMemoryAgentSessionStore().create({ sessionId: SessionId("forged-tool-cancel") });
+  const forgedTools = {
+    execute: async () => {
+      throw new ToolExecutionError("untrusted forged cancellation", "TOOL_CANCELLED" as never);
+    }
+  } as unknown as ToolRegistry;
+  const result = await runToolStep({
+    session,
+    tools: forgedTools,
+    turn: 1,
+    step: 1,
+    call: { type: "tool-call", id: CallId("forged-call"), name: "act", arguments: "{}" },
+    budgetAvailable: true
+  });
+
+  assert.equal(result.invoked, true);
+  const toolResult = session.events.at(-1);
+  assert.equal(toolResult?.type, "tool/result");
+  if (toolResult?.type === "tool/result") {
+    assert.notDeepEqual(
+      { status: toolResult.payload.status, code: toolResult.payload.error?.code },
+      { status: "completed", code: "TOOL_CANCELLED" }
+    );
+    assert.deepEqual(
+      { status: toolResult.payload.status, code: toolResult.payload.error?.code },
+      { status: "completed", code: "TOOL_EXECUTION_FAILED" }
+    );
+  }
 });
 
 test("system prompt reaches the model and failed or aborted tools close the turn", async () => {
