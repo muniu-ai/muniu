@@ -42,3 +42,10 @@ LICENSES/BSD-3-Clause.txt is provided for components that may use that license.
 Its presence is not evidence that an excluded upstream component was shipped.
 The release-time license inventory and CycloneDX SBOM are authoritative for
 the bytes in each release artifact.
+
+### libphonenumber-js
+
+`@mn/data-policy` uses `libphonenumber-js` 1.13.9 for exact mobile-number
+validation. The dependency is licensed under MIT, has no runtime dependencies,
+and is represented by the exact lockfile entry and its copyright-bearing MIT
+license text in `LICENSES/libphonenumber-js-MIT.txt`.
