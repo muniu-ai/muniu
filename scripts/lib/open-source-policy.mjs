@@ -153,6 +153,9 @@ export function validateAgentCoverageGate({ rootPackage, workspacePackages, ciWo
   }
   const nodeJob = workflow?.jobs?.node;
   const nodeSteps = nodeJob?.steps;
+  const workflowHasCondition = workflow !== null
+    && typeof workflow === "object"
+    && Object.hasOwn(workflow, "if");
   const workflowOverridesRun = workflow !== null
     && typeof workflow === "object"
     && workflow.defaults !== null
@@ -180,7 +183,8 @@ export function validateAgentCoverageGate({ rootPackage, workspacePackages, ciWo
       && !Object.hasOwn(step, "working-directory");
   });
   if (
-    workflowOverridesRun
+    workflowHasCondition
+    || workflowOverridesRun
     || nodeOverridesRun
     || nodeHasCondition
     || nodeSwallowsErrors

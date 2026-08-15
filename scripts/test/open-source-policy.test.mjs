@@ -213,6 +213,13 @@ test("agent coverage policy rejects disabled or error-swallowing CI coverage gat
     .map((workspace) => `npm run test:coverage -w @mn/${workspace}`)
     .join(" && ");
   const invalidWorkflows = [
+    ["workflow if", [
+      "if: false",
+      "jobs:",
+      "  node:",
+      "    steps:",
+      "      - run: npm run test:coverage:agent"
+    ]],
     ["step if", [
       "jobs:",
       "  node:",
