@@ -314,7 +314,7 @@ function isSafeAssignmentMetadataValue(
   value: string,
   quoted: boolean
 ): boolean {
-  if (kind === "number") return !quoted && isJsonNumberLexeme(value);
+  if (kind === "number") return !quoted && isFiniteNonNegativeZeroNumberLexeme(value);
   if (kind === "boolean") return !quoted && (value === "true" || value === "false");
   return isSafeCredentialMetadataValue(kind, value);
 }
@@ -395,6 +395,12 @@ function isJsonNumberLexeme(value: string): boolean {
   return /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$/u.test(value);
 }
 
+function isFiniteNonNegativeZeroNumberLexeme(value: string): boolean {
+  if (!isJsonNumberLexeme(value)) return false;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && !Object.is(parsed, -0);
+}
+
 function hasEncodedSensitiveAssignment(rawToken: string): boolean {
   if (!rawToken.includes("%") && !rawToken.includes("\\")) return false;
   const decoded = decodeKeyRepresentations(rawToken);
@@ -418,7 +424,7 @@ function hasEncodedSensitiveAssignment(rawToken: string): boolean {
     );
   }
   return kind === "numeric-token-metric"
-    && !isJsonNumberLexeme(decoded.slice(delimiterIndex + 1).trim());
+    && !isFiniteNonNegativeZeroNumberLexeme(decoded.slice(delimiterIndex + 1).trim());
 }
 
 function redactAssignments(content: string): string {
@@ -539,7 +545,8 @@ function redactAssignments(content: string): string {
     const marker = SAFE_MARKERS.find((candidate) => content.startsWith(candidate, valueStart));
     const completeMarker = marker !== undefined
       && isCompleteValueMarker(content, valueStart, marker);
-    const safeMetric = kind === "numeric-token-metric" && isJsonNumberLexeme(rawValue);
+    const safeMetric = kind === "numeric-token-metric"
+      && isFiniteNonNegativeZeroNumberLexeme(rawValue);
     const safeMetadata = metadataKind !== undefined
       && isSafeAssignmentMetadataValue(metadataKind, rawValue, false);
     if (!completeMarker && !safeMetric && !safeMetadata) {
@@ -730,6 +737,9 @@ function protectJsonNode(
   if (typeof value === "number") {
     if (!Number.isFinite(value)) throw new TypeError("JSON numbers must be finite");
     if (Object.is(value, -0)) throw new TypeError("JSON numbers cannot contain negative zero");
+    if (Number.isInteger(value) && !Number.isSafeInteger(value)) {
+      throw new TypeError("lossless JSON integers must be safe integers");
+    }
     if (businessRedaction) {
       const representation = String(value);
       if (isMainlandMobile(representation)) return PHONE_MARKER;
@@ -777,6 +787,7 @@ function protectJsonNode(
       if (typeof key === "symbol") throw new TypeError("lossless JSON cannot contain symbol keys");
       addCodeUnits(state, key.length);
       if (DANGEROUS_KEYS.has(key)) throw new TypeError("lossless JSON contains an unsafe object key");
+      if (protectTextLeaf(key, businessRedaction) !== key) return UNSAFE_MARKER;
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
       if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
         throw new TypeError("lossless JSON object fields must be enumerable data properties");
@@ -1059,6 +1070,8 @@ function scanJsonValue(
   }
 
   if (first === "{") {
+    const objectPatches: TextPatch[] = [];
+    let unsafePropertyName = false;
     let index = skipJsonWhitespace(content, valueStart + 1);
     if (content[index] === "}") return index + 1;
     while (index < content.length) {
@@ -1067,12 +1080,14 @@ function scanJsonValue(
       const key = decodeJsonString(content, keyStart, keyEnd);
       addCodeUnits(state, key.length);
       if (DANGEROUS_KEYS.has(key)) throw new TypeError("JSON text contains an unsafe object key");
+      if (protectTextLeaf(key, businessRedaction) !== key) unsafePropertyName = true;
 
       index = skipJsonWhitespace(content, keyEnd);
       if (content[index] !== ":") throw new SyntaxError("expected a JSON object colon");
       const childStart = skipJsonWhitespace(content, index + 1);
       const keyKind = credentialKeyKind(key);
       const metadataKind = credentialMetadataKind(key);
+      const emitObjectPatches = emitPatches && !unsafePropertyName;
       let childEnd: number;
       if (keyKind === "credential") {
         childEnd = scanJsonValue(
@@ -1080,31 +1095,35 @@ function scanJsonValue(
           childStart,
           businessRedaction,
           state,
-          patches,
+          objectPatches,
           false,
           depth + 1
         );
-        if (emitPatches) {
-          patches.push({
+        if (emitObjectPatches) {
+          objectPatches.push({
             start: childStart,
             end: childEnd,
             replacement: encodedJsonMarker(CREDENTIAL_MARKER)
           });
         }
       } else if (keyKind === "numeric-token-metric") {
-        const numericMetric = content[childStart] === "-"
-          || /[0-9]/u.test(content[childStart] ?? "");
+        const numericEnd = content[childStart] === "-"
+          || /[0-9]/u.test(content[childStart] ?? "")
+          ? scanJsonNumberEnd(content, childStart)
+          : childStart;
+        const numericMetric = numericEnd > childStart
+          && isFiniteNonNegativeZeroNumberLexeme(content.slice(childStart, numericEnd));
         childEnd = scanJsonValue(
           content,
           childStart,
           numericMetric ? false : businessRedaction,
           state,
-          patches,
+          objectPatches,
           false,
           depth + 1
         );
-        if (emitPatches && !numericMetric) {
-          patches.push({
+        if (emitObjectPatches && !numericMetric) {
+          objectPatches.push({
             start: childStart,
             end: childEnd,
             replacement: encodedJsonMarker(CREDENTIAL_MARKER)
@@ -1117,12 +1136,12 @@ function scanJsonValue(
           childStart,
           metadataKind === "number" && safeMetadata ? false : businessRedaction,
           state,
-          patches,
-          emitPatches && safeMetadata,
+          objectPatches,
+          emitObjectPatches && safeMetadata,
           depth + 1
         );
-        if (emitPatches && !safeMetadata) {
-          patches.push({
+        if (emitObjectPatches && !safeMetadata) {
+          objectPatches.push({
             start: childStart,
             end: childEnd,
             replacement: encodedJsonMarker(CREDENTIAL_MARKER)
@@ -1134,14 +1153,28 @@ function scanJsonValue(
           childStart,
           businessRedaction,
           state,
-          patches,
-          emitPatches,
+          objectPatches,
+          emitObjectPatches,
           depth + 1
         );
       }
 
       index = skipJsonWhitespace(content, childEnd);
-      if (content[index] === "}") return index + 1;
+      if (content[index] === "}") {
+        const objectEnd = index + 1;
+        if (emitPatches) {
+          if (unsafePropertyName) {
+            patches.push({
+              start: valueStart,
+              end: objectEnd,
+              replacement: encodedJsonMarker(UNSAFE_MARKER)
+            });
+          } else {
+            patches.push(...objectPatches);
+          }
+        }
+        return objectEnd;
+      }
       if (content[index] !== ",") throw new SyntaxError("expected a JSON object comma");
       index = skipJsonWhitespace(content, index + 1);
     }

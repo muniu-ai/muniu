@@ -607,6 +607,123 @@ test("protectText preserves every non-target JSON byte, duplicate key and large 
   );
 });
 
+test("JSON property names fail closed when the name itself contains protected data", () => {
+  const opaque = ["opaque", "-", "auth", "-", "material"].join("");
+  const providerKey = credentialFixtures().providerKey ?? "";
+  const unsafeNames = [
+    `phone:${mainlandMobile}`,
+    `identity:${prcId}`,
+    `password=${opaque}`,
+    providerKey
+  ];
+  for (const key of unsafeNames) {
+    assert.equal(protectJsonValue({ [key]: "ordinary" }), UNSAFE_MARKER);
+    assert.equal(protectText(JSON.stringify({ [key]: "ordinary" })), JSON.stringify(UNSAFE_MARKER));
+  }
+  for (const key of [`password=${opaque}`, providerKey]) {
+    const raw = JSON.stringify({ [key]: "ordinary" });
+    assert.equal(containsCredential(raw), true);
+    assert.equal(containsCredential(protectText(raw)), false);
+  }
+
+  assert.deepEqual(protectJsonValue({
+    outer: { [`password=${opaque}`]: "ordinary" },
+    keep: true
+  }), {
+    outer: UNSAFE_MARKER,
+    keep: true
+  });
+  assert.equal(
+    protectText(`{"outer":{"password=${opaque}":"ordinary"},"keep":true}`),
+    `{"outer":${JSON.stringify(UNSAFE_MARKER)},"keep":true}`
+  );
+
+  const duplicateOrdinaryKey = `{"password":"${opaque}","password":"${opaque}"}`;
+  assert.equal(
+    protectText(duplicateOrdinaryKey, { businessRedaction: false }),
+    `{"password":${JSON.stringify(CREDENTIAL_MARKER)},"password":${JSON.stringify(CREDENTIAL_MARKER)}}`
+  );
+  assert.deepEqual(protectJsonValue({ password: opaque }), { password: CREDENTIAL_MARKER });
+
+  const encodedOrdinaryKey = `{"pass\\u0077ord":"${opaque}"}`;
+  assert.equal(
+    protectText(encodedOrdinaryKey, { businessRedaction: false }),
+    `{"pass\\u0077ord":${JSON.stringify(CREDENTIAL_MARKER)}}`
+  );
+  const encodedUnsafeKey = `{"pass\\u0077ord=${opaque}":"ordinary"}`;
+  assert.equal(
+    protectText(encodedUnsafeKey, { businessRedaction: false }),
+    JSON.stringify(UNSAFE_MARKER)
+  );
+  assert.equal(containsCredential(encodedUnsafeKey), true);
+});
+
+test("protectJsonValue rejects every non-safe integer before business classification", () => {
+  const numericIdentity = Array.from({ length: 999 }, (_value, index) =>
+    makePrcId("110105", "19900101", String(index + 1).padStart(3, "0")))
+    .find((identity) => /^[0-9]{18}$/u.test(identity));
+  assert.notEqual(numericIdentity, undefined);
+  const roundedIdentity = JSON.parse(numericIdentity ?? "0") as number;
+  assert.equal(Number.isInteger(roundedIdentity), true);
+  assert.equal(Number.isSafeInteger(roundedIdentity), false);
+
+  for (const value of [
+    Number.MAX_SAFE_INTEGER + 1,
+    Number.MIN_SAFE_INTEGER - 1,
+    roundedIdentity
+  ]) {
+    assert.throws(() => protectJsonValue(value), /safe integer|lossless/i);
+    assert.throws(() => protectJsonValue({ nested: value }), /safe integer|lossless/i);
+  }
+
+  assert.deepEqual(protectJsonValue({
+    max: Number.MAX_SAFE_INTEGER,
+    min: Number.MIN_SAFE_INTEGER,
+    fraction: 1.25
+  }), {
+    max: Number.MAX_SAFE_INTEGER,
+    min: Number.MIN_SAFE_INTEGER,
+    fraction: 1.25
+  });
+});
+
+test("numeric credential metadata accepts only finite non-negative-zero numeric scalars", () => {
+  for (const key of ["tokenUsage", "tokens", "inputTokens"]) {
+    for (const invalid of ["-0", "1e999", "NaN"]) {
+      assert.equal(
+        protectText(`${key}=${invalid}`, { businessRedaction: false }),
+        `${key}=${CREDENTIAL_MARKER}`
+      );
+    }
+    assert.equal(
+      protectText(`${key}="12"`, { businessRedaction: false }),
+      `${key}="${CREDENTIAL_MARKER}"`
+    );
+    for (const valid of ["0", "-1", "1.5"]) {
+      assert.equal(
+        protectText(`${key}=${valid}`, { businessRedaction: false }),
+        `${key}=${valid}`
+      );
+    }
+
+    for (const invalid of ["-0", "1e999", '"12"']) {
+      assert.equal(
+        protectText(`{"${key}":${invalid}}`, { businessRedaction: false }),
+        `{"${key}":${JSON.stringify(CREDENTIAL_MARKER)}}`
+      );
+    }
+    assert.equal(
+      protectText(`{"${key}":1.5}`, { businessRedaction: false }),
+      `{"${key}":1.5}`
+    );
+
+    assert.throws(() => protectJsonValue({ [key]: -0 }), /negative zero|lossless/i);
+    assert.throws(() => protectJsonValue({ [key]: Number.POSITIVE_INFINITY }), /finite|lossless/i);
+    assert.deepEqual(protectJsonValue({ [key]: "12" }), { [key]: CREDENTIAL_MARKER });
+    assert.deepEqual(protectJsonValue({ [key]: 1.5 }), { [key]: 1.5 });
+  }
+});
+
 test("containsCredential reuses JSON-aware credential-only protection", () => {
   const fixtures = [
     '"Bearer x"',
