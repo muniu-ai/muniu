@@ -6,6 +6,7 @@ import {
   link,
   mkdir,
   mkdtemp,
+  open,
   readFile,
   readdir,
   realpath,
@@ -18,6 +19,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   CallId,
@@ -46,6 +48,12 @@ import { acquireOsWriterLock, resolveWriterLockHelper } from "../src/writer-lock
 const CHILD_PROCESS_ENV = { ...process.env };
 delete CHILD_PROCESS_ENV.NODE_V8_COVERAGE;
 delete CHILD_PROCESS_ENV.NODE_TEST_CONTEXT;
+
+function fixedWriterLockRoot(ownerUid: number | undefined): string {
+  assert.equal(typeof ownerUid, "number");
+  const temporaryRoot = process.platform === "darwin" ? "/private/tmp" : "/tmp";
+  return path.join(temporaryRoot, `muniu-agent-session-writer-locks-${String(ownerUid)}`);
+}
 
 const CHILD_STORE_SCRIPT = String.raw`
 const [moduleUrl, root, sessionId, command] = process.argv.slice(1);
@@ -89,6 +97,51 @@ try {
 }
 `;
 
+const CHILD_GATED_APPEND_SCRIPT = String.raw`
+const [moduleUrl, root, sessionId] = process.argv.slice(1);
+const { JsonlAgentSessionStore } = await import(moduleUrl);
+const store = new JsonlAgentSessionStore(root, {
+  beforeAppend: async (event) => {
+    if (event.type !== "turn/start") return;
+    process.stdout.write("BEFORE_APPEND\n");
+    await new Promise((resolve) => process.stdin.once("data", resolve));
+  }
+});
+try {
+  const session = await store.open(sessionId);
+  try {
+    await session.append("turn/start", { turn: 1 });
+    process.stdout.write("APPEND_OK\n");
+  } catch (error) {
+    process.stdout.write("APPEND_FAILED " + (error instanceof Error ? error.message : String(error)) + "\n");
+  }
+  await new Promise((resolve) => process.stdin.once("data", resolve));
+} catch (error) {
+  process.stderr.write("BLOCKED " + (error instanceof Error ? error.message : String(error)) + "\n");
+  process.exitCode = 23;
+} finally {
+  try { await store.dispose(); } catch (error) {
+    process.stderr.write("DISPOSE_FAILED " + (error instanceof Error ? error.message : String(error)) + "\n");
+  }
+}
+`;
+
+const CHILD_APPEND_ONCE_SCRIPT = String.raw`
+const [moduleUrl, root, sessionId] = process.argv.slice(1);
+const { JsonlAgentSessionStore } = await import(moduleUrl);
+const store = new JsonlAgentSessionStore(root);
+try {
+  const session = await store.open(sessionId);
+  await session.append("turn/start", { turn: 1 });
+  process.stdout.write("APPENDED\n");
+} catch (error) {
+  process.stderr.write("BLOCKED " + (error instanceof Error ? error.message : String(error)) + "\n");
+  process.exitCode = 23;
+} finally {
+  try { await store.dispose(); } catch {}
+}
+`;
+
 function spawnStoreProcess(root: string, sessionId: SessionId, command: "create-hold" | "hold" | "try"):
 ChildProcessWithoutNullStreams {
   return spawn(process.execPath, [
@@ -102,14 +155,60 @@ ChildProcessWithoutNullStreams {
   ], { env: CHILD_PROCESS_ENV, stdio: ["pipe", "pipe", "pipe"] });
 }
 
-function spawnWriterLockProcess(identity: string): ChildProcessWithoutNullStreams {
+function spawnWriterLockProcess(
+  identity: string,
+  env: NodeJS.ProcessEnv = CHILD_PROCESS_ENV
+): ChildProcessWithoutNullStreams {
   return spawn(process.execPath, [
     "--input-type=module",
     "--eval",
     CHILD_WRITER_LOCK_SCRIPT,
     new URL("../src/writer-lock.js", import.meta.url).href,
     identity
+  ], { env, stdio: ["pipe", "pipe", "pipe"] });
+}
+
+function spawnGatedAppendProcess(root: string, sessionId: SessionId): ChildProcessWithoutNullStreams {
+  return spawn(process.execPath, [
+    "--input-type=module",
+    "--eval",
+    CHILD_GATED_APPEND_SCRIPT,
+    new URL("../src/index.js", import.meta.url).href,
+    root,
+    sessionId
   ], { env: CHILD_PROCESS_ENV, stdio: ["pipe", "pipe", "pipe"] });
+}
+
+function spawnAppendOnceProcess(root: string, sessionId: SessionId): ChildProcessWithoutNullStreams {
+  return spawn(process.execPath, [
+    "--input-type=module",
+    "--eval",
+    CHILD_APPEND_ONCE_SCRIPT,
+    new URL("../src/index.js", import.meta.url).href,
+    root,
+    sessionId
+  ], { env: CHILD_PROCESS_ENV, stdio: ["pipe", "pipe", "pipe"] });
+}
+
+function findDirectLockHelper(parentPid: number, lockDigest: string): number {
+  const result = spawnSync("/bin/ps", ["-axo", "pid=,ppid=,command="], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  for (const line of result.stdout.split("\n")) {
+    const match = /^\s*(\d+)\s+(\d+)\s+(.+)$/u.exec(line);
+    if (match === null || Number(match[2]) !== parentPid || !match[3]?.includes(lockDigest)) continue;
+    return Number(match[1]);
+  }
+  throw new Error(`could not find lock helper ${lockDigest} for process ${String(parentPid)}`);
+}
+
+async function waitForProcessDeath(pid: number, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const result = spawnSync("/bin/ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" });
+    if (result.status !== 0 || result.stdout.trim() === "" || result.stdout.trim().startsWith("Z")) return;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  throw new Error(`process ${String(pid)} did not exit within ${String(timeoutMs)}ms`);
 }
 
 async function waitForChildOutput(
@@ -391,6 +490,11 @@ test("JSONL store persists mode 0700/0600 and reopens a verified session", async
   await chmod(root, 0o777);
   const store = new JsonlAgentSessionStore(root);
   const session = await store.create({ sessionId: SessionId("disk-session"), cwd: "/tmp/project" });
+  const liveEventStat = await stat(path.join(root, "sessions", "disk-session", "events.jsonl"));
+  const liveInodeDigest = createHash("sha256")
+    .update(`inode:${String(liveEventStat.dev)}:${String(liveEventStat.ino)}`)
+    .digest("hex");
+  const liveHelperPid = findDirectLockHelper(process.pid, liveInodeDigest);
   await session.append("turn/start", { turn: 1 });
   await session.flush();
 
@@ -401,11 +505,31 @@ test("JSONL store persists mode 0700/0600 and reopens a verified session", async
   assert.equal((await stat(path.join(sessionDir, "events.jsonl"))).mode & 0o777, 0o600);
 
   await store.dispose();
+  await waitForProcessDeath(liveHelperPid);
   const reopenStore = new JsonlAgentSessionStore(root);
   const reopened = await reopenStore.open(SessionId("disk-session"));
   assert.equal(reopened.header.cwd, "/tmp/project");
   assert.deepEqual(reopened.events.map((event) => event.type), ["session/created", "turn/start"]);
   await reopenStore.dispose();
+});
+
+test("JSONL helper serializes concurrent appends and reopens one verified chain", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "muniu-session-helper-concurrency-"));
+  const sessionId = SessionId("helper-concurrency-session");
+  const store = new JsonlAgentSessionStore(root);
+  const session = await store.create({ sessionId });
+  await Promise.all(Array.from(
+    { length: 32 },
+    (_entry, index) => session.append("turn/start", { turn: index + 1 })
+  ));
+  await session.flush();
+  await store.dispose();
+
+  const reopenedStore = new JsonlAgentSessionStore(root);
+  const reopened = await reopenedStore.open(sessionId);
+  assert.deepEqual(reopened.events.map((event) => event.seq), Array.from({ length: 33 }, (_entry, index) => index));
+  assert.doesNotThrow(() => verifyAgentSessionEventChain(reopened.events));
+  await reopenedStore.dispose();
 });
 
 test("JSONL load truncates a torn final line but fails closed on middle corruption", async () => {
@@ -512,6 +636,104 @@ test("JSONL stores enforce one canonical in-process writer and coalesce concurre
   await creating.dispose();
 });
 
+test("OS writer locks cannot fork when Node processes use different TMPDIR values", async () => {
+  assert.match(process.version, /^v22\.19\./u);
+  const temporaryA = await mkdtemp(path.join(os.tmpdir(), "muniu-lock-root-a-"));
+  const temporaryB = await mkdtemp(path.join(os.tmpdir(), "muniu-lock-root-b-"));
+  const identity = `tmpdir-independent:${crypto.randomUUID()}`;
+  const environmentFor = (temporary: string): NodeJS.ProcessEnv => ({
+    ...CHILD_PROCESS_ENV,
+    TMPDIR: temporary,
+    TMP: temporary,
+    TEMP: temporary
+  });
+  const holder = spawnWriterLockProcess(identity, environmentFor(temporaryA));
+  let contender: ChildProcessWithoutNullStreams | undefined;
+  try {
+    await waitForChildOutput(holder, "stdout", /ACQUIRED/u);
+    contender = spawnWriterLockProcess(identity, environmentFor(temporaryB));
+    assert.equal(await waitForChildDecision(contender), "blocked");
+  } finally {
+    holder.stdin.end("release\n");
+    contender?.stdin.end("release\n");
+    await Promise.allSettled([
+      waitForChildExit(holder),
+      ...(contender === undefined ? [] : [waitForChildExit(contender)])
+    ]);
+    holder.kill("SIGKILL");
+    contender?.kill("SIGKILL");
+  }
+});
+
+test("losing an inode helper cannot let an alias and its former parent fork the event chain", { timeout: 20_000 }, async () => {
+  assert.match(process.version, /^v22\.19\./u);
+  const root = await mkdtemp(path.join(os.tmpdir(), "muniu-session-helper-loss-"));
+  const aliasRoot = await mkdtemp(path.join(os.tmpdir(), "muniu-session-helper-loss-alias-"));
+  const sessionId = SessionId("helper-loss-session");
+  const creator = new JsonlAgentSessionStore(root);
+  await creator.create({ sessionId });
+  await creator.dispose();
+
+  const sourceDirectory = path.join(root, "sessions", sessionId);
+  const aliasDirectory = path.join(aliasRoot, "sessions", sessionId);
+  await mkdir(aliasDirectory, { recursive: true });
+  await link(path.join(sourceDirectory, "header.json"), path.join(aliasDirectory, "header.json"));
+  await link(path.join(sourceDirectory, "events.jsonl"), path.join(aliasDirectory, "events.jsonl"));
+  const eventStat = await stat(path.join(sourceDirectory, "events.jsonl"));
+  const inodeIdentity = `inode:${String(eventStat.dev)}:${String(eventStat.ino)}`;
+  const inodeDigest = createHash("sha256").update(inodeIdentity).digest("hex");
+
+  const original = spawnGatedAppendProcess(root, sessionId);
+  let alias: ChildProcessWithoutNullStreams | undefined;
+  let originalStdout = "";
+  let originalStderr = "";
+  original.stdout.on("data", (chunk: Buffer) => { originalStdout += chunk.toString("utf8"); });
+  original.stderr.on("data", (chunk: Buffer) => { originalStderr += chunk.toString("utf8"); });
+  const waitForOriginal = async (pattern: RegExp): Promise<void> => {
+    const deadline = Date.now() + 5_000;
+    while (!pattern.test(originalStdout) && Date.now() < deadline) {
+      if (original.exitCode !== null || original.signalCode !== null) {
+        throw new Error(`original writer exited early: ${originalStdout} ${originalStderr}`);
+      }
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    assert.match(originalStdout, pattern);
+  };
+
+  try {
+    await waitForOriginal(/BEFORE_APPEND/u);
+    assert.ok(original.pid !== undefined);
+    const helperPid = findDirectLockHelper(original.pid, inodeDigest);
+    process.kill(helperPid, "SIGKILL");
+    await waitForProcessDeath(helperPid);
+
+    alias = spawnAppendOnceProcess(aliasRoot, sessionId);
+    const aliasOutput = await waitForChildOutput(alias, "stdout", /APPENDED/u);
+    assert.match(aliasOutput, /APPENDED/u);
+    assert.equal(await waitForChildExit(alias), 0);
+
+    original.stdin.write("release-append\n");
+    await waitForOriginal(/APPEND_FAILED/u);
+    original.stdin.end("exit\n");
+    await waitForChildExit(original);
+
+    const rows = (await readFile(path.join(sourceDirectory, "events.jsonl"), "utf8"))
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    assert.deepEqual(rows.map((event) => event.seq), [0, 1]);
+    assert.doesNotThrow(() => verifyAgentSessionEventChain(rows));
+
+    const reopenedStore = new JsonlAgentSessionStore(root);
+    const reopened = await reopenedStore.open(sessionId);
+    assert.deepEqual(reopened.events.map((event) => event.seq), [0, 1]);
+    await reopenedStore.dispose();
+  } finally {
+    original.kill("SIGKILL");
+    alias?.kill("SIGKILL");
+  }
+});
+
 test("JSONL OS leases admit only one Node 22 writer across path and event-inode aliases and recover after crash", async () => {
   assert.match(process.version, /^v22\.19\./u);
   const root = await mkdtemp(path.join(os.tmpdir(), "muniu-session-process-lease-"));
@@ -532,7 +754,7 @@ test("JSONL OS leases admit only one Node 22 writer across path and event-inode 
     await waitForChildOutput(holder, "stdout", /ACQUIRED/u);
     const ownerUid = process.getuid?.();
     assert.equal(typeof ownerUid, "number");
-    const lockRoot = path.join(os.tmpdir(), `muniu-agent-session-writer-locks-${String(ownerUid)}`);
+    const lockRoot = fixedWriterLockRoot(ownerUid);
     const lockRootStat = await stat(lockRoot);
     assert.equal(lockRootStat.mode & 0o777, 0o700);
     assert.equal(lockRootStat.uid, ownerUid);
@@ -671,7 +893,7 @@ test("writer lock helpers are fixed, fail closed when missing, and mark an unexp
 
   const ownerUid = process.getuid?.();
   assert.equal(typeof ownerUid, "number");
-  const lockRoot = path.join(os.tmpdir(), `muniu-agent-session-writer-locks-${String(ownerUid)}`);
+  const lockRoot = fixedWriterLockRoot(ownerUid);
   const unsafeIdentity = `unsafe-file:${await mkdtemp(path.join(os.tmpdir(), "muniu-lock-unsafe-"))}`;
   const unsafeDigest = createHash("sha256").update(unsafeIdentity).digest("hex");
   const unsafePath = path.join(lockRoot, `${unsafeDigest}.lock`);
@@ -687,6 +909,51 @@ test("writer lock helpers are fixed, fail closed when missing, and mark an unexp
     await assert.rejects(() => acquireOsWriterLock(unsafeIdentity), /permissions|unsafe/i);
   } finally {
     await unlink(unsafePath);
+  }
+});
+
+test("JSONL fails closed when the compiled event writer helper is missing and recovers after restore", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "muniu-session-missing-writer-helper-"));
+  const sessionId = SessionId("missing-writer-helper-session");
+  const creator = new JsonlAgentSessionStore(root);
+  await creator.create({ sessionId });
+  await creator.dispose();
+
+  const helperPath = fileURLToPath(new URL("../src/event-writer-helper.js", import.meta.url));
+  const hiddenPath = `${helperPath}.missing`;
+  await rename(helperPath, hiddenPath);
+  try {
+    const unavailable = new JsonlAgentSessionStore(root);
+    await assert.rejects(() => unavailable.open(sessionId), /compiled event writer helper.*unavailable/i);
+    await unavailable.dispose();
+  } finally {
+    await rename(hiddenPath, helperPath);
+  }
+
+  const restored = new JsonlAgentSessionStore(root);
+  const reopened = await restored.open(sessionId);
+  assert.deepEqual(reopened.events.map((event) => event.type), ["session/created"]);
+  await restored.dispose();
+});
+
+test("compiled event writer helper rejects non-string operation values", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "muniu-session-writer-protocol-"));
+  const eventHandle = await open(path.join(root, "events.jsonl"), "w+");
+  const helperPath = fileURLToPath(new URL("../src/event-writer-helper.js", import.meta.url));
+  const nonce = crypto.randomUUID();
+  const requestId = crypto.randomUUID();
+  const helper = spawn(process.execPath, [helperPath, "3", nonce], {
+    env: CHILD_PROCESS_ENV,
+    stdio: ["pipe", "pipe", "pipe", eventHandle.fd]
+  }) as unknown as ChildProcessWithoutNullStreams;
+  try {
+    await waitForChildOutput(helper, "stdout", /"status":"ready"/u);
+    helper.stdin.write(`${JSON.stringify({ nonce, requestId, operation: ["append"] })}\n`);
+    assert.notEqual(await waitForChildExit(helper), 0);
+    assert.equal(await readFile(path.join(root, "events.jsonl"), "utf8"), "");
+  } finally {
+    helper.kill("SIGKILL");
+    await eventHandle.close();
   }
 });
 

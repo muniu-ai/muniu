@@ -30,7 +30,12 @@ import { snapshotCreateAgentSessionOptions, type CreateAgentSessionOptionsSnapsh
 import { createInitialAgentSessionState } from "./initial-state.js";
 import { DurableAgentSession } from "./session.js";
 import type { AgentSessionHeaderV1, CreateAgentSessionOptions, EventPersistence } from "./types.js";
-import { acquireOsWriterLock, type OsWriterLock } from "./writer-lock.js";
+import {
+  acquireEventWriterLock,
+  acquireOsWriterLock,
+  type EventWriterLock,
+  type OsWriterLock
+} from "./writer-lock.js";
 
 const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const STAGING_NONCE_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -48,7 +53,7 @@ interface WriterLease {
   readonly osLocks: Map<string, OsWriterLock>;
   directoryHandle?: FileHandle;
   directoryStat?: Stats;
-  eventHandle?: FileHandle;
+  eventWriter?: EventWriterLock;
   eventStat?: Stats;
 }
 
@@ -197,18 +202,11 @@ async function syncDirectory(directoryPath: string): Promise<void> {
   }
 }
 
-async function appendEvent(
+async function loadEvents(
   handle: FileHandle,
-  event: AgentSessionEventV1,
-  verifyIdentity: (fileStat: Stats) => void
-): Promise<void> {
-  const fileStat = await handle.stat();
-  verifyIdentity(fileStat);
-  await handle.writeFile(`${JSON.stringify(event)}\n`, "utf8");
-  await handle.sync();
-}
-
-async function loadEvents(handle: FileHandle, verifyIdentity?: (fileStat: Stats) => void): Promise<AgentSessionEventV1[]> {
+  repairTail: (committedLength: number) => Promise<void>,
+  verifyIdentity?: (fileStat: Stats) => void
+): Promise<AgentSessionEventV1[]> {
   const fileStat = await handle.stat();
   let buffer: Buffer;
   verifyIdentity?.(fileStat);
@@ -216,8 +214,7 @@ async function loadEvents(handle: FileHandle, verifyIdentity?: (fileStat: Stats)
   if (buffer.length > 0 && buffer.at(-1) !== 0x0a) {
     const lastNewline = buffer.lastIndexOf(0x0a);
     const committedLength = lastNewline < 0 ? 0 : lastNewline + 1;
-    await handle.truncate(committedLength);
-    await handle.sync();
+    await repairTail(committedLength);
     buffer = buffer.subarray(0, committedLength);
   }
 
@@ -460,7 +457,7 @@ export class JsonlAgentSessionStore {
     expectedCreation?: CreateAgentSessionOptionsSnapshot
   ): Promise<DurableAgentSession> {
     const paths = this.paths(sessionId);
-    if (lease.directoryHandle !== undefined || lease.eventHandle !== undefined) {
+    if (lease.directoryHandle !== undefined || lease.eventWriter !== undefined) {
       throw new Error("session file descriptors are already bound to this writer lease");
     }
     const directory = await this.openValidatedSessionDirectory(paths.dir, canonicalSessionsRoot, sessionId);
@@ -479,21 +476,56 @@ export class JsonlAgentSessionStore {
       if (error instanceof SymbolicLinkError) throw error;
       throw new Error(`session "${sessionId}" has a corrupt header`, { cause: error });
     }
-    const eventFile = await openRegularNoFollow(paths.events, constants.O_RDWR | constants.O_APPEND);
-    lease.eventHandle = eventFile.handle;
-    lease.eventStat = eventFile.fileStat;
-    await eventFile.handle.chmod(0o600);
-    await this.addFileIdentityLease(lease, eventFile.fileStat, sessionId);
-    this.assertLeaseHeld(lease);
-    await this.assertDirectoryIdentity(paths.dir, directory.stat);
+    const eventReader = await openRegularNoFollow(paths.events, constants.O_RDONLY);
+    let eventWriteHandle: Awaited<ReturnType<typeof openRegularNoFollow>> | undefined;
+    let writeHandleClosed = false;
+    let events: AgentSessionEventV1[] | undefined;
+    let eventFailure: unknown;
+    try {
+      eventWriteHandle = await openRegularNoFollow(paths.events, constants.O_RDWR | constants.O_APPEND);
+      if (eventReader.fileStat.dev !== eventWriteHandle.fileStat.dev
+        || eventReader.fileStat.ino !== eventWriteHandle.fileStat.ino) {
+        throw new Error("durable event file identity changed while descriptors were being bound");
+      }
+      lease.eventStat = eventReader.fileStat;
+      await eventWriteHandle.handle.chmod(0o600);
+      await this.addFileIdentityLease(lease, eventReader.fileStat, sessionId, eventWriteHandle.handle);
+      await eventWriteHandle.handle.close();
+      writeHandleClosed = true;
+      this.assertLeaseHeld(lease);
+      await this.assertDirectoryIdentity(paths.dir, directory.stat);
+      events = await loadEvents(
+        eventReader.handle,
+        (committedLength) => this.eventWriter(lease).truncate(committedLength),
+        (fileStat) => this.assertFileIdentity(lease, fileStat)
+      );
+    } catch (error: unknown) {
+      eventFailure = error;
+    } finally {
+      const closed = await Promise.allSettled([
+        eventReader.handle.close(),
+        ...(eventWriteHandle === undefined || writeHandleClosed ? [] : [eventWriteHandle.handle.close()])
+      ]);
+      const closeErrors = closed.flatMap((result) => result.status === "rejected" ? [result.reason] : []);
+      if (closeErrors.length > 0) {
+        eventFailure = eventFailure === undefined
+          ? new AggregateError(closeErrors, "event file descriptors could not be closed")
+          : new AggregateError(
+            [eventFailure, ...closeErrors],
+            "event file binding and descriptor cleanup failed",
+            { cause: eventFailure }
+          );
+      }
+    }
+    if (eventFailure !== undefined) throw eventFailure;
     const header = validateHeader(parsedHeader, sessionId);
-    const events = await loadEvents(eventFile.handle, (fileStat) => this.assertFileIdentity(lease, fileStat));
-    if (events.length === 0) throw new Error(`session "${sessionId}" has an empty event log`);
-    const created = events[0];
+    const loadedEvents = events as AgentSessionEventV1[];
+    if (loadedEvents.length === 0) throw new Error(`session "${sessionId}" has an empty event log`);
+    const created = loadedEvents[0];
     if (created?.type !== "session/created") {
       throw new Error(`session "${sessionId}" first event must be session/created`);
     }
-    if (events.some((event) => event.sessionId !== header.sessionId)) {
+    if (loadedEvents.some((event) => event.sessionId !== header.sessionId)) {
       throw new Error(`session "${sessionId}" event session id does not match header`);
     }
     if (header.cwd !== created.payload.cwd) {
@@ -507,7 +539,7 @@ export class JsonlAgentSessionStore {
       throw new Error(`session "${sessionId}" already exists with a different creation snapshot`);
     }
     this.assertLease(lease);
-    const session = new DurableAgentSession(header, events, this.persistence(lease));
+    const session = new DurableAgentSession(header, loadedEvents, this.persistence(lease));
     this.sessions.set(sessionId, session);
     return session;
   }
@@ -594,7 +626,12 @@ export class JsonlAgentSessionStore {
     }
   }
 
-  private async addFileIdentityLease(lease: WriterLease, fileStat: Stats, sessionId: SessionId): Promise<void> {
+  private async addFileIdentityLease(
+    lease: WriterLease,
+    fileStat: Stats,
+    sessionId: SessionId,
+    eventHandle: FileHandle
+  ): Promise<void> {
     this.assertLeaseHeld(lease);
     const identityKey = `inode:${fileStat.dev}:${fileStat.ino}`;
     const owner = PROCESS_SESSION_LEASES.get(identityKey);
@@ -604,7 +641,9 @@ export class JsonlAgentSessionStore {
     PROCESS_SESSION_LEASES.set(identityKey, lease);
     lease.keys.add(identityKey);
     try {
-      lease.osLocks.set(identityKey, await acquireOsWriterLock(identityKey));
+      const eventWriter = await acquireEventWriterLock(identityKey, eventHandle);
+      lease.eventWriter = eventWriter;
+      lease.osLocks.set(identityKey, eventWriter);
     } catch (error: unknown) {
       if (PROCESS_SESSION_LEASES.get(identityKey) === lease) PROCESS_SESSION_LEASES.delete(identityKey);
       lease.keys.delete(identityKey);
@@ -614,11 +653,10 @@ export class JsonlAgentSessionStore {
 
   private async releaseLease(lease: WriterLease): Promise<void> {
     const cleanup = [
-      ...(lease.eventHandle === undefined ? [] : [lease.eventHandle.close()]),
       ...(lease.directoryHandle === undefined ? [] : [lease.directoryHandle.close()]),
       ...[...lease.osLocks.values()].reverse().map((lock) => lock.release())
     ];
-    lease.eventHandle = undefined;
+    lease.eventWriter = undefined;
     lease.eventStat = undefined;
     lease.directoryHandle = undefined;
     lease.directoryStat = undefined;
@@ -653,12 +691,12 @@ export class JsonlAgentSessionStore {
     }
   }
 
-  private eventHandle(lease: WriterLease): FileHandle {
-    const handle = lease.eventHandle;
-    if (handle === undefined || lease.eventStat === undefined) {
-      throw new Error("durable event file descriptor is not bound to its writer lease");
+  private eventWriter(lease: WriterLease): EventWriterLock {
+    const writer = lease.eventWriter;
+    if (writer === undefined || lease.eventStat === undefined) {
+      throw new Error("durable event writer is not bound to its writer lease");
     }
-    return handle;
+    return writer;
   }
 
   private persistence(lease: WriterLease): EventPersistence {
@@ -666,12 +704,12 @@ export class JsonlAgentSessionStore {
       append: (event) => this.runIo(lease, async () => {
         await this.runHook(() => this.options.beforeAppend?.(event));
         this.assertLeaseHeld(lease);
-        await appendEvent(this.eventHandle(lease), event, (fileStat) => this.assertFileIdentity(lease, fileStat));
+        await this.eventWriter(lease).append(`${JSON.stringify(event)}\n`);
         this.assertLeaseHeld(lease);
       }),
       flush: () => this.runIo(lease, async () => {
         this.assertLeaseHeld(lease);
-        await this.eventHandle(lease).sync();
+        await this.eventWriter(lease).flush();
         this.assertLeaseHeld(lease);
       })
     };

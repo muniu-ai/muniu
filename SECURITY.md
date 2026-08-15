@@ -52,13 +52,21 @@ return SANDBOX_UNAVAILABLE and must never run without the sandbox.
 The local JSONL session store validates canonical containment and directory
 identity before and after opening a session's files. Node.js does not expose a
 portable `openat(2)` API, so a same-user process that can concurrently rename
-store paths can still race the read-only header snapshot. The store keeps the
-validated session directory and event-log descriptors open for the lifetime of
-the writer lease; every append and flush uses that leased event descriptor.
-Consequently, the residual metadata race cannot redirect an active event write,
-create a second writer for the same event inode, or turn a path replacement into
-an out-of-workspace append. This is a Developer Preview boundary, not protection
-against a malicious process already running as the same operating-system user.
+store paths can still race the read-only header snapshot. Writer locks use a
+UID-private `0700` namespace rooted at `/private/tmp` on macOS and `/tmp` on
+Linux, independent of `TMPDIR`; lock files are regular, single-link, user-owned
+`0600` files opened without following symlinks. Active event appends, tail
+repairs, and fsyncs run in the packaged Node.js helper that simultaneously holds
+the event inode advisory lock. The parent closes its writable event descriptor
+after the nonce-bound READY handshake and accepts an operation only after its
+bounded request receives a matching acknowledgement. A lost helper poisons the
+writer lease, so the old parent cannot resume writing; reopen accepts a complete
+unacknowledged final record or repairs a torn tail before verifying the digest
+chain. Consequently, the residual metadata race cannot redirect an active event
+write, create a second writer for the same event inode, or turn a path
+replacement into an out-of-workspace append. This is a Developer Preview
+boundary, not protection against a malicious process already running as the
+same operating-system user.
 
 Signed and notarized desktop binaries are not published in v0.1.0. The desktop
 updater remains disabled until a separately reviewed signed release channel
