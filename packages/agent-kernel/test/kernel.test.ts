@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { CallId, CandidateId, RunId, SessionId } from "@mn/agent-protocol";
+import { CallId, CandidateId, RunId, SessionId, verifyAgentSessionEventChain } from "@mn/agent-protocol";
 import { InMemoryAgentSessionStore } from "@mn/agent-session";
 import { LlmRuntime, ScriptedLlmAdapter, type LlmAdapter } from "@mn/agent-llm";
 import { ToolExecutionError, ToolRegistry, defineTool } from "@mn/agent-tools";
@@ -270,6 +270,204 @@ test("separate AgentKernel instances share the run lease and can reenter a built
     model: "scripted"
   });
   assert.equal(nested.reason, "completed");
+});
+
+test("kernel delegation admits one driver only across concurrent and sequential handoffs", async () => {
+  let dispatches = 0;
+  const llm = new LlmRuntime();
+  llm.register({
+    id: "single-delegation",
+    async *stream() {
+      dispatches += 1;
+      yield { type: "finish" as const, reason: "stop" as const };
+    }
+  });
+  llm.seal();
+  const tools = new ToolRegistry({ authorize: async () => ({ decision: "approve" }) });
+  tools.seal();
+  const firstDriver = createBuiltinAgentKernel({ llm, tools, systemPrompt: new StaticSystemPrompt([]) });
+  const secondDriver = createBuiltinAgentKernel({ llm, tools, systemPrompt: new StaticSystemPrompt([]) });
+  let concurrentOutcomes: PromiseSettledResult<Awaited<ReturnType<typeof firstDriver.run>>>[] = [];
+  let sequentialOutcome: PromiseSettledResult<Awaited<ReturnType<typeof firstDriver.run>>> | undefined;
+  const registry = new AgentRegistry();
+  registry.register("delegating", {
+    run: async (input) => {
+      concurrentOutcomes = await Promise.allSettled([
+        firstDriver.run(input),
+        secondDriver.run(input)
+      ]);
+      [sequentialOutcome] = await Promise.allSettled([firstDriver.run(input)]);
+      return { reason: "completed", steps: 0, toolCalls: 0 };
+    }
+  });
+  registry.seal();
+  const session = await new InMemoryAgentSessionStore().create({ sessionId: SessionId("single-driver-delegation") });
+
+  const result = await new AgentKernel(registry).run({
+    agentId: "delegating",
+    session,
+    prompt: "run",
+    provider: "single-delegation",
+    model: "scripted"
+  });
+
+  assert.equal(result.reason, "completed");
+  assert.equal(concurrentOutcomes.filter((outcome) => outcome.status === "fulfilled").length, 1);
+  assert.equal(concurrentOutcomes.filter((outcome) => outcome.status === "rejected").length, 1);
+  assert.equal(sequentialOutcome?.status, "rejected");
+  assert.equal(dispatches, 1);
+  assert.equal(session.events.filter((event) => event.type === "turn/start").length, 1);
+  assert.doesNotThrow(() => verifyAgentSessionEventChain(session.events));
+});
+
+test("kernel lease waits for a detached delegated driver before rejecting an external contender", async () => {
+  let dispatches = 0;
+  let childEntered!: () => void;
+  const childStarted = new Promise<void>((resolve) => { childEntered = resolve; });
+  let releaseChild!: () => void;
+  const childGate = new Promise<void>((resolve) => { releaseChild = resolve; });
+  const llm = new LlmRuntime();
+  llm.register({
+    id: "detached-delegation",
+    async *stream() {
+      dispatches += 1;
+      if (dispatches === 1) {
+        childEntered();
+        await childGate;
+      }
+      yield { type: "finish" as const, reason: "stop" as const };
+    }
+  });
+  llm.seal();
+  const tools = new ToolRegistry({ authorize: async () => ({ decision: "approve" }) });
+  tools.seal();
+  const detachedDriver = createBuiltinAgentKernel({ llm, tools, systemPrompt: new StaticSystemPrompt([]) });
+  const contenderDriver = createBuiltinAgentKernel({ llm, tools, systemPrompt: new StaticSystemPrompt([]) });
+  let detached!: ReturnType<typeof detachedDriver.run>;
+  const registry = new AgentRegistry();
+  registry.register("detached", {
+    run: async (input) => {
+      detached = detachedDriver.run(input);
+      void detached.catch(() => {});
+      return { reason: "completed", steps: 0, toolCalls: 0 };
+    }
+  });
+  registry.seal();
+  const session = await new InMemoryAgentSessionStore().create({ sessionId: SessionId("detached-driver-delegation") });
+  let routedSettled = false;
+  const routed = new AgentKernel(registry).run({
+    agentId: "detached",
+    session,
+    prompt: "run",
+    provider: "detached-delegation",
+    model: "scripted"
+  }).then((value) => { routedSettled = true; return value; });
+
+  await childStarted;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const routedSettledBeforeChild = routedSettled;
+  const [contenderOutcome] = await Promise.allSettled([contenderDriver.run({
+    session,
+    prompt: "contend",
+    provider: "detached-delegation",
+    model: "scripted"
+  })]);
+  releaseChild();
+  const [routedOutcome, detachedOutcome] = await Promise.allSettled([routed, detached]);
+
+  assert.equal(routedSettledBeforeChild, false);
+  assert.equal(contenderOutcome?.status, "rejected");
+  assert.equal(routedOutcome.status, "fulfilled");
+  assert.equal(detachedOutcome.status, "fulfilled");
+  const after = await contenderDriver.run({
+    session,
+    prompt: "after",
+    provider: "detached-delegation",
+    model: "scripted"
+  });
+  assert.equal(after.reason, "completed");
+  assert.equal(dispatches, 2);
+});
+
+test("driver start inherited after kernel closure cannot become a standalone run", async () => {
+  let dispatches = 0;
+  const llm = new LlmRuntime();
+  llm.register({
+    id: "late-delegation",
+    async *stream() {
+      dispatches += 1;
+      yield { type: "finish" as const, reason: "stop" as const };
+    }
+  });
+  llm.seal();
+  const tools = new ToolRegistry({ authorize: async () => ({ decision: "approve" }) });
+  tools.seal();
+  const driver = createBuiltinAgentKernel({ llm, tools, systemPrompt: new StaticSystemPrompt([]) });
+  let delayed!: ReturnType<typeof driver.run>;
+  const registry = new AgentRegistry();
+  registry.register("late", {
+    run: async (input) => {
+      delayed = new Promise((resolve, reject) => {
+        setImmediate(() => { driver.run(input).then(resolve, reject); });
+      });
+      void delayed.catch(() => {});
+      return { reason: "completed", steps: 0, toolCalls: 0 };
+    }
+  });
+  registry.seal();
+  const session = await new InMemoryAgentSessionStore().create({ sessionId: SessionId("late-driver-delegation") });
+
+  const routed = await new AgentKernel(registry).run({
+    agentId: "late",
+    session,
+    prompt: "run",
+    provider: "late-delegation",
+    model: "scripted"
+  });
+  const [delayedOutcome] = await Promise.allSettled([delayed]);
+
+  assert.equal(routed.reason, "completed");
+  assert.equal(delayedOutcome?.status, "rejected");
+  assert.equal(dispatches, 0);
+  assert.equal(session.events.some((event) => event.type === "turn/start"), false);
+});
+
+test("kernel retains the primary executor error while draining a failed delegated driver", async () => {
+  const llm = new LlmRuntime();
+  llm.register(new ScriptedLlmAdapter("aggregate-delegation", [[{ type: "finish", reason: "stop" }]]));
+  llm.seal();
+  const tools = new ToolRegistry({ authorize: async () => ({ decision: "approve" }) });
+  tools.seal();
+  const driver = createBuiltinAgentKernel({ llm, tools, systemPrompt: new StaticSystemPrompt([]) });
+  const primary = new Error("primary executor failure");
+  const registry = new AgentRegistry();
+  registry.register("aggregate", {
+    run: async (input) => {
+      const delegated = driver.run({ ...input, prompt: "" });
+      void delegated.catch(() => {});
+      throw primary;
+    }
+  });
+  registry.seal();
+  const session = await new InMemoryAgentSessionStore().create({ sessionId: SessionId("aggregate-driver-delegation") });
+
+  let failure: unknown;
+  try {
+    await new AgentKernel(registry).run({
+      agentId: "aggregate",
+      session,
+      prompt: "run",
+      provider: "aggregate-delegation",
+      model: "scripted"
+    });
+  } catch (error: unknown) {
+    failure = error;
+  }
+
+  assert.ok(failure instanceof AggregateError);
+  assert.equal(failure.errors[0], primary);
+  assert.ok(failure.errors.some((error) => /prompt.*empty|must not be empty/i.test(String(error))));
+  assert.equal(failure.cause, primary);
 });
 
 test("ReactDriver maps max-tokens finish to budget-exceeded", async () => {
