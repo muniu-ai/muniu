@@ -68,4 +68,40 @@ excluded:
   - executable YAML or JavaScript configuration
   - eval, new Function, HMR-loaded code, and unsigned executable plugins
 
-files: []
+files:
+  - upstreamPath: packages/core/session/src/json.ts
+    localPath: packages/agent-protocol/src/json.ts
+    mode: copied
+    summary: Copied lossless JSON validation and detached snapshot traversal; formatting adapted to the Muniu TypeScript style.
+  - upstreamPath: packages/llm/llm/src/brand.ts
+    localPath: packages/agent-protocol/src/ids.ts
+    mode: adapted
+    summary: Replaced the external brand package with a local closed set of protocol identifiers.
+  - upstreamPath: packages/llm/llm/src/types.ts
+    localPath: packages/agent-protocol/src/model.ts
+    mode: adapted
+    summary: Retained a provider-neutral message and stream vocabulary while removing Cordis, attachments, discovery, and plugin extension points.
+  - upstreamPath: packages/llm/llm/src/message.ts
+    localPath: packages/agent-protocol/src/messages.ts
+    mode: adapted
+    summary: Reduced immutable message constructors to the closed Muniu v0.1 source and content union.
+  - upstreamPath: packages/llm/llm/src/call-config.ts
+    localPath: packages/agent-protocol/src/freeze.ts
+    mode: adapted
+    summary: Retained only the cycle-safe iterative deep-freeze helper and removed request ownership state.
+  - upstreamPath: packages/core/session/src/types.ts
+    localPath: packages/agent-protocol/src/events.ts
+    mode: adapted
+    summary: Replaced Session v0 and plugin-merged events with the versioned Muniu event envelope and digest chain.
+  - upstreamPath: packages/core/session/src/surface.ts
+    localPath: packages/agent-session/src/projection.ts
+    mode: adapted
+    summary: Replaced the extensible surface fold with a closed projection of messages and active turn, step, and tool state.
+  - upstreamPath: packages/core/session/src/repair.ts
+    localPath: packages/agent-session/src/recovery.ts
+    mode: adapted
+    summary: Emits digest-chained interrupted results and boundaries through the session API without any side-effect replay capability.
+  - upstreamPath: packages/core/session/src/index.ts
+    localPath: packages/agent-session/src/event-snapshot.ts
+    mode: adapted
+    summary: Retained only the event adopt and detached immutable snapshot boundary; removed Cordis lifecycle and store coupling.

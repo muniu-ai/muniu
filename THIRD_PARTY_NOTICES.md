@@ -23,9 +23,10 @@ Muniu and 木牛 are independent project names. Use of DeepSeek Harness source
 does not grant rights to DeepSeek names, logos, or trademarks and does not
 imply endorsement.
 
-At this baseline no DeepSeek Harness source file is copied into a Muniu
-workspace package. Later sub-plans must add a per-file provenance entry before
-committing each copied or adapted file.
+Muniu v0.1 selectively copies or adapts the protocol, session, LLM, tool,
+agent-loop, and prompt files enumerated in the provenance manifest. The
+manifest is authoritative for the exact upstream/local path mapping and
+adaptation summary; no unlisted upstream directory or Git history is shipped.
 
 ## Explicitly excluded upstream payloads
 
