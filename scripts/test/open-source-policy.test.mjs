@@ -208,6 +208,100 @@ test("agent coverage policy rejects disguised or incomplete workspace coverage c
   }
 });
 
+test("agent coverage policy rejects disabled or error-swallowing CI coverage gates", () => {
+  const command = agentWorkspaces
+    .map((workspace) => `npm run test:coverage -w @mn/${workspace}`)
+    .join(" && ");
+  const invalidWorkflows = [
+    ["step if", [
+      "jobs:",
+      "  node:",
+      "    steps:",
+      "      - if: false",
+      "        run: npm run test:coverage:agent"
+    ]],
+    ["continue-on-error", [
+      "jobs:",
+      "  node:",
+      "    steps:",
+      "      - continue-on-error: true",
+      "        run: npm run test:coverage:agent"
+    ]],
+    ["custom shell", [
+      "jobs:",
+      "  node:",
+      "    steps:",
+      "      - shell: echo {0}",
+      "        run: npm run test:coverage:agent"
+    ]],
+    ["step working-directory", [
+      "jobs:",
+      "  node:",
+      "    steps:",
+      "      - working-directory: packages/agent-host",
+      "        run: npm run test:coverage:agent"
+    ]],
+    ["disabled node job", [
+      "jobs:",
+      "  node:",
+      "    if: false",
+      "    steps:",
+      "      - run: npm run test:coverage:agent"
+    ]],
+    ["node job continue-on-error", [
+      "jobs:",
+      "  node:",
+      "    continue-on-error: true",
+      "    steps:",
+      "      - run: npm run test:coverage:agent"
+    ]],
+    ["workflow run defaults", [
+      "defaults:",
+      "  run:",
+      "    shell: echo {0}",
+      "jobs:",
+      "  node:",
+      "    steps:",
+      "      - run: npm run test:coverage:agent"
+    ]],
+    ["node job run defaults", [
+      "jobs:",
+      "  node:",
+      "    defaults:",
+      "      run:",
+      "        working-directory: packages/agent-host",
+      "    steps:",
+      "      - run: npm run test:coverage:agent"
+    ]]
+  ];
+
+  for (const [label, lines] of invalidWorkflows) {
+    const failures = validateAgentCoverageGate({
+      rootPackage: { scripts: { "test:coverage:agent": command } },
+      workspacePackages: validAgentCoveragePackages(),
+      ciWorkflow: lines.join("\n")
+    });
+    assert.equal(
+      failures.some((failure) => /CI node job.*test:coverage:agent/u.test(failure)),
+      true,
+      `${label} was accepted`
+    );
+  }
+
+  assert.deepEqual(validateAgentCoverageGate({
+    rootPackage: { scripts: { "test:coverage:agent": command } },
+    workspacePackages: validAgentCoveragePackages(),
+    ciWorkflow: [
+      "jobs:",
+      "  node:",
+      "    continue-on-error: false",
+      "    steps:",
+      "      - continue-on-error: false",
+      "        run: npm run test:coverage:agent"
+    ].join("\n")
+  }), []);
+});
+
 test("attribution policy rejects claiming unimported upstream code in NOTICE", () => {
   assert.throws(
     () =>

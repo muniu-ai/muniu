@@ -86,33 +86,39 @@ test("PATH-empty host completes a durable two-step tool turn and reloads it afte
     });
     const runId = RunId("run-host");
     const candidateId = CandidateId("candidate-host");
-    const outcome = await host.run({ sessionId, prompt: "echo hello", provider: "mock", model: "scripted", runId, candidateId });
-    assert.equal(outcome.reason, "completed");
-    assert.equal(durableCallObserved, true);
-    assert.deepEqual(outcome.session.events.map((event) => event.type), [
-      "session/created",
-      "turn/start",
-      "user/message",
-      "step/start",
-      "assistant/message",
-      "tool/call",
-      "tool/result",
-      "step/end",
-      "step/start",
-      "assistant/message",
-      "step/end",
-      "turn/end"
-    ]);
-    assert.equal(outcome.session.events.slice(1).every((event) => event.runId === runId && event.candidateId === candidateId), true);
-    await host.dispose();
+    try {
+      const outcome = await host.run({ sessionId, prompt: "echo hello", provider: "mock", model: "scripted", runId, candidateId });
+      assert.equal(outcome.reason, "completed");
+      assert.equal(durableCallObserved, true);
+      assert.deepEqual(outcome.session.events.map((event) => event.type), [
+        "session/created",
+        "turn/start",
+        "user/message",
+        "step/start",
+        "assistant/message",
+        "tool/call",
+        "tool/result",
+        "step/end",
+        "step/start",
+        "assistant/message",
+        "step/end",
+        "turn/end"
+      ]);
+      assert.equal(outcome.session.events.slice(1).every((event) => event.runId === runId && event.candidateId === candidateId), true);
+    } finally {
+      await host.dispose();
+    }
 
     const reopenStore = new JsonlAgentSessionStore(root);
-    const reopened = await reopenStore.open(sessionId);
-    assert.doesNotThrow(() => verifyAgentSessionEventChain(reopened.events));
-    assert.equal(projectSession(reopened.events).status, "completed");
-    const finalMessage = projectSession(reopened.events).messages.at(-1);
-    assert.equal(finalMessage?.role, "assistant");
-    await reopenStore.dispose();
+    try {
+      const reopened = await reopenStore.open(sessionId);
+      assert.doesNotThrow(() => verifyAgentSessionEventChain(reopened.events));
+      assert.equal(projectSession(reopened.events).status, "completed");
+      const finalMessage = projectSession(reopened.events).messages.at(-1);
+      assert.equal(finalMessage?.role, "assistant");
+    } finally {
+      await reopenStore.dispose();
+    }
   } finally {
     if (previousPath === undefined) delete process.env.PATH;
     else process.env.PATH = previousPath;
@@ -465,6 +471,132 @@ test("host rejects reentrant disposal from its active run without self-deadlocki
   assert.equal(outcome.reason, "completed");
   assert.equal(reentrantOutcome, "rejected");
   await host.dispose();
+});
+
+test("abort listeners reject nested disposal while external callers share one coordinator", async () => {
+  const entered = deferred();
+  const releaseRun = deferred();
+  const order: string[] = [];
+  const delegate = new InMemoryAgentSessionStore();
+  let reportNested!: (outcome: "rejected" | "resolved") => void;
+  const nestedOutcome = new Promise<"rejected" | "resolved">((resolve) => {
+    reportNested = resolve;
+  });
+  let nestedDisposal: Promise<void> | undefined;
+  let host: Awaited<ReturnType<typeof createAgentHost>>;
+  host = await createAgentHost({
+    sessionStore: {
+      create: delegate.create.bind(delegate),
+      open: delegate.open.bind(delegate),
+      dispose: () => { order.push("store"); }
+    },
+    adapters: [{
+      id: "abort-reentrant",
+      async *stream(request) {
+        request.signal?.addEventListener("abort", async () => {
+          nestedDisposal = host.dispose();
+          const outcome = await nestedDisposal.then(
+            () => "resolved" as const,
+            (error: unknown) => {
+              assert.match(error instanceof Error ? error.message : String(error), /reentrant|active host run/i);
+              return "rejected" as const;
+            }
+          );
+          reportNested(outcome);
+          releaseRun.resolve();
+        }, { once: true });
+        entered.resolve();
+        await releaseRun.promise;
+        yield { type: "finish", reason: "stop" };
+      },
+      dispose: () => { order.push("adapter"); }
+    }],
+    tools: [],
+    authorizer: { authorize: async () => ({ decision: "deny" }) }
+  });
+
+  const run = host.run({ prompt: "nested dispose", provider: "abort-reentrant", model: "test" });
+  await entered.promise;
+  const externalDisposal = host.dispose();
+  assert.equal(host.dispose(), externalDisposal);
+  const observed = await Promise.race([
+    nestedOutcome,
+    new Promise<"timed-out">((resolve) => {
+      setTimeout(() => { resolve("timed-out"); }, 100);
+    })
+  ]);
+  if (observed === "timed-out") releaseRun.resolve();
+  const [runResult, disposalResult] = await Promise.allSettled([run, externalDisposal]);
+
+  assert.equal(observed, "rejected");
+  assert.ok(nestedDisposal);
+  assert.notEqual(nestedDisposal, externalDisposal);
+  assert.equal(runResult.status, "fulfilled");
+  if (runResult.status === "fulfilled") assert.equal(runResult.value.reason, "cancelled");
+  assert.equal(disposalResult.status, "fulfilled");
+  assert.deepEqual(order, ["adapter", "store"]);
+});
+
+test("abort callback failures release the drain gate and reject the stable disposal coordinator", async () => {
+  const entered = deferred();
+  const releaseRun = deferred();
+  const order: string[] = [];
+  const abortFailure = new Error("abort callback failed");
+  const delegate = new InMemoryAgentSessionStore();
+  const host = await createAgentHost({
+    sessionStore: {
+      create: delegate.create.bind(delegate),
+      open: delegate.open.bind(delegate),
+      dispose: () => { order.push("store"); }
+    },
+    adapters: [{
+      id: "throwing-abort",
+      async *stream() {
+        entered.resolve();
+        await releaseRun.promise;
+        yield { type: "finish", reason: "stop" };
+      },
+      dispose: () => { order.push("adapter"); }
+    }],
+    tools: [],
+    authorizer: { authorize: async () => ({ decision: "deny" }) }
+  });
+
+  const run = host.run({ prompt: "abort failure", provider: "throwing-abort", model: "test" });
+  await entered.promise;
+  const active = [...(host as unknown as {
+    activeRuns: ReadonlySet<{ readonly controller: AbortController }>;
+  }).activeRuns][0];
+  assert.ok(active);
+  const originalAbort = active.controller.abort.bind(active.controller);
+  Object.defineProperty(active.controller, "abort", {
+    configurable: true,
+    value: () => {
+      originalAbort();
+      throw abortFailure;
+    }
+  });
+
+  let synchronousFailure: unknown;
+  let disposal: Promise<void> | undefined;
+  try {
+    disposal = host.dispose();
+  } catch (error: unknown) {
+    synchronousFailure = error;
+  } finally {
+    delete (active.controller as { abort?: () => void }).abort;
+  }
+  const cachedDisposal = host.dispose();
+  releaseRun.resolve();
+  const [runResult, disposalResult] = await Promise.allSettled([run, cachedDisposal]);
+
+  assert.equal(synchronousFailure, undefined);
+  assert.ok(disposal);
+  assert.equal(cachedDisposal, disposal);
+  assert.equal(runResult.status, "fulfilled");
+  assert.equal(disposalResult.status, "rejected");
+  if (disposalResult.status === "rejected") assert.equal(disposalResult.reason, abortFailure);
+  assert.deepEqual(order, ["adapter", "store"]);
 });
 
 test("host snapshots and binds every session store method exactly once", async () => {

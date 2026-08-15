@@ -151,13 +151,41 @@ export function validateAgentCoverageGate({ rootPackage, workspacePackages, ciWo
   } catch {
     workflow = undefined;
   }
-  const nodeSteps = workflow?.jobs?.node?.steps;
+  const nodeJob = workflow?.jobs?.node;
+  const nodeSteps = nodeJob?.steps;
+  const workflowOverridesRun = workflow !== null
+    && typeof workflow === "object"
+    && workflow.defaults !== null
+    && typeof workflow.defaults === "object"
+    && Object.hasOwn(workflow.defaults, "run");
+  const nodeOverridesRun = nodeJob !== null
+    && typeof nodeJob === "object"
+    && nodeJob.defaults !== null
+    && typeof nodeJob.defaults === "object"
+    && Object.hasOwn(nodeJob.defaults, "run");
+  const nodeHasCondition = nodeJob !== null
+    && typeof nodeJob === "object"
+    && Object.hasOwn(nodeJob, "if");
+  const nodeSwallowsErrors = nodeJob !== null
+    && typeof nodeJob === "object"
+    && Object.hasOwn(nodeJob, "continue-on-error")
+    && nodeJob["continue-on-error"] !== false;
   const hasCoverageStep = Array.isArray(nodeSteps) && nodeSteps.some((step) => {
     return step !== null
       && typeof step === "object"
-      && step.run === "npm run test:coverage:agent";
+      && step.run === "npm run test:coverage:agent"
+      && !Object.hasOwn(step, "if")
+      && (!Object.hasOwn(step, "continue-on-error") || step["continue-on-error"] === false)
+      && !Object.hasOwn(step, "shell")
+      && !Object.hasOwn(step, "working-directory");
   });
-  if (!hasCoverageStep) {
+  if (
+    workflowOverridesRun
+    || nodeOverridesRun
+    || nodeHasCondition
+    || nodeSwallowsErrors
+    || !hasCoverageStep
+  ) {
     failures.push("CI node job must explicitly run npm run test:coverage:agent");
   }
   return failures;

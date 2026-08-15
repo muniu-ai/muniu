@@ -61,6 +61,7 @@ interface ActiveHostRunContext {
 
 interface ActiveHostRun {
   readonly controller: AbortController;
+  readonly context: ActiveHostRunContext;
   readonly operation: Promise<AgentHostRunResult>;
 }
 
@@ -245,7 +246,7 @@ export class AgentHost {
         this.activeRuns.delete(active);
       }
     );
-    active = { controller, operation };
+    active = { controller, context, operation };
     this.activeRuns.add(active);
     try {
       const snapshot = snapshotAgentHostRunInput(input);
@@ -286,8 +287,48 @@ export class AgentHost {
 
     this.acceptingRuns = false;
     const active = [...this.activeRuns];
-    for (const run of active) run.controller.abort();
-    this.disposal = this.drainAndDispose(active);
+    let releaseDrain!: () => void;
+    const drainGate = new Promise<void>((resolve) => { releaseDrain = resolve; });
+    const abortFailures: unknown[] = [];
+    this.disposal = (async () => {
+      await drainGate;
+      let teardownFailure: unknown;
+      let teardownFailed = false;
+      try {
+        await this.drainAndDispose(active);
+      } catch (error: unknown) {
+        teardownFailure = error;
+        teardownFailed = true;
+      }
+
+      if (abortFailures.length > 0 && teardownFailed) {
+        throw new AggregateError(
+          [...abortFailures, teardownFailure],
+          "agent host cancellation and teardown failed",
+          { cause: abortFailures[0] }
+        );
+      }
+      if (abortFailures.length === 1) throw abortFailures[0];
+      if (abortFailures.length > 1) {
+        throw new AggregateError(
+          abortFailures,
+          "agent host cancellation failed",
+          { cause: abortFailures[0] }
+        );
+      }
+      if (teardownFailed) throw teardownFailure;
+    })();
+    try {
+      for (const run of active) {
+        try {
+          ACTIVE_HOST_RUN.run(run.context, () => { run.controller.abort(); });
+        } catch (error: unknown) {
+          abortFailures.push(error);
+        }
+      }
+    } finally {
+      releaseDrain();
+    }
     return this.disposal;
   }
 
