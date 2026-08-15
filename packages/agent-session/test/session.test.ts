@@ -1,13 +1,27 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  link,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rename,
+  stat,
+  symlink,
+  unlink,
+  writeFile
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
 import {
   CallId,
+  CandidateId,
   EventId,
   MessageId,
+  RunId,
   SessionId,
   createAgentSessionEvent,
   createAssistantMessage,
@@ -23,6 +37,142 @@ import {
   projectSession,
   recoverInterruptedSession
 } from "../src/index.js";
+import type { AgentSessionExclusiveView } from "../src/index.js";
+
+test("withExclusive serializes inner operations, waits for them, and expires its scoped view", async () => {
+  const sessionId = SessionId("exclusive-scope");
+  let activeAppends = 0;
+  let maximumActiveAppends = 0;
+  const session = new DurableAgentSession({
+    schemaVersion: 1,
+    sessionId,
+    createdAt: "2026-08-15T00:00:00.000Z"
+  }, [], {
+    append: async () => {
+      activeAppends += 1;
+      maximumActiveAppends = Math.max(maximumActiveAppends, activeAppends);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      activeAppends -= 1;
+    },
+    flush: async () => {}
+  });
+
+  let leakedView: Parameters<Parameters<DurableAgentSession["withExclusive"]>[0]>[0] | undefined;
+  const result = await session.withExclusive(async (view) => {
+    leakedView = view;
+    const created = view.append("session/created", {});
+    const turn = view.append("turn/start", { turn: 1 });
+    void view.append("step/start", { turn: 1, step: 1 });
+    await Promise.all([created, turn]);
+    return "complete";
+  });
+
+  assert.equal(result, "complete");
+  assert.equal(maximumActiveAppends, 1);
+  assert.deepEqual(session.events.map((event) => event.seq), [0, 1, 2]);
+  assert.doesNotThrow(() => verifyAgentSessionEventChain(session.events));
+  const expiredView = leakedView;
+  assert.ok(expiredView);
+  assert.throws(() => expiredView.append("turn/end", { turn: 1, reason: "completed" }), /expired|exclusive/i);
+  assert.throws(() => expiredView.events, /expired|exclusive/i);
+});
+
+test("withExclusive drains started work and expires its view when the callback throws synchronously", async () => {
+  const session = new DurableAgentSession({
+    schemaVersion: 1,
+    sessionId: SessionId("exclusive-sync-throw"),
+    createdAt: "2026-08-15T00:00:00.000Z"
+  }, [], {
+    append: async () => { await new Promise<void>((resolve) => setImmediate(resolve)); },
+    flush: async () => {}
+  });
+  let leakedView: Parameters<Parameters<DurableAgentSession["withExclusive"]>[0]>[0] | undefined;
+
+  await assert.rejects(() => session.withExclusive((view: AgentSessionExclusiveView) => {
+    leakedView = view;
+    void view.append("session/created", {});
+    throw new Error("callback failed synchronously");
+  }), /callback failed synchronously/i);
+
+  assert.deepEqual(session.events.map((event) => event.type), ["session/created"]);
+  const expiredView = leakedView;
+  assert.ok(expiredView);
+  assert.throws(() => expiredView.events, /expired|exclusive/i);
+});
+
+test("withExclusive rejects when unawaited scoped work rejects without an error value", async () => {
+  const session = new DurableAgentSession({
+    schemaVersion: 1,
+    sessionId: SessionId("exclusive-undefined-rejection"),
+    createdAt: "2026-08-15T00:00:00.000Z"
+  }, [], {
+    append: () => Promise.reject(undefined),
+    flush: async () => {}
+  });
+
+  const [outcome] = await Promise.allSettled([
+    session.withExclusive(async (view) => { void view.append("session/created", {}); })
+  ]);
+  assert.equal(outcome?.status, "rejected");
+});
+
+test("stores synchronously snapshot and validate create options with one getter read", async () => {
+  const stores = [
+    new InMemoryAgentSessionStore(),
+    new JsonlAgentSessionStore(await mkdtemp(path.join(os.tmpdir(), "muniu-options-")))
+  ];
+
+  for (const [index, store] of stores.entries()) {
+    let sessionId = SessionId(`option-session-${index}`);
+    let cwd = `/workspace/${index}`;
+    let label = `value-${index}`;
+    const reads = { sessionId: 0, cwd: 0, labels: 0, label: 0 };
+    const labels = Object.defineProperty({}, "kind", {
+      enumerable: true,
+      get() { reads.label += 1; return label; }
+    }) as Record<string, string>;
+    const options = {
+      get sessionId() { reads.sessionId += 1; return sessionId; },
+      get cwd() { reads.cwd += 1; return cwd; },
+      get labels() { reads.labels += 1; return labels; }
+    };
+
+    const created = store.create(options);
+    sessionId = SessionId(`mutated-${index}`);
+    cwd = `/mutated/${index}`;
+    label = `mutated-${index}`;
+    const session = await created;
+
+    assert.equal(session.header.sessionId, SessionId(`option-session-${index}`));
+    assert.equal(session.header.cwd, `/workspace/${index}`);
+    assert.deepEqual(session.events[0]?.payload, { cwd: `/workspace/${index}`, labels: { kind: `value-${index}` } });
+    assert.deepEqual(reads, { sessionId: 1, cwd: 1, labels: 1, label: 1 });
+    if ("dispose" in store) await store.dispose();
+  }
+
+  const invalid = new InMemoryAgentSessionStore();
+  let synchronousError: unknown;
+  try {
+    const pending = invalid.create({ sessionId: SessionId("invalid-options"), cwd: 42 } as never);
+    void pending.catch(() => {});
+  } catch (error: unknown) {
+    synchronousError = error;
+  }
+  assert.match(String(synchronousError), /cwd.*string|invalid.*cwd/i);
+  const retried = await invalid.create({ sessionId: SessionId("invalid-options") });
+  assert.deepEqual(retried.events.map((event) => event.type), ["session/created"]);
+
+  const disk = new JsonlAgentSessionStore(await mkdtemp(path.join(os.tmpdir(), "muniu-invalid-session-id-")));
+  let unsafeIdError: unknown;
+  try {
+    const pending = disk.create({ sessionId: SessionId("../escape") });
+    void pending.catch(() => {});
+  } catch (error: unknown) {
+    unsafeIdError = error;
+  }
+  assert.match(String(unsafeIdError), /session id.*safe/i);
+  await disk.dispose();
+});
 
 test("session is poisoned after an uncertain persistence failure and never retries", async () => {
   const sessionId = SessionId("poisoned-session");
@@ -135,6 +285,14 @@ test("JSONL load rejects empty logs, a non-creation first event, and header/even
   await assert.rejects(() => new JsonlAgentSessionStore(root).open(SessionId("bound-session")), /invalid session header/i);
   await writeFile(headerPath, `${JSON.stringify({ ...originalHeader, createdAt: "2026-08-15" })}\n`);
   await assert.rejects(() => new JsonlAgentSessionStore(root).open(SessionId("bound-session")), /invalid session header/i);
+  const tamperedCreatedAt = originalHeader.createdAt === "2000-01-01T00:00:00.000Z"
+    ? "2001-01-01T00:00:00.000Z"
+    : "2000-01-01T00:00:00.000Z";
+  await writeFile(headerPath, `${JSON.stringify({ ...originalHeader, createdAt: tamperedCreatedAt })}\n`);
+  await assert.rejects(
+    () => new JsonlAgentSessionStore(root).open(SessionId("bound-session")),
+    /creation time.*creation event/i
+  );
   await writeFile(headerPath, `${JSON.stringify({ ...originalHeader, cwd: "/tampered" })}\n`);
   await assert.rejects(() => new JsonlAgentSessionStore(root).open(SessionId("bound-session")), /cwd.*creation event/i);
   await writeFile(headerPath, `${JSON.stringify(originalHeader)}\n`);
@@ -229,6 +387,92 @@ test("JSONL dispose holds its lease until an active durable append settles", asy
   await contender.dispose();
 });
 
+test("JSONL create publishes a complete session atomically and can retry after the first append fails", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "muniu-session-atomic-"));
+  const sessionId = SessionId("atomic-session");
+  let attempts = 0;
+  const store = new JsonlAgentSessionStore(root, {
+    beforeAppend: (event) => {
+      if (event.type === "session/created" && attempts++ === 0) throw new Error("injected initial append failure");
+    }
+  });
+
+  await assert.rejects(() => store.create({ sessionId }), /injected initial append failure/i);
+  await assert.rejects(() => stat(path.join(root, "sessions", sessionId)), /ENOENT/);
+  assert.deepEqual(await readdir(path.join(root, "sessions")), []);
+
+  const session = await store.create({ sessionId });
+  assert.deepEqual(session.events.map((event) => event.type), ["session/created"]);
+  assert.equal(session.header.createdAt, session.events[0]?.occurredAt);
+  await store.dispose();
+});
+
+test("JSONL open rejects symlinked session paths and files", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "muniu-session-symlink-"));
+  const sessionId = SessionId("linked-session");
+  const creator = new JsonlAgentSessionStore(root);
+  await creator.create({ sessionId });
+  await creator.dispose();
+  const sessionDir = path.join(root, "sessions", sessionId);
+  const realDir = `${sessionDir}.real`;
+
+  await rename(sessionDir, realDir);
+  await symlink(realDir, sessionDir, "dir");
+  await assert.rejects(() => new JsonlAgentSessionStore(root).open(sessionId), /symbolic link|symlink/i);
+  await unlink(sessionDir);
+  await rename(realDir, sessionDir);
+
+  for (const fileName of ["header.json", "events.jsonl"]) {
+    const filePath = path.join(sessionDir, fileName);
+    const realFile = `${filePath}.real`;
+    await rename(filePath, realFile);
+    await symlink(realFile, filePath, "file");
+    const contender = new JsonlAgentSessionStore(root);
+    await assert.rejects(() => contender.open(sessionId), /symbolic link|symlink|too many levels/i);
+    await contender.dispose();
+    await unlink(filePath);
+    await rename(realFile, filePath);
+  }
+});
+
+test("JSONL writer leases converge across symlink roots and hard-linked event aliases", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "muniu-session-alias-"));
+  const sessionId = SessionId("alias-session");
+  const owner = new JsonlAgentSessionStore(root);
+  await owner.create({ sessionId });
+
+  const symlinkRoot = `${root}-symlink`;
+  await symlink(root, symlinkRoot, "dir");
+  const symlinkContender = new JsonlAgentSessionStore(symlinkRoot);
+  await assert.rejects(() => symlinkContender.open(sessionId), /lease|writer/i);
+  await symlinkContender.dispose();
+
+  const hardlinkRoot = await mkdtemp(path.join(os.tmpdir(), "muniu-session-hardlink-"));
+  const hardlinkDir = path.join(hardlinkRoot, "sessions", sessionId);
+  await mkdir(hardlinkDir, { recursive: true });
+  const ownerDir = path.join(root, "sessions", sessionId);
+  await link(path.join(ownerDir, "header.json"), path.join(hardlinkDir, "header.json"));
+  await link(path.join(ownerDir, "events.jsonl"), path.join(hardlinkDir, "events.jsonl"));
+  const hardlinkContender = new JsonlAgentSessionStore(hardlinkRoot);
+  await assert.rejects(() => hardlinkContender.open(sessionId), /lease|writer|alias/i);
+  await hardlinkContender.dispose();
+  await owner.dispose();
+});
+
+test("JSONL append fails closed if the leased event file inode is replaced", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "muniu-session-replaced-"));
+  const sessionId = SessionId("replaced-events");
+  const store = new JsonlAgentSessionStore(root);
+  const session = await store.create({ sessionId });
+  const eventsPath = path.join(root, "sessions", sessionId, "events.jsonl");
+  await rename(eventsPath, `${eventsPath}.replaced`);
+  await writeFile(eventsPath, "", { mode: 0o600 });
+
+  await assert.rejects(() => session.append("turn/start", { turn: 1 }), /lease|inode|identity|replaced/i);
+  assert.deepEqual(session.events.map((event) => event.type), ["session/created"]);
+  await store.dispose();
+});
+
 test("recovery closes started and unstarted tool effects without replaying either", async () => {
   const store = new InMemoryAgentSessionStore();
   const session = await store.create({ sessionId: SessionId("recover-session") });
@@ -247,11 +491,23 @@ test("recovery closes started and unstarted tool effects without replaying eithe
     ],
     source: { kind: "model", provider: "mock", model: "scripted" }
   });
-  await session.append("turn/start", { turn: 1 });
+  const runId = RunId("recovery-run");
+  const turnCandidateId = CandidateId("recovery-turn-candidate");
+  const assistantCandidateId = CandidateId("recovery-assistant-candidate");
+  const startedCandidateId = CandidateId("recovery-started-candidate");
+  await session.append("turn/start", { turn: 1 }, { runId, candidateId: turnCandidateId });
   await session.append("user/message", { turn: 1, message: user });
   await session.append("step/start", { turn: 1, step: 1 });
-  await session.append("assistant/message", { turn: 1, step: 1, message: assistant });
-  await session.append("tool/call", { turn: 1, step: 1, callId: started, name: "write", arguments: "{}" });
+  await session.append(
+    "assistant/message",
+    { turn: 1, step: 1, message: assistant },
+    { runId, candidateId: assistantCandidateId }
+  );
+  await session.append(
+    "tool/call",
+    { turn: 1, step: 1, callId: started, name: "write", arguments: "{}" },
+    { runId, candidateId: startedCandidateId }
+  );
 
   const firstRecovery = recoverInterruptedSession(session);
   const concurrentRecovery = recoverInterruptedSession(session);
@@ -262,6 +518,19 @@ test("recovery closes started and unstarted tool effects without replaying eithe
     [TOOL_OUTCOME_UNKNOWN, TOOL_NOT_STARTED]
   );
   assert.deepEqual(recovered.slice(-2).map((event) => event.type), ["step/end", "turn/end"]);
+  const recoveredToolResults = recovered.filter((event) => event.type === "tool/result");
+  assert.deepEqual(
+    recoveredToolResults.map((event) => event.candidateId),
+    [startedCandidateId, assistantCandidateId]
+  );
+  assert.deepEqual(recoveredToolResults.map((event) => event.runId), [runId, runId]);
+  assert.deepEqual(
+    recovered.slice(-2).map((event) => ({ runId: event.runId, candidateId: event.candidateId })),
+    [
+      { runId, candidateId: turnCandidateId },
+      { runId, candidateId: turnCandidateId }
+    ]
+  );
   const last = recovered.at(-1);
   assert.equal(last?.type === "turn/end" ? last.payload.reason : undefined, "interrupted");
   assert.equal((await recoverInterruptedSession(session)).length, 0);

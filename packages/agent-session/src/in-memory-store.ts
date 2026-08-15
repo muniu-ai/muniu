@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import { randomUUID } from "node:crypto";
+import { SessionId, type AgentSessionEventV1 } from "@mn/agent-protocol";
 
-import { SessionId, deepFreeze, type AgentSessionEventV1 } from "@mn/agent-protocol";
-
+import { snapshotCreateAgentSessionOptions, type CreateAgentSessionOptionsSnapshot } from "./create-options.js";
+import { createInitialAgentSessionState } from "./initial-state.js";
 import { DurableAgentSession } from "./session.js";
-import type { AgentSessionHeaderV1, CreateAgentSessionOptions, EventPersistence } from "./types.js";
+import type { CreateAgentSessionOptions, EventPersistence } from "./types.js";
 
 const memoryPersistence: EventPersistence = {
   append: async (_event: AgentSessionEventV1): Promise<void> => {},
@@ -15,21 +15,19 @@ const memoryPersistence: EventPersistence = {
 export class InMemoryAgentSessionStore {
   private readonly sessions = new Map<SessionId, DurableAgentSession>();
 
-  async create(options: CreateAgentSessionOptions = {}): Promise<DurableAgentSession> {
-    const sessionId = options.sessionId ?? SessionId(`session-${randomUUID()}`);
+  create(options: CreateAgentSessionOptions = {}): Promise<DurableAgentSession> {
+    const snapshot = snapshotCreateAgentSessionOptions(options);
+    return this.createSnapshot(snapshot);
+  }
+
+  private async createSnapshot(options: CreateAgentSessionOptionsSnapshot): Promise<DurableAgentSession> {
+    const { sessionId } = options;
     if (this.sessions.has(sessionId)) throw new Error(`session "${sessionId}" already exists`);
-    const header: AgentSessionHeaderV1 = deepFreeze({
-      schemaVersion: 1,
-      sessionId,
-      createdAt: new Date().toISOString(),
-      ...(options.cwd === undefined ? {} : { cwd: options.cwd })
-    });
-    const session = new DurableAgentSession(header, [], memoryPersistence);
+    const initial = createInitialAgentSessionState(options);
+    const session = new DurableAgentSession(initial.header, [initial.event], memoryPersistence);
+    // Publish only a complete in-memory session, so a failed initial snapshot
+    // cannot leave a provisional entry that blocks a retry.
     this.sessions.set(sessionId, session);
-    await session.append("session/created", {
-      ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-      ...(options.labels === undefined ? {} : { labels: options.labels })
-    });
     return session;
   }
 

@@ -22,7 +22,6 @@ export class DurableAgentSession {
   private eventsSnapshot: readonly AgentSessionEventV1[] | undefined;
   private persistencePoisoned = false;
   private persistenceFailure: unknown;
-  private readonly exclusiveView: AgentSessionExclusiveView;
 
   constructor(
     readonly header: AgentSessionHeaderV1,
@@ -35,20 +34,6 @@ export class DurableAgentSession {
       throw new Error("session event id does not match the header");
     }
     deepFreeze(this.header);
-    const owner = this;
-    this.exclusiveView = Object.freeze({
-      header: this.header,
-      get events(): readonly AgentSessionEventV1[] { return owner.events; },
-      append<T extends AgentSessionEventTypeV1>(
-        type: T,
-        payload: AgentSessionEventPayloadMapV1[T],
-        metadata: AgentEventMetadata = {}
-      ): Promise<AgentSessionEventV1<T>> {
-        const prepared = owner.prepareAppend(type, payload, metadata);
-        return owner.appendPrepared(prepared);
-      },
-      flush(): Promise<void> { return owner.flushPersistence(); }
-    });
   }
 
   get events(): readonly AgentSessionEventV1[] {
@@ -66,7 +51,54 @@ export class DurableAgentSession {
   }
 
   withExclusive<T>(operation: (session: AgentSessionExclusiveView) => Promise<T>): Promise<T> {
-    return this.enqueue(() => operation(this.exclusiveView));
+    return this.enqueue(async () => {
+      let accepting = true;
+      let scopeTail: Promise<void> = Promise.resolve();
+      let scopeFailed = false;
+      let scopeFailure: unknown;
+      const assertActive = (): void => {
+        if (!accepting) throw new Error("exclusive session view has expired");
+      };
+      const scopeEnqueue = <Result>(inner: () => Promise<Result>): Promise<Result> => {
+        assertActive();
+        const result = scopeTail.then(inner);
+        void result.catch((error: unknown) => {
+          if (!scopeFailed) {
+            scopeFailed = true;
+            scopeFailure = error;
+          }
+        });
+        scopeTail = result.then(() => undefined, () => undefined);
+        return result;
+      };
+      const owner = this;
+      const view: AgentSessionExclusiveView = Object.freeze({
+        get header(): AgentSessionHeaderV1 { assertActive(); return owner.header; },
+        get events(): readonly AgentSessionEventV1[] { assertActive(); return owner.events; },
+        append<EventType extends AgentSessionEventTypeV1>(
+          type: EventType,
+          payload: AgentSessionEventPayloadMapV1[EventType],
+          metadata: AgentEventMetadata = {}
+        ): Promise<AgentSessionEventV1<EventType>> {
+          assertActive();
+          const prepared = owner.prepareAppend(type, payload, metadata);
+          return scopeEnqueue(() => owner.appendPrepared(prepared));
+        },
+        flush(): Promise<void> {
+          return scopeEnqueue(() => owner.flushPersistence());
+        }
+      });
+
+      const outcome = await Promise.resolve().then(() => operation(view)).then(
+        (value) => ({ ok: true as const, value }),
+        (error: unknown) => ({ ok: false as const, error })
+      );
+      accepting = false;
+      await scopeTail;
+      if (!outcome.ok) throw outcome.error;
+      if (scopeFailed) throw scopeFailure;
+      return outcome.value;
+    });
   }
 
   flush(): Promise<void> {

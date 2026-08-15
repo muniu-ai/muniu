@@ -49,6 +49,9 @@ async function recoverOnce(session: AgentSessionExclusiveView): Promise<AgentSes
         name: call.started ? "ToolOutcomeUnknownError" : "ToolNotStartedError",
         code
       }
+    }, {
+      ...(call.runId === undefined ? {} : { runId: call.runId }),
+      ...(call.candidateId === undefined ? {} : { candidateId: call.candidateId })
     }));
   }
   if (projection.openStep !== undefined) {
@@ -56,9 +59,19 @@ async function recoverOnce(session: AgentSessionExclusiveView): Promise<AgentSes
       turn: projection.openTurn,
       step: projection.openStep,
       status: "interrupted"
+    }, {
+      ...(projection.openTurnRunId === undefined ? {} : { runId: projection.openTurnRunId }),
+      ...(projection.openTurnCandidateId === undefined ? {} : { candidateId: projection.openTurnCandidateId })
     }));
   }
-  appended.push(await session.append("turn/end", { turn: projection.openTurn, reason: "interrupted" }));
+  appended.push(await session.append(
+    "turn/end",
+    { turn: projection.openTurn, reason: "interrupted" },
+    {
+      ...(projection.openTurnRunId === undefined ? {} : { runId: projection.openTurnRunId }),
+      ...(projection.openTurnCandidateId === undefined ? {} : { candidateId: projection.openTurnCandidateId })
+    }
+  ));
   await session.flush();
   return appended;
 }

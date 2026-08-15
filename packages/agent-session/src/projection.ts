@@ -12,6 +12,8 @@
 import type {
   AgentSessionEventV1,
   CallId,
+  CandidateId,
+  RunId,
   Message
 } from "@mn/agent-protocol";
 
@@ -22,12 +24,16 @@ export interface PendingToolCall {
   readonly name: string;
   readonly arguments: string;
   readonly started: boolean;
+  readonly runId?: RunId;
+  readonly candidateId?: CandidateId;
 }
 
 export interface AgentSessionProjection {
   readonly status: "idle" | "active" | "completed" | "cancelled" | "budget-exceeded" | "interrupted" | "error";
   readonly openTurn?: number;
   readonly openStep?: number;
+  readonly openTurnRunId?: RunId;
+  readonly openTurnCandidateId?: CandidateId;
   readonly messages: readonly Message[];
   readonly pendingToolCalls: readonly PendingToolCall[];
 }
@@ -38,12 +44,16 @@ export function projectSession(events: readonly AgentSessionEventV1[]): AgentSes
   let status: AgentSessionProjection["status"] = "idle";
   let openTurn: number | undefined;
   let openStep: number | undefined;
+  let openTurnRunId: RunId | undefined;
+  let openTurnCandidateId: CandidateId | undefined;
 
   for (const event of events) {
     switch (event.type) {
       case "turn/start":
         openTurn = event.payload.turn;
         openStep = undefined;
+        openTurnRunId = event.runId;
+        openTurnCandidateId = event.candidateId;
         pending.clear();
         status = "active";
         break;
@@ -57,25 +67,34 @@ export function projectSession(events: readonly AgentSessionEventV1[]): AgentSes
         messages.push(event.payload.message);
         for (const block of event.payload.message.content) {
           if (block.type === "tool-call") {
+            const runId = event.runId ?? openTurnRunId;
+            const candidateId = event.candidateId ?? openTurnCandidateId;
             pending.set(block.id, {
               callId: block.id,
               turn: event.payload.turn,
               step: event.payload.step,
               name: block.name,
               arguments: block.arguments,
-              started: false
+              started: false,
+              ...(runId === undefined ? {} : { runId }),
+              ...(candidateId === undefined ? {} : { candidateId })
             });
           }
         }
         break;
       case "tool/call": {
+        const existing = pending.get(event.payload.callId);
+        const runId = event.runId ?? existing?.runId ?? openTurnRunId;
+        const candidateId = event.candidateId ?? existing?.candidateId ?? openTurnCandidateId;
         pending.set(event.payload.callId, {
           callId: event.payload.callId,
           turn: event.payload.turn,
           step: event.payload.step,
           name: event.payload.name,
           arguments: event.payload.arguments,
-          started: true
+          started: true,
+          ...(runId === undefined ? {} : { runId }),
+          ...(candidateId === undefined ? {} : { candidateId })
         });
         break;
       }
@@ -89,6 +108,8 @@ export function projectSession(events: readonly AgentSessionEventV1[]): AgentSes
       case "turn/end":
         openTurn = undefined;
         openStep = undefined;
+        openTurnRunId = undefined;
+        openTurnCandidateId = undefined;
         pending.clear();
         status = event.payload.reason;
         break;
@@ -100,6 +121,8 @@ export function projectSession(events: readonly AgentSessionEventV1[]): AgentSes
     status,
     ...(openTurn === undefined ? {} : { openTurn }),
     ...(openStep === undefined ? {} : { openStep }),
+    ...(openTurnRunId === undefined ? {} : { openTurnRunId }),
+    ...(openTurnCandidateId === undefined ? {} : { openTurnCandidateId }),
     messages: Object.freeze([...messages]),
     pendingToolCalls: Object.freeze([...pending.values()])
   };
