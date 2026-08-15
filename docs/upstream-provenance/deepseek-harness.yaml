@@ -1,0 +1,72 @@
+schemaVersion: 1
+upstream:
+  name: DeepSeek Harness
+  repository: https://github.com/deepseek-ai/deepseek-harness
+  commit: 47f943859bef60e4160492346772ded9b24f765a
+  license: MIT
+  copyright: Copyright (c) 2026 DeepSeek
+  trademarkNote: No DeepSeek trademark rights or endorsement are implied.
+
+policy:
+  sourceMode: fixed-commit-selective-adaptation
+  preserveOriginalNotices: true
+  requirePerFileEntryBeforeCommit: true
+  defaultMuniuLicense: Apache-2.0
+  dynamicExecutableConfigurationAllowed: false
+
+plannedClusters:
+  - id: agent-kernel
+    upstreamPaths:
+      - packages/core/agent
+      - packages/core/agent-loop
+      - packages/core/scope
+      - packages/core/system-prompt
+    targetPackages:
+      - packages/agent-kernel
+      - packages/agent-host
+    mode: adapted
+  - id: agent-session
+    upstreamPaths:
+      - packages/core/session
+      - packages/core/context
+      - packages/core/compaction
+    targetPackages:
+      - packages/agent-protocol
+      - packages/agent-session
+    mode: adapted
+  - id: tools
+    upstreamPaths:
+      - packages/core/tools
+      - packages/fs
+      - packages/shell
+      - packages/terminal
+      - packages/lsp
+      - packages/skill
+      - packages/subagent
+      - packages/jobs
+      - packages/workflow
+      - packages/todo
+      - packages/web
+      - packages/attachment
+    targetPackages:
+      - packages/agent-tools
+    mode: adapted
+  - id: llm
+    upstreamPaths:
+      - packages/llm/llm
+    targetPackages:
+      - packages/agent-llm
+    mode: adapted
+
+excluded:
+  - DSH CLI and Web user interfaces
+  - ACP integration
+  - Claude Code and Codex subprocess plugins
+  - Anthropic Claude Agent SDK and platform payloads
+  - native/landlock-run and Linux Landlock packages
+  - telemetry, anonymous identifiers, and feedback upload
+  - executable YAML or JavaScript configuration
+  - eval, new Function, HMR-loaded code, and unsigned executable plugins
+
+files: []
+

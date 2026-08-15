@@ -1,0 +1,49 @@
+# Security policy
+
+## Supported versions
+
+Muniu v0.1.x is a Developer Preview. Only the latest released v0.1 patch is
+eligible for security fixes. Source snapshots and unreleased branches receive
+no security support commitment.
+
+## Reporting a vulnerability
+
+Use GitHub private vulnerability reporting for
+https://github.com/muniu-ai/muniu. If that facility is temporarily
+unavailable, contact the maintainers through the private contact method listed
+on the Muniu GitHub organization profile. Do not include exploit details,
+secrets, or affected user data in a public issue.
+
+Include the affected version and commit, reproduction conditions, impact,
+suggested severity, and a minimal proof of concept. Maintainers will
+acknowledge a complete report when reasonably possible, coordinate a fix and
+disclosure, and credit reporters who request credit. There is no guaranteed
+response or remediation SLA for the Developer Preview.
+
+## Security posture
+
+- Telemetry and diagnostic upload are disabled by default.
+- Only context selected for a configured model request is sent to that model
+  endpoint. Users remain responsible for the endpoint's terms and data policy.
+- Secrets must use the encrypted secret store and must not appear in logs,
+  fixtures, diagnostics, or release artifacts.
+- Arbitrary executable plugins, executable YAML/JS configuration, eval, and
+  new Function are outside the v0.1 threat model and are disabled.
+- Side-effecting tools require centralized policy and approval checks.
+
+The planned macOS sandbox combines Seatbelt with an isolated canonical Git
+worktree. It is defense in depth, not a virtual machine or Docker-equivalent
+security boundary. If the required sandbox probe fails, command execution must
+return SANDBOX_UNAVAILABLE and must never run without the sandbox.
+
+Signed and notarized desktop binaries are not published in v0.1.0. The desktop
+updater remains disabled until a separately reviewed signed release channel
+exists.
+
+## Out of scope
+
+Social engineering, denial of service requiring unreasonable traffic,
+reports against unsupported snapshots, and issues that require a user to
+deliberately disable documented safeguards may be closed without a security
+advisory. This does not waive responsible review of credible impact.
+

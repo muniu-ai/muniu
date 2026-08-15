@@ -1,0 +1,9 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/muniu-ai/muniu/security/advisories/new
+    about: Report vulnerabilities privately; do not open a public issue.
+  - name: Support policy
+    url: https://github.com/muniu-ai/muniu/blob/main/SUPPORT.md
+    about: Read the Developer Preview support policy.
+
