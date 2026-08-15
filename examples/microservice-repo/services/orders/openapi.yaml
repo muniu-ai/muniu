@@ -1,0 +1,70 @@
+openapi: 3.1.0
+info:
+  title: Orders API
+  version: 1.0.0
+servers:
+  - url: http://orders:4100
+paths:
+  /health:
+    get:
+      operationId: ordersHealth
+      responses:
+        "200":
+          description: Service is healthy
+  /v1/orders:
+    post:
+      operationId: createOrder
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema:
+            type: string
+            maxLength: 128
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOrder"
+      responses:
+        "201":
+          description: Order confirmed and inventory reserved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "200":
+          description: Idempotent replay of a confirmed order
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "409":
+          description: Inventory or idempotency conflict
+        "502":
+          description: Inventory service unavailable
+components:
+  schemas:
+    CreateOrder:
+      type: object
+      additionalProperties: false
+      required: [sku, quantity]
+      properties:
+        sku:
+          type: string
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        quantity:
+          type: integer
+          minimum: 1
+    Order:
+      type: object
+      additionalProperties: false
+      required: [orderId, sku, quantity, reservationId, status]
+      properties:
+        orderId: { type: string }
+        sku: { type: string }
+        quantity: { type: integer }
+        reservationId: { type: string }
+        status: { type: string, const: confirmed }
+

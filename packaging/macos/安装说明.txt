@@ -1,0 +1,7 @@
+木牛安装说明
+
+1. 将“木牛”应用拖到旁边的 Applications 文件夹。
+2. 从“应用程序”目录启动木牛。
+3. 本地开发或个人自用的 unsigned 构建首次启动时，macOS 可能要求在“系统设置 > 隐私与安全性”中确认打开。
+
+公开分发版本必须经过 Developer ID Application 签名和 Apple 公证。请勿把 unsigned 构建当作正式发布版本。

@@ -1,0 +1,55 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "木牛",
+  "version": "0.1.0",
+  "identifier": "dev.muniu.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:5173",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "木牛",
+        "width": 1180,
+        "height": 760,
+        "minWidth": 960,
+        "minHeight": 640,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "createUpdaterArtifacts": true,
+    "externalBin": ["binaries/mn-api"],
+    "resources": {
+      "binaries/mn-api-aarch64-apple-darwin": "mn-api-aarch64-apple-darwin",
+      "binaries/mn-api-x86_64-apple-darwin": "mn-api-x86_64-apple-darwin"
+    },
+    "targets": ["dmg", "app"],
+    "macOS": {
+      "minimumSystemVersion": "12.0"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDVDMkIxRjVCMDVBOEZBNDgKUldSSStxZ0ZXeDhyWFAvNFIyQnYzUEtzMVVJNUgzNHJJMmVhakk4ZDlNRGZ1bTVLZ3RiVFJJU1kK",
+      "endpoints": [
+        "https://github.com/muniu-ai/muniu/releases/latest/download/latest.json"
+      ]
+    },
+    "deep-link": {
+      "desktop": {
+        "schemes": ["mniu"]
+      }
+    }
+  }
+}

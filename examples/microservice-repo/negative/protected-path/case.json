@@ -1,0 +1,14 @@
+{
+  "gate": "protected_path",
+  "changedPaths": [
+    ".mn/standards.lock",
+    "services/orders/src/server.mjs"
+  ],
+  "protectedPaths": [
+    ".github/**",
+    ".mn/standards.lock",
+    "standards/**"
+  ],
+  "expectedStatus": "fail"
+}
+

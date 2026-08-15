@@ -1,0 +1,29 @@
+asyncapi: 3.0.0
+info:
+  title: Orders Events
+  version: 1.0.0
+channels:
+  orders.confirmed:
+    address: orders.confirmed
+    messages:
+      orderConfirmed:
+        $ref: "#/components/messages/OrderConfirmed"
+operations:
+  publishOrderConfirmed:
+    action: send
+    channel:
+      $ref: "#/channels/orders.confirmed"
+components:
+  messages:
+    OrderConfirmed:
+      name: OrderConfirmed
+      payload:
+        type: object
+        additionalProperties: false
+        required: [eventId, orderId, reservationId, occurredAt]
+        properties:
+          eventId: { type: string }
+          orderId: { type: string }
+          reservationId: { type: string }
+          occurredAt: { type: string, format: date-time }
+

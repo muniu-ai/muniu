@@ -1,0 +1,109 @@
+{
+  "apiVersion": "mn.dev/spec/v1",
+  "kind": "SpecRevision",
+  "revision": {
+    "specSetId": "order-reservation",
+    "revision": 1,
+    "status": "approved",
+    "source": "native",
+    "title": "Create an order with an inventory reservation",
+    "hypothesis": "A versioned reservation contract and idempotent Saga let customers create orders without overselling stock.",
+    "outcomes": [
+      "A valid order confirms only after inventory is reserved.",
+      "Retries do not reserve inventory more than once.",
+      "Insufficient stock produces an explicit business rejection."
+    ],
+    "nonGoals": [
+      "Payment capture and production deployment are outside this increment."
+    ],
+    "targetServices": [
+      "orders",
+      "inventory"
+    ],
+    "contracts": {
+      "interface": {
+        "breaking": false,
+        "openapi": [
+          "services/orders/openapi.yaml",
+          "services/inventory/openapi.yaml"
+        ],
+        "asyncapi": "services/orders/events.asyncapi.yaml"
+      },
+      "data": {
+        "owners": {
+          "orders-db": "orders",
+          "inventory-db": "inventory"
+        },
+        "sharedDatabase": false
+      },
+      "state": {
+        "order": ["pending", "confirmed", "rejected"],
+        "reservation": ["reserved", "released"],
+        "consistency": "saga"
+      },
+      "permission": {
+        "createOrder": ["commerce_customer"],
+        "reserveInventory": ["orders_service"]
+      },
+      "exception": {
+        "insufficientStock": 409,
+        "inventoryUnavailable": 502,
+        "invalidInput": 400
+      },
+      "quality": {
+        "p95LatencyMs": 500,
+        "maxRepairAttempts": 3,
+        "idempotencyRequired": true
+      },
+      "observability": {
+        "metrics": ["orders_created_total", "inventory_reserved_total"],
+        "trace": "order-create",
+        "releaseProbe": "POST /v1/orders then GET /v1/stock/{sku}"
+      }
+    },
+    "acceptanceCases": [
+      {
+        "id": "accept-order-reservation",
+        "kind": "positive",
+        "title": "Confirm an order across services",
+        "given": ["SKU sku-demo has five available units."],
+        "when": "A customer creates an order for two units.",
+        "then": ["The order is confirmed.", "Inventory falls to three units."],
+        "targetService": "orders"
+      },
+      {
+        "id": "accept-insufficient-stock",
+        "kind": "negative",
+        "title": "Reject an order without enough stock",
+        "given": ["Fewer units are available than requested."],
+        "when": "A customer creates the order.",
+        "then": ["The API responds with 409.", "No order is confirmed."],
+        "targetService": "orders"
+      },
+      {
+        "id": "accept-idempotent-retry",
+        "kind": "boundary",
+        "title": "Retry the same order safely",
+        "given": ["An order request already completed with an idempotency key."],
+        "when": "The identical request is retried with the same key.",
+        "then": ["The original order is returned.", "Inventory is not reserved twice."],
+        "targetService": "inventory"
+      }
+    ],
+    "risks": [
+      {
+        "id": "risk-partial-saga",
+        "level": "high",
+        "description": "The order may not persist after inventory reservation.",
+        "mitigation": "Use an idempotent reservation and compensating release before production rollout."
+      }
+    ],
+    "unknowns": [],
+    "createdAt": "2026-07-11T00:00:00.000Z",
+    "createdBy": "commerce-product@example.com",
+    "approvedAt": "2026-07-11T01:00:00.000Z",
+    "approvedBy": "commerce-architecture@example.com",
+    "digest": "0f46c0d94052fe71e3e1becd90425a3a3c615c490374832b35ba64844309b8f3"
+  }
+}
+

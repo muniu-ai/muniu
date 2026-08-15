@@ -1,0 +1,7 @@
+/services/orders/ @commerce-orders
+/services/inventory/ @commerce-inventory
+/specs/ @commerce-architecture @commerce-product
+/.mn/ @enterprise-platform
+/standards/ @enterprise-governance
+/negative/ @enterprise-quality
+

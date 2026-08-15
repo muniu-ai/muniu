@@ -1,0 +1,121 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("MN_DATABASE_URL")
+}
+
+model Project {
+  id            String   @id
+  name          String
+  rootPath      String
+  defaultBranch String
+  policyId      String
+  services      Service[]
+  tasks         Task[]
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model Service {
+  id        String   @id
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name      String
+  path      String
+  owners    Json
+  language  String
+  contracts Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Task {
+  id                 String   @id
+  projectId          String
+  project            Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  title              String
+  intent             String
+  targetServices     Json
+  prompt             String
+  acceptanceCriteria Json
+  strategy           Json
+  runs               Run[]
+  createdAt          DateTime @default(now())
+}
+
+model Run {
+  id                String      @id
+  taskId            String
+  task              Task        @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  projectId         String
+  status            String
+  winnerCandidateId String?
+  candidates        Candidate[]
+  gates             GateResult[]
+  artifacts         Artifact[]
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+}
+
+model Candidate {
+  id           String       @id
+  runId        String
+  run          Run          @relation(fields: [runId], references: [id], onDelete: Cascade)
+  provider     String
+  worktreePath String
+  status       String
+  result       Json?
+  gates        GateResult[]
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+}
+
+model GateResult {
+  id          String     @id
+  runId       String
+  run         Run        @relation(fields: [runId], references: [id], onDelete: Cascade)
+  candidateId String?
+  candidate   Candidate? @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  gate        String
+  status      String
+  summary     String
+  evidence    Json
+  createdAt   DateTime   @default(now())
+}
+
+model Artifact {
+  id          String   @id
+  runId       String
+  run         Run      @relation(fields: [runId], references: [id], onDelete: Cascade)
+  kind        String
+  path        String
+  sha256      String?
+  contentType String?
+  createdAt   DateTime @default(now())
+}
+
+model Policy {
+  id                                   String   @id
+  name                                 String
+  allowedProviders                     Json
+  defaultRequiredGates                 Json
+  commandAllowlist                     Json
+  protectedPaths                       Json
+  requireHumanApprovalForCrossService  Boolean
+  maxCandidates                        Int
+  maxTimeoutSeconds                    Int
+  createdAt                            DateTime @default(now())
+  updatedAt                            DateTime @updatedAt
+}
+
+model AuditLog {
+  id        String   @id
+  actor     String
+  action    String
+  target    String
+  metadata  Json
+  createdAt DateTime @default(now())
+}

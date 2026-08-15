@@ -1,0 +1,25 @@
+{
+  "name": "@mn/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "mn": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.test.json && node --test dist-test/test/**/*.test.js",
+    "dev": "npm run build && node dist/index.js"
+  },
+  "dependencies": {
+    "@mn/core": "^0.1.0",
+    "@mn/executors": "^0.1.0",
+    "@mn/harness": "^0.1.0",
+    "@mn/loop": "^0.1.0",
+    "@mn/specs": "^0.1.0",
+    "@mn/worker": "^0.1.0",
+    "yaml": "^2.4.2"
+  }
+}

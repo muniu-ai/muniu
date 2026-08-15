@@ -1,0 +1,15 @@
+{
+  "id": "enterprise-fixture-trust",
+  "requireSignature": true,
+  "requireReleaseMetadata": false,
+  "requireReleaseSignature": false,
+  "trustedPublicKeys": [
+    {
+      "id": "enterprise-fixture-2026",
+      "publicKey": "MCowBQYDK2VwAyEA3s2YZ56XbCL2rwtgZjU/FQDdDm51hvGt0xtTWZLCvC0=",
+      "status": "active"
+    }
+  ],
+  "revokedPublicKeyIds": [],
+  "verificationTime": "2026-07-11T02:00:00.000Z"
+}

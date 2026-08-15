@@ -1,0 +1,37 @@
+{
+  "name": "@mn/api",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.test.json && node --test dist-test/test/**/*.test.js",
+    "dev": "npm run build && node dist/index.js",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@mn/config-manager": "0.1.0",
+    "@mn/connectors": "0.1.0",
+    "@mn/core": "0.1.0",
+    "@mn/evidence": "0.1.0",
+    "@mn/executors": "0.1.0",
+    "@mn/extensions": "0.1.0",
+    "@mn/governance": "0.1.0",
+    "@mn/harness": "0.1.0",
+    "@mn/local-proxy": "0.1.0",
+    "@mn/loop": "0.1.0",
+    "@mn/provider-catalog": "0.1.0",
+    "@mn/specs": "0.1.0",
+    "@mn/store": "0.1.0",
+    "@mn/usage": "0.1.0",
+    "@mn/worker": "0.1.0",
+    "fastify": "^5.2.1",
+    "pg": "^8.22.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.20.0"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "gate": "contract",
+  "type": "openapi",
+  "previous": "previous.openapi.yaml",
+  "current": "current.openapi.yaml",
+  "expectedStatus": "fail",
+  "expectedFinding": "removed paths entry /v1/orders/{orderId}"
+}
+

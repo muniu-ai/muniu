@@ -1,0 +1,43 @@
+{
+  "name": "mn-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "npm@11.10.1",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w @mn/specs && npm run build -w @mn/governance && npm run build -w @mn/harness && npm run build -w @mn/core && npm run build -w @mn/loop && npm run build -w @mn/evidence && npm run build -w @mn/provider-catalog && npm run build -w @mn/usage && npm run build -w @mn/config-manager && npm run build -w @mn/extensions && npm run build -w @mn/store && npm run build -w @mn/local-proxy && npm run build -w @mn/executors && npm run build -w @mn/verifier && npm run build -w @mn/connectors && npm run build -w @mn/worker && npm run build -w @mn/api && npm run build -w @mn/cli",
+    "typecheck": "npm run typecheck -w @mn/specs && npm run typecheck -w @mn/governance && npm run typecheck -w @mn/harness && npm run typecheck -w @mn/core && npm run typecheck -w @mn/loop && npm run typecheck -w @mn/evidence && npm run typecheck -w @mn/provider-catalog && npm run typecheck -w @mn/usage && npm run typecheck -w @mn/config-manager && npm run typecheck -w @mn/extensions && npm run typecheck -w @mn/store && npm run typecheck -w @mn/local-proxy && npm run typecheck -w @mn/executors && npm run typecheck -w @mn/verifier && npm run typecheck -w @mn/connectors && npm run typecheck -w @mn/worker && npm run typecheck -w @mn/api && npm run typecheck -w @mn/cli",
+    "test": "npm run build && npm run test -w @mn/specs && npm run test -w @mn/governance && npm run test -w @mn/harness && npm run test -w @mn/core && npm run test -w @mn/loop && npm run test -w @mn/evidence && npm run test -w @mn/provider-catalog && npm run test -w @mn/usage && npm run test -w @mn/config-manager && npm run test -w @mn/extensions && npm run test -w @mn/store && npm run test -w @mn/local-proxy && npm run test -w @mn/executors && npm run test -w @mn/verifier && npm run test -w @mn/connectors && npm run test -w @mn/worker && npm run test -w @mn/api && npm run test -w @mn/cli",
+    "dev:api": "npm run build && node apps/api/dist/index.js",
+    "dev:worker": "npm run build && node apps/worker/dist/index.js",
+    "dev:cli": "npm run build -w @mn/cli && node apps/cli/dist/index.js",
+    "dev:desktop": "npm run dev -w @mn/desktop-mac",
+    "build:desktop": "npm run build -w @mn/desktop-mac",
+    "typecheck:desktop": "npm run typecheck -w @mn/desktop-mac",
+    "verify:desktop-extensions": "npm run build -w @mn/api && npm run verify:extensions-ui -w @mn/desktop-mac",
+    "verify:desktop-observability": "npm run build -w @mn/api && npm run verify:observability-ui -w @mn/desktop-mac",
+    "verify:desktop-task-fusion": "npm run build -w @mn/api && npm run verify:task-fusion-ui -w @mn/desktop-mac",
+    "verify:desktop-settings": "npm run build -w @mn/config-manager && npm run build -w @mn/api && npm run verify:settings-ui -w @mn/desktop-mac",
+    "verify:desktop-close-behavior": "npm run verify:close-behavior-source -w @mn/desktop-mac",
+    "verify:enterprise-fixture": "node scripts/enterprise-e2e.mjs",
+    "verify:enterprise-dependencies": "node scripts/enterprise-e2e.mjs --with-compose",
+    "verify:enterprise-e2e": "node scripts/enterprise-e2e.mjs --with-compose --api-flow",
+    "verify:mac-release": "node scripts/verify-macos-release.mjs",
+    "verify:mac-packaged-app": "node scripts/verify-packaged-macos-app.mjs",
+    "build:daemon-sidecar": "npm run build && node scripts/build-daemon-sidecar.mjs",
+    "preflight:mac-signing": "node scripts/preflight-macos-signing.mjs",
+    "tauri:desktop": "npm run tauri -w @mn/desktop-mac",
+    "release:mac": "npm run build:daemon-sidecar && npm run tauri:build -w @mn/desktop-mac"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@yao-pkg/pkg": "^6.21.0",
+    "ds-store": "^0.1.6",
+    "esbuild": "^0.28.1",
+    "typescript": "^5.7.2"
+  }
+}

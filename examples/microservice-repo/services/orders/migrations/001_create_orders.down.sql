@@ -1,0 +1,5 @@
+BEGIN;
+DROP TABLE IF EXISTS order_outbox;
+DROP TABLE IF EXISTS orders;
+COMMIT;
+

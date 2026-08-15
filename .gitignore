@@ -1,0 +1,36 @@
+# Dependencies and package-manager state
+node_modules/
+**/node_modules/
+
+# Build and test outputs
+dist/
+dist-test/
+target/
+coverage/
+.turbo/
+.cache/
+*.tsbuildinfo
+
+# Local runtime state and secrets
+.env
+.env.local
+.mn/
+.mniu/
+.muniu/
+secret-key.json
+secrets/
+*.pem
+*.key
+*.p12
+*.mobileprovision
+
+# Generated desktop sidecars (keep the dispatcher script)
+apps/desktop-mac/src-tauri/binaries/mn-api-aarch64-apple-darwin
+apps/desktop-mac/src-tauri/binaries/mn-api-x86_64-apple-darwin
+
+# Developer-local state
+.DS_Store
+.idea/
+.gdp-state/
+.worktrees/
+*.log

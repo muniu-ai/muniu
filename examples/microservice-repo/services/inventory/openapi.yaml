@@ -1,0 +1,69 @@
+openapi: 3.1.0
+info:
+  title: Inventory API
+  version: 1.0.0
+servers:
+  - url: http://inventory:4101
+paths:
+  /health:
+    get:
+      operationId: inventoryHealth
+      responses:
+        "200":
+          description: Service is healthy
+  /v1/reservations:
+    post:
+      operationId: reserveInventory
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReserveInventory"
+      responses:
+        "201":
+          description: Inventory reserved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Reservation"
+        "200":
+          description: Idempotent reservation replay
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Reservation"
+        "409":
+          description: Insufficient stock or idempotency conflict
+  /v1/stock/{sku}:
+    get:
+      operationId: getStock
+      parameters:
+        - in: path
+          name: sku
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Current available stock
+components:
+  schemas:
+    ReserveInventory:
+      type: object
+      additionalProperties: false
+      required: [orderId, sku, quantity]
+      properties:
+        orderId: { type: string }
+        sku: { type: string }
+        quantity: { type: integer, minimum: 1 }
+    Reservation:
+      type: object
+      additionalProperties: false
+      required: [reservationId, orderId, sku, quantity, status]
+      properties:
+        reservationId: { type: string }
+        orderId: { type: string }
+        sku: { type: string }
+        quantity: { type: integer }
+        status: { type: string, const: reserved }
+

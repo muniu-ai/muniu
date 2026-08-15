@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "id": "enterprise-microservices",
+  "name": "Enterprise Microservice Baseline",
+  "version": "1.0.0",
+  "description": "Fail-closed SDD, Harness and bounded Loop baseline for enterprise microservices.",
+  "rules": {
+    "requiredGates": [
+      "spec_schema",
+      "spec_approval",
+      "acceptance_coverage",
+      "diff_scope",
+      "protected_path",
+      "contract",
+      "migration_safety",
+      "security",
+      "unit",
+      "integration"
+    ],
+    "deny": [
+      "cross-service-shared-database",
+      "runtime-spec-mutation",
+      "unsigned-learning-promotion"
+    ],
+    "protectedPaths": [
+      ".github/**",
+      ".mn/standards.lock",
+      "standards/**"
+    ],
+    "allowedProviders": ["claude", "codex"],
+    "commandAllowlist": ["node", "npm"],
+    "networkAllowlist": ["127.0.0.1", "jwks", "localhost", "minio", "postgres"],
+    "budgets": {
+      "maxCandidates": 2,
+      "maxDurationSeconds": 1800,
+      "maxTokens": 200000,
+      "maxCostUsd": 50,
+      "maxRepairAttempts": 3,
+      "maxChangedFiles": 40,
+      "maxChangedLines": 3000
+    },
+    "approvalMode": "before-merge"
+  },
+  "specTemplates": ["specs/order-reservation/spec.yaml"],
+  "architectureRules": [
+    "migration-rollback-required",
+    "service-data-single-owner",
+    "cross-service-owner-approval"
+  ],
+  "harnessProfiles": ["enterprise-container-v1"],
+  "workflows": ["governed-increment-v1"],
+  "release": {
+    "sequence": 1,
+    "publishedAt": "2026-07-11T00:00:00.000Z",
+    "changelog": "Initial enterprise microservice baseline."
+  },
+  "signature": {
+    "algorithm": "ed25519",
+    "keyId": "enterprise-fixture-2026",
+    "value": "EdgmpSDMc3euSzrX5BkbDspxKGOiJq7J+tHb49+UiY4oDJ+66KQKhwIend5QRZ45JYy4BezOIj4dVqOOp+l2Aw=="
+  }
+}
+
