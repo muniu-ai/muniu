@@ -7,8 +7,8 @@
   "type": "module",
   "packageManager": "npm@11.10.1",
   "engines": {
-    "node": ">=22.19.0 <23",
-    "npm": ">=11.10.1 <12"
+    "node": ">=22.19.0 <22.20.0",
+    "npm": "11.10.1"
   },
   "workspaces": [
     "apps/*",
@@ -48,6 +48,7 @@
     "ds-store": "^0.1.6",
     "esbuild": "^0.28.1",
     "spdx-expression-parse": "3.0.1",
-    "typescript": "5.7.2"
+    "typescript": "5.7.2",
+    "yaml": "2.9.0"
   }
 }

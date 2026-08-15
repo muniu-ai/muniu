@@ -39,6 +39,22 @@ test("secret scan allows only the documented fake fixture values", async () => {
   ]);
 });
 
+test("secret scan checks every match around an allowlisted fake value", () => {
+  const realBefore = ["AKIA", "1111111111111111"].join("");
+  const allowedFake = ["AKIA", "0000000000000000"].join("");
+  const realAfter = ["AKIA", "2222222222222222"].join("");
+  const content = Buffer.from(`${realBefore}\0${allowedFake}\0${realAfter}`);
+
+  assert.deepEqual(findSecretFindings(content, ".gitleaks.toml"), [
+    { label: "AWS access key", path: ".gitleaks.toml" },
+    { label: "AWS access key", path: ".gitleaks.toml" }
+  ]);
+  assert.deepEqual(
+    findSecretFindings(`${allowedFake}\0${realAfter}`, ".gitleaks.toml"),
+    [{ label: "AWS access key", path: ".gitleaks.toml" }]
+  );
+});
+
 test("workflow scan includes nested repository workflows", () => {
   const failures = findUnpinnedWorkflowActions([
     {
@@ -53,6 +69,46 @@ test("workflow scan includes nested repository workflows", () => {
 
   assert.equal(failures.length, 1);
   assert.match(failures[0], /examples\/service\/\.github\/workflows\/fixture\.yml/u);
+});
+
+test("workflow scan parses YAML uses keys and rejects mutable Docker actions", () => {
+  const failures = findUnpinnedWorkflowActions([
+    {
+      path: ".github/workflows/supply-chain.yml",
+      text: [
+        "jobs:",
+        "  build:",
+        "    uses : actions/checkout@v4",
+        "  test:",
+        "    steps:",
+        "      - uses: docker://alpine:latest",
+        "      - uses: ./.github/actions/local",
+        "      - uses: docker://alpine@sha256:" + "a".repeat(64),
+        "      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020"
+      ].join("\n")
+    }
+  ]);
+
+  assert.equal(failures.length, 2);
+  assert.match(failures[0], /actions\/checkout@v4/u);
+  assert.match(failures[1], /docker:\/\/alpine:latest/u);
+});
+
+test("workflow scan fails closed for invalid YAML and escaping local actions", () => {
+  const failures = findUnpinnedWorkflowActions([
+    {
+      path: ".github/workflows/invalid.yml",
+      text: "jobs: ["
+    },
+    {
+      path: ".github/workflows/escape.yml",
+      text: "jobs:\n  build:\n    steps:\n      - uses: ./../outside/action"
+    }
+  ]);
+
+  assert.equal(failures.length, 2);
+  assert.match(failures[0], /invalid YAML/u);
+  assert.match(failures[1], /\.\/\.\.\/outside\/action/u);
 });
 
 test("attribution policy rejects claiming unimported upstream code in NOTICE", () => {

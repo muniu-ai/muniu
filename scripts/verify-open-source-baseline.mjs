@@ -49,6 +49,7 @@ const requiredFiles = [
   "CHANGELOG.md",
   "SUPPORT.md",
   "GOVERNANCE.md",
+  ".node-version",
   ".npmrc",
   ".gitleaks.toml",
   "deny.toml",
@@ -103,9 +104,14 @@ for (const manifestPath of workspaceManifests) {
 
 const rootPackage = readJson("package.json");
 if (rootPackage.packageManager !== "npm@11.10.1") fail("packageManager must be npm@11.10.1");
-if (rootPackage.engines?.node !== ">=22.19.0 <23") fail("Node engine must be >=22.19.0 <23");
-if (rootPackage.engines?.npm !== ">=11.10.1 <12") fail("npm engine must be >=11.10.1 <12");
+if (rootPackage.engines?.node !== ">=22.19.0 <22.20.0") {
+  fail("Node engine must stay within the supported 22.19.x line");
+}
+if (rootPackage.engines?.npm !== "11.10.1") fail("npm engine must be exactly 11.10.1");
 if (rootPackage.devDependencies?.typescript !== "5.7.2") fail("TypeScript must be pinned exactly to 5.7.2");
+if (rootPackage.devDependencies?.yaml !== "2.9.0") {
+  fail("the workflow policy parser must declare yaml 2.9.0 directly");
+}
 if (rootPackage.scripts?.["test:oss-policy"] !== "node --test scripts/test/open-source-policy.test.mjs") {
   fail("test:oss-policy must run the open-source policy regression suite");
 }
@@ -114,10 +120,15 @@ if (rootPackage.scripts?.["verify:licenses"] !== "node scripts/verify-third-part
 }
 
 const npmrc = readFileSync(path.join(root, ".npmrc"), "utf8");
+const nodeVersionPath = path.join(root, ".node-version");
+if (existsSync(nodeVersionPath) && readFileSync(nodeVersionPath, "utf8").trim() !== "22.19.0") {
+  fail(".node-version must pin Node 22.19.0");
+}
 if (!/^registry=https:\/\/registry\.npmjs\.org\/$/mu.test(npmrc)) {
   fail(".npmrc must pin the official npm registry used by installs and audit");
 }
 if (!/^audit=true$/mu.test(npmrc)) fail(".npmrc must keep npm audit enabled");
+if (!/^engine-strict=true$/mu.test(npmrc)) fail(".npmrc must enforce the pinned Node and npm engines");
 if (npmrc.includes(obsoleteRegistryHost)) fail(".npmrc uses an obsolete registry mirror");
 
 const gitleaksConfig = readFileSync(path.join(root, ".gitleaks.toml"), "utf8");

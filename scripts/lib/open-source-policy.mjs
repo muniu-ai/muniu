@@ -1,4 +1,7 @@
+import path from "node:path";
+
 import parseSpdxExpression from "spdx-expression-parse";
+import { parseDocument } from "yaml";
 
 const fakeSecretFixturePath = "scripts/test/fixtures/allowed-fake-secrets.txt";
 const allowedFakeSecretLocations = new Map([
@@ -60,8 +63,10 @@ export function findSecretFindings(content, relativePath) {
   const text = Buffer.isBuffer(content) ? content.toString("utf8") : String(content);
   const findings = [];
   for (const { label, pattern } of secretPatterns) {
-    const match = pattern.exec(text);
-    if (match && !allowedFakeSecretLocations.get(match[0])?.has(relativePath)) {
+    const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
+    const matches = text.matchAll(new RegExp(pattern.source, flags));
+    for (const match of matches) {
+      if (allowedFakeSecretLocations.get(match[0])?.has(relativePath)) continue;
       findings.push({ label, path: relativePath });
     }
   }
@@ -72,17 +77,66 @@ export function findUnpinnedWorkflowActions(files) {
   const failures = [];
   for (const file of files) {
     if (!/(?:^|\/)\.github\/workflows\/[^/]+\.ya?ml$/u.test(file.path)) continue;
-    for (const line of file.text.split("\n")) {
-      if (!line.includes("uses:")) continue;
-      const reference = line.match(/uses:\s+([^\s#]+)/u)?.[1];
-      if (reference?.startsWith("./") || reference?.startsWith("docker://")) continue;
-      const revision = reference?.match(/@([^@]+)$/u)?.[1];
-      if (!revision || !/^[0-9a-f]{40}$/u.test(revision)) {
-        failures.push(`${file.path}: ${line.trim()}`);
+    let workflow;
+    try {
+      const document = parseDocument(file.text, {
+        prettyErrors: false,
+        strict: true,
+        uniqueKeys: true
+      });
+      if (document.errors.length > 0 || document.warnings.length > 0) {
+        const issue = document.errors[0] ?? document.warnings[0];
+        throw issue;
       }
+      workflow = document.toJS({ maxAliasCount: 0 });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message.split("\n", 1)[0] : String(error);
+      failures.push(`${file.path}: invalid YAML (${detail})`);
+      continue;
+    }
+
+    const references = [];
+    collectWorkflowUses(workflow, references, new WeakSet());
+    for (const reference of references) {
+      if (isPinnedWorkflowReference(reference)) continue;
+      failures.push(`${file.path}: ${formatWorkflowReference(reference)}`);
     }
   }
   return failures;
+}
+
+function collectWorkflowUses(value, references, seen) {
+  if (!value || typeof value !== "object") return;
+  if (seen.has(value)) throw new Error("workflow YAML contains a cyclic value");
+  seen.add(value);
+  if (Array.isArray(value)) {
+    for (const entry of value) collectWorkflowUses(entry, references, seen);
+    return;
+  }
+  for (const [key, entry] of Object.entries(value)) {
+    if (key === "uses") references.push(entry);
+    collectWorkflowUses(entry, references, seen);
+  }
+}
+
+function isPinnedWorkflowReference(reference) {
+  if (typeof reference !== "string" || reference.length === 0) return false;
+  if (reference.startsWith("./")) {
+    const relative = reference.slice(2);
+    if (!relative || relative.includes("\\") || relative.includes("\0")) return false;
+    const normalized = path.posix.normalize(relative);
+    return normalized !== ".." && !normalized.startsWith("../") && !path.posix.isAbsolute(normalized);
+  }
+  if (reference.startsWith("docker://")) {
+    return /^docker:\/\/[^@\s]+@sha256:[0-9a-f]{64}$/u.test(reference);
+  }
+  return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*@[0-9a-f]{40}$/u.test(
+    reference
+  );
+}
+
+function formatWorkflowReference(reference) {
+  return typeof reference === "string" ? reference : `<non-string uses: ${typeof reference}>`;
 }
 
 export function validateAttributionPolicy({ notice, thirdParty, provenance }) {
