@@ -56,16 +56,26 @@ export class BlockAssembler {
         return;
       }
       case "tool-call-delta": {
+        if (chunk.id.length === 0) throw new Error(`tool call at index ${chunk.index} is missing an id`);
         const partial = this.ensure(chunk.index, "tool-call");
-        if (partial.block !== undefined) return;
+        if (partial.block !== undefined) throw new Error(`tool call at index ${chunk.index} already ended`);
+        if (partial.toolCallId !== undefined && partial.toolCallId !== chunk.id) {
+          throw new Error(`tool call id conflict at index ${chunk.index}`);
+        }
         partial.toolCallId = chunk.id;
-        if (chunk.name !== undefined) partial.toolCallName = chunk.name;
+        if (chunk.name !== undefined) {
+          if (chunk.name.length === 0) throw new Error(`tool call at index ${chunk.index} is missing a name`);
+          if (partial.toolCallName !== undefined && partial.toolCallName !== chunk.name) {
+            throw new Error(`tool call name conflict at index ${chunk.index}`);
+          }
+          partial.toolCallName = chunk.name;
+        }
         partial.toolCallArguments += chunk.argumentsDelta;
         return;
       }
       case "block-end": {
         const partial = this.ensure(chunk.index, chunk.block.type);
-        if (partial.block === undefined) partial.block = chunk.block;
+        this.finishBlock(partial, chunk.block, chunk.index);
         return;
       }
       case "usage":
@@ -78,6 +88,27 @@ export class BlockAssembler {
         this.currentFinish = chunk.reason;
         return;
     }
+  }
+
+  private finishBlock(partial: PartialBlock, block: ContentBlock, index: number): void {
+    if (block.type === "tool-call" && (block.id.length === 0 || block.name.length === 0)) {
+      throw new Error(`tool call at index ${index} is missing an id or name`);
+    }
+    if (partial.block !== undefined) {
+      if (JSON.stringify(partial.block) !== JSON.stringify(block)) throw new Error(`block end conflict at index ${index}`);
+      return;
+    }
+    if ((block.type === "text" || block.type === "thinking") && partial.text.length > 0 && partial.text !== block.text) {
+      throw new Error(`block end conflict at index ${index}`);
+    }
+    if (block.type === "tool-call") {
+      if (partial.toolCallId !== undefined && partial.toolCallId !== block.id) throw new Error(`block end id conflict at index ${index}`);
+      if (partial.toolCallName !== undefined && partial.toolCallName !== block.name) throw new Error(`block end name conflict at index ${index}`);
+      if (partial.toolCallArguments.length > 0 && partial.toolCallArguments !== block.arguments) {
+        throw new Error(`block end arguments conflict at index ${index}`);
+      }
+    }
+    partial.block = block;
   }
 
   private ensure(index: number, blockType: ContentBlockType): PartialBlock {

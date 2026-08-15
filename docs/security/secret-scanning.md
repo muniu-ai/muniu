@@ -17,3 +17,8 @@ The initial local snapshot at commit `4f00f46e3d80ca3e4af51e0ede467b97827e9822` 
 | Harness hardening test | 1 | The structurally JWT-shaped value is synthetic header/payload text with a literal test signature and is injected to verify rejection of secret-bearing context. |
 
 All reviewed values are non-secret test data. The committed configuration records the exact values because gitleaks must match them, while reports and release notes must redact them. Any new or uncertain finding blocks the build until it is investigated; it must never be added to the allowlist solely to make CI pass.
+
+Credential detection is independent of business-content redaction. The
+narrow business rule in `redaction-policy.md` does not weaken gitleaks, this
+repository scanner, or the requirement to hide every API key, token, password,
+and private key.

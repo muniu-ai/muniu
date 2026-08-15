@@ -16,12 +16,12 @@ import {
 } from "@mn/agent-protocol";
 
 import { projectSession } from "./projection.js";
-import type { AgentSessionLike } from "./types.js";
+import type { AgentSessionExclusiveView, AgentSessionLike } from "./types.js";
 
 export const TOOL_NOT_STARTED = "TOOL_NOT_STARTED";
 export const TOOL_OUTCOME_UNKNOWN = "TOOL_OUTCOME_UNKNOWN";
 
-export async function recoverInterruptedSession(session: AgentSessionLike): Promise<AgentSessionEventV1[]> {
+async function recoverOnce(session: AgentSessionExclusiveView): Promise<AgentSessionEventV1[]> {
   const projection = projectSession(session.events);
   if (projection.openTurn === undefined) return [];
   const appended: AgentSessionEventV1[] = [];
@@ -61,4 +61,8 @@ export async function recoverInterruptedSession(session: AgentSessionLike): Prom
   appended.push(await session.append("turn/end", { turn: projection.openTurn, reason: "interrupted" }));
   await session.flush();
   return appended;
+}
+
+export function recoverInterruptedSession(session: AgentSessionLike): Promise<AgentSessionEventV1[]> {
+  return session.withExclusive(recoverOnce);
 }

@@ -117,3 +117,15 @@ files:
     localPath: packages/agent-tools/src/define-tool.ts
     mode: adapted
     summary: Retained schema enforcement and typed tool construction while removing output DSL, presentation hooks, and plugin concurrency policy.
+  - upstreamPath: packages/core/agent-loop/src/agent.ts
+    localPath: packages/agent-kernel/src/react-driver.ts
+    mode: adapted
+    summary: Retained a bounded model and tool reaction loop while replacing Cordis hooks and plugin extension points with static runtimes and durable events.
+  - upstreamPath: packages/core/agent-loop/src/tool-calls.ts
+    localPath: packages/agent-kernel/src/tool-step.ts
+    mode: adapted
+    summary: Reduced tool-call processing to sequential execution with an awaited durable call event before dispatch and a closed result event afterward.
+  - upstreamPath: packages/core/system-prompt/src/index.ts
+    localPath: packages/agent-kernel/src/system-prompt.ts
+    mode: adapted
+    summary: Retained deterministic section joining and variable interpolation while removing Cordis services, runtime discovery, and extension hooks.

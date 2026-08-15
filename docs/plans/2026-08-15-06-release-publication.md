@@ -19,6 +19,7 @@
 - GHCR 多架构镜像仅承诺在受支持 macOS 的 Docker Desktop 使用。
 - CI 固定 Action SHA、最小权限和 release environment 审批；受保护 main 与不可变 v0.1.0 标签才能发布。
 - 发布环境的 DeepSeek live smoke 使用专用密钥和最小合成提示，不发送项目源码。
+- 发布日志、SBOM、manifest、portable 与镜像扫描同时验证数据策略：业务样例仅手机号/身份证号脱敏；API key、token、password、private key 等凭据始终隐藏且 raw/debug 不可绕过。
 - 公开前启用 branch/tag ruleset、DCO、Dependabot、secret scanning/push protection 和 private vulnerability reporting。
 
 ## 测试命令与退出门槛
@@ -30,4 +31,4 @@ npm audit --omit=dev
 ./scripts/verify-release-artifacts.sh dist/release/v0.1.0
 ~~~
 
-两个 portable 包在仓库外完成 mn --version、mn --help、API /healthz、mn doctor 和 mock Agent；源码包可重建；所有 hash/SBOM 匹配后方可公开仓库并创建不可覆盖的 v0.1.0 Release。
+两个 portable 包在仓库外完成 mn --version、mn --help、API /healthz、mn doctor 和 mock Agent；源码包可重建；制品与 CI 日志的凭据扫描为零，业务脱敏 fixture 只改变手机号/身份证号；所有 hash/SBOM 匹配后方可公开仓库并创建不可覆盖的 v0.1.0 Release。

@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import { snapshotJsonValue, type JsonValue, type ToolSchema } from "@mn/agent-protocol";
+import { deepFreeze, snapshotJsonValue, type JsonValue, type ToolSchema } from "@mn/agent-protocol";
 
 import { validateJsonSchemaValue } from "./json-schema.js";
-import type { ToolDefinition, ToolRisk, ToolRunContext } from "./define-tool.js";
+import { defineTool, type ToolDefinition, type ToolRisk, type ToolRunContext } from "./define-tool.js";
 
 export interface ToolAuthorizationRequest {
   readonly name: string;
@@ -49,13 +49,25 @@ export class ToolRegistry {
 
   register(tool: ToolDefinition): () => void {
     if (this.sealed) throw new Error("tool registry is sealed");
-    if (this.tools.has(tool.name)) throw new Error(`tool "${tool.name}" is already registered`);
-    this.tools.set(tool.name, tool);
+    const name = tool.name;
+    const description = tool.description;
+    const risk = tool.risk;
+    const parameters = tool.parameters;
+    const execute = tool.execute;
+    const stable = defineTool({
+      name,
+      description,
+      risk,
+      parameters,
+      execute
+    });
+    if (this.tools.has(stable.name)) throw new Error(`tool "${stable.name}" is already registered`);
+    this.tools.set(stable.name, stable);
     let active = true;
     return (): void => {
       if (!active) return;
       active = false;
-      if (this.tools.get(tool.name) === tool) this.tools.delete(tool.name);
+      if (this.tools.get(stable.name) === stable) this.tools.delete(stable.name);
     };
   }
 
@@ -86,20 +98,35 @@ export class ToolRegistry {
     }
     const violations = validateJsonSchemaValue(tool.parameters, args, "");
     if (violations.length > 0) throw new ToolExecutionError("Invalid tool arguments", "INVALID_ARGUMENTS");
+    const authorizationArgs = snapshotJsonValue(args) as Record<string, unknown> | undefined;
+    const handlerArgs = snapshotJsonValue(args) as Record<string, unknown> | undefined;
+    if (authorizationArgs === undefined || handlerArgs === undefined) {
+      throw new ToolExecutionError("Invalid tool arguments", "INVALID_ARGUMENTS");
+    }
+    deepFreeze(authorizationArgs);
+    deepFreeze(handlerArgs);
+    const authorizationContext = deepFreeze({
+      sessionId: invocation.context.sessionId,
+      ...(invocation.context.signal === undefined ? {} : { signal: invocation.context.signal })
+    });
+    const handlerContext = deepFreeze({
+      sessionId: invocation.context.sessionId,
+      ...(invocation.context.signal === undefined ? {} : { signal: invocation.context.signal })
+    });
     let decision: "approve" | "deny";
     try {
       decision = (await this.authorizer.authorize({
         name: tool.name,
         risk: tool.risk,
-        args: args as Record<string, unknown>,
-        context: invocation.context
+        args: authorizationArgs,
+        context: authorizationContext
       })).decision;
     } catch {
       throw new ToolExecutionError("Tool authorization failed", "TOOL_AUTHORIZATION_FAILED");
     }
     if (decision !== "approve") throw new ToolExecutionError("Tool execution denied", "TOOL_DENIED");
     try {
-      const result = await tool.execute(args as Record<string, unknown>, invocation.context);
+      const result = await tool.execute(handlerArgs, handlerContext);
       const snapshot = snapshotJsonValue(result);
       if (snapshot === undefined) throw new Error("non-JSON tool result");
       return snapshot;

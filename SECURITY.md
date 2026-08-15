@@ -27,6 +27,13 @@ response or remediation SLA for the Developer Preview.
   endpoint. Users remain responsible for the endpoint's terms and data policy.
 - Secrets must use the encrypted secret store and must not appear in logs,
   fixtures, diagnostics, or release artifacts.
+- Business-content redaction is deliberately narrow: only mobile/cellular
+  phone numbers and government-issued identity card numbers (including PRC
+  resident identity card numbers) are redacted. Names, email addresses,
+  postal addresses, filesystem paths, ordinary usernames, and model text are
+  not redacted. Credentials remain a separate security class and are always
+  hidden; no raw-output option may expose API keys, tokens, passwords, or
+  private keys. See `docs/security/redaction-policy.md`.
 - Arbitrary executable plugins, executable YAML/JS configuration, eval, and
   new Function are outside the v0.1 threat model and are disabled.
 - Side-effecting tools require centralized policy and approval checks.

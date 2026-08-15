@@ -18,6 +18,7 @@
 - 定义事件 schema、digest、单调序号、clientRequestId 幂等、SSE after cursor、取消/关闭/审批接口。
 - 实现固定 REST 端点：POST/GET /v1/agent-sessions、messages、events?after=<seq>、cancel、close 与 approvals/:approvalId；审批值仅 approve_once、approve_session_scope、deny。
 - 未完成副作用恢复为 interrupted，任何恢复路径不得自动重放。
+- 实现统一的数据分类与输出过滤：业务内容仅脱敏手机号和身份证号；姓名、邮箱、地址、路径、普通用户名和模型文本不脱敏。API key、token、password、private key 等凭据始终隐藏，任何 raw/debug 开关不得绕过。
 
 ## 测试命令与退出门槛
 
@@ -29,4 +30,4 @@ npm run test -w @mn/api
 npm test
 ~~~
 
-mock API 完成多轮、重启恢复、SSE 续传、并发序号、取消和审批；三种 Provider contract tests 全绿，新增逻辑覆盖率不低于 70%。
+mock API 完成多轮、重启恢复、SSE 续传、并发序号、取消和审批；三种 Provider contract tests 全绿；传输与持久化 contract tests 证明业务内容只处理手机号/身份证号且凭据无条件隐藏；新增逻辑覆盖率不低于 70%。

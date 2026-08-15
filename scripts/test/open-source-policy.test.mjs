@@ -8,7 +8,8 @@ import {
   findUnpinnedWorkflowActions,
   validateAttributionPolicy,
   validateLicenseExpression,
-  validateLicenseInventory
+  validateLicenseInventory,
+  validateWorkspaceSourceLicenses
 } from "../lib/open-source-policy.mjs";
 
 const fakeSecretsFixture = fileURLToPath(
@@ -148,4 +149,72 @@ test("license inventory reports unknown and forbidden third-party packages", () 
       "unknown@1.0.0: UNKNOWN"
     ]
   );
+});
+
+test("workspace source license policy permits MIT only for exact provenance-backed files", () => {
+  const provenance = [
+    "upstream:",
+    "  commit: 47f943859bef60e4160492346772ded9b24f765a",
+    "files:",
+    "  - upstreamPath: packages/core/agent-loop/src/agent.ts",
+    "    localPath: packages/agent-kernel/src/react-driver.ts",
+    "    mode: adapted",
+    "    summary: Static loop adaptation."
+  ].join("\n");
+  const source = [
+    "/*",
+    " * 47f943859bef60e4160492346772ded9b24f765a.",
+    " * Original path: packages/core/agent-loop/src/agent.ts",
+    " * Copyright (c) 2026 DeepSeek",
+    " * SPDX-License-Identifier: MIT",
+    " */"
+  ].join("\n");
+  assert.deepEqual(validateWorkspaceSourceLicenses({
+    manifests: [
+      { path: "package.json", license: "Apache-2.0" },
+      { path: "packages/agent-kernel/package.json", license: "Apache-2.0 AND MIT" },
+      { path: "packages/agent-host/package.json", license: "Apache-2.0" }
+    ],
+    provenance,
+    sourceFiles: [{ path: "packages/agent-kernel/src/react-driver.ts", text: source }]
+  }), []);
+
+  const failures = validateWorkspaceSourceLicenses({
+    manifests: [
+      { path: "package.json", license: "Apache-2.0 AND MIT" },
+      { path: "packages/agent-kernel/package.json", license: "Apache-2.0" },
+      { path: "packages/unlisted/package.json", license: "Apache-2.0 AND MIT" }
+    ],
+    provenance,
+    sourceFiles: [
+      { path: "packages/agent-kernel/src/react-driver.ts", text: source },
+      { path: "packages/agent-kernel/src/unlisted.ts", text: source.replace("agent.ts", "other.ts") }
+    ]
+  });
+  assert.equal(failures.some((failure) => /^package\.json must declare Apache-2\.0/u.test(failure)), true);
+  assert.equal(failures.some((failure) => /agent-kernel\/package\.json must declare Apache-2\.0 AND MIT/u.test(failure)), true);
+  assert.equal(failures.some((failure) => /unlisted\/package\.json.*no listed MIT source/u.test(failure)), true);
+  assert.equal(failures.some((failure) => /unlisted\.ts has an unlisted DeepSeek MIT notice/u.test(failure)), true);
+});
+
+test("workspace source license policy fails closed on bad provenance metadata and headers", () => {
+  const failures = validateWorkspaceSourceLicenses({
+    manifests: [{ path: "packages/agent-kernel/package.json", license: "Apache-2.0 AND MIT" }],
+    provenance: [
+      "files:",
+      "  - upstreamPath: packages/core/agent-loop/src/agent.ts",
+      "    localPath: packages/agent-kernel/src/react-driver.ts",
+      "    mode: inspired",
+      "    summary: ''"
+    ].join("\n"),
+    sourceFiles: [{
+      path: "packages/agent-kernel/src/react-driver.ts",
+      text: "// SPDX-License-Identifier: MIT"
+    }]
+  });
+  assert.equal(failures.some((failure) => /mode must be copied or adapted/u.test(failure)), true);
+  assert.equal(failures.some((failure) => /summary must not be empty/u.test(failure)), true);
+  assert.equal(failures.some((failure) => /approved upstream commit/u.test(failure)), true);
+  assert.equal(failures.some((failure) => /original upstream path/u.test(failure)), true);
+  assert.equal(failures.some((failure) => /DeepSeek copyright/u.test(failure)), true);
 });

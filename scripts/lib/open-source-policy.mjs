@@ -59,6 +59,8 @@ const allowedLicenseTerms = new Set([
   "Zlib"
 ]);
 
+const deepSeekHarnessCommit = "47f943859bef60e4160492346772ded9b24f765a";
+
 export function findSecretFindings(content, relativePath) {
   const text = Buffer.isBuffer(content) ? content.toString("utf8") : String(content);
   const findings = [];
@@ -150,6 +152,118 @@ export function validateAttributionPolicy({ notice, thirdParty, provenance }) {
     }
   }
   return true;
+}
+
+function workspaceManifestForSource(sourcePath) {
+  const match = /^(packages|apps)\/([^/]+)\//u.exec(sourcePath);
+  return match === null ? undefined : `${match[1]}/${match[2]}/package.json`;
+}
+
+function hasDeepSeekCopyrightNotice(text) {
+  return /^[ \t]*(?:\/\*+|\*|\/\/|#)?[ \t]*Copyright \(c\) 2026 DeepSeek[ \t]*(?:\*\/)?[ \t]*$/mu.test(text);
+}
+
+function hasMitSpdxNotice(text) {
+  return /^[ \t]*(?:\/\*+|\*|\/\/|#)?[ \t]*SPDX-License-Identifier:[ \t]*MIT[ \t]*(?:\*\/)?[ \t]*$/mu.test(text);
+}
+
+function parseProvenanceFiles(provenance, failures) {
+  let value;
+  try {
+    const document = parseDocument(provenance, {
+      prettyErrors: false,
+      strict: true,
+      uniqueKeys: true
+    });
+    if (document.errors.length > 0 || document.warnings.length > 0) {
+      throw document.errors[0] ?? document.warnings[0];
+    }
+    value = document.toJS({ maxAliasCount: 0 });
+  } catch (error) {
+    failures.push(`provenance is invalid YAML: ${error instanceof Error ? error.message.split("\n", 1)[0] : String(error)}`);
+    return [];
+  }
+  if (!value || typeof value !== "object" || !Array.isArray(value.files)) {
+    failures.push("provenance files must be an array");
+    return [];
+  }
+  return value.files;
+}
+
+/** Enforce Apache-by-default and exact, provenance-backed DeepSeek MIT exceptions. */
+export function validateWorkspaceSourceLicenses({ manifests, provenance, sourceFiles }) {
+  const failures = [];
+  const entries = parseProvenanceFiles(provenance, failures);
+  const sources = new Map(sourceFiles.map((file) => [file.path, file.text]));
+  const listed = new Map();
+  const mixedManifests = new Set();
+
+  for (const [index, rawEntry] of entries.entries()) {
+    const label = `provenance files[${index}]`;
+    if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
+      failures.push(`${label} must be an object`);
+      continue;
+    }
+    const entry = rawEntry;
+    if (typeof entry.localPath !== "string" || entry.localPath.length === 0) {
+      failures.push(`${label} localPath must not be empty`);
+      continue;
+    }
+    if (listed.has(entry.localPath)) failures.push(`${label} duplicates localPath ${entry.localPath}`);
+    listed.set(entry.localPath, entry);
+    if (entry.mode !== "copied" && entry.mode !== "adapted") {
+      failures.push(`${label} mode must be copied or adapted`);
+    }
+    if (typeof entry.summary !== "string" || entry.summary.trim().length === 0) {
+      failures.push(`${label} summary must not be empty`);
+    }
+    if (typeof entry.upstreamPath !== "string" || entry.upstreamPath.length === 0) {
+      failures.push(`${label} upstreamPath must not be empty`);
+    }
+    const manifestPath = workspaceManifestForSource(entry.localPath);
+    if (manifestPath === undefined) failures.push(`${label} localPath must belong to a workspace`);
+    else mixedManifests.add(manifestPath);
+
+    const text = sources.get(entry.localPath);
+    if (text === undefined) {
+      failures.push(`${entry.localPath} listed in provenance is missing`);
+      continue;
+    }
+    if (!text.includes(deepSeekHarnessCommit)) {
+      failures.push(`${entry.localPath} notice is missing the approved upstream commit`);
+    }
+    if (typeof entry.upstreamPath !== "string" || !text.includes(`Original path: ${entry.upstreamPath}`)) {
+      failures.push(`${entry.localPath} notice is missing the original upstream path`);
+    }
+    if (!hasDeepSeekCopyrightNotice(text)) {
+      failures.push(`${entry.localPath} notice is missing the DeepSeek copyright`);
+    }
+    if (!hasMitSpdxNotice(text)) {
+      failures.push(`${entry.localPath} notice is missing SPDX-License-Identifier: MIT`);
+    }
+  }
+
+  for (const file of sourceFiles) {
+    if (!hasDeepSeekCopyrightNotice(file.text)) continue;
+    if (!hasMitSpdxNotice(file.text)) continue;
+    if (!listed.has(file.path)) failures.push(`${file.path} has an unlisted DeepSeek MIT notice`);
+  }
+
+  const manifestPaths = new Set(manifests.map((manifest) => manifest.path));
+  for (const manifestPath of mixedManifests) {
+    if (!manifestPaths.has(manifestPath)) failures.push(`${manifestPath} is missing for a listed MIT source`);
+  }
+  for (const manifest of manifests) {
+    if (mixedManifests.has(manifest.path)) {
+      if (manifest.license !== "Apache-2.0 AND MIT") {
+        failures.push(`${manifest.path} must declare Apache-2.0 AND MIT for listed MIT source files`);
+      }
+    } else if (manifest.license !== "Apache-2.0") {
+      const suffix = manifest.license === "Apache-2.0 AND MIT" ? " because it has no listed MIT source" : "";
+      failures.push(`${manifest.path} must declare Apache-2.0${suffix}`);
+    }
+  }
+  return failures.sort();
 }
 
 export function validateLicenseExpression(expression) {

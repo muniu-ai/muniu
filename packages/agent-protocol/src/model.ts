@@ -16,6 +16,7 @@ export interface LlmFailure {
   readonly message: string;
   readonly code: string;
   readonly status?: number;
+  readonly retryable?: boolean;
 }
 
 export interface TextBlock { readonly type: "text"; readonly text: string }

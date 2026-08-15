@@ -51,12 +51,36 @@ test("assembler rejects block conflicts, incomplete tool calls, and chunks after
   incomplete.push({ type: "tool-call-delta", index: 0, id: CallId("call-1"), argumentsDelta: "{}" });
   assert.throws(() => incomplete.blocks(), /tool call.*name/i);
   const invalidEnd = new BlockAssembler();
-  invalidEnd.push({
+  assert.throws(() => invalidEnd.push({
     type: "block-end",
     index: 0,
     block: { type: "tool-call", id: CallId(""), name: "", arguments: "{}" }
-  });
-  assert.throws(() => invalidEnd.blocks(), /tool call.*(?:id|name)/i);
+  }), /tool call.*(?:id|name)/i);
+
+  const conflictingId = new BlockAssembler();
+  conflictingId.push({ type: "tool-call-delta", index: 0, id: CallId("call-1"), name: "read", argumentsDelta: "{" });
+  assert.throws(
+    () => conflictingId.push({ type: "tool-call-delta", index: 0, id: CallId("call-2"), name: "read", argumentsDelta: "}" }),
+    /tool call.*id.*conflict/i
+  );
+  const conflictingName = new BlockAssembler();
+  conflictingName.push({ type: "tool-call-delta", index: 0, id: CallId("call-1"), name: "read", argumentsDelta: "{}" });
+  assert.throws(
+    () => conflictingName.push({ type: "tool-call-delta", index: 0, id: CallId("call-1"), name: "write", argumentsDelta: "" }),
+    /tool call.*name.*conflict/i
+  );
+  const emptyId = new BlockAssembler();
+  assert.throws(
+    () => emptyId.push({ type: "tool-call-delta", index: 0, id: CallId(""), name: "read", argumentsDelta: "{}" }),
+    /tool call.*id/i
+  );
+  const conflictingEnd = new BlockAssembler();
+  conflictingEnd.push({ type: "tool-call-delta", index: 0, id: CallId("call-1"), name: "read", argumentsDelta: "{" });
+  assert.throws(() => conflictingEnd.push({
+    type: "block-end",
+    index: 0,
+    block: { type: "tool-call", id: CallId("call-1"), name: "read", arguments: "{}" }
+  }), /block end.*conflict/i);
 
   const terminal = new BlockAssembler();
   terminal.push({ type: "finish", reason: "stop" });
@@ -93,4 +117,80 @@ test("LLM runtime is static, sealed, and normalizes adapter failures", async () 
     { type: "finish", reason: "error" }
   ]);
   assert.equal(JSON.stringify(failed).includes("secret-provider-credential"), false);
+});
+
+test("LLM runtime emits one safe terminal for provider errors and post-finish throws", async () => {
+  const afterFinish = new LlmRuntime();
+  afterFinish.register({
+    id: "after-finish",
+    async *stream(): AsyncIterable<StreamChunk> {
+      try {
+        yield { type: "finish", reason: "stop" };
+      } finally {
+        throw new Error("iterator close failure must never add another terminal");
+      }
+    }
+  });
+  assert.deepEqual(await collect(afterFinish.stream({ ...request, provider: "after-finish" })), [
+    { type: "finish", reason: "stop" }
+  ]);
+
+  const providerError = new LlmRuntime();
+  providerError.register({
+    id: "provider-error",
+    async *stream(): AsyncIterable<StreamChunk> {
+      yield {
+        type: "error",
+        error: {
+          code: "SECRET_INTERNAL_CODE",
+          message: "api_key=provider-secret",
+          status: 429,
+          retryable: true
+        }
+      };
+      yield { type: "finish", reason: "stop" };
+    }
+  });
+  const chunks = await collect(providerError.stream({ ...request, provider: "provider-error" }));
+  assert.deepEqual(chunks, [
+    {
+      type: "error",
+      error: {
+        code: "LLM_PROVIDER_ERROR",
+        message: "Model provider returned an error",
+        status: 429,
+        retryable: true
+      }
+    },
+    { type: "finish", reason: "error" }
+  ]);
+  assert.equal(JSON.stringify(chunks).includes("provider-secret"), false);
+  assert.equal(chunks.filter((chunk) => chunk.type === "finish").length, 1);
+});
+
+test("LLM runtime seals a stable adapter facade and its original disposer", async () => {
+  let streamed = "none";
+  let disposed = "none";
+  const mutable = {
+    id: "mutable",
+    async *stream(): AsyncIterable<StreamChunk> {
+      streamed = "original";
+      yield { type: "finish", reason: "stop" };
+    },
+    dispose: () => { disposed = "original"; }
+  };
+  const runtime = new LlmRuntime();
+  const dispose = runtime.register(mutable);
+  runtime.seal();
+  mutable.id = "renamed";
+  mutable.stream = async function *mutated(): AsyncIterable<StreamChunk> {
+    streamed = "mutated";
+    yield { type: "finish", reason: "stop" };
+  };
+  mutable.dispose = () => { disposed = "mutated"; };
+  await collect(runtime.stream({ ...request, provider: "mutable" }));
+  assert.equal(streamed, "original");
+  await dispose();
+  assert.equal(disposed, "original");
+  await assert.rejects(async () => collect(runtime.stream({ ...request, provider: "mutable" })), /not registered/i);
 });

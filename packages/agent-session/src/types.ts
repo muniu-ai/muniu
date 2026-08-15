@@ -27,7 +27,7 @@ export interface AgentEventMetadata {
   readonly candidateId?: CandidateId;
 }
 
-export interface AgentSessionLike {
+export interface AgentSessionExclusiveView {
   readonly header: AgentSessionHeaderV1;
   readonly events: readonly AgentSessionEventV1[];
   append<T extends AgentSessionEventTypeV1>(
@@ -38,9 +38,14 @@ export interface AgentSessionLike {
   flush(): Promise<void>;
 }
 
+export interface AgentSessionLike extends AgentSessionExclusiveView {
+  withExclusive<T>(operation: (session: AgentSessionExclusiveView) => Promise<T>): Promise<T>;
+}
+
 export interface AgentSessionStore {
   create(options?: CreateAgentSessionOptions): Promise<AgentSession>;
   open(sessionId: SessionId): Promise<AgentSession>;
+  dispose?(): void | Promise<void>;
 }
 
 export interface EventPersistence {

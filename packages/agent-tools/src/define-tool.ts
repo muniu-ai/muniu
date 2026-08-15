@@ -41,6 +41,8 @@ export function defineTool<TArgs extends Record<string, unknown> = Record<string
 ): ToolDefinition<TArgs> {
   if (!/^[A-Za-z][A-Za-z0-9_-]{0,63}$/u.test(options.name)) throw new Error("tool name is invalid");
   if (options.description.length === 0) throw new Error("tool description must not be empty");
+  if (options.risk !== "read-only" && options.risk !== "side-effecting") throw new Error("tool risk is invalid");
+  if (typeof options.execute !== "function") throw new Error("tool execute must be a function");
   const parameters = snapshotJsonValue(options.parameters);
   if (parameters === undefined) throw new Error("tool parameters are not lossless JSON");
   assertObjectJsonSchema(parameters);

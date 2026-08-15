@@ -200,11 +200,13 @@ function isEventPayload(type: AgentSessionEventTypeV1, value: unknown): boolean 
       return hasExactKeys(value, ["turn", "step", "status"])
         && isPositiveSafeInteger(value.turn)
         && isPositiveSafeInteger(value.step)
-        && ["completed", "cancelled", "budget-exceeded", "interrupted", "error"].includes(String(value.status));
+        && typeof value.status === "string"
+        && ["completed", "cancelled", "budget-exceeded", "interrupted", "error"].includes(value.status);
     case "turn/end":
       return hasExactKeys(value, ["turn", "reason"], ["error"])
         && isPositiveSafeInteger(value.turn)
-        && ["completed", "cancelled", "budget-exceeded", "interrupted", "error"].includes(String(value.reason))
+        && typeof value.reason === "string"
+        && ["completed", "cancelled", "budget-exceeded", "interrupted", "error"].includes(value.reason)
         && (value.error === undefined || isTurnError(value.error));
   }
 }
@@ -297,11 +299,15 @@ export function isAgentSessionEventV1(value: unknown): value is AgentSessionEven
     || !isCanonicalRfc3339(value.occurredAt)
     || typeof value.type !== "string"
     || !AGENT_SESSION_EVENT_TYPES_V1.has(value.type)
-    || !DIGEST_PATTERN.test(String(value.payloadDigest))
-    || !DIGEST_PATTERN.test(String(value.digest))
+    || typeof value.payloadDigest !== "string"
+    || !DIGEST_PATTERN.test(value.payloadDigest)
+    || typeof value.digest !== "string"
+    || !DIGEST_PATTERN.test(value.digest)
     || (value.runId !== undefined && !isNonEmptyString(value.runId))
     || (value.candidateId !== undefined && !isNonEmptyString(value.candidateId))) return false;
-  if (value.seq === 0 ? value.previousDigest !== undefined : !DIGEST_PATTERN.test(String(value.previousDigest))) return false;
+  if (value.seq === 0
+    ? value.previousDigest !== undefined
+    : typeof value.previousDigest !== "string" || !DIGEST_PATTERN.test(value.previousDigest)) return false;
   return isEventPayload(value.type as AgentSessionEventTypeV1, value.payload);
 }
 

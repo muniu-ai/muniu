@@ -12,7 +12,8 @@ import { fileURLToPath } from "node:url";
 import {
   findSecretFindings,
   findUnpinnedWorkflowActions,
-  validateAttributionPolicy
+  validateAttributionPolicy,
+  validateWorkspaceSourceLicenses
 } from "./lib/open-source-policy.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -57,6 +58,7 @@ const requiredFiles = [
   "scripts/test/open-source-policy.test.mjs",
   "scripts/test/fixtures/allowed-fake-secrets.txt",
   "scripts/verify-third-party-licenses.mjs",
+  "docs/security/redaction-policy.md",
   "docs/security/secret-scanning.md",
   "docs/upstream-provenance/deepseek-harness.yaml"
 ];
@@ -94,11 +96,12 @@ const workspaceManifests = [
     .map((name) => "packages/" + name + "/package.json")
     .filter((relativePath) => existsSync(path.join(root, relativePath)))
 ];
+const workspaceManifestRecords = [];
 for (const manifestPath of workspaceManifests) {
   const manifest = readJson(manifestPath);
+  workspaceManifestRecords.push({ path: manifestPath, license: manifest.license });
   if (manifest.version !== "0.1.0") fail(manifestPath + " must use version 0.1.0");
   if (manifest.private !== true) fail(manifestPath + " must remain private for v0.1.0");
-  if (manifest.license !== "Apache-2.0") fail(manifestPath + " must declare Apache-2.0");
   if (manifest.repository !== repository) fail(manifestPath + " has the wrong repository");
 }
 
@@ -220,6 +223,7 @@ const tracked = execFileSync(
   .split("\0")
   .filter(Boolean);
 const workflowFiles = [];
+const sourceFiles = [];
 for (const relativePath of tracked) {
   const absolutePath = path.join(root, relativePath);
   if (!existsSync(absolutePath)) continue;
@@ -233,6 +237,15 @@ for (const relativePath of tracked) {
     fail("possible " + finding.label + " in " + finding.path);
   }
   workflowFiles.push({ path: relativePath, text });
+  sourceFiles.push({ path: relativePath, text });
+}
+
+for (const sourceLicenseFailure of validateWorkspaceSourceLicenses({
+  manifests: workspaceManifestRecords,
+  provenance: readFileSync(provenancePath, "utf8"),
+  sourceFiles
+})) {
+  fail(sourceLicenseFailure);
 }
 
 for (const actionFailure of findUnpinnedWorkflowActions(workflowFiles)) {
