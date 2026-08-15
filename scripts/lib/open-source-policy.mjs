@@ -60,6 +60,14 @@ const allowedLicenseTerms = new Set([
 ]);
 
 const deepSeekHarnessCommit = "47f943859bef60e4160492346772ded9b24f765a";
+const agentCoverageCommand = [
+  "npm run test:coverage -w @mn/agent-protocol",
+  "npm run test:coverage -w @mn/agent-session",
+  "npm run test:coverage -w @mn/agent-llm",
+  "npm run test:coverage -w @mn/agent-tools",
+  "npm run test:coverage -w @mn/agent-kernel",
+  "npm run test:coverage -w @mn/agent-host"
+].join(" && ");
 
 export function findSecretFindings(content, relativePath) {
   const text = Buffer.isBuffer(content) ? content.toString("utf8") : String(content);
@@ -103,6 +111,38 @@ export function findUnpinnedWorkflowActions(files) {
       if (isPinnedWorkflowReference(reference)) continue;
       failures.push(`${file.path}: ${formatWorkflowReference(reference)}`);
     }
+  }
+  return failures;
+}
+
+export function validateAgentCoverageGate({ rootPackage, ciWorkflow }) {
+  const failures = [];
+  if (rootPackage?.scripts?.["test:coverage:agent"] !== agentCoverageCommand) {
+    failures.push("test:coverage:agent must serially run all six agent package coverage suites");
+  }
+
+  let workflow;
+  try {
+    const document = parseDocument(ciWorkflow, {
+      prettyErrors: false,
+      strict: true,
+      uniqueKeys: true
+    });
+    if (document.errors.length > 0 || document.warnings.length > 0) {
+      throw document.errors[0] ?? document.warnings[0];
+    }
+    workflow = document.toJS({ maxAliasCount: 0 });
+  } catch {
+    workflow = undefined;
+  }
+  const nodeSteps = workflow?.jobs?.node?.steps;
+  const hasCoverageStep = Array.isArray(nodeSteps) && nodeSteps.some((step) => {
+    return step !== null
+      && typeof step === "object"
+      && step.run === "npm run test:coverage:agent";
+  });
+  if (!hasCoverageStep) {
+    failures.push("CI node job must explicitly run npm run test:coverage:agent");
   }
   return failures;
 }

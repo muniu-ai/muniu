@@ -38,6 +38,12 @@ response or remediation SLA for the Developer Preview.
   new Function are outside the v0.1 threat model and are disabled.
 - Side-effecting tools require centralized policy and approval checks.
 
+AgentHost cancellation is cooperative. Disposal refuses new runs, aborts every
+active run, and retains model adapters, tools, and session writers until those
+runs settle. An adapter or tool that does not observe its supplied AbortSignal
+can therefore delay disposal indefinitely; v0.1 does not forcibly terminate
+in-process third-party code.
+
 The planned macOS sandbox combines Seatbelt with an isolated canonical Git
 worktree. It is defense in depth, not a virtual machine or Docker-equivalent
 security boundary. If the required sandbox probe fails, command execution must

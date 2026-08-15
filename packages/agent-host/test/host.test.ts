@@ -5,7 +5,12 @@ import path from "node:path";
 import test from "node:test";
 
 import { CallId, CandidateId, RunId, SessionId, verifyAgentSessionEventChain } from "@mn/agent-protocol";
-import { JsonlAgentSessionStore, projectSession } from "@mn/agent-session";
+import {
+  InMemoryAgentSessionStore,
+  JsonlAgentSessionStore,
+  projectSession,
+  type AgentSessionStore
+} from "@mn/agent-session";
 import { ScriptedLlmAdapter, type LlmAdapter } from "@mn/agent-llm";
 import { StaticSystemPrompt } from "@mn/agent-kernel";
 import { defineTool } from "@mn/agent-tools";
@@ -17,6 +22,16 @@ const echoParameters = {
   required: ["text"],
   additionalProperties: false
 };
+
+function deferred(): { readonly promise: Promise<void>; readonly resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((settle) => { resolve = settle; });
+  return { promise, resolve };
+}
+
+async function nextTurn(): Promise<void> {
+  await new Promise<void>((resolve) => { setImmediate(resolve); });
+}
 
 test("host rolls back partially registered components in LIFO order", async () => {
   const disposed: string[] = [];
@@ -166,5 +181,283 @@ test("host preserves initialization cause when rollback also fails", async () =>
     (error: unknown) => error instanceof AggregateError
       && /already registered/i.test(error.message)
       && error.errors.length === 2
+  );
+});
+
+test("host aborts an active durable run and retains its writer until the run settles", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "muniu-host-drain-"));
+  const sessionId = SessionId("host-drain-session");
+  const entered = deferred();
+  const release = deferred();
+  let observedSignal: AbortSignal | undefined;
+  const adapter: LlmAdapter = {
+    id: "gated",
+    async *stream(request) {
+      observedSignal = request.signal;
+      entered.resolve();
+      await release.promise;
+      yield { type: "finish", reason: "stop" };
+    }
+  };
+  const host = await createAgentHost({
+    sessionStore: new JsonlAgentSessionStore(root),
+    adapters: [adapter],
+    tools: [],
+    authorizer: { authorize: async () => ({ decision: "deny" }) }
+  });
+  const run = host.run({ sessionId, prompt: "wait", provider: "gated", model: "test" });
+  await entered.promise;
+
+  let disposeSettled = false;
+  const disposal = host.dispose().then(() => { disposeSettled = true; });
+  assert.equal(observedSignal?.aborted, true);
+  await nextTurn();
+  assert.equal(disposeSettled, false);
+
+  const contender = new JsonlAgentSessionStore(root);
+  await assert.rejects(() => contender.open(sessionId), /lease|writer/i);
+  release.resolve();
+  const outcome = await run;
+  assert.equal(outcome.reason, "cancelled");
+  assert.equal(projectSession(outcome.session.events).status, "cancelled");
+  await disposal;
+
+  const transferred = await contender.open(sessionId);
+  assert.equal(projectSession(transferred.events).status, "cancelled");
+  await contender.dispose();
+});
+
+test("host disposal aborts and drains active runs in every session", async () => {
+  const entered = [deferred(), deferred()];
+  const release = [deferred(), deferred()];
+  const signals: Array<AbortSignal | undefined> = [];
+  let invocation = 0;
+  const host = await createAgentHost({
+    adapters: [{
+      id: "multi-gated",
+      async *stream(request) {
+        const index = invocation;
+        invocation += 1;
+        signals[index] = request.signal;
+        entered[index]?.resolve();
+        await release[index]?.promise;
+        yield { type: "finish", reason: "stop" };
+      }
+    }],
+    tools: [],
+    authorizer: { authorize: async () => ({ decision: "deny" }) }
+  });
+  const runs = [
+    host.run({ sessionId: SessionId("host-drain-a"), prompt: "a", provider: "multi-gated", model: "test" }),
+    host.run({ sessionId: SessionId("host-drain-b"), prompt: "b", provider: "multi-gated", model: "test" })
+  ];
+  await Promise.all(entered.map((gate) => gate.promise));
+
+  let disposeSettled = false;
+  const disposal = host.dispose().then(() => { disposeSettled = true; });
+  assert.deepEqual(signals.map((signal) => signal?.aborted), [true, true]);
+  await nextTurn();
+  assert.equal(disposeSettled, false);
+  release.forEach((gate) => { gate.resolve(); });
+  const outcomes = await Promise.all(runs);
+  assert.deepEqual(outcomes.map((outcome) => outcome.reason), ["cancelled", "cancelled"]);
+  await disposal;
+});
+
+test("host rejects reentrant disposal from its active run without self-deadlocking", async () => {
+  let host: Awaited<ReturnType<typeof createAgentHost>>;
+  let reentrantOutcome: "rejected" | "resolved" | "timed-out" | undefined;
+  host = await createAgentHost({
+    adapters: [{
+      id: "reentrant",
+      async *stream() {
+        reentrantOutcome = await Promise.race([
+          host.dispose().then(() => "resolved" as const, (error: unknown) => {
+            assert.match(error instanceof Error ? error.message : String(error), /reentrant|active host run/i);
+            return "rejected" as const;
+          }),
+          new Promise<"timed-out">((resolve) => { setTimeout(() => { resolve("timed-out"); }, 250); })
+        ]);
+        yield { type: "finish", reason: "stop" };
+      }
+    }],
+    tools: [],
+    authorizer: { authorize: async () => ({ decision: "deny" }) }
+  });
+
+  const outcome = await host.run({ prompt: "dispose", provider: "reentrant", model: "test" });
+  assert.equal(outcome.reason, "completed");
+  assert.equal(reentrantOutcome, "rejected");
+  await host.dispose();
+});
+
+test("host snapshots and binds every session store method exactly once", async () => {
+  const delegate = new InMemoryAgentSessionStore();
+  const reads = { create: 0, open: 0, dispose: 0 };
+  const calls = { create: 0, open: 0, dispose: 0 };
+  let generation = 0;
+  let source!: AgentSessionStore;
+  source = {
+    get create() {
+      reads.create += 1;
+      const snapshot = generation;
+      return async function create(
+        this: AgentSessionStore,
+        options: Parameters<AgentSessionStore["create"]>[0]
+      ) {
+        assert.equal(this, source);
+        assert.equal(snapshot, 0, "host reread a mutated create method");
+        calls.create += 1;
+        return delegate.create(options);
+      };
+    },
+    get open() {
+      reads.open += 1;
+      const snapshot = generation;
+      return async function open(
+        this: AgentSessionStore,
+        sessionId: Parameters<AgentSessionStore["open"]>[0]
+      ) {
+        assert.equal(this, source);
+        assert.equal(snapshot, 0, "host reread a mutated open method");
+        calls.open += 1;
+        return delegate.open(sessionId);
+      };
+    },
+    get dispose() {
+      reads.dispose += 1;
+      const snapshot = generation;
+      return function dispose(this: AgentSessionStore) {
+        assert.equal(this, source);
+        assert.equal(snapshot, 0, "host reread a mutated dispose method");
+        calls.dispose += 1;
+      };
+    }
+  };
+
+  const host = await createAgentHost({
+    sessionStore: source,
+    adapters: [new ScriptedLlmAdapter("stable-store", [[{ type: "finish", reason: "stop" }]])],
+    tools: [],
+    authorizer: { authorize: async () => ({ decision: "deny" }) }
+  });
+  assert.deepEqual(reads, { create: 1, open: 1, dispose: 1 });
+  generation = 1;
+  const outcome = await host.run({ prompt: "stable", provider: "stable-store", model: "test" });
+  assert.equal(outcome.reason, "completed");
+  await host.dispose();
+  await host.dispose();
+  assert.deepEqual(reads, { create: 1, open: 1, dispose: 1 });
+  assert.deepEqual(calls, { create: 1, open: 0, dispose: 1 });
+});
+
+test("host bridges external cancellation and removes its listener after settlement", async () => {
+  const entered = deferred();
+  const release = deferred();
+  const externalController = new AbortController();
+  const nativeSignal = externalController.signal;
+  let listenersAdded = 0;
+  let listenersRemoved = 0;
+  const externalSignal = {
+    get aborted() { return nativeSignal.aborted; },
+    get reason() { return nativeSignal.reason; },
+    addEventListener(
+      type: "abort",
+      listener: (this: AbortSignal, event: Event) => unknown,
+      options?: boolean | AddEventListenerOptions
+    ) {
+      listenersAdded += 1;
+      nativeSignal.addEventListener(type, listener, options);
+    },
+    removeEventListener(
+      type: "abort",
+      listener: (this: AbortSignal, event: Event) => unknown,
+      options?: boolean | EventListenerOptions
+    ) {
+      listenersRemoved += 1;
+      nativeSignal.removeEventListener(type, listener, options);
+    }
+  } as unknown as AbortSignal;
+  let internalSignal: AbortSignal | undefined;
+  const host = await createAgentHost({
+    adapters: [{
+      id: "external-abort",
+      async *stream(request) {
+        internalSignal = request.signal;
+        entered.resolve();
+        await release.promise;
+        yield { type: "finish", reason: "stop" };
+      }
+    }],
+    tools: [],
+    authorizer: { authorize: async () => ({ decision: "deny" }) }
+  });
+  const run = host.run({
+    prompt: "cancel",
+    provider: "external-abort",
+    model: "test",
+    signal: externalSignal
+  });
+  await entered.promise;
+  externalController.abort();
+  assert.equal(internalSignal?.aborted, true);
+  release.resolve();
+  assert.equal((await run).reason, "cancelled");
+  assert.equal(listenersAdded, 1);
+  assert.equal(listenersRemoved, 1);
+  await host.dispose();
+});
+
+test("host validates stable session store methods and aggregates rollback failures", async () => {
+  const cleanupFailure = new Error("store cleanup failed");
+  let disposeCalls = 0;
+  const invalidCreate = {
+    create: 1,
+    open: async () => { throw new Error("unused"); },
+    dispose: () => {
+      disposeCalls += 1;
+      throw cleanupFailure;
+    }
+  } as unknown as AgentSessionStore;
+  await assert.rejects(
+    () => createAgentHost({
+      sessionStore: invalidCreate,
+      adapters: [],
+      tools: [],
+      authorizer: { authorize: async () => ({ decision: "deny" }) }
+    }),
+    (error: unknown) => error instanceof AggregateError
+      && error.errors.length === 2
+      && error.cause === error.errors[0]
+      && error.errors[0] instanceof TypeError
+      && /store create/i.test(error.errors[0].message)
+      && error.errors[1] === cleanupFailure
+  );
+  assert.equal(disposeCalls, 1);
+
+  await assert.rejects(
+    () => createAgentHost({
+      sessionStore: {
+        create: async () => { throw new Error("unused"); },
+        open: 1
+      } as unknown as AgentSessionStore,
+      adapters: [],
+      tools: [],
+      authorizer: { authorize: async () => ({ decision: "deny" }) }
+    }),
+    /store open.*function/i
+  );
+  await assert.rejects(
+    () => createAgentHost({
+      sessionStore: {
+        create: async () => { throw new Error("unused"); },
+        open: async () => { throw new Error("unused"); },
+        dispose: 1
+      } as unknown as AgentSessionStore,
+      adapters: [],
+      tools: [],
+      authorizer: { authorize: async () => ({ decision: "deny" }) }
+    }),
+    /store dispose.*function/i
   );
 });

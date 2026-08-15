@@ -83,6 +83,7 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm run typecheck
+      - run: npm run test:coverage:agent
       - run: npm test
       - run: npm run verify:enterprise-fixture
 

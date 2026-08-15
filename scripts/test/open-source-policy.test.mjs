@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import {
   findSecretFindings,
   findUnpinnedWorkflowActions,
+  validateAgentCoverageGate,
   validateAttributionPolicy,
   validateLicenseExpression,
   validateLicenseInventory,
@@ -110,6 +111,42 @@ test("workflow scan fails closed for invalid YAML and escaping local actions", (
   assert.equal(failures.length, 2);
   assert.match(failures[0], /invalid YAML/u);
   assert.match(failures[1], /\.\/\.\.\/outside\/action/u);
+});
+
+test("agent coverage policy requires the serial six-package root gate in the node job", () => {
+  const command = [
+    "npm run test:coverage -w @mn/agent-protocol",
+    "npm run test:coverage -w @mn/agent-session",
+    "npm run test:coverage -w @mn/agent-llm",
+    "npm run test:coverage -w @mn/agent-tools",
+    "npm run test:coverage -w @mn/agent-kernel",
+    "npm run test:coverage -w @mn/agent-host"
+  ].join(" && ");
+  assert.deepEqual(validateAgentCoverageGate({
+    rootPackage: { scripts: { "test:coverage:agent": command } },
+    ciWorkflow: [
+      "jobs:",
+      "  node:",
+      "    steps:",
+      "      - run: npm run test:coverage:agent"
+    ].join("\n")
+  }), []);
+
+  const failures = validateAgentCoverageGate({
+    rootPackage: { scripts: { "test:coverage:agent": command.replace("agent-host", "agent-kernel") } },
+    ciWorkflow: [
+      "jobs:",
+      "  baseline:",
+      "    steps:",
+      "      - run: npm run test:coverage:agent",
+      "  node:",
+      "    steps:",
+      "      - run: npm test"
+    ].join("\n")
+  });
+  assert.equal(failures.length, 2);
+  assert.match(failures[0], /serially run all six agent package coverage suites/u);
+  assert.match(failures[1], /node job.*test:coverage:agent/u);
 });
 
 test("attribution policy rejects claiming unimported upstream code in NOTICE", () => {

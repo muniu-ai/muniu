@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import {
   findSecretFindings,
   findUnpinnedWorkflowActions,
+  validateAgentCoverageGate,
   validateAttributionPolicy,
   validateWorkspaceSourceLicenses
 } from "./lib/open-source-policy.mjs";
@@ -144,12 +145,35 @@ for (const expected of ['version = 2', '"Apache-2.0"', '"MIT"', "confidence-thre
 }
 
 const ciWorkflow = readFileSync(path.join(root, ".github/workflows/ci.yml"), "utf8");
+for (const coverageFailure of validateAgentCoverageGate({ rootPackage, ciWorkflow })) {
+  fail(coverageFailure);
+}
+for (const workspace of [
+  "agent-protocol",
+  "agent-session",
+  "agent-llm",
+  "agent-tools",
+  "agent-kernel",
+  "agent-host"
+]) {
+  const coverageScript = readJson(`packages/${workspace}/package.json`).scripts?.["test:coverage"];
+  for (const threshold of [
+    "--test-coverage-lines=70",
+    "--test-coverage-functions=70",
+    "--test-coverage-branches=70"
+  ]) {
+    if (typeof coverageScript !== "string" || !coverageScript.includes(threshold)) {
+      fail(`packages/${workspace} test:coverage is missing ${threshold}`);
+    }
+  }
+}
 for (const expected of [
   "fetch-depth: 0",
   "GITLEAKS_VERSION: 8.30.1",
   "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb",
   "--log-opts=--all",
   "npm run verify:licenses",
+  "npm run test:coverage:agent",
   "EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25"
 ]) {
   if (!ciWorkflow.includes(expected)) fail("CI open-source gate is missing " + expected);
