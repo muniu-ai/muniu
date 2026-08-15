@@ -46,4 +46,3 @@ body:
           required: true
         - label: This report contains no credentials or private data.
           required: true
-

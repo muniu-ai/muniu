@@ -292,6 +292,7 @@ test("rejects expired, malformed, scope-mismatched, and non-waivable waivers", (
   assertResolutionIssue(
     () =>
       resolveGovernance(base, {
+        now: "2026-07-11T00:00:00.000Z",
         waivers: [
           {
             id: "wrong-scope",
@@ -307,6 +308,7 @@ test("rejects expired, malformed, scope-mismatched, and non-waivable waivers", (
   assertResolutionIssue(
     () =>
       resolveGovernance(base, {
+        now: "2026-07-11T00:00:00.000Z",
         waivers: [
           {
             id: "non-waivable-origin",

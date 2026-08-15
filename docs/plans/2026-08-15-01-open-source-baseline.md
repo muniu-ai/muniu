@@ -46,4 +46,3 @@ git diff --check
 ## 退出门槛
 
 所有命令通过；production audit 零 Critical/High；许可证、秘密、绝对路径和大文件扫描无阻断；git status 干净。完成后才允许执行子计划 02。
-

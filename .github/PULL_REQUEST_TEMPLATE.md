@@ -25,4 +25,3 @@ source was copied.
 - [ ] Copied/adapted files retain notices and provenance is current.
 - [ ] Documentation and changelog are updated when user behavior changed.
 - [ ] Every commit includes a DCO Signed-off-by line.
-

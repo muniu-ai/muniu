@@ -1,0 +1,17 @@
+apiVersion: mn.dev/project/v1
+kind: Project
+metadata:
+  id: negative-no-rollback
+  owner: enterprise-quality
+services:
+  - id: catalog
+    path: services/catalog
+    owners: [catalog-team]
+    data:
+      - kind: database
+        name: catalog-db
+        role: owner
+    observability:
+      metrics: [catalog_write_total]
+    deployment:
+      unit: catalog

@@ -1,0 +1,24 @@
+apiVersion: mn.dev/project/v1
+kind: Project
+metadata:
+  id: negative-shared-data
+  owner: enterprise-quality
+services:
+  - id: service-a
+    path: services/service-a
+    owners: [team-a]
+    data:
+      - kind: database
+        name: shared-commerce-db
+        role: owner
+    observability:
+      metrics: [service_a_total]
+  - id: service-b
+    path: services/service-b
+    owners: [team-b]
+    data:
+      - kind: database
+        name: shared-commerce-db
+        role: writer
+    observability:
+      metrics: [service_b_total]

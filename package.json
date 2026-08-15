@@ -1,9 +1,15 @@
 {
-  "name": "mn-workspace",
+  "name": "muniu",
   "version": "0.1.0",
   "private": true,
+  "license": "Apache-2.0",
+  "repository": "https://github.com/muniu-ai/muniu",
   "type": "module",
   "packageManager": "npm@11.10.1",
+  "engines": {
+    "node": ">=22.19.0 <23",
+    "npm": ">=11.10.1 <12"
+  },
   "workspaces": [
     "apps/*",
     "packages/*"
@@ -26,6 +32,7 @@
     "verify:enterprise-fixture": "node scripts/enterprise-e2e.mjs",
     "verify:enterprise-dependencies": "node scripts/enterprise-e2e.mjs --with-compose",
     "verify:enterprise-e2e": "node scripts/enterprise-e2e.mjs --with-compose --api-flow",
+    "verify:oss-baseline": "node scripts/verify-open-source-baseline.mjs",
     "verify:mac-release": "node scripts/verify-macos-release.mjs",
     "verify:mac-packaged-app": "node scripts/verify-packaged-macos-app.mjs",
     "build:daemon-sidecar": "npm run build && node scripts/build-daemon-sidecar.mjs",

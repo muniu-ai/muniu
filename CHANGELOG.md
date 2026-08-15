@@ -29,4 +29,3 @@ during the Developer Preview.
 - No npm package or signed/notarized desktop application is published.
 - Claude Code and Codex CLI remain legacy executors until the embedded runtime
   is integrated by the following sub-plans.
-

@@ -17,6 +17,15 @@ coverage/
 .mn/
 .mniu/
 .muniu/
+
+# Versioned enterprise example fixtures (not local runtime state)
+!examples/microservice-repo/.mn/
+!examples/microservice-repo/.mn/project.yaml
+!examples/microservice-repo/.mn/standards.lock
+!examples/microservice-repo/negative/no-rollback/.mn/
+!examples/microservice-repo/negative/no-rollback/.mn/project.yaml
+!examples/microservice-repo/negative/shared-data-ownership/.mn/
+!examples/microservice-repo/negative/shared-data-ownership/.mn/project.yaml
 secret-key.json
 secrets/
 *.pem

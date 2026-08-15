@@ -1,0 +1,74 @@
+apiVersion: mn.dev/project/v1
+kind: Project
+metadata:
+  id: commerce-reservation
+  owner: commerce-platform
+services:
+  - id: orders
+    path: services/orders
+    owners: [commerce-orders]
+    language: javascript
+    contracts:
+      - type: openapi
+        path: services/orders/openapi.yaml
+        serviceName: orders
+      - type: asyncapi
+        path: services/orders/events.asyncapi.yaml
+        serviceName: orders
+    dependencies:
+      - service: inventory
+        kind: sync
+        contract: services/inventory/openapi.yaml
+    data:
+      - kind: database
+        name: orders-db
+        role: owner
+        lifecycle: order-retention-365d
+      - kind: topic
+        name: orders.confirmed
+        role: publisher
+        lifecycle: event-retention-7d
+    commands:
+      test: npm test
+      integration: node --test ../../tests/cross-service.e2e.test.mjs
+      lint: node --check src/server.mjs
+      typecheck: node --check src/server.mjs
+      llm_verifier: node --check src/server.mjs
+    observability:
+      metrics: [orders_created_total, orders_rejected_total]
+      traces: [order-create, inventory-reserve]
+      logs: [order-audit]
+      alerts: [order-create-error-rate]
+    deployment:
+      unit: orders
+      rollbackCommand: node scripts/rollback.mjs
+  - id: inventory
+    path: services/inventory
+    owners: [commerce-inventory]
+    language: javascript
+    contracts:
+      - type: openapi
+        path: services/inventory/openapi.yaml
+        serviceName: inventory
+    data:
+      - kind: database
+        name: inventory-db
+        role: owner
+        lifecycle: inventory-ledger-permanent
+    commands:
+      test: npm test
+      lint: node --check src/server.mjs
+      typecheck: node --check src/server.mjs
+      llm_verifier: node --check src/server.mjs
+    observability:
+      metrics: [inventory_reserved_total, inventory_conflict_total]
+      traces: [inventory-reserve]
+      logs: [inventory-audit]
+      alerts: [inventory-reservation-conflict-rate]
+    deployment:
+      unit: inventory
+      rollbackCommand: node scripts/rollback.mjs
+consistency:
+  - id: order-inventory-reservation
+    participants: [orders, inventory]
+    strategy: saga

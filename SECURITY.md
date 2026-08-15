@@ -46,4 +46,3 @@ Social engineering, denial of service requiring unreasonable traffic,
 reports against unsupported snapshots, and issues that require a user to
 deliberately disable documented safeguards may be closed without a security
 advisory. This does not waive responsible review of credible impact.
-

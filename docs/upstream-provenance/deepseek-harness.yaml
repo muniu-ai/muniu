@@ -69,4 +69,3 @@ excluded:
   - eval, new Function, HMR-loaded code, and unsigned executable plugins
 
 files: []
-

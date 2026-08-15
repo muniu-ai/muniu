@@ -29,4 +29,3 @@ npm run build:desktop
 ~~~
 
 路径/符号链接逃逸、Home 敏感文件、工作区外写、Shell 网络、审批绕过、资源泄漏和恢复重放测试全绿；SECURITY.md 明示 Seatbelt 残余风险。
-

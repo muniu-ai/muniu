@@ -1,15 +1,15 @@
 {
-  "version": "0.1.1",
-  "notes": "Dry-run update manifest for validating the macOS updater release shape. Replace signatures and URLs with real Tauri updater artifacts before publishing.",
-  "pub_date": "2026-07-06T00:00:00Z",
+  "version": "0.1.0",
+  "notes": "Test fixture only. The v0.1.0 Developer Preview updater is disabled and this manifest must never be published.",
+  "pub_date": "2026-08-15T00:00:00Z",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "REPLACE_WITH_TAURI_UPDATER_SIGNATURE_FROM_MUNIU_0_1_1_UNIVERSAL_APP_TAR_GZ_SIG",
-      "url": "https://github.com/muniu-ai/muniu/releases/download/v0.1.1/Muniu_0.1.1_universal.app.tar.gz"
+      "signature": "TEST_FIXTURE_NOT_FOR_RELEASE",
+      "url": "https://github.com/muniu-ai/muniu/releases/download/v0.1.0/Muniu_0.1.0_universal.app.tar.gz"
     },
     "darwin-x86_64": {
-      "signature": "REPLACE_WITH_TAURI_UPDATER_SIGNATURE_FROM_MUNIU_0_1_1_UNIVERSAL_APP_TAR_GZ_SIG",
-      "url": "https://github.com/muniu-ai/muniu/releases/download/v0.1.1/Muniu_0.1.1_universal.app.tar.gz"
+      "signature": "TEST_FIXTURE_NOT_FOR_RELEASE",
+      "url": "https://github.com/muniu-ai/muniu/releases/download/v0.1.0/Muniu_0.1.0_universal.app.tar.gz"
     }
   }
 }

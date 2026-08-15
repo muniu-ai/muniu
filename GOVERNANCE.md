@@ -39,4 +39,3 @@ A published version is never overwritten; fixes receive a new patch version.
 Governance changes use a pull request, explain the motivation and transition,
 and remain open for public comment for at least seven days unless they address
 an active security incident.
-

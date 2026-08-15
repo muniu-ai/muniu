@@ -3,6 +3,8 @@ name = "mniu-desktop"
 version = "0.1.0"
 description = "木牛 macOS desktop shell"
 authors = ["Muniu"]
+license = "Apache-2.0"
+repository = "https://github.com/muniu-ai/muniu"
 edition = "2021"
 
 [lib]

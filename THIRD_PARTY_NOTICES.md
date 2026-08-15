@@ -40,4 +40,3 @@ LICENSES/BSD-3-Clause.txt is provided for components that may use that license.
 Its presence is not evidence that an excluded upstream component was shipped.
 The release-time license inventory and CycloneDX SBOM are authoritative for
 the bytes in each release artifact.
-

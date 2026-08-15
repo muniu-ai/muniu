@@ -30,4 +30,3 @@ body:
         - Breaking change requiring versioning
     validations:
       required: true
-

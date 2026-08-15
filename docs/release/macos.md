@@ -103,6 +103,8 @@ brew install --cask --dry-run local/mniu/mniu
 
 ## 自动更新 dry-run
 
+> v0.1.0 Developer Preview 不发布签名/公证桌面应用，运行时 updater、updater capability 和 updater artifact generation 均已禁用。以下流程只保留为未来签名发布通道的设计资料，不得用于 v0.1.0 发布。
+
 桌面端已经接入 Tauri 2 updater：
 
 - JS 依赖：`@tauri-apps/plugin-updater`
@@ -121,8 +123,8 @@ npm run release:mac
 签名构建应产出：
 
 ```text
-Muniu_0.1.1_universal.app.tar.gz
-Muniu_0.1.1_universal.app.tar.gz.sig
+Muniu_0.1.0_universal.app.tar.gz
+Muniu_0.1.0_universal.app.tar.gz.sig
 latest.json
 ```
 

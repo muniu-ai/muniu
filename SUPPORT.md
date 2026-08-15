@@ -18,4 +18,3 @@ necessary for the report.
 Support for enterprise deployment examples does not create a commercial
 support commitment. Downstream distributions are responsible for their own
 binaries, signing, updates, and user support.
-

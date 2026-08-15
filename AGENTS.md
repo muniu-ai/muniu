@@ -28,4 +28,3 @@ These rules apply to the whole repository unless a deeper AGENTS.md narrows them
 - Side effects must pass the centralized tool policy and approval path. Never silently fall back from a required sandbox to unsandboxed execution.
 - Keep telemetry disabled by default and redact secrets from logs, fixtures, diagnostics, and test output.
 - Baseline verification is npm test, npm run typecheck, npm run typecheck:desktop, npm run build:desktop, Cargo tests with --locked, npm run verify:enterprise-fixture, and npm audit --omit=dev.
-

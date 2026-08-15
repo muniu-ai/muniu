@@ -30,4 +30,3 @@ npm run verify:enterprise-fixture
 ~~~
 
 现有 CLI/API/桌面主流程无回归；旧数据 fixture 可迁移并回滚；builtin Agent 完成治理、验证、证据和 repair 全流程。
-

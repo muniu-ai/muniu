@@ -314,26 +314,29 @@ test("safe npm direct-node tests execute as allowlisted JUnit commands", async (
   );
   const published: string[] = [];
   const actualCommands: Array<{ executable: string; args: readonly string[] }> = [];
+  const trustedNodePath = "/opt/mn/tools/node";
   const actualExecutor: GateCommandExecutor = {
     id: "test/real-node",
     version: "1",
     sandboxExecution: canonicalizationExecution(),
     async resolveToolIdentity(executable) {
-      return testToolIdentity(executable, process.execPath);
+      return testToolIdentity(executable, trustedNodePath);
     },
     async execute(request) {
       actualCommands.push(request);
       const { NODE_TEST_CONTEXT: _nodeTestContext, ...env } = process.env;
-      const result = await execFileAsync(request.executable, [...request.args], {
+      // The leased runtime path is a fixture. Use this process' pinned Node to
+      // exercise the real reporter without weakening production path checks.
+      const result = await execFileAsync(process.execPath, [...request.args], {
         cwd: request.cwd,
         env,
         encoding: "utf8"
       });
       return { exitCode: 0, stdout: result.stdout, stderr: result.stderr };
     },
-    async probeVersion(executable, args, cwd) {
+    async probeVersion(_executable, args, cwd) {
       const { NODE_TEST_CONTEXT: _nodeTestContext, ...env } = process.env;
-      const result = await execFileAsync(executable, [...args], {
+      const result = await execFileAsync(process.execPath, [...args], {
         cwd,
         env,
         encoding: "utf8"
@@ -362,7 +365,7 @@ test("safe npm direct-node tests execute as allowlisted JUnit commands", async (
   const [second] = await execute();
   assert.equal(first?.status, "pass");
   assert.equal(second?.status, "pass");
-  assert.equal(first?.command?.executable, process.execPath);
+  assert.equal(first?.command?.executable, trustedNodePath);
   assert.deepEqual(first?.command?.args, [
     "--test",
     "--experimental-test-isolation=process",
@@ -371,10 +374,10 @@ test("safe npm direct-node tests execute as allowlisted JUnit commands", async (
     "provenance.test.mjs"
   ]);
   assert.equal(first?.tool?.id, "node");
-  assert.equal(first?.tool?.resolvedExecutable, process.execPath);
+  assert.equal(first?.tool?.resolvedExecutable, trustedNodePath);
   assert.match(first?.tool?.contentDigest ?? "", /^[a-f0-9]{64}$/u);
   assert.equal(first?.tool?.imageDigest, TEST_IMAGE_DIGEST);
-  assert.equal(actualCommands[0]?.executable, process.execPath);
+  assert.equal(actualCommands[0]?.executable, trustedNodePath);
   assert.equal(published[0], published[1], JSON.stringify(published));
   assert.equal(first?.artifacts[0]?.digest, second?.artifacts[0]?.digest);
   assert.match(published[0] ?? "", /^<\?xml version="1\.0" encoding="utf-8"\?>/u);

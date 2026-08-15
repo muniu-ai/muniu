@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-07-11T01:30:00.000Z",
+  "packs": [
+    {
+      "id": "enterprise-microservices",
+      "version": "1.0.0",
+      "digest": "dcf6f5dd4fc5eeec17cab60a41fc98e1a6b22320e28bd6c14b2033bfadd7a85c",
+      "sequence": 1,
+      "scope": "organization",
+      "scopeId": "commerce",
+      "source": "fixture://enterprise-microservices@1.0.0"
+    }
+  ],
+  "digest": "cf463a4532f30d35606f17f7d45581bf6dee8eff4dd0420fe4e70125833e22e9"
+}

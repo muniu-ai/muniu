@@ -20,7 +20,6 @@
         }
       ]
     },
-    "updater:default",
     "fs:allow-write-file",
     {
       "identifier": "fs:scope",

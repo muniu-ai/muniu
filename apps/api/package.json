@@ -1,6 +1,9 @@
 {
   "name": "@mn/api",
   "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "repository": "https://github.com/muniu-ai/muniu",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -27,7 +30,7 @@
     "@mn/store": "0.1.0",
     "@mn/usage": "0.1.0",
     "@mn/worker": "0.1.0",
-    "fastify": "^5.2.1",
+    "fastify": "^5.12.0",
     "pg": "^8.22.0",
     "zod": "^3.24.1"
   },

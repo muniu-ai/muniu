@@ -28,7 +28,7 @@
   },
   "bundle": {
     "active": true,
-    "createUpdaterArtifacts": true,
+    "createUpdaterArtifacts": false,
     "externalBin": ["binaries/mn-api"],
     "resources": {
       "binaries/mn-api-aarch64-apple-darwin": "mn-api-aarch64-apple-darwin",
@@ -40,12 +40,6 @@
     }
   },
   "plugins": {
-    "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDVDMkIxRjVCMDVBOEZBNDgKUldSSStxZ0ZXeDhyWFAvNFIyQnYzUEtzMVVJNUgzNHJJMmVhakk4ZDlNRGZ1bTVLZ3RiVFJJU1kK",
-      "endpoints": [
-        "https://github.com/muniu-ai/muniu/releases/latest/download/latest.json"
-      ]
-    },
     "deep-link": {
       "desktop": {
         "schemes": ["mniu"]
