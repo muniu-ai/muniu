@@ -42,6 +42,45 @@ test("assembler records errors and drops an incomplete tool call at max tokens",
   assert.deepEqual(assembler.error, { code: "UPSTREAM", message: "provider stopped" });
 });
 
+test("assembler snapshots and freezes block, usage, and error push boundaries", () => {
+  const assembler = new BlockAssembler();
+  const block = { type: "text" as const, text: "stable" };
+  const usage = { inputTokens: 2, outputTokens: 3, thinkingTokens: 1 };
+  const error = { code: "UPSTREAM", message: "stable error", retryable: true };
+  assembler.push({ type: "block-end", index: 0, block });
+  assembler.push({ type: "usage", usage });
+  assembler.push({ type: "error", error });
+
+  block.text = "mutated";
+  usage.outputTokens = 99;
+  error.message = "mutated error";
+  const blocks = assembler.blocks();
+  assert.deepEqual(blocks, [{ type: "text", text: "stable" }]);
+  assert.deepEqual(assembler.usage, { inputTokens: 2, outputTokens: 3, thinkingTokens: 1 });
+  assert.deepEqual(assembler.error, { code: "UPSTREAM", message: "stable error", retryable: true });
+  assert.equal(Object.isFrozen(blocks), true);
+  assert.equal(Object.isFrozen(blocks[0]), true);
+  assert.equal(Object.isFrozen(assembler.usage), true);
+  assert.equal(Object.isFrozen(assembler.error), true);
+  assert.throws(() => { (blocks[0] as { text: string }).text = "caller mutation"; }, TypeError);
+});
+
+test("assembler rejects non-lossless block, usage, and error boundary values", () => {
+  assert.throws(() => new BlockAssembler().push({
+    type: "block-end",
+    index: 0,
+    block: { type: "text", text: "x", invalid: undefined }
+  } as never), /block.*lossless|lossless.*block/i);
+  assert.throws(() => new BlockAssembler().push({
+    type: "usage",
+    usage: { inputTokens: 1, outputTokens: 1, invalid: 1n }
+  } as never), /usage.*lossless|lossless.*usage/i);
+  assert.throws(() => new BlockAssembler().push({
+    type: "error",
+    error: { code: "UPSTREAM", message: "x", invalid: undefined }
+  } as never), /error.*lossless|lossless.*error/i);
+});
+
 test("assembler rejects block conflicts, incomplete tool calls, and chunks after finish", () => {
   const conflict = new BlockAssembler();
   conflict.push({ type: "text-delta", index: 0, text: "text" });
@@ -165,6 +204,30 @@ test("LLM runtime emits one safe terminal for provider errors and post-finish th
     { type: "finish", reason: "error" }
   ]);
   assert.equal(JSON.stringify(chunks).includes("provider-secret"), false);
+  assert.equal(chunks.filter((chunk) => chunk.type === "finish").length, 1);
+});
+
+test("LLM runtime emits one cancelled terminal when an aborted stream exhausts normally", async () => {
+  const controller = new AbortController();
+  const runtime = new LlmRuntime();
+  runtime.register({
+    id: "normal-abort",
+    async *stream(): AsyncIterable<StreamChunk> {
+      yield { type: "text-delta", index: 0, text: "partial" };
+      controller.abort();
+    }
+  });
+
+  const chunks = await collect(runtime.stream({
+    ...request,
+    provider: "normal-abort",
+    signal: controller.signal
+  }));
+  assert.deepEqual(chunks, [
+    { type: "text-delta", index: 0, text: "partial" },
+    { type: "error", error: { code: "LLM_CANCELLED", message: "Model stream cancelled" } },
+    { type: "finish", reason: "cancelled" }
+  ]);
   assert.equal(chunks.filter((chunk) => chunk.type === "finish").length, 1);
 });
 

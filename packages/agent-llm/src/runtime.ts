@@ -66,6 +66,15 @@ export class LlmRuntime {
         yield chunk;
         if (chunk.type === "finish") return;
       }
+      if (request.signal?.aborted === true) {
+        yield {
+          type: "error",
+          error: { code: "LLM_CANCELLED", message: "Model stream cancelled" }
+        };
+        terminalEmitted = true;
+        yield { type: "finish", reason: "cancelled" };
+        return;
+      }
       terminalEmitted = true;
       yield { type: "finish", reason: "stop" };
     } catch {

@@ -47,6 +47,145 @@ test("registry requires an authorizer and seals duplicate/static registration", 
   assert.deepEqual(registry.schemas(), [{ name: "read", description: "Read a path", parameters }]);
 });
 
+test("registry reads, validates, and binds the authorizer getter exactly once", async () => {
+  let reads = 0;
+  const authorizer = {
+    marker: "bound",
+    get authorize() {
+      reads += 1;
+      return async function (this: { marker: string }) {
+        return { decision: this.marker === "bound" ? "approve" as const : "deny" as const };
+      };
+    }
+  };
+  const registry = new ToolRegistry(authorizer);
+  registry.register(defineTool({
+    name: "bound_authorizer",
+    description: "Check stable authorization",
+    risk: "read-only",
+    parameters,
+    execute: async () => ({ ok: true })
+  }));
+
+  assert.deepEqual(
+    await registry.execute({ name: "bound_authorizer", arguments: '{"path":"a"}', context }),
+    { ok: true }
+  );
+  assert.equal(reads, 1);
+});
+
+test("tool cancellation before authorization or dispatch never invokes a remaining side effect", async () => {
+  let authorizationCount = 0;
+  const dispatched: string[] = [];
+  let releaseFirst!: () => void;
+  const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const registry = new ToolRegistry({ authorize: async () => {
+    authorizationCount += 1;
+    return { decision: "approve" };
+  } });
+  registry.register(defineTool({
+    name: "cancel_boundary",
+    description: "Cancellation boundary",
+    risk: "side-effecting",
+    parameters,
+    execute: async (args) => {
+      const value = String(args.path);
+      dispatched.push(value);
+      if (value === "first") await firstGate;
+      return { value };
+    }
+  }));
+
+  const first = registry.execute({ name: "cancel_boundary", arguments: '{"path":"first"}', context });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const queuedController = new AbortController();
+  const queued = registry.execute({
+    name: "cancel_boundary",
+    arguments: '{"path":"queued"}',
+    context: { ...context, signal: queuedController.signal }
+  });
+  queuedController.abort();
+  releaseFirst();
+  await first;
+  await assert.rejects(
+    queued,
+    (error: unknown) => error instanceof ToolExecutionError && error.code === "TOOL_CANCELLED"
+  );
+  assert.deepEqual(dispatched, ["first"]);
+  assert.equal(authorizationCount, 1);
+
+  const beforeAuthorizeController = new AbortController();
+  const beforeAuthorize = {
+    name: "cancel_boundary",
+    get arguments() {
+      beforeAuthorizeController.abort();
+      return '{"path":"before-authorize"}';
+    },
+    context: { ...context, signal: beforeAuthorizeController.signal }
+  };
+  await assert.rejects(
+    registry.execute(beforeAuthorize),
+    (error: unknown) => error instanceof ToolExecutionError && error.code === "TOOL_CANCELLED"
+  );
+  assert.deepEqual(dispatched, ["first"]);
+  assert.equal(authorizationCount, 1);
+});
+
+test("tool cancellation after approval or during a handler reports TOOL_CANCELLED", async () => {
+  const afterApprovalController = new AbortController();
+  let approvalDispatches = 0;
+  const afterApproval = new ToolRegistry({ authorize: async () => {
+    afterApprovalController.abort();
+    return { decision: "approve" };
+  } });
+  afterApproval.register(defineTool({
+    name: "after_approval",
+    description: "Cancel after approval",
+    risk: "side-effecting",
+    parameters,
+    execute: async () => { approvalDispatches += 1; return null; }
+  }));
+  await assert.rejects(
+    afterApproval.execute({
+      name: "after_approval",
+      arguments: '{"path":"a"}',
+      context: { ...context, signal: afterApprovalController.signal }
+    }),
+    (error: unknown) => error instanceof ToolExecutionError && error.code === "TOOL_CANCELLED"
+  );
+  assert.equal(approvalDispatches, 0);
+
+  const runningController = new AbortController();
+  let handlerStarted!: () => void;
+  const started = new Promise<void>((resolve) => { handlerStarted = resolve; });
+  let releaseHandler!: () => void;
+  const handlerGate = new Promise<void>((resolve) => { releaseHandler = resolve; });
+  const running = new ToolRegistry({ authorize: async () => ({ decision: "approve" }) });
+  running.register(defineTool({
+    name: "running_cancel",
+    description: "Cancel running handler",
+    risk: "side-effecting",
+    parameters,
+    execute: async () => {
+      handlerStarted();
+      await handlerGate;
+      return { outcome: "potentially-applied" };
+    }
+  }));
+  const execution = running.execute({
+    name: "running_cancel",
+    arguments: '{"path":"a"}',
+    context: { ...context, signal: runningController.signal }
+  });
+  await started;
+  runningController.abort();
+  releaseHandler();
+  await assert.rejects(
+    execution,
+    (error: unknown) => error instanceof ToolExecutionError && error.code === "TOOL_CANCELLED"
+  );
+});
+
 test("tool execution distinguishes parse, authorization, and redacted handler failures", async () => {
   let invoked = 0;
   const denied = new ToolRegistry({ authorize: async () => ({ decision: "deny" }) });

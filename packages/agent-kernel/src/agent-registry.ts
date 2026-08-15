@@ -64,9 +64,21 @@ export interface RoutedAgentRunInput extends AgentRunInput {
 }
 
 export class AgentKernel {
+  private readonly activeSessionIds = new Set<string>();
+
   constructor(private readonly registry: AgentRegistry) {}
 
   async run(input: RoutedAgentRunInput): Promise<AgentRunResult> {
-    return this.registry.require(input.agentId).run(input);
+    const executor = this.registry.require(input.agentId);
+    const sessionId = input.session.header.sessionId;
+    if (this.activeSessionIds.has(sessionId)) {
+      throw new Error(`session "${sessionId}" already has an active agent run`);
+    }
+    this.activeSessionIds.add(sessionId);
+    try {
+      return await executor.run(input);
+    } finally {
+      this.activeSessionIds.delete(sessionId);
+    }
   }
 }

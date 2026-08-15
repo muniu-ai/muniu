@@ -115,6 +115,8 @@ export class ReactDriver {
               reason = "error";
             } else if (assembler.finish === "cancelled" || isAborted(input.signal)) {
               reason = "cancelled";
+            } else if (assembler.finish === "max-tokens") {
+              reason = "budget-exceeded";
             } else if (calls.length === 0) {
               reason = "completed";
             } else {
@@ -134,7 +136,7 @@ export class ReactDriver {
                 if (result.budgetExceeded) budgetExceeded = true;
                 if (isAborted(input.signal)) {
                   reason = "cancelled";
-                  break;
+                  continue;
                 }
               }
               if (reason === "cancelled") {

@@ -48,6 +48,16 @@ function toolResultMessage(call: ToolCallBlock, text: string, isError: boolean) 
 
 export async function runToolStep(options: ToolStepOptions): Promise<ToolStepResult> {
   const { session, call, turn, step } = options;
+  if (isAborted(options.signal)) {
+    await session.append("tool/result", {
+      turn,
+      step,
+      message: toolResultMessage(call, "Tool execution was cancelled before dispatch.", true),
+      status: "interrupted",
+      error: { name: "ToolCancelledError", code: "TOOL_CANCELLED" }
+    }, options.metadata);
+    return { invoked: false, budgetExceeded: false };
+  }
   if (!options.budgetAvailable) {
     await session.append("tool/result", {
       turn,

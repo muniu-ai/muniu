@@ -26,6 +26,7 @@ export type ToolExecutionErrorCode =
   | "TOOL_NOT_FOUND"
   | "INVALID_ARGUMENTS"
   | "TOOL_DENIED"
+  | "TOOL_CANCELLED"
   | "TOOL_AUTHORIZATION_FAILED"
   | "TOOL_EXECUTION_FAILED";
 
@@ -36,15 +37,24 @@ export class ToolExecutionError extends Error {
   }
 }
 
+function assertToolNotCancelled(signal: AbortSignal | undefined): void {
+  if (signal?.aborted === true) {
+    throw new ToolExecutionError("Tool execution cancelled", "TOOL_CANCELLED");
+  }
+}
+
 export class ToolRegistry {
   private readonly tools = new Map<string, ToolDefinition>();
+  private readonly authorize: ToolAuthorizer["authorize"];
   private sealed = false;
   private tail: Promise<void> = Promise.resolve();
 
-  constructor(private readonly authorizer: ToolAuthorizer) {
-    if (authorizer === undefined || typeof authorizer.authorize !== "function") {
+  constructor(authorizer: ToolAuthorizer) {
+    const authorize = authorizer?.authorize;
+    if (typeof authorize !== "function") {
       throw new Error("a tool authorizer is required");
     }
+    this.authorize = authorize.bind(authorizer);
   }
 
   register(tool: ToolDefinition): () => void {
@@ -88,6 +98,9 @@ export class ToolRegistry {
   }
 
   private async executeSerial(invocation: ToolInvocation): Promise<JsonValue> {
+    const invocationContext = invocation.context;
+    const signal = invocationContext.signal;
+    assertToolNotCancelled(signal);
     const tool = this.tools.get(invocation.name);
     if (tool === undefined) throw new ToolExecutionError("Tool is not registered", "TOOL_NOT_FOUND");
     let args: unknown;
@@ -106,31 +119,38 @@ export class ToolRegistry {
     deepFreeze(authorizationArgs);
     deepFreeze(handlerArgs);
     const authorizationContext = deepFreeze({
-      sessionId: invocation.context.sessionId,
-      ...(invocation.context.signal === undefined ? {} : { signal: invocation.context.signal })
+      sessionId: invocationContext.sessionId,
+      ...(signal === undefined ? {} : { signal })
     });
     const handlerContext = deepFreeze({
-      sessionId: invocation.context.sessionId,
-      ...(invocation.context.signal === undefined ? {} : { signal: invocation.context.signal })
+      sessionId: invocationContext.sessionId,
+      ...(signal === undefined ? {} : { signal })
     });
+    assertToolNotCancelled(signal);
     let decision: "approve" | "deny";
     try {
-      decision = (await this.authorizer.authorize({
+      decision = (await this.authorize({
         name: tool.name,
         risk: tool.risk,
         args: authorizationArgs,
         context: authorizationContext
       })).decision;
     } catch {
+      assertToolNotCancelled(signal);
       throw new ToolExecutionError("Tool authorization failed", "TOOL_AUTHORIZATION_FAILED");
     }
+    assertToolNotCancelled(signal);
     if (decision !== "approve") throw new ToolExecutionError("Tool execution denied", "TOOL_DENIED");
+    assertToolNotCancelled(signal);
     try {
       const result = await tool.execute(handlerArgs, handlerContext);
+      assertToolNotCancelled(signal);
       const snapshot = snapshotJsonValue(result);
       if (snapshot === undefined) throw new Error("non-JSON tool result");
       return snapshot;
-    } catch {
+    } catch (error: unknown) {
+      if (error instanceof ToolExecutionError && error.code === "TOOL_CANCELLED") throw error;
+      assertToolNotCancelled(signal);
       throw new ToolExecutionError("Tool execution failed", "TOOL_EXECUTION_FAILED");
     }
   }

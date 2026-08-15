@@ -12,6 +12,8 @@
 import {
   MessageId,
   createAssistantMessage,
+  deepFreeze,
+  snapshotJsonValue,
   type AssistantMessage,
   type CallId,
   type ContentBlock,
@@ -22,6 +24,12 @@ import {
   type StreamChunk,
   type TokenUsage
 } from "@mn/agent-protocol";
+
+function snapshotBoundary<T>(value: T, label: string): T {
+  const snapshot = snapshotJsonValue(value);
+  if (snapshot === undefined) throw new Error(`assembler ${label} must be lossless JSON`);
+  return deepFreeze(snapshot);
+}
 
 interface PartialBlock {
   blockType: ContentBlockType;
@@ -74,15 +82,16 @@ export class BlockAssembler {
         return;
       }
       case "block-end": {
-        const partial = this.ensure(chunk.index, chunk.block.type);
-        this.finishBlock(partial, chunk.block, chunk.index);
+        const block = snapshotBoundary(chunk.block, "block");
+        const partial = this.ensure(chunk.index, block.type);
+        this.finishBlock(partial, block, chunk.index);
         return;
       }
       case "usage":
-        this.currentUsage = chunk.usage;
+        this.currentUsage = snapshotBoundary(chunk.usage, "usage");
         return;
       case "error":
-        this.currentError = chunk.error;
+        this.currentError = snapshotBoundary(chunk.error, "error");
         return;
       case "finish":
         this.currentFinish = chunk.reason;
@@ -148,13 +157,14 @@ export class BlockAssembler {
     throw new Error(`cannot assemble incomplete block of type "${partial.blockType}"`);
   }
 
-  blocks(): ContentBlock[] {
+  blocks(): readonly ContentBlock[] {
     const blocks = this.order.map((index) => {
       const partial = this.partials.get(index);
       if (partial === undefined) throw new Error(`assembler invariant violated at index ${index}`);
       return this.assemble(partial, index);
     });
-    return this.finish === "max-tokens" ? blocks.filter((block) => block.type !== "tool-call") : blocks;
+    const visible = this.finish === "max-tokens" ? blocks.filter((block) => block.type !== "tool-call") : blocks;
+    return snapshotBoundary(visible, "blocks");
   }
 
   get usage(): TokenUsage | undefined { return this.currentUsage; }

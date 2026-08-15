@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { CallId, SessionId } from "@mn/agent-protocol";
+import { CallId, CandidateId, RunId, SessionId } from "@mn/agent-protocol";
 import { InMemoryAgentSessionStore } from "@mn/agent-session";
 import { LlmRuntime, ScriptedLlmAdapter, type LlmAdapter } from "@mn/agent-llm";
 import { ToolRegistry, defineTool } from "@mn/agent-tools";
@@ -118,6 +118,135 @@ test("AgentKernel routes only registered static executors", async () => {
   await assert.rejects(
     kernel.run({ agentId: "missing" } as never),
     /not registered/i
+  );
+});
+
+test("AgentKernel fails closed for concurrent runs on one session while allowing different sessions", async () => {
+  let starts = 0;
+  let active = 0;
+  let maximumActive = 0;
+  let firstStarted!: () => void;
+  const firstStart = new Promise<void>((resolve) => { firstStarted = resolve; });
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const registry = new AgentRegistry();
+  registry.register("builtin", {
+    run: async (runInput) => {
+      starts += 1;
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      await runInput.session.append("turn/start", { turn: 1 });
+      if (starts === 1) firstStarted();
+      await gate;
+      active -= 1;
+      return { reason: "completed", steps: 0, toolCalls: 0 };
+    }
+  });
+  registry.seal();
+  const kernel = new AgentKernel(registry);
+  const store = new InMemoryAgentSessionStore();
+  const firstSession = await store.create({ sessionId: SessionId("kernel-active-first") });
+  const secondSession = await store.create({ sessionId: SessionId("kernel-active-second") });
+  const input = { agentId: "builtin", prompt: "run", provider: "mock", model: "scripted" };
+
+  const first = kernel.run({ ...input, session: firstSession });
+  await firstStart;
+  const duplicate = kernel.run({ ...input, session: firstSession });
+  void duplicate.catch(() => {});
+  const independent = kernel.run({ ...input, session: secondSession });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const startsBeforeRelease = starts;
+  release();
+  const outcomes = await Promise.allSettled([first, duplicate, independent]);
+
+  assert.equal(startsBeforeRelease, 2);
+  assert.equal(maximumActive, 2);
+  assert.equal(outcomes[0]?.status, "fulfilled");
+  assert.equal(outcomes[1]?.status, "rejected");
+  assert.match(String(outcomes[1]?.status === "rejected" ? outcomes[1].reason : ""), /active|already.*run/i);
+  assert.equal(outcomes[2]?.status, "fulfilled");
+  assert.equal(firstSession.events.filter((event) => event.type === "turn/start").length, 1);
+});
+
+test("ReactDriver maps max-tokens finish to budget-exceeded", async () => {
+  const llm = new LlmRuntime();
+  llm.register(new ScriptedLlmAdapter("max-tokens", [[
+    { type: "text-delta", index: 0, text: "partial" },
+    { type: "finish", reason: "max-tokens" }
+  ]]));
+  llm.seal();
+  const tools = new ToolRegistry({ authorize: async () => ({ decision: "approve" }) });
+  tools.seal();
+  const session = await new InMemoryAgentSessionStore().create({ sessionId: SessionId("max-tokens-session") });
+  const result = await createBuiltinAgentKernel({
+    llm,
+    tools,
+    systemPrompt: new StaticSystemPrompt([])
+  }).run({ session, prompt: "continue", provider: "max-tokens", model: "scripted" });
+
+  assert.equal(result.reason, "budget-exceeded");
+  const turnEnd = session.events.at(-1);
+  assert.equal(turnEnd?.type === "turn/end" ? turnEnd.payload.reason : undefined, "budget-exceeded");
+});
+
+test("ReactDriver closes every remaining model tool call symmetrically after cancellation", async () => {
+  const controller = new AbortController();
+  const llm = new LlmRuntime();
+  llm.register(new ScriptedLlmAdapter("multi-cancel", [[
+    { type: "tool-call-delta", index: 0, id: CallId("cancel-call-1"), name: "act", argumentsDelta: "{}" },
+    { type: "tool-call-delta", index: 1, id: CallId("cancel-call-2"), name: "act", argumentsDelta: "{}" },
+    { type: "tool-call-delta", index: 2, id: CallId("cancel-call-3"), name: "act", argumentsDelta: "{}" },
+    { type: "finish", reason: "tool-calls" }
+  ]]));
+  llm.seal();
+  let dispatches = 0;
+  const tools = new ToolRegistry({ authorize: async () => ({ decision: "approve" }) });
+  tools.register(defineTool({
+    name: "act",
+    description: "Cancel after first dispatch",
+    risk: "side-effecting",
+    parameters: noArgs,
+    execute: async () => {
+      dispatches += 1;
+      controller.abort();
+      return { outcome: "unknown" };
+    }
+  }));
+  tools.seal();
+  const session = await new InMemoryAgentSessionStore().create({ sessionId: SessionId("multi-tool-cancel") });
+  const runId = RunId("multi-tool-run");
+  const candidateId = CandidateId("multi-tool-candidate");
+  const result = await createBuiltinAgentKernel({
+    llm,
+    tools,
+    systemPrompt: new StaticSystemPrompt([])
+  }).run({
+    session,
+    prompt: "run all",
+    provider: "multi-cancel",
+    model: "scripted",
+    signal: controller.signal,
+    runId,
+    candidateId
+  });
+
+  assert.equal(result.reason, "cancelled");
+  assert.equal(dispatches, 1);
+  const toolResults = session.events.filter((event) => event.type === "tool/result");
+  assert.equal(toolResults.length, 3);
+  assert.deepEqual(
+    toolResults.map((event) => event.type === "tool/result" ? event.payload.message.source.callId : undefined),
+    ["cancel-call-1", "cancel-call-2", "cancel-call-3"]
+  );
+  assert.deepEqual(
+    toolResults.map((event) => event.type === "tool/result"
+      ? { status: event.payload.status, code: event.payload.error?.code, runId: event.runId, candidateId: event.candidateId }
+      : undefined),
+    Array.from({ length: 3 }, () => ({ status: "interrupted", code: "TOOL_CANCELLED", runId, candidateId }))
+  );
+  assert.deepEqual(
+    session.events.filter((event) => event.type === "tool/call").map((event) => event.type === "tool/call" ? event.payload.callId : undefined),
+    ["cancel-call-1"]
   );
 });
 
