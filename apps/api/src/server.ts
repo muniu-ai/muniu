@@ -3077,9 +3077,26 @@ export function buildServer(options: BuildServerOptions = {}) {
     return handleDeepLinkImport(body.url, body.dryRun, reply);
   });
 
-  app.post("/v1/providers/model-catalog/sync-due", async (request) => {
-    const body = providerModelCatalogSyncDueSchema.parse(request.body ?? {});
-    return syncDueProviderModelCatalogs(body);
+  app.post("/v1/providers/model-catalog/sync-due", async (request, reply) => {
+    const bodyResult = providerModelCatalogSyncDueSchema.safeParse(request.body ?? {});
+    if (!bodyResult.success) {
+      return reply.code(400).send({
+        error: "invalid model catalog sync-due request",
+        details: bodyResult.error.issues.map((issue) => issue.message)
+      });
+    }
+    if (bodyResult.data.providerIds) {
+      const selectedProviders = await Promise.all(
+        bodyResult.data.providerIds.map((id) => localStore.getProvider(id))
+      );
+      const agentProvider = selectedProviders.find(isAgentOnlyProvider);
+      if (agentProvider) {
+        return reply.code(400).send({
+          error: `model catalog sync is unavailable for embedded agent provider ${agentProvider.name}`
+        });
+      }
+    }
+    return syncDueProviderModelCatalogs(bodyResult.data);
   });
 
   app.get("/v1/providers/:id", async (request, reply) => {
@@ -3094,6 +3111,11 @@ export function buildServer(options: BuildServerOptions = {}) {
     const query = providerModelCatalogAuditQuerySchema.parse(request.query);
     const provider = await localStore.getProvider(id);
     if (!provider) return reply.code(404).send({ error: "provider not found" });
+    if (isAgentOnlyProvider(provider)) {
+      return reply.code(400).send({
+        error: `model catalog audit is unavailable for embedded agent provider ${provider.name}`
+      });
+    }
     return buildProviderModelCatalogAudit(provider, query.maxAgeDays);
   });
 
@@ -3133,6 +3155,11 @@ export function buildServer(options: BuildServerOptions = {}) {
 
     const provider = await localStore.getProvider(id);
     if (!provider) return reply.code(404).send({ error: "provider not found" });
+    if (isAgentOnlyProvider(provider)) {
+      return reply.code(400).send({
+        error: `model catalog sync is unavailable for embedded agent provider ${provider.name}`
+      });
+    }
 
     let incomingModels: ProviderModel[];
     try {
@@ -4237,12 +4264,33 @@ export function buildServer(options: BuildServerOptions = {}) {
     };
   });
 
-  app.get("/v1/proxy/health", async (request) => {
-    const query = proxyHealthQuerySchema.parse(request.query);
-    const [providers, healthRecords] = await Promise.all([
-      localStore.listProviders(query.app),
-      localStore.listProviderHealth(query)
-    ]);
+  app.get("/v1/proxy/health", async (request, reply) => {
+    const queryResult = proxyHealthQuerySchema.safeParse(request.query);
+    if (!queryResult.success) {
+      return reply.code(400).send({
+        error: "invalid proxy health query",
+        details: queryResult.error.issues.map((issue) => issue.message)
+      });
+    }
+    const query = queryResult.data;
+    const allProviders = await localStore.listProviders();
+    const selectedProvider = query.providerId
+      ? allProviders.find((provider) => provider.id === query.providerId)
+      : undefined;
+    if (selectedProvider && isAgentOnlyProvider(selectedProvider)) {
+      return reply.code(400).send({
+        error: `proxy health is unavailable for embedded agent provider ${selectedProvider.name}`
+      });
+    }
+    const agentProviderIds = new Set(
+      allProviders.filter(isAgentOnlyProvider).map((provider) => provider.id)
+    );
+    const appFilter = query.app;
+    const providers = appFilter
+      ? allProviders.filter((provider) => providerSupportsApp(provider, appFilter))
+      : allProviders;
+    const healthRecords = (await localStore.listProviderHealth(query))
+      .filter((health) => !agentProviderIds.has(health.providerId));
     const healthByProviderApp = new Map(
       healthRecords.map((health) => [providerHealthKey(health.providerId, health.app), health])
     );
@@ -4284,10 +4332,22 @@ export function buildServer(options: BuildServerOptions = {}) {
   });
 
   app.post("/v1/proxy/health/reset", async (request, reply) => {
-    const body = proxyHealthResetSchema.parse(request.body ?? {});
+    const bodyResult = proxyHealthResetSchema.safeParse(request.body ?? {});
+    if (!bodyResult.success) {
+      return reply.code(400).send({
+        error: "invalid proxy health reset request",
+        details: bodyResult.error.issues.map((issue) => issue.message)
+      });
+    }
+    const body = bodyResult.data;
     const provider = await localStore.getProvider(body.providerId);
     if (!provider) {
       return reply.code(404).send({ error: "provider not found" });
+    }
+    if (isAgentOnlyProvider(provider)) {
+      return reply.code(400).send({
+        error: `proxy health reset is unavailable for embedded agent provider ${provider.name}`
+      });
     }
     const reset = await localStore.resetProviderHealth({
       providerId: body.providerId,
@@ -7058,9 +7118,9 @@ export function buildServer(options: BuildServerOptions = {}) {
     const providerIdFilter = options.providerIds
       ? new Set(options.providerIds)
       : undefined;
-    const providers = (await localStore.listProviders(options.app)).filter((provider) =>
-      providerIdFilter ? providerIdFilter.has(provider.id) : true
-    );
+    const providers = (await localStore.listProviders(options.app))
+      .filter((provider) => !isAgentOnlyProvider(provider))
+      .filter((provider) => providerIdFilter ? providerIdFilter.has(provider.id) : true);
     const results: ProviderModelCatalogSyncDueRow[] = [];
     let policyCount = 0;
     let dueCount = 0;
@@ -9402,10 +9462,17 @@ function providerHealthKey(providerId: string, app: ManagedAgentApp): string {
   return `${app}:${providerId}`;
 }
 
+function isAgentOnlyProvider(
+  provider: ProviderRecord | undefined
+): boolean {
+  return provider?.app === "agent";
+}
+
 function proxyHealthApps(
   providerApp: string,
   requested?: ManagedAgentApp
 ): ManagedAgentApp[] {
+  if (providerApp === "agent") return [];
   if (requested) return [requested];
   if (providerApp === "claude" || providerApp === "codex") return [providerApp];
   return ["claude", "codex"];

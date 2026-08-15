@@ -23,6 +23,17 @@ import { MemoryStore } from "../src/store.js";
 
 const execFileAsync = promisify(execFile);
 
+class WriteCountingFileLocalStore extends FileLocalStore {
+  writeCount = 0;
+
+  override async write(
+    data: Parameters<FileLocalStore["write"]>[0]
+  ): Promise<void> {
+    this.writeCount += 1;
+    await super.write(data);
+  }
+}
+
 test("packaged macOS daemon defaults secrets to Keychain", () => {
   assert.equal(defaultSecretVaultBackend({ MN_DESKTOP_PACKAGED: "1" }, "darwin"), "keychain");
   assert.equal(
@@ -3270,6 +3281,163 @@ test("api keeps agent outside managed provider projection and extension surfaces
   for (const response of await Promise.all(managedOnlyRequests)) {
     assert.ok(response.statusCode >= 400, response.body);
   }
+});
+
+test("api rejects agent-only model catalog operations before fetch or store mutation", async (t) => {
+  const mniuRoot = await mkdtemp(join(tmpdir(), "mn-api-agent-catalog-boundary-"));
+  let upstreamHits = 0;
+  const upstream = createServer((_request, response) => {
+    upstreamHits += 1;
+    response
+      .writeHead(200, { "content-type": "application/json" })
+      .end(JSON.stringify({
+        models: [{ id: "deepseek-v4-pro", displayName: "DeepSeek V4 Pro" }]
+      }));
+  });
+  await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+  const address = upstream.address() as AddressInfo | null;
+  assert.ok(address);
+  const sourceUrl = `http://127.0.0.1:${address.port}/catalog.json`;
+  const localStore = new WriteCountingFileLocalStore({ rootDir: mniuRoot });
+  const provider = await localStore.createProvider({
+    app: "agent",
+    name: "Agent catalog boundary",
+    kind: "official",
+    apiFormat: "openai_chat",
+    baseUrl: "https://api.deepseek.com",
+    defaultModel: "deepseek-v4-flash",
+    modelCatalog: [{ id: "deepseek-v4-flash", displayName: "DeepSeek V4 Flash" }],
+    config: {
+      modelCatalogSyncPolicy: {
+        sourceUrl,
+        mode: "replace",
+        maxAgeDays: 30,
+        refreshIntervalHours: 24,
+        updatedAt: "2026-01-01T00:00:00.000Z"
+      }
+    }
+  });
+  localStore.writeCount = 0;
+
+  const app = buildServer({ mniuRoot, localStore, useMockExecutors: true });
+  t.after(async () => {
+    upstream.close();
+    await app.close();
+    await rm(mniuRoot, { recursive: true, force: true });
+  });
+
+  const auditResponse = await app.inject({
+    method: "GET",
+    url: `/v1/providers/${provider.id}/model-catalog/audit`
+  });
+  const selectedDueResponse = await app.inject({
+    method: "POST",
+    url: "/v1/providers/model-catalog/sync-due",
+    payload: { dryRun: false, providerIds: [provider.id] }
+  });
+  const unfilteredDueResponse = await app.inject({
+    method: "POST",
+    url: "/v1/providers/model-catalog/sync-due",
+    payload: { dryRun: false }
+  });
+  const syncResponse = await app.inject({
+    method: "POST",
+    url: `/v1/providers/${provider.id}/model-catalog/sync`,
+    payload: { dryRun: false, sourceUrl }
+  });
+
+  for (const response of [auditResponse, selectedDueResponse, syncResponse]) {
+    assert.equal(response.statusCode, 400, response.body);
+    assert.match(response.body, /embedded agent provider/iu);
+  }
+  assert.equal(unfilteredDueResponse.statusCode, 200, unfilteredDueResponse.body);
+  assert.equal(unfilteredDueResponse.json().checkedCount, 0);
+  assert.equal(unfilteredDueResponse.json().policyCount, 0);
+  assert.equal(unfilteredDueResponse.json().dueCount, 0);
+  assert.equal(upstreamHits, 0);
+  assert.equal(localStore.writeCount, 0);
+});
+
+test("api keeps agent-only providers and fake legacy records outside proxy health", async (t) => {
+  const mniuRoot = await mkdtemp(join(tmpdir(), "mn-api-agent-health-boundary-"));
+  let upstreamHits = 0;
+  const upstream = createServer((_request, response) => {
+    upstreamHits += 1;
+    response.writeHead(200).end();
+  });
+  await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+  const address = upstream.address() as AddressInfo | null;
+  assert.ok(address);
+
+  const localStore = new WriteCountingFileLocalStore({ rootDir: mniuRoot });
+  const provider = await localStore.createProvider({
+    app: "agent",
+    name: "Agent health boundary",
+    kind: "official",
+    apiFormat: "openai_chat",
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    defaultModel: "deepseek-v4-flash"
+  });
+  await localStore.recordProviderHealthEvent({
+    providerId: provider.id,
+    app: "claude",
+    ok: false,
+    retryable: true,
+    failureThreshold: 1,
+    occurredAt: "2099-07-05T00:00:00.000Z"
+  });
+  await localStore.recordProviderHealthEvent({
+    providerId: provider.id,
+    app: "codex",
+    ok: false,
+    retryable: true,
+    failureThreshold: 1,
+    occurredAt: "2099-07-05T00:00:01.000Z"
+  });
+  localStore.writeCount = 0;
+
+  const app = buildServer({ mniuRoot, localStore, useMockExecutors: true });
+  t.after(async () => {
+    upstream.close();
+    await app.close();
+    await rm(mniuRoot, { recursive: true, force: true });
+  });
+
+  const listResponse = await app.inject({ method: "GET", url: "/v1/proxy/health" });
+  const agentListResponse = await app.inject({
+    method: "GET",
+    url: "/v1/proxy/health?app=agent"
+  });
+  const getResponse = await app.inject({
+    method: "GET",
+    url: `/v1/proxy/health?providerId=${provider.id}`
+  });
+  const resetResponse = await app.inject({
+    method: "POST",
+    url: "/v1/proxy/health/reset",
+    payload: { providerId: provider.id }
+  });
+
+  assert.equal(listResponse.statusCode, 200, listResponse.body);
+  assert.equal(
+    listResponse.json().health.some((health: { providerId: string }) =>
+      health.providerId === provider.id
+    ),
+    false
+  );
+  assert.equal(agentListResponse.statusCode, 400, agentListResponse.body);
+  assert.equal(getResponse.statusCode, 400, getResponse.body);
+  assert.match(getResponse.body, /embedded agent provider/iu);
+  assert.equal(resetResponse.statusCode, 400, resetResponse.body);
+  assert.match(resetResponse.body, /embedded agent provider/iu);
+  assert.equal(upstreamHits, 0);
+  assert.equal(localStore.writeCount, 0);
+  assert.deepEqual(
+    (await localStore.listProviderHealth({ providerId: provider.id })).map(
+      (health) => health.app
+    ),
+    ["claude", "codex"]
+  );
 });
 
 test("api restores Codex config and auth as one provider projection", async (t) => {
