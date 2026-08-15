@@ -35,9 +35,9 @@ import { acquireOsWriterLock, type OsWriterLock } from "./writer-lock.js";
 const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const STAGING_NONCE_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const PROCESS_SESSION_LEASES = new Map<string, WriterLease>();
-const ACTIVE_SESSION_IO = new AsyncLocalStorage<SessionIoContext>();
+const ACTIVE_SESSION_HOOK = new AsyncLocalStorage<SessionHookContext>();
 
-interface SessionIoContext {
+interface SessionHookContext {
   readonly store: JsonlAgentSessionStore;
   active: boolean;
 }
@@ -362,7 +362,9 @@ export class JsonlAgentSessionStore {
     const cleanupErrors: unknown[] = [];
     try {
       lease = await this.acquireLease(`path:${path.join(canonicalSessionsRoot, sessionId)}`, sessionId);
+      this.assertLeaseHeld(lease);
       await this.clearStaleStaging(sessionId);
+      this.assertLeaseHeld(lease);
       let finalExists = true;
       try {
         await lstat(paths.dir);
@@ -384,20 +386,21 @@ export class JsonlAgentSessionStore {
           await stagingDirectory.handle.close();
         }
         const initial = createInitialAgentSessionState(options);
-        await this.options.beforeAppend?.(initial.event);
-        this.assertOpen();
+        await this.runHook(() => this.options.beforeAppend?.(initial.event));
+        this.assertLease(lease);
         await writeExclusive(path.join(stagingDir, "header.json"), `${JSON.stringify(initial.header)}\n`);
         await writeExclusive(path.join(stagingDir, "events.jsonl"), `${JSON.stringify(initial.event)}\n`);
         await syncDirectory(stagingDir);
+        this.assertLease(lease);
         await rename(stagingDir, paths.dir);
         stagingCreated = false;
         outcome = "uncertain";
-        await this.options.afterPublish?.("renamed", sessionId);
-        this.assertOpen();
+        await this.runHook(() => this.options.afterPublish?.("renamed", sessionId));
+        this.assertLease(lease);
         await syncDirectory(this.sessionsRoot);
         outcome = "committed";
-        await this.options.afterPublish?.("committed", sessionId);
-        this.assertOpen();
+        await this.runHook(() => this.options.afterPublish?.("committed", sessionId));
+        this.assertLease(lease);
         result = await this.loadSessionWithLease(sessionId, canonicalSessionsRoot, lease, options);
         completed = true;
       }
@@ -481,6 +484,7 @@ export class JsonlAgentSessionStore {
     lease.eventStat = eventFile.fileStat;
     await eventFile.handle.chmod(0o600);
     await this.addFileIdentityLease(lease, eventFile.fileStat, sessionId);
+    this.assertLeaseHeld(lease);
     await this.assertDirectoryIdentity(paths.dir, directory.stat);
     const header = validateHeader(parsedHeader, sessionId);
     const events = await loadEvents(eventFile.handle, (fileStat) => this.assertFileIdentity(lease, fileStat));
@@ -502,7 +506,7 @@ export class JsonlAgentSessionStore {
       && persistedCreationSnapshotDigest(header, created) !== creationSnapshotDigest(expectedCreation)) {
       throw new Error(`session "${sessionId}" already exists with a different creation snapshot`);
     }
-    this.assertOpen();
+    this.assertLease(lease);
     const session = new DurableAgentSession(header, events, this.persistence(lease));
     this.sessions.set(sessionId, session);
     return session;
@@ -526,13 +530,20 @@ export class JsonlAgentSessionStore {
       lease = await this.acquireLease(`path:${canonicalDirectory}`, sessionId);
       return await this.loadSessionWithLease(sessionId, canonicalSessionsRoot, lease);
     } catch (error: unknown) {
-      if (lease !== undefined) await this.releaseLease(lease);
+      if (lease !== undefined) {
+        const [released] = await Promise.allSettled([this.releaseLease(lease)]);
+        if (released?.status === "rejected") {
+          throw new AggregateError([error, released.reason], `session "${sessionId}" open and cleanup failed`, {
+            cause: error
+          });
+        }
+      }
       throw error;
     }
   }
 
   dispose(): Promise<void> {
-    const activeContext = ACTIVE_SESSION_IO.getStore();
+    const activeContext = ACTIVE_SESSION_HOOK.getStore();
     if (activeContext?.store === this && activeContext.active) {
       return Promise.reject(new Error("cannot dispose a JSONL session store reentrantly from its I/O hook"));
     }
@@ -541,7 +552,9 @@ export class JsonlAgentSessionStore {
     this.disposal = (async () => {
       await Promise.allSettled([...this.inFlight.values(), ...this.activeIo]);
       this.sessions.clear();
-      await Promise.all([...this.leases].map((lease) => this.releaseLease(lease)));
+      const released = await Promise.allSettled([...this.leases].map((lease) => this.releaseLease(lease)));
+      const errors = released.flatMap((result) => result.status === "rejected" ? [result.reason] : []);
+      if (errors.length > 0) throw new AggregateError(errors, "failed to dispose session writer leases");
     })();
     return this.disposal;
   }
@@ -582,6 +595,7 @@ export class JsonlAgentSessionStore {
   }
 
   private async addFileIdentityLease(lease: WriterLease, fileStat: Stats, sessionId: SessionId): Promise<void> {
+    this.assertLeaseHeld(lease);
     const identityKey = `inode:${fileStat.dev}:${fileStat.ino}`;
     const owner = PROCESS_SESSION_LEASES.get(identityKey);
     if (owner !== undefined && owner !== lease) {
@@ -599,43 +613,32 @@ export class JsonlAgentSessionStore {
   }
 
   private async releaseLease(lease: WriterLease): Promise<void> {
-    const errors: unknown[] = [];
-    if (lease.eventHandle !== undefined) {
-      try {
-        await lease.eventHandle.close();
-      } catch (error: unknown) {
-        errors.push(error);
-      }
-      lease.eventHandle = undefined;
-      lease.eventStat = undefined;
-    }
-    if (lease.directoryHandle !== undefined) {
-      try {
-        await lease.directoryHandle.close();
-      } catch (error: unknown) {
-        errors.push(error);
-      }
-      lease.directoryHandle = undefined;
-      lease.directoryStat = undefined;
-    }
-    for (const lock of [...lease.osLocks.values()].reverse()) {
-      try {
-        await lock.release();
-      } catch (error: unknown) {
-        errors.push(error);
-      }
-    }
+    const cleanup = [
+      ...(lease.eventHandle === undefined ? [] : [lease.eventHandle.close()]),
+      ...(lease.directoryHandle === undefined ? [] : [lease.directoryHandle.close()]),
+      ...[...lease.osLocks.values()].reverse().map((lock) => lock.release())
+    ];
+    lease.eventHandle = undefined;
+    lease.eventStat = undefined;
+    lease.directoryHandle = undefined;
+    lease.directoryStat = undefined;
+    const settled = await Promise.allSettled(cleanup);
     lease.osLocks.clear();
     for (const key of lease.keys) {
       if (PROCESS_SESSION_LEASES.get(key) === lease) PROCESS_SESSION_LEASES.delete(key);
     }
     lease.keys.clear();
     this.leases.delete(lease);
+    const errors = settled.flatMap((result) => result.status === "rejected" ? [result.reason] : []);
     if (errors.length > 0) throw new AggregateError(errors, "failed to release session writer lease");
   }
 
   private assertLease(lease: WriterLease): void {
     this.assertOpen();
+    this.assertLeaseHeld(lease);
+  }
+
+  private assertLeaseHeld(lease: WriterLease): void {
     if (lease.owner !== this || lease.keys.size === 0
       || lease.osLocks.size !== lease.keys.size
       || [...lease.keys].some((key) => PROCESS_SESSION_LEASES.get(key) !== lease || lease.osLocks.get(key)?.released !== false)) {
@@ -661,10 +664,16 @@ export class JsonlAgentSessionStore {
   private persistence(lease: WriterLease): EventPersistence {
     return {
       append: (event) => this.runIo(lease, async () => {
-        await this.options.beforeAppend?.(event);
+        await this.runHook(() => this.options.beforeAppend?.(event));
+        this.assertLeaseHeld(lease);
         await appendEvent(this.eventHandle(lease), event, (fileStat) => this.assertFileIdentity(lease, fileStat));
+        this.assertLeaseHeld(lease);
       }),
-      flush: () => this.runIo(lease, async () => { await this.eventHandle(lease).sync(); })
+      flush: () => this.runIo(lease, async () => {
+        this.assertLeaseHeld(lease);
+        await this.eventHandle(lease).sync();
+        this.assertLeaseHeld(lease);
+      })
     };
   }
 
@@ -672,10 +681,7 @@ export class JsonlAgentSessionStore {
     this.assertLease(lease);
     let start!: () => void;
     const startGate = new Promise<void>((resolve) => { start = resolve; });
-    const context: SessionIoContext = { store: this, active: true };
-    const active = startGate
-      .then(() => ACTIVE_SESSION_IO.run(context, operation))
-      .finally(() => { context.active = false; });
+    const active = startGate.then(operation);
     this.activeIo.add(active);
     void active.then(
       () => { this.activeIo.delete(active); },
@@ -683,5 +689,14 @@ export class JsonlAgentSessionStore {
     );
     start();
     return active;
+  }
+
+  private async runHook<T>(operation: () => T | Promise<T>): Promise<T> {
+    const context: SessionHookContext = { store: this, active: true };
+    try {
+      return await ACTIVE_SESSION_HOOK.run(context, operation);
+    } finally {
+      context.active = false;
+    }
   }
 }

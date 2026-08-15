@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmod,
   link,
@@ -7,6 +8,7 @@ import {
   mkdtemp,
   readFile,
   readdir,
+  realpath,
   rename,
   stat,
   symlink,
@@ -39,6 +41,11 @@ import {
   recoverInterruptedSession
 } from "../src/index.js";
 import type { AgentSessionExclusiveView } from "../src/index.js";
+import { acquireOsWriterLock, resolveWriterLockHelper } from "../src/writer-lock.js";
+
+const CHILD_PROCESS_ENV = { ...process.env };
+delete CHILD_PROCESS_ENV.NODE_V8_COVERAGE;
+delete CHILD_PROCESS_ENV.NODE_TEST_CONTEXT;
 
 const CHILD_STORE_SCRIPT = String.raw`
 const [moduleUrl, root, sessionId, command] = process.argv.slice(1);
@@ -68,6 +75,20 @@ try {
 }
 `;
 
+const CHILD_WRITER_LOCK_SCRIPT = String.raw`
+const [moduleUrl, identity] = process.argv.slice(1);
+const { acquireOsWriterLock } = await import(moduleUrl);
+try {
+  const lock = await acquireOsWriterLock(identity);
+  process.stdout.write("ACQUIRED\n");
+  await new Promise((resolve) => process.stdin.once("data", resolve));
+  await lock.release();
+} catch (error) {
+  process.stderr.write("BLOCKED " + (error instanceof Error ? error.message : String(error)) + "\n");
+  process.exitCode = 23;
+}
+`;
+
 function spawnStoreProcess(root: string, sessionId: SessionId, command: "create-hold" | "hold" | "try"):
 ChildProcessWithoutNullStreams {
   return spawn(process.execPath, [
@@ -78,7 +99,17 @@ ChildProcessWithoutNullStreams {
     root,
     sessionId,
     command
-  ], { stdio: ["pipe", "pipe", "pipe"] });
+  ], { env: CHILD_PROCESS_ENV, stdio: ["pipe", "pipe", "pipe"] });
+}
+
+function spawnWriterLockProcess(identity: string): ChildProcessWithoutNullStreams {
+  return spawn(process.execPath, [
+    "--input-type=module",
+    "--eval",
+    CHILD_WRITER_LOCK_SCRIPT,
+    new URL("../src/writer-lock.js", import.meta.url).href,
+    identity
+  ], { env: CHILD_PROCESS_ENV, stdio: ["pipe", "pipe", "pipe"] });
 }
 
 async function waitForChildOutput(
@@ -126,6 +157,43 @@ async function waitForChildExit(child: ChildProcessWithoutNullStreams, timeoutMs
       clearTimeout(timer);
       resolve(code);
     });
+  });
+}
+
+async function waitForChildDecision(
+  child: ChildProcessWithoutNullStreams,
+  timeoutMs = 5_000
+): Promise<"acquired" | "blocked"> {
+  return new Promise<"acquired" | "blocked">((resolve, reject) => {
+    let stdout = "";
+    let stderr = "";
+    const onStdout = (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+      if (/ACQUIRED/u.test(stdout)) finish(() => resolve("acquired"));
+    };
+    const onStderr = (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+      if (/BLOCKED/u.test(stderr)) finish(() => resolve("blocked"));
+    };
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+      finish(() => reject(new Error(
+        `child exited without a lock decision (code=${String(code)}, signal=${String(signal)}, stdout=${stdout}, stderr=${stderr})`
+      )));
+    };
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      finish(() => reject(new Error(`timed out waiting for lock decision: stdout=${stdout}, stderr=${stderr}`)));
+    }, timeoutMs);
+    const finish = (complete: () => void) => {
+      clearTimeout(timer);
+      child.stdout.off("data", onStdout);
+      child.stderr.off("data", onStderr);
+      child.off("exit", onExit);
+      complete();
+    };
+    child.stdout.on("data", onStdout);
+    child.stderr.on("data", onStderr);
+    child.on("exit", onExit);
   });
 }
 
@@ -468,23 +536,20 @@ test("JSONL OS leases admit only one Node 22 writer across path and event-inode 
     const lockRootStat = await stat(lockRoot);
     assert.equal(lockRootStat.mode & 0o777, 0o700);
     assert.equal(lockRootStat.uid, ownerUid);
-    const holderRecords: Array<{ name: string; record: Record<string, unknown> }> = [];
-    for (const name of await readdir(lockRoot)) {
-      if (!name.endsWith(".lock")) continue;
-      const record = JSON.parse(await readFile(path.join(lockRoot, name), "utf8")) as Record<string, unknown>;
-      if (record.pid === holder.pid) holderRecords.push({ name, record });
-    }
-    assert.equal(holderRecords.length, 2);
-    for (const { name, record } of holderRecords) {
-      const lockStat = await stat(path.join(lockRoot, name));
+    const sessionDirectory = path.join(root, "sessions", sessionId);
+    const canonicalSessionDirectory = await realpath(sessionDirectory);
+    const eventStat = await stat(path.join(sessionDirectory, "events.jsonl"));
+    const identities = [
+      `path:${canonicalSessionDirectory}`,
+      `inode:${String(eventStat.dev)}:${String(eventStat.ino)}`
+    ];
+    for (const identity of identities) {
+      const digest = createHash("sha256").update(identity).digest("hex");
+      const lockStat = await stat(path.join(lockRoot, `${digest}.lock`));
       assert.equal(lockStat.mode & 0o777, 0o600);
       assert.equal(lockStat.uid, ownerUid);
       assert.equal(lockStat.nlink, 1);
-      assert.deepEqual(Object.keys(record).sort(), [
-        "createdAt", "identityDigest", "nonce", "pid", "schemaVersion", "uid"
-      ]);
-      assert.match(String(record.identityDigest), /^[0-9a-f]{64}$/u);
-      assert.doesNotMatch(JSON.stringify(record), new RegExp(root.replaceAll(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"));
+      assert.equal(lockStat.isFile(), true);
     }
 
     const pathContender = launch(root, "try");
@@ -522,6 +587,106 @@ test("JSONL OS leases admit only one Node 22 writer across path and event-inode 
     assert.equal(await inodeHolderExit, 0);
   } finally {
     for (const child of children) child.kill("SIGKILL");
+  }
+});
+
+test("JSONL OS writer lease never admits two holders under repeated crash contention", { timeout: 120_000 }, async () => {
+  assert.match(process.version, /^v22\.19\./u);
+  const root = await mkdtemp(path.join(os.tmpdir(), "muniu-session-lock-stress-"));
+  const identity = `stress:${root}`;
+
+  const seed = spawnWriterLockProcess(identity);
+  await waitForChildOutput(seed, "stdout", /ACQUIRED/u);
+  const seedExit = waitForChildExit(seed);
+  seed.kill("SIGKILL");
+  assert.equal(await seedExit, null);
+
+  let maximumAcquired = 0;
+  const rounds = process.env.NODE_V8_COVERAGE === undefined ? 20 : 1;
+  for (let round = 0; round < rounds; round += 1) {
+    const contenders = Array.from({ length: 16 }, () => spawnWriterLockProcess(identity));
+    try {
+      const decisions = await Promise.all(contenders.map((child) => waitForChildDecision(child, 10_000)));
+      const acquired = decisions.filter((decision) => decision === "acquired").length;
+      maximumAcquired = Math.max(maximumAcquired, acquired);
+      assert.ok(acquired <= 1, `round ${round} admitted ${acquired} concurrent writer leases`);
+    } finally {
+      const exits = contenders.map((child) => {
+        const exit = waitForChildExit(child, 10_000);
+        child.kill("SIGKILL");
+        return exit;
+      });
+      await Promise.all(exits);
+    }
+  }
+
+  assert.equal(maximumAcquired, 1);
+});
+
+test("writer lock helpers are fixed, fail closed when missing, and mark an unexpected exit lost", async () => {
+  const checked: string[] = [];
+  await assert.rejects(
+    () => resolveWriterLockHelper("darwin", async (filePath) => {
+      checked.push(filePath);
+      return filePath === "/bin/cat";
+    }),
+    /helper.*unavailable/i
+  );
+  assert.deepEqual(checked, ["/bin/cat", "/usr/bin/lockf"]);
+
+  const darwin = await resolveWriterLockHelper("darwin", async () => true);
+  assert.equal(darwin.executable, "/usr/bin/lockf");
+  assert.deepEqual(
+    darwin.argumentsFor("/private/fixed.lock"),
+    ["-t", "0", "-k", "/private/fixed.lock", "/bin/cat"]
+  );
+  const linux = await resolveWriterLockHelper("linux", async (filePath) => {
+    return filePath === "/bin/cat" || filePath === "/usr/bin/flock";
+  });
+  assert.equal(linux.executable, "/usr/bin/flock");
+  assert.deepEqual(
+    linux.argumentsFor("/private/fixed.lock"),
+    ["-n", "/private/fixed.lock", "/bin/cat"]
+  );
+
+  const helper = await resolveWriterLockHelper(process.platform);
+  assert.ok(["/usr/bin/lockf", "/usr/bin/flock", "/bin/flock"].includes(helper.executable));
+  assert.deepEqual(
+    helper.argumentsFor("/private/fixed.lock").slice(-2),
+    ["/private/fixed.lock", "/bin/cat"]
+  );
+
+  const identity = `unexpected-exit:${await mkdtemp(path.join(os.tmpdir(), "muniu-lock-lost-"))}`;
+  const lost = await acquireOsWriterLock(identity);
+  process.kill(lost.holderPid, "SIGKILL");
+  const deadline = Date.now() + 5_000;
+  while (!lost.released && Date.now() < deadline) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  assert.equal(lost.released, true);
+  await assert.rejects(() => lost.release(), /lost|unexpected/i);
+
+  const recovered = await acquireOsWriterLock(identity);
+  await recovered.release();
+
+  const ownerUid = process.getuid?.();
+  assert.equal(typeof ownerUid, "number");
+  const lockRoot = path.join(os.tmpdir(), `muniu-agent-session-writer-locks-${String(ownerUid)}`);
+  const unsafeIdentity = `unsafe-file:${await mkdtemp(path.join(os.tmpdir(), "muniu-lock-unsafe-"))}`;
+  const unsafeDigest = createHash("sha256").update(unsafeIdentity).digest("hex");
+  const unsafePath = path.join(lockRoot, `${unsafeDigest}.lock`);
+  await symlink("/dev/null", unsafePath, "file");
+  try {
+    await assert.rejects(() => acquireOsWriterLock(unsafeIdentity), /safely|unsafe|symbolic|symlink/i);
+  } finally {
+    await unlink(unsafePath);
+  }
+  await writeFile(unsafePath, "", { mode: 0o644 });
+  await chmod(unsafePath, 0o644);
+  try {
+    await assert.rejects(() => acquireOsWriterLock(unsafeIdentity), /permissions|unsafe/i);
+  } finally {
+    await unlink(unsafePath);
   }
 });
 
@@ -607,6 +772,45 @@ test("JSONL rejects reentrant dispose from an I/O hook without misclassifying ex
   const reopened = await successor.open(sessionId);
   assert.deepEqual(reopened.events.map((event) => event.type), ["session/created", "turn/start"]);
   await successor.dispose();
+});
+
+test("JSONL initial create hooks reject reentrant dispose without self-waiting", { timeout: 10_000 }, async () => {
+  for (const target of ["beforeAppend", "renamed", "committed"] as const) {
+    const root = await mkdtemp(path.join(os.tmpdir(), `muniu-session-initial-hook-${target}-`));
+    const sessionId = SessionId(`initial-hook-${target}`);
+    let store!: JsonlAgentSessionStore;
+    let rejected = false;
+    const rejectReentrantDispose = async () => {
+      await assert.rejects(
+        () => Promise.race([
+          store.dispose(),
+          new Promise<never>((_resolve, reject) => {
+            setTimeout(() => reject(new Error("reentrant dispose timed out")), 250);
+          })
+        ]),
+        /reentrant|I\/O hook/i
+      );
+      rejected = true;
+    };
+    store = new JsonlAgentSessionStore(root, {
+      beforeAppend: async (event) => {
+        if (target === "beforeAppend" && event.type === "session/created") {
+          await rejectReentrantDispose();
+        }
+      },
+      afterPublish: async (phase) => {
+        if (target === phase) await rejectReentrantDispose();
+      }
+    });
+
+    try {
+      const session = await store.create({ sessionId });
+      assert.equal(session.header.sessionId, sessionId);
+      assert.equal(rejected, true);
+    } finally {
+      await store.dispose();
+    }
+  }
 });
 
 test("JSONL create publishes a complete session atomically and can retry after the first append fails", async () => {
