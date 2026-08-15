@@ -68,6 +68,15 @@ const agentCoverageCommand = [
   "npm run test:coverage -w @mn/agent-kernel",
   "npm run test:coverage -w @mn/agent-host"
 ].join(" && ");
+const agentWorkspaces = [
+  "agent-protocol",
+  "agent-session",
+  "agent-llm",
+  "agent-tools",
+  "agent-kernel",
+  "agent-host"
+];
+const agentPackageCoverageCommand = "tsc -p tsconfig.test.json && node --test --experimental-test-coverage --test-coverage-include=dist-test/src/**/*.js --test-coverage-lines=70 --test-coverage-functions=70 --test-coverage-branches=70 dist-test/test/**/*.test.js";
 
 export function findSecretFindings(content, relativePath) {
   const text = Buffer.isBuffer(content) ? content.toString("utf8") : String(content);
@@ -115,10 +124,17 @@ export function findUnpinnedWorkflowActions(files) {
   return failures;
 }
 
-export function validateAgentCoverageGate({ rootPackage, ciWorkflow }) {
+export function validateAgentCoverageGate({ rootPackage, workspacePackages, ciWorkflow }) {
   const failures = [];
   if (rootPackage?.scripts?.["test:coverage:agent"] !== agentCoverageCommand) {
     failures.push("test:coverage:agent must serially run all six agent package coverage suites");
+  }
+  for (const workspace of agentWorkspaces) {
+    if (workspacePackages?.[workspace]?.scripts?.["test:coverage"] !== agentPackageCoverageCommand) {
+      failures.push(
+        `packages/${workspace} test:coverage must use the canonical Node coverage command`
+      );
+    }
   }
 
   let workflow;

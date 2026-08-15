@@ -17,6 +17,23 @@ const fakeSecretsFixture = fileURLToPath(
   new URL("./fixtures/allowed-fake-secrets.txt", import.meta.url)
 );
 
+const agentWorkspaces = [
+  "agent-protocol",
+  "agent-session",
+  "agent-llm",
+  "agent-tools",
+  "agent-kernel",
+  "agent-host"
+];
+const agentCoverageScript = "tsc -p tsconfig.test.json && node --test --experimental-test-coverage --test-coverage-include=dist-test/src/**/*.js --test-coverage-lines=70 --test-coverage-functions=70 --test-coverage-branches=70 dist-test/test/**/*.test.js";
+
+function validAgentCoveragePackages() {
+  return Object.fromEntries(agentWorkspaces.map((workspace) => [
+    workspace,
+    { scripts: { "test:coverage": agentCoverageScript } }
+  ]));
+}
+
 test("secret scan detects a credential even when the file contains NUL bytes", () => {
   const credential = ["AKIA", "1234567890ABCDEF"].join("");
   const content = Buffer.concat([
@@ -124,6 +141,7 @@ test("agent coverage policy requires the serial six-package root gate in the nod
   ].join(" && ");
   assert.deepEqual(validateAgentCoverageGate({
     rootPackage: { scripts: { "test:coverage:agent": command } },
+    workspacePackages: validAgentCoveragePackages(),
     ciWorkflow: [
       "jobs:",
       "  node:",
@@ -134,6 +152,7 @@ test("agent coverage policy requires the serial six-package root gate in the nod
 
   const failures = validateAgentCoverageGate({
     rootPackage: { scripts: { "test:coverage:agent": command.replace("agent-host", "agent-kernel") } },
+    workspacePackages: validAgentCoveragePackages(),
     ciWorkflow: [
       "jobs:",
       "  baseline:",
@@ -147,6 +166,46 @@ test("agent coverage policy requires the serial six-package root gate in the nod
   assert.equal(failures.length, 2);
   assert.match(failures[0], /serially run all six agent package coverage suites/u);
   assert.match(failures[1], /node job.*test:coverage:agent/u);
+});
+
+test("agent coverage policy rejects disguised or incomplete workspace coverage commands", () => {
+  const command = agentWorkspaces
+    .map((workspace) => `npm run test:coverage -w @mn/${workspace}`)
+    .join(" && ");
+  const ciWorkflow = [
+    "jobs:",
+    "  node:",
+    "    steps:",
+    "      - run: npm run test:coverage:agent"
+  ].join("\n");
+  const invalidScripts = [
+    `true # ${agentCoverageScript}`,
+    `echo ${agentCoverageScript}`,
+    agentCoverageScript.replace("node --test", "node"),
+    agentCoverageScript.replace(" --experimental-test-coverage", ""),
+    agentCoverageScript.replace(" --test-coverage-include=dist-test/src/**/*.js", ""),
+    agentCoverageScript.replace(" --test-coverage-lines=70", ""),
+    agentCoverageScript.replace(" --test-coverage-functions=70", ""),
+    agentCoverageScript.replace(" --test-coverage-branches=70", ""),
+    agentCoverageScript.replace(" dist-test/test/**/*.test.js", "")
+  ];
+
+  for (const workspace of agentWorkspaces) {
+    for (const script of invalidScripts) {
+      const workspacePackages = validAgentCoveragePackages();
+      workspacePackages[workspace].scripts["test:coverage"] = script;
+      const failures = validateAgentCoverageGate({
+        rootPackage: { scripts: { "test:coverage:agent": command } },
+        workspacePackages,
+        ciWorkflow
+      });
+      assert.equal(
+        failures.some((failure) => failure.includes(`packages/${workspace}`)),
+        true,
+        `${workspace} accepted invalid test:coverage script: ${script}`
+      );
+    }
+  }
 });
 
 test("attribution policy rejects claiming unimported upstream code in NOTICE", () => {

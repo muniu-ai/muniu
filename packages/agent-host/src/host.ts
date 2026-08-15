@@ -14,8 +14,10 @@ import { LlmRuntime, type LlmAdapter } from "@mn/agent-llm";
 import type { CandidateId, RunId, SessionId } from "@mn/agent-protocol";
 import {
   InMemoryAgentSessionStore,
+  snapshotCreateAgentSessionOptions,
   type AgentSession,
-  type AgentSessionStore
+  type AgentSessionStore,
+  type CreateAgentSessionOptionsSnapshot
 } from "@mn/agent-session";
 import {
   ToolRegistry,
@@ -62,7 +64,48 @@ interface ActiveHostRun {
   readonly operation: Promise<AgentHostRunResult>;
 }
 
+interface AgentHostRunInputSnapshot {
+  readonly creation: CreateAgentSessionOptionsSnapshot;
+  readonly prompt: string;
+  readonly provider: string;
+  readonly model: string;
+  readonly signal?: AbortSignal;
+  readonly maxSteps?: number;
+  readonly maxToolCalls?: number;
+  readonly runId?: RunId;
+  readonly candidateId?: CandidateId;
+}
+
 const ACTIVE_HOST_RUN = new AsyncLocalStorage<ActiveHostRunContext>();
+
+function snapshotAgentHostRunInput(input: AgentHostRunInput): AgentHostRunInputSnapshot {
+  if (input === null || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("agent host run input must be an object");
+  }
+  const sessionId = input.sessionId;
+  const cwd = input.cwd;
+  const labels = input.labels;
+  const prompt = input.prompt;
+  const provider = input.provider;
+  const model = input.model;
+  const signal = input.signal;
+  const maxSteps = input.maxSteps;
+  const maxToolCalls = input.maxToolCalls;
+  const runId = input.runId;
+  const candidateId = input.candidateId;
+  const creation = snapshotCreateAgentSessionOptions({ sessionId, cwd, labels });
+  return Object.freeze({
+    creation,
+    prompt,
+    provider,
+    model,
+    ...(signal === undefined ? {} : { signal }),
+    ...(maxSteps === undefined ? {} : { maxSteps }),
+    ...(maxToolCalls === undefined ? {} : { maxToolCalls }),
+    ...(runId === undefined ? {} : { runId }),
+    ...(candidateId === undefined ? {} : { candidateId })
+  });
+}
 
 function bindExternalSignal(
   external: AbortSignal | undefined,
@@ -79,8 +122,59 @@ function bindExternalSignal(
     abort();
     return () => {};
   }
-  addEventListener.call(external, "abort", abort, { once: true });
+  try {
+    addEventListener.call(external, "abort", abort, { once: true });
+  } catch (primary: unknown) {
+    try {
+      removeEventListener.call(external, "abort", abort);
+    } catch (cleanup: unknown) {
+      throw new AggregateError(
+        [primary, cleanup],
+        "agent host signal registration and cleanup failed",
+        { cause: primary }
+      );
+    }
+    throw primary;
+  }
   return (): void => { removeEventListener.call(external, "abort", abort); };
+}
+
+async function settleHostRun(
+  primaryOperation: Promise<AgentHostRunResult>,
+  cleanup: () => void,
+  settled: () => void
+): Promise<AgentHostRunResult> {
+  let result!: AgentHostRunResult;
+  let primary: unknown;
+  let primaryFailed = false;
+  try {
+    result = await primaryOperation;
+  } catch (error: unknown) {
+    primary = error;
+    primaryFailed = true;
+  }
+
+  let cleanupFailure: unknown;
+  let cleanupFailed = false;
+  try {
+    cleanup();
+  } catch (error: unknown) {
+    cleanupFailure = error;
+    cleanupFailed = true;
+  } finally {
+    settled();
+  }
+
+  if (primaryFailed && cleanupFailed) {
+    throw new AggregateError(
+      [primary, cleanupFailure],
+      "agent host run and signal cleanup failed",
+      { cause: primary }
+    );
+  }
+  if (primaryFailed) throw primary;
+  if (cleanupFailed) throw cleanupFailure;
+  return result;
 }
 
 function stableSessionStore(
@@ -131,39 +225,43 @@ export class AgentHost {
   run(input: AgentHostRunInput): Promise<AgentHostRunResult> {
     if (!this.acceptingRuns) return Promise.reject(new Error("agent host is disposed"));
     const controller = new AbortController();
-    let removeExternalListener: () => void;
-    try {
-      removeExternalListener = bindExternalSignal(input.signal, controller);
-    } catch (error: unknown) {
-      return Promise.reject(error);
-    }
-
     const context: ActiveHostRunContext = { host: this, active: true };
-    let start!: () => void;
-    const startGate = new Promise<void>((resolve) => { start = resolve; });
+    let start!: (snapshot: AgentHostRunInputSnapshot) => void;
+    let rejectStart!: (error: unknown) => void;
+    const startGate = new Promise<AgentHostRunInputSnapshot>((resolve, reject) => {
+      start = resolve;
+      rejectStart = reject;
+    });
+    let removeExternalListener = (): void => {};
     let active!: ActiveHostRun;
-    const operation = startGate
-      .then(() => ACTIVE_HOST_RUN.run(context, () => this.runInternal(input, controller.signal)))
-      .finally(() => {
+    const primaryOperation = startGate.then((snapshot) => {
+      return ACTIVE_HOST_RUN.run(context, () => this.runInternal(snapshot, controller.signal));
+    });
+    const operation = settleHostRun(
+      primaryOperation,
+      () => { removeExternalListener(); },
+      () => {
         context.active = false;
-        removeExternalListener();
         this.activeRuns.delete(active);
-      });
+      }
+    );
     active = { controller, operation };
     this.activeRuns.add(active);
-    start();
+    try {
+      const snapshot = snapshotAgentHostRunInput(input);
+      removeExternalListener = bindExternalSignal(snapshot.signal, controller);
+      start(snapshot);
+    } catch (error: unknown) {
+      rejectStart(error);
+    }
     return operation;
   }
 
   private async runInternal(
-    input: AgentHostRunInput,
+    input: AgentHostRunInputSnapshot,
     signal: AbortSignal
   ): Promise<AgentHostRunResult> {
-    const session = await this.sessions.create({
-      ...(input.sessionId === undefined ? {} : { sessionId: input.sessionId }),
-      ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
-      ...(input.labels === undefined ? {} : { labels: input.labels })
-    });
+    const session = await this.sessions.create(input.creation);
     const result = await this.kernel.run({
       agentId: "builtin",
       session,

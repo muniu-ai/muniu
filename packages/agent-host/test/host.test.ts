@@ -14,7 +14,7 @@ import {
 import { ScriptedLlmAdapter, type LlmAdapter } from "@mn/agent-llm";
 import { StaticSystemPrompt } from "@mn/agent-kernel";
 import { defineTool } from "@mn/agent-tools";
-import { createAgentHost } from "../src/index.js";
+import { createAgentHost, type AgentHostRunInput } from "../src/index.js";
 
 const echoParameters = {
   type: "object" as const,
@@ -106,11 +106,13 @@ test("PATH-empty host completes a durable two-step tool turn and reloads it afte
     assert.equal(outcome.session.events.slice(1).every((event) => event.runId === runId && event.candidateId === candidateId), true);
     await host.dispose();
 
-    const reopened = await new JsonlAgentSessionStore(root).open(sessionId);
+    const reopenStore = new JsonlAgentSessionStore(root);
+    const reopened = await reopenStore.open(sessionId);
     assert.doesNotThrow(() => verifyAgentSessionEventChain(reopened.events));
     assert.equal(projectSession(reopened.events).status, "completed");
     const finalMessage = projectSession(reopened.events).messages.at(-1);
     assert.equal(finalMessage?.role, "assistant");
+    await reopenStore.dispose();
   } finally {
     if (previousPath === undefined) delete process.env.PATH;
     else process.env.PATH = previousPath;
@@ -264,6 +266,180 @@ test("host disposal aborts and drains active runs in every session", async () =>
   await disposal;
 });
 
+test("host registers a run before signal access can reenter disposal", async () => {
+  for (const trigger of ["getter", "listener"] as const) {
+    const entered = deferred();
+    const release = deferred();
+    const order: string[] = [];
+    const delegate = new InMemoryAgentSessionStore();
+    const store: AgentSessionStore = {
+      create: async (options) => {
+        entered.resolve();
+        await release.promise;
+        return delegate.create(options);
+      },
+      open: delegate.open.bind(delegate),
+      dispose: () => { order.push("store"); }
+    };
+    const host = await createAgentHost({
+      sessionStore: store,
+      adapters: [{
+        id: `signal-${trigger}`,
+        async *stream() { throw new Error("a pre-aborted run must not dispatch the adapter"); },
+        dispose: () => { order.push("adapter"); }
+      }],
+      tools: [],
+      authorizer: { authorize: async () => ({ decision: "deny" }) }
+    });
+    const nativeSignal = new AbortController().signal;
+    let disposal: Promise<void> | undefined;
+    const signal = trigger === "getter"
+      ? nativeSignal
+      : {
+          get aborted() { return nativeSignal.aborted; },
+          get reason() { return nativeSignal.reason; },
+          addEventListener() { disposal = host.dispose(); },
+          removeEventListener() {}
+        } as unknown as AbortSignal;
+    const input = {
+      prompt: "dispose during signal binding",
+      provider: `signal-${trigger}`,
+      model: "test"
+    } as AgentHostRunInput;
+    if (trigger === "getter") {
+      Object.defineProperty(input, "signal", {
+        enumerable: true,
+        get() {
+          disposal = host.dispose();
+          return signal;
+        }
+      });
+    } else {
+      Object.defineProperty(input, "signal", { enumerable: true, value: signal });
+    }
+
+    const run = host.run(input);
+    await entered.promise;
+    assert.ok(disposal);
+    let disposeSettled = false;
+    void disposal.then(() => { disposeSettled = true; });
+    await nextTurn();
+    assert.equal(disposeSettled, false);
+    assert.deepEqual(order, []);
+
+    release.resolve();
+    assert.equal((await run).reason, "cancelled");
+    await disposal;
+    assert.deepEqual(order, ["adapter", "store"]);
+    await assert.rejects(
+      () => host.run({ prompt: "late", provider: `signal-${trigger}`, model: "test" }),
+      /disposed/i
+    );
+  }
+});
+
+test("host synchronously snapshots every run input getter and nested labels", async () => {
+  const reads = {
+    sessionId: 0,
+    cwd: 0,
+    labels: 0,
+    label: 0,
+    prompt: 0,
+    provider: 0,
+    model: 0,
+    signal: 0,
+    maxSteps: 0,
+    maxToolCalls: 0,
+    runId: 0,
+    candidateId: 0
+  };
+  let sessionId = SessionId("snapshotted-host-input");
+  let cwd = "/original";
+  let label = "original";
+  const labels = Object.defineProperty({}, "source", {
+    enumerable: true,
+    get() { reads.label += 1; return label; }
+  }) as Record<string, string>;
+  let prompt = "original prompt";
+  let provider = "snapshot-input";
+  let model = "original-model";
+  let signal: AbortSignal = new AbortController().signal;
+  let maxSteps = 2;
+  let maxToolCalls = 0;
+  let runId = RunId("original-run");
+  let candidateId = CandidateId("original-candidate");
+  let observedModel: string | undefined;
+  const host = await createAgentHost({
+    adapters: [{
+      id: provider,
+      async *stream(request) {
+        observedModel = request.model;
+        yield { type: "finish", reason: "stop" };
+      }
+    }],
+    tools: [],
+    authorizer: { authorize: async () => ({ decision: "deny" }) }
+  });
+  const input = {
+    get sessionId() { reads.sessionId += 1; return sessionId; },
+    get cwd() { reads.cwd += 1; return cwd; },
+    get labels() { reads.labels += 1; return labels; },
+    get prompt() { reads.prompt += 1; return prompt; },
+    get provider() { reads.provider += 1; return provider; },
+    get model() { reads.model += 1; return model; },
+    get signal() { reads.signal += 1; return signal; },
+    get maxSteps() { reads.maxSteps += 1; return maxSteps; },
+    get maxToolCalls() { reads.maxToolCalls += 1; return maxToolCalls; },
+    get runId() { reads.runId += 1; return runId; },
+    get candidateId() { reads.candidateId += 1; return candidateId; }
+  } satisfies AgentHostRunInput;
+
+  const run = host.run(input);
+  const readsWhenRunReturned = { ...reads };
+  sessionId = SessionId("mutated-session");
+  cwd = "/mutated";
+  label = "mutated";
+  prompt = "mutated prompt";
+  provider = "mutated-provider";
+  model = "mutated-model";
+  signal = AbortSignal.abort();
+  maxSteps = 99;
+  maxToolCalls = 99;
+  runId = RunId("mutated-run");
+  candidateId = CandidateId("mutated-candidate");
+
+  const outcome = await run;
+  assert.deepEqual(readsWhenRunReturned, {
+    sessionId: 1,
+    cwd: 1,
+    labels: 1,
+    label: 1,
+    prompt: 1,
+    provider: 1,
+    model: 1,
+    signal: 1,
+    maxSteps: 1,
+    maxToolCalls: 1,
+    runId: 1,
+    candidateId: 1
+  });
+  assert.deepEqual(reads, readsWhenRunReturned);
+  assert.equal(outcome.reason, "completed");
+  assert.equal(outcome.session.header.sessionId, SessionId("snapshotted-host-input"));
+  assert.equal(outcome.session.header.cwd, "/original");
+  assert.equal(outcome.session.events[0]?.type === "session/created"
+    ? outcome.session.events[0].payload.labels?.source
+    : undefined, "original");
+  assert.deepEqual(projectSession(outcome.session.events).messages[0]?.content, [
+    { type: "text", text: "original prompt" }
+  ]);
+  assert.equal(observedModel, "original-model");
+  assert.equal(outcome.session.events.slice(1).every((event) => {
+    return event.runId === RunId("original-run") && event.candidateId === CandidateId("original-candidate");
+  }), true);
+  await host.dispose();
+});
+
 test("host rejects reentrant disposal from its active run without self-deadlocking", async () => {
   let host: Awaited<ReturnType<typeof createAgentHost>>;
   let reentrantOutcome: "rejected" | "resolved" | "timed-out" | undefined;
@@ -406,6 +582,94 @@ test("host bridges external cancellation and removes its listener after settleme
   assert.equal(listenersAdded, 1);
   assert.equal(listenersRemoved, 1);
   await host.dispose();
+});
+
+test("host removes a partially registered external abort listener while preserving the registration error", async () => {
+  const primary = new Error("listener registration failed");
+  const nativeController = new AbortController();
+  let listenersAdded = 0;
+  let listenersRemoved = 0;
+  const externalSignal = {
+    get aborted() { return nativeController.signal.aborted; },
+    get reason() { return nativeController.signal.reason; },
+    addEventListener(
+      type: "abort",
+      listener: (this: AbortSignal, event: Event) => unknown,
+      options?: boolean | AddEventListenerOptions
+    ) {
+      listenersAdded += 1;
+      nativeController.signal.addEventListener(type, listener, options);
+      throw primary;
+    },
+    removeEventListener(
+      type: "abort",
+      listener: (this: AbortSignal, event: Event) => unknown,
+      options?: boolean | EventListenerOptions
+    ) {
+      listenersRemoved += 1;
+      nativeController.signal.removeEventListener(type, listener, options);
+    }
+  } as unknown as AbortSignal;
+  const host = await createAgentHost({
+    adapters: [],
+    tools: [],
+    authorizer: { authorize: async () => ({ decision: "deny" }) }
+  });
+
+  let failure: unknown;
+  try {
+    await host.run({ prompt: "register", provider: "unused", model: "test", signal: externalSignal });
+  } catch (error: unknown) {
+    failure = error;
+  }
+  assert.equal(failure, primary);
+  assert.equal(listenersAdded, 1);
+  assert.equal(listenersRemoved, 1);
+  nativeController.abort();
+  const firstDisposal = host.dispose();
+  assert.equal(host.dispose(), firstDisposal);
+  await firstDisposal;
+});
+
+test("host retains a primary run failure when external listener cleanup also fails", async () => {
+  const primary = new Error("primary session creation failed");
+  const cleanup = new Error("listener cleanup failed");
+  let storeDisposals = 0;
+  const host = await createAgentHost({
+    sessionStore: {
+      create: async () => { throw primary; },
+      open: async () => { throw new Error("unused"); },
+      dispose: () => { storeDisposals += 1; }
+    },
+    adapters: [],
+    tools: [],
+    authorizer: { authorize: async () => ({ decision: "deny" }) }
+  });
+  const externalSignal = {
+    aborted: false,
+    reason: undefined,
+    addEventListener() {},
+    removeEventListener() { throw cleanup; }
+  } as unknown as AbortSignal;
+
+  let failure: unknown;
+  try {
+    await host.run({ prompt: "fail", provider: "unused", model: "test", signal: externalSignal });
+  } catch (error: unknown) {
+    failure = error;
+  }
+  assert.ok(failure instanceof AggregateError);
+  assert.deepEqual(failure.errors, [primary, cleanup]);
+  assert.equal(failure.cause, primary);
+  assert.equal(
+    (host as unknown as { activeRuns: ReadonlySet<unknown> }).activeRuns.size,
+    0
+  );
+
+  const firstDisposal = host.dispose();
+  assert.equal(host.dispose(), firstDisposal);
+  await firstDisposal;
+  assert.equal(storeDisposals, 1);
 });
 
 test("host validates stable session store methods and aggregates rollback failures", async () => {

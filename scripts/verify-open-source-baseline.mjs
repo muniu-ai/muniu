@@ -145,27 +145,24 @@ for (const expected of ['version = 2', '"Apache-2.0"', '"MIT"', "confidence-thre
 }
 
 const ciWorkflow = readFileSync(path.join(root, ".github/workflows/ci.yml"), "utf8");
-for (const coverageFailure of validateAgentCoverageGate({ rootPackage, ciWorkflow })) {
-  fail(coverageFailure);
-}
-for (const workspace of [
+const agentWorkspaces = [
   "agent-protocol",
   "agent-session",
   "agent-llm",
   "agent-tools",
   "agent-kernel",
   "agent-host"
-]) {
-  const coverageScript = readJson(`packages/${workspace}/package.json`).scripts?.["test:coverage"];
-  for (const threshold of [
-    "--test-coverage-lines=70",
-    "--test-coverage-functions=70",
-    "--test-coverage-branches=70"
-  ]) {
-    if (typeof coverageScript !== "string" || !coverageScript.includes(threshold)) {
-      fail(`packages/${workspace} test:coverage is missing ${threshold}`);
-    }
-  }
+];
+const workspacePackages = Object.fromEntries(agentWorkspaces.map((workspace) => [
+  workspace,
+  readJson(`packages/${workspace}/package.json`)
+]));
+for (const coverageFailure of validateAgentCoverageGate({
+  rootPackage,
+  workspacePackages,
+  ciWorkflow
+})) {
+  fail(coverageFailure);
 }
 for (const expected of [
   "fetch-depth: 0",
