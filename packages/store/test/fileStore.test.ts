@@ -1,10 +1,35 @@
-import { access, mkdtemp, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { createProviderInputFromPreset } from "@mn/provider-catalog";
 import { FileLocalStore, LocalSecretVault, SqliteLocalStore } from "../src/index.js";
+
+function legacyProviderFixture() {
+  return {
+    version: 1,
+    providers: [
+      {
+        id: "legacy-unified",
+        app: "unified",
+        name: "Legacy unified",
+        kind: "relay",
+        apiFormat: "openai_chat",
+        baseUrl: "https://legacy.example.test/v1",
+        defaultModel: "legacy-model",
+        modelCatalog: [{ id: "legacy-model", displayName: "Legacy model" }],
+        config: {},
+        enabled: true,
+        enabledApps: ["claude", "agent"],
+        sortOrder: 1,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z"
+      }
+    ]
+  };
+}
 
 test("file local store persists providers as local SSOT", async (t) => {
   const rootDir = await mkdtemp(join(tmpdir(), "mn-store-"));
@@ -45,6 +70,9 @@ test("unified provider activation is isolated per app", async (t) => {
     baseUrl: "https://codex.example.test/v1",
     defaultModel: "codex-model"
   });
+  const agent = await store.createProvider(
+    createProviderInputFromPreset("deepseek-official")
+  );
 
   await store.enableProvider(unified.id, "claude");
   assert.equal((await store.getEnabledProvider("claude"))?.id, unified.id);
@@ -53,13 +81,77 @@ test("unified provider activation is isolated per app", async (t) => {
   await store.enableProvider(codex.id, "codex");
   assert.equal((await store.getEnabledProvider("claude"))?.id, unified.id);
   assert.equal((await store.getEnabledProvider("codex"))?.id, codex.id);
+  assert.equal(await store.getEnabledProvider("agent"), undefined);
+
+  await store.enableProvider(agent.id, "agent");
+  assert.equal((await store.getEnabledProvider("agent"))?.id, agent.id);
+  assert.equal((await store.getEnabledProvider("claude"))?.id, unified.id);
+  assert.equal((await store.getEnabledProvider("codex"))?.id, codex.id);
   const persistedUnified = await store.getProvider(unified.id);
-  assert.deepEqual(persistedUnified?.enabledApps, ["claude"]);
+  assert.deepEqual(persistedUnified?.enabledConsumers, ["claude"]);
+  assert.equal(persistedUnified?.enabledApps, undefined);
   assert.equal(persistedUnified?.enabled, true);
+
+  const persistedAgent = await store.getProvider(agent.id);
+  assert.deepEqual(persistedAgent?.enabledConsumers, ["agent"]);
+  assert.equal(persistedAgent?.enabledApps, undefined);
 
   const codexView = await store.listProviders("codex");
   assert.equal(codexView.find((provider) => provider.id === unified.id)?.enabled, false);
   assert.equal(codexView.find((provider) => provider.id === codex.id)?.enabled, true);
+});
+
+test("legacy JSON enabledApps remains readable without rewriting the fixture", async (t) => {
+  const rootDir = await mkdtemp(join(tmpdir(), "mn-legacy-json-provider-store-"));
+  t.after(async () => rm(rootDir, { recursive: true, force: true }));
+  const dataFile = join(rootDir, "mniu.db.json");
+  const original = `${JSON.stringify(legacyProviderFixture(), null, 2)}\n`;
+  await writeFile(dataFile, original, "utf8");
+
+  const store = new FileLocalStore({ rootDir });
+  const claude = await store.getEnabledProvider("claude");
+  const agent = await store.getEnabledProvider("agent");
+
+  assert.equal(claude?.id, "legacy-unified");
+  assert.deepEqual(claude?.enabledConsumers, ["claude"]);
+  assert.deepEqual(claude?.enabledApps, ["claude"]);
+  assert.equal(agent, undefined);
+  assert.equal(await readFile(dataFile, "utf8"), original);
+});
+
+test("legacy SQLite enabledApps remains readable without rewriting the fixture", async (t) => {
+  const rootDir = await mkdtemp(join(tmpdir(), "mn-legacy-sqlite-provider-store-"));
+  t.after(async () => rm(rootDir, { recursive: true, force: true }));
+  const databaseFile = join(rootDir, "mniu.db");
+  const original = JSON.stringify(legacyProviderFixture());
+  const fixtureDatabase = new DatabaseSync(databaseFile);
+  fixtureDatabase.exec(`
+    create table local_state (
+      key text primary key,
+      value text not null
+    )
+  `);
+  fixtureDatabase
+    .prepare("insert into local_state (key, value) values (?, ?)")
+    .run("data", original);
+  fixtureDatabase.close();
+
+  const store = new SqliteLocalStore({ rootDir });
+  const claude = await store.getEnabledProvider("claude");
+  const agent = await store.getEnabledProvider("agent");
+  store.close();
+
+  assert.equal(claude?.id, "legacy-unified");
+  assert.deepEqual(claude?.enabledConsumers, ["claude"]);
+  assert.deepEqual(claude?.enabledApps, ["claude"]);
+  assert.equal(agent, undefined);
+
+  const verificationDatabase = new DatabaseSync(databaseFile);
+  const row = verificationDatabase
+    .prepare("select value from local_state where key = ?")
+    .get("data") as { value: string };
+  verificationDatabase.close();
+  assert.equal(row.value, original);
 });
 
 test("local secret vault stores only encrypted payload on disk", async (t) => {

@@ -3121,6 +3121,157 @@ test("api manages provider lifecycle and projects Codex without overwriting auth
   assert.equal(duplicateListResponse.json().providers.length, 2);
 });
 
+test("api provider CRUD accepts the agent consumer", async (t) => {
+  const mniuRoot = await mkdtemp(join(tmpdir(), "mn-api-agent-provider-store-"));
+  t.after(async () => rm(mniuRoot, { recursive: true, force: true }));
+  const app = buildServer({
+    mniuRoot,
+    localStore: new FileLocalStore({ rootDir: mniuRoot }),
+    useMockExecutors: true
+  });
+  t.after(async () => app.close());
+
+  const createResponse = await app.inject({
+    method: "POST",
+    url: "/v1/providers",
+    payload: {
+      presetId: "deepseek-official",
+      enabled: true
+    }
+  });
+  assert.equal(createResponse.statusCode, 201);
+  const provider = createResponse.json();
+  assert.equal(provider.app, "agent");
+  assert.equal(provider.baseUrl, "https://api.deepseek.com");
+  assert.equal(provider.defaultModel, "deepseek-v4-flash");
+  assert.deepEqual(provider.enabledConsumers, ["agent"]);
+  assert.equal("enabledApps" in provider, false);
+
+  const listResponse = await app.inject({
+    method: "GET",
+    url: "/v1/providers?app=agent"
+  });
+  assert.equal(listResponse.statusCode, 200);
+  assert.deepEqual(
+    listResponse.json().providers.map((item: { id: string }) => item.id),
+    [provider.id]
+  );
+
+  const exportResponse = await app.inject({
+    method: "GET",
+    url: "/v1/providers/export?app=agent"
+  });
+  assert.equal(exportResponse.statusCode, 200);
+  assert.equal(exportResponse.json().providers[0].app, "agent");
+
+  const duplicateResponse = await app.inject({
+    method: "POST",
+    url: `/v1/providers/${provider.id}/duplicate`,
+    payload: { app: "agent", name: "DeepSeek Agent Copy" }
+  });
+  assert.equal(duplicateResponse.statusCode, 201);
+  assert.equal(duplicateResponse.json().app, "agent");
+
+  const importPreviewResponse = await app.inject({
+    method: "POST",
+    url: "/v1/providers/import",
+    payload: {
+      dryRun: true,
+      providers: [
+        {
+          app: "agent",
+          name: "Agent Import",
+          kind: "official",
+          apiFormat: "openai_chat",
+          baseUrl: "https://api.deepseek.com",
+          defaultModel: "deepseek-v4-pro"
+        }
+      ]
+    }
+  });
+  assert.equal(importPreviewResponse.statusCode, 200);
+  assert.equal(importPreviewResponse.json().wouldImportCount, 1);
+});
+
+test("api keeps agent outside managed provider projection and extension surfaces", async (t) => {
+  const mniuRoot = await mkdtemp(join(tmpdir(), "mn-api-agent-boundary-store-"));
+  t.after(async () => rm(mniuRoot, { recursive: true, force: true }));
+  const app = buildServer({
+    mniuRoot,
+    localStore: new FileLocalStore({ rootDir: mniuRoot }),
+    useMockExecutors: true
+  });
+  t.after(async () => app.close());
+  const createResponse = await app.inject({
+    method: "POST",
+    url: "/v1/providers",
+    payload: {
+      app: "agent",
+      name: "Agent boundary",
+      kind: "official",
+      apiFormat: "openai_chat",
+      baseUrl: "http://127.0.0.1:9",
+      defaultModel: "deepseek-v4-flash"
+    }
+  });
+  assert.equal(createResponse.statusCode, 201);
+  const provider = createResponse.json();
+
+  const endpointProbeResponse = await app.inject({
+    method: "POST",
+    url: `/v1/providers/${provider.id}/test-endpoint`,
+    payload: { timeoutMs: 50 }
+  });
+  assert.equal(endpointProbeResponse.statusCode, 400);
+  assert.match(endpointProbeResponse.body, /embedded agent provider/iu);
+
+  const managedOnlyRequests = [
+    app.inject({
+      method: "POST",
+      url: `/v1/providers/${provider.id}/enable`,
+      payload: { app: "agent" }
+    }),
+    app.inject({
+      method: "POST",
+      url: `/v1/providers/${provider.id}/enable`,
+      payload: {}
+    }),
+    app.inject({
+      method: "POST",
+      url: `/v1/providers/${provider.id}/restore`,
+      payload: { app: "agent" }
+    }),
+    app.inject({
+      method: "POST",
+      url: "/v1/providers/model-catalog/sync-due",
+      payload: { app: "agent" }
+    }),
+    app.inject({
+      method: "POST",
+      url: "/v1/proxy/apps/agent/takeover",
+      payload: {}
+    }),
+    app.inject({
+      method: "POST",
+      url: "/v1/mcp/servers",
+      payload: { name: "agent-mcp", command: "true", apps: ["agent"] }
+    }),
+    app.inject({
+      method: "POST",
+      url: "/v1/prompts/presets",
+      payload: { name: "Agent prompt", content: "test", apps: ["agent"] }
+    }),
+    app.inject({
+      method: "POST",
+      url: "/v1/skills",
+      payload: { name: "agent-skill", sourcePath: "/tmp/agent-skill", apps: ["agent"] }
+    })
+  ];
+  for (const response of await Promise.all(managedOnlyRequests)) {
+    assert.ok(response.statusCode >= 400, response.body);
+  }
+});
+
 test("api restores Codex config and auth as one provider projection", async (t) => {
   const homeDir = await mkdtemp(join(tmpdir(), "mn-api-codex-auth-restore-home-"));
   const mniuRoot = await mkdtemp(join(tmpdir(), "mn-api-codex-auth-restore-store-"));

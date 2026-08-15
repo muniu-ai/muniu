@@ -426,7 +426,8 @@ const taskSchema = z.object({
     .optional()
 });
 
-const providerAppSchema = z.enum(["claude", "codex", "unified"]);
+const providerConsumerSchema = z.enum(["claude", "codex", "agent"]);
+const providerAppSchema = z.enum(["claude", "codex", "agent", "unified"]);
 const managedAppSchema = z.enum(["claude", "codex"]);
 const providerModelSchema = z.object({
   id: z.string().min(1),
@@ -513,7 +514,7 @@ const providerPatchSchema = z.object({
 });
 
 const providerExportQuerySchema = z.object({
-  app: managedAppSchema.optional()
+  app: providerConsumerSchema.optional()
 });
 
 const providerImportSecretRefSchema = z.object({
@@ -2975,7 +2976,7 @@ export function buildServer(options: BuildServerOptions = {}) {
 
   app.get("/v1/providers", async (request) => {
     const query = request.query as { app?: string };
-    const appFilter = query.app ? managedAppSchema.parse(query.app) : undefined;
+    const appFilter = query.app ? providerConsumerSchema.parse(query.app) : undefined;
     const providers = await localStore.listProviders(appFilter);
     if (runtimeProfile === "enterprise") {
       const context = requestContexts.get(request) ?? localRequestContext(request.id);
@@ -3345,6 +3346,11 @@ export function buildServer(options: BuildServerOptions = {}) {
     const body = providerTestEndpointSchema.parse(request.body ?? {});
     const provider = await localStore.getProvider(id);
     if (!provider) return reply.code(404).send({ error: "provider not found" });
+    if (provider.app === "agent") {
+      return reply.code(400).send({
+        error: "embedded agent providers do not use the legacy endpoint probe"
+      });
+    }
     const token = await resolveProviderToken(provider);
     const probe = await probeProviderEndpoint(provider, {
       token,

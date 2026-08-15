@@ -19,6 +19,7 @@ import type {
 import type {
   ManagedAgentApp,
   ProviderAppProjection,
+  ProviderConsumerId,
   ProviderCreateInput,
   ProviderHealthEvent,
   ProviderHealthRecord,
@@ -46,7 +47,7 @@ export class FileLocalStore {
     this.dataFile = options.dataFile ?? join(options.rootDir, "mniu.db.json");
   }
 
-  async listProviders(app?: ManagedAgentApp): Promise<ProviderRecord[]> {
+  async listProviders(app?: ProviderConsumerId): Promise<ProviderRecord[]> {
     const data = await this.read();
     const providers = app
       ? data.providers.filter((provider) => providerSupportsApp(provider, app))
@@ -80,9 +81,9 @@ export class FileLocalStore {
       modelCatalog: input.modelCatalog ?? [],
       enterpriseCapabilities: input.enterpriseCapabilities,
       config: input.config ?? {},
-      ...providerWithEnabledApps(
+      ...providerWithEnabledConsumers(
         input.app,
-        input.enabled ? supportedProviderApps(input.app) : []
+        input.enabled ? supportedProviderConsumers(input.app) : []
       ),
       sortOrder: input.sortOrder ?? data.providers.length + 1,
       createdAt: now,
@@ -107,9 +108,9 @@ export class FileLocalStore {
       ? normalizeProviderActivationRecord(merged)
       : {
           ...merged,
-          ...providerWithEnabledApps(
+          ...providerWithEnabledConsumers(
             merged.app,
-            patch.enabled ? supportedProviderApps(merged.app) : []
+            patch.enabled ? supportedProviderConsumers(merged.app) : []
           )
         };
     data.providers[index] = updated;
@@ -131,7 +132,7 @@ export class FileLocalStore {
 
   async enableProvider(
     id: string,
-    app: ManagedAgentApp
+    app: ProviderConsumerId
   ): Promise<ProviderRecord> {
     const data = await this.read();
     const provider = data.providers.find((item) => item.id === id);
@@ -142,11 +143,13 @@ export class FileLocalStore {
     const updatedAt = new Date().toISOString();
     data.providers = data.providers.map((item) => {
       if (providerSupportsApp(item, app)) {
-        const enabledApps = providerEnabledApps(item).filter((itemApp) => itemApp !== app);
-        if (item.id === id) enabledApps.push(app);
+        const enabledConsumers = providerEnabledConsumers(item).filter(
+          (consumer) => consumer !== app
+        );
+        if (item.id === id) enabledConsumers.push(app);
         return {
           ...item,
-          ...providerWithEnabledApps(item.app, enabledApps),
+          ...providerWithEnabledConsumers(item.app, enabledConsumers),
           updatedAt
         };
       }
@@ -159,13 +162,13 @@ export class FileLocalStore {
   }
 
   async getEnabledProvider(
-    app: ManagedAgentApp
+    app: ProviderConsumerId
   ): Promise<ProviderRecord | undefined> {
     const providers = await this.listProviders(app);
     return providers.find((provider) => provider.enabled);
   }
 
-  async disableProvider(id: string, app: ManagedAgentApp): Promise<ProviderRecord> {
+  async disableProvider(id: string, app: ProviderConsumerId): Promise<ProviderRecord> {
     const data = await this.read();
     const index = data.providers.findIndex((provider) => provider.id === id);
     const provider = data.providers[index];
@@ -175,9 +178,9 @@ export class FileLocalStore {
     }
     const disabled = {
       ...provider,
-      ...providerWithEnabledApps(
+      ...providerWithEnabledConsumers(
         provider.app,
-        providerEnabledApps(provider).filter((itemApp) => itemApp !== app)
+        providerEnabledConsumers(provider).filter((consumer) => consumer !== app)
       ),
       updatedAt: new Date().toISOString()
     };
@@ -706,38 +709,60 @@ export function emptyStoreData(): LocalStoreData {
 export function normalizeProviderActivationRecord(provider: ProviderRecord): ProviderRecord {
   return {
     ...provider,
-    ...providerWithEnabledApps(provider.app, providerEnabledApps(provider))
+    ...(provider.enabledApps !== undefined
+      ? { enabledApps: providerLegacyEnabledApps(provider) }
+      : {}),
+    ...providerWithEnabledConsumers(provider.app, providerEnabledConsumers(provider))
   };
 }
 
 function providerActivationView(
   provider: ProviderRecord,
-  app?: ManagedAgentApp
+  app?: ProviderConsumerId
 ): ProviderRecord {
   const normalized = normalizeProviderActivationRecord(provider);
   return app
-    ? { ...normalized, enabled: normalized.enabledApps?.includes(app) ?? false }
+    ? {
+        ...normalized,
+        enabled: normalized.enabledConsumers?.includes(app) ?? false
+      }
     : normalized;
 }
 
-function providerEnabledApps(provider: ProviderRecord): ManagedAgentApp[] {
-  if (provider.enabledApps) {
-    return provider.enabledApps.filter((app) => providerSupportsApp(provider, app));
+function providerEnabledConsumers(provider: ProviderRecord): ProviderConsumerId[] {
+  if (provider.enabledConsumers) {
+    return provider.enabledConsumers.filter((consumer) =>
+      providerSupportsApp(provider, consumer)
+    );
   }
-  return provider.enabled ? supportedProviderApps(provider.app) : [];
+  if (provider.enabledApps) {
+    return providerLegacyEnabledApps(provider);
+  }
+  return provider.enabled ? supportedProviderConsumers(provider.app) : [];
 }
 
-function providerWithEnabledApps(
+function providerLegacyEnabledApps(provider: ProviderRecord): ManagedAgentApp[] {
+  return (provider.enabledApps ?? []).filter(
+    (app) =>
+      (app === "claude" || app === "codex") && providerSupportsApp(provider, app)
+  );
+}
+
+function providerWithEnabledConsumers(
   scope: ProviderRecord["app"],
-  apps: readonly ManagedAgentApp[]
-): Pick<ProviderRecord, "enabled" | "enabledApps"> {
-  const supported = new Set(supportedProviderApps(scope));
-  const enabledApps = Array.from(new Set(apps.filter((app) => supported.has(app))));
-  return { enabled: enabledApps.length > 0, enabledApps };
+  consumers: readonly ProviderConsumerId[]
+): Pick<ProviderRecord, "enabled" | "enabledConsumers"> {
+  const supported = new Set(supportedProviderConsumers(scope));
+  const enabledConsumers = Array.from(
+    new Set(consumers.filter((consumer) => supported.has(consumer)))
+  );
+  return { enabled: enabledConsumers.length > 0, enabledConsumers };
 }
 
-function supportedProviderApps(scope: ProviderRecord["app"]): ManagedAgentApp[] {
-  return scope === "unified" ? ["claude", "codex"] : [scope];
+function supportedProviderConsumers(
+  scope: ProviderRecord["app"]
+): ProviderConsumerId[] {
+  return scope === "unified" ? ["claude", "codex", "agent"] : [scope];
 }
 
 function normalizeApps(apps: ManagedAgentApp[] | undefined): ManagedAgentApp[] {

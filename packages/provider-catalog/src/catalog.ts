@@ -1,6 +1,7 @@
 import type {
   ManagedAgentApp,
   ProviderAppScope,
+  ProviderConsumerId,
   ProviderCreateInput,
   ProviderPreset,
   ProviderRecord,
@@ -8,6 +9,11 @@ import type {
 } from "./types.js";
 
 export const managedApps: readonly ManagedAgentApp[] = ["claude", "codex"] as const;
+export const providerConsumers: readonly ProviderConsumerId[] = [
+  "claude",
+  "codex",
+  "agent"
+] as const;
 
 export const providerPresets: readonly ProviderPreset[] = [
   {
@@ -52,6 +58,19 @@ export const providerPresets: readonly ProviderPreset[] = [
     wireApi: "chat",
     modelCatalog: [
       { id: "openai-compatible-model", displayName: "OpenAI-compatible model" }
+    ]
+  },
+  {
+    id: "deepseek-official",
+    app: "agent",
+    name: "DeepSeek 官方",
+    kind: "official",
+    apiFormat: "openai_chat",
+    baseUrl: "https://api.deepseek.com",
+    defaultModel: "deepseek-v4-flash",
+    modelCatalog: [
+      { id: "deepseek-v4-flash", displayName: "DeepSeek V4 Flash" },
+      { id: "deepseek-v4-pro", displayName: "DeepSeek V4 Pro" }
     ]
   },
   {
@@ -111,14 +130,14 @@ export function findProviderPreset(id: string): ProviderPreset | undefined {
 
 export function providerSupportsApp(
   provider: Pick<ProviderRecord, "app"> | Pick<ProviderPreset, "app">,
-  app: ManagedAgentApp
+  app: ProviderConsumerId
 ): boolean {
   return provider.app === app || provider.app === "unified";
 }
 
 export function assertProviderSupportsApp(
   provider: Pick<ProviderRecord, "app" | "name">,
-  app: ManagedAgentApp
+  app: ProviderConsumerId
 ): void {
   if (!providerSupportsApp(provider, app)) {
     throw new Error(`${provider.name} does not support ${app}`);
@@ -168,7 +187,9 @@ export function mergeProviderUpdate(
 }
 
 export function normalizeProviderApp(app: string): ProviderAppScope {
-  if (app === "claude" || app === "codex" || app === "unified") return app;
+  if (app === "claude" || app === "codex" || app === "agent" || app === "unified") {
+    return app;
+  }
   throw new Error(`Unknown provider app: ${app}`);
 }
 

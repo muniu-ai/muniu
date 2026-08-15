@@ -1,7 +1,8 @@
 import type { AgentProvider } from "@mn/core";
 
 export type ManagedAgentApp = AgentProvider;
-export type ProviderAppScope = ManagedAgentApp | "unified";
+export type ProviderConsumerId = ManagedAgentApp | "agent";
+export type ProviderAppScope = ProviderConsumerId | "unified";
 
 export type ProviderKind =
   | "official"
@@ -71,6 +72,8 @@ export interface ProviderRecord {
   enterpriseCapabilities?: ProviderEnterpriseCapabilities;
   config: Record<string, unknown>;
   enabled: boolean;
+  enabledConsumers?: ProviderConsumerId[];
+  /** @deprecated Read-only compatibility for v0.1 records. */
   enabledApps?: ManagedAgentApp[];
   sortOrder: number;
   createdAt: string;
