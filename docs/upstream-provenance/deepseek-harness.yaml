@@ -105,3 +105,15 @@ files:
     localPath: packages/agent-session/src/event-snapshot.ts
     mode: adapted
     summary: Retained only the event adopt and detached immutable snapshot boundary; removed Cordis lifecycle and store coupling.
+  - upstreamPath: packages/llm/llm/src/assembler.ts
+    localPath: packages/agent-llm/src/assembler.ts
+    mode: adapted
+    summary: Adapted incremental block assembly to the closed Muniu thinking/error stream and immutable message types.
+  - upstreamPath: packages/core/tools/src/json-schema.ts
+    localPath: packages/agent-tools/src/json-schema.ts
+    mode: adapted
+    summary: Retained the enforced JSON Schema subset and path-qualified validator in a smaller Cordis-free implementation.
+  - upstreamPath: packages/core/tools/src/schema.ts
+    localPath: packages/agent-tools/src/define-tool.ts
+    mode: adapted
+    summary: Retained schema enforcement and typed tool construction while removing output DSL, presentation hooks, and plugin concurrency policy.
