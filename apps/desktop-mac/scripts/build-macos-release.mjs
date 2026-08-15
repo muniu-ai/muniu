@@ -26,7 +26,6 @@ const shouldSign = process.env.MNIU_MACOS_SIGN === "1";
 const shouldNotarize = process.env.MNIU_MACOS_NOTARIZE === "1";
 const signingIdentity = process.env.MNIU_MACOS_SIGNING_IDENTITY ?? process.env.APPLE_SIGNING_IDENTITY;
 const notaryProfile = process.env.MNIU_NOTARY_KEYCHAIN_PROFILE;
-const updaterPrivateKey = process.env.TAURI_SIGNING_PRIVATE_KEY_PATH || process.env.TAURI_SIGNING_PRIVATE_KEY;
 const archLabel = target === "universal-apple-darwin" ? "universal" : target.replace(/-apple-darwin$/, "");
 const releaseDir = path.join(tauriDir, "target", target, "release");
 const bundleDir = path.join(releaseDir, "bundle");
@@ -37,12 +36,6 @@ const dmgName = `Muniu_${config.version}_${archLabel}.dmg`;
 const dmgPath = path.join(dmgBundleDir, dmgName);
 const zipName = `Muniu_${config.version}_${archLabel}.zip`;
 const zipPath = path.join(macosBundleDir, zipName);
-const rawUpdaterArchivePath = path.join(macosBundleDir, `${config.productName}.app.tar.gz`);
-const updaterArchiveName = `Muniu_${config.version}_${archLabel}.app.tar.gz`;
-const updaterArchivePath = path.join(macosBundleDir, updaterArchiveName);
-const updaterSignaturePath = `${updaterArchivePath}.sig`;
-const updaterManifestPath = path.join(macosBundleDir, "latest.json");
-const updaterManifestScriptPath = path.join(repoRoot, "scripts", "generate-macos-updater-manifest.mjs");
 const notaryUploadPath = path.join(macosBundleDir, `.notary-${zipName}`);
 const stagingDir = path.join(dmgBundleDir, ".headless-staging");
 const mountDir = path.join(dmgBundleDir, ".headless-mount");
@@ -121,10 +114,6 @@ if (shouldNotarize && !shouldSign) {
 if (shouldNotarize && !notaryProfile) {
   throw new Error("MNIU_MACOS_NOTARIZE=1 requires MNIU_NOTARY_KEYCHAIN_PROFILE");
 }
-if (shouldNotarize && !updaterPrivateKey) {
-  throw new Error("MNIU_MACOS_NOTARIZE=1 requires a Tauri updater private key");
-}
-
 const tauriArgs = ["build", "--ci", "--bundles", "app", "--target", target];
 if (!shouldSign) {
   tauriArgs.push("--no-sign");
@@ -160,31 +149,6 @@ if (shouldNotarize) {
   run("spctl", ["--assess", "--type", "execute", "--verbose", appPath]);
   rmSync(notaryUploadPath, { force: true });
 }
-
-rmSync(updaterArchivePath, { force: true });
-rmSync(updaterSignaturePath, { force: true });
-rmSync(updaterManifestPath, { force: true });
-run("tar", ["-czf", updaterArchivePath, "-C", macosBundleDir, `${config.productName}.app`]);
-const updaterEntries = runCapture("tar", ["-tzf", updaterArchivePath]).split("\n");
-if (!updaterEntries.some((entry) => entry === `${config.productName}.app/`)) {
-  throw new Error("versioned updater archive does not contain the app bundle root");
-}
-if (updaterPrivateKey) {
-  run(tauriBin, ["signer", "sign", updaterArchivePath], { cwd: repoRoot });
-  run(process.execPath, [
-    updaterManifestScriptPath,
-    "--version",
-    config.version,
-    "--archive",
-    updaterArchivePath,
-    "--signature",
-    updaterSignaturePath,
-    "--output",
-    updaterManifestPath,
-  ]);
-}
-rmSync(rawUpdaterArchivePath, { force: true });
-rmSync(`${rawUpdaterArchivePath}.sig`, { force: true });
 
 run("ditto", ["-c", "-k", "--sequesterRsrc", "--keepParent", appPath, zipPath]);
 run("unzip", ["-t", zipPath]);

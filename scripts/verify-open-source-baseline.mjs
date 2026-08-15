@@ -9,6 +9,12 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
+import {
+  findSecretFindings,
+  findUnpinnedWorkflowActions,
+  validateAttributionPolicy
+} from "./lib/open-source-policy.mjs";
+
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repository = "https://github.com/muniu-ai/muniu";
 const upstreamCommit = "47f943859bef60e4160492346772ded9b24f765a";
@@ -43,6 +49,14 @@ const requiredFiles = [
   "CHANGELOG.md",
   "SUPPORT.md",
   "GOVERNANCE.md",
+  ".npmrc",
+  ".gitleaks.toml",
+  "deny.toml",
+  "scripts/lib/open-source-policy.mjs",
+  "scripts/test/open-source-policy.test.mjs",
+  "scripts/test/fixtures/allowed-fake-secrets.txt",
+  "scripts/verify-third-party-licenses.mjs",
+  "docs/security/secret-scanning.md",
   "docs/upstream-provenance/deepseek-harness.yaml"
 ];
 requiredFiles.forEach(requireFile);
@@ -59,6 +73,15 @@ if (
 const provenancePath = path.join(root, "docs/upstream-provenance/deepseek-harness.yaml");
 if (existsSync(provenancePath) && !readFileSync(provenancePath, "utf8").includes(upstreamCommit)) {
   fail("DeepSeek Harness provenance does not pin the approved commit");
+}
+try {
+  validateAttributionPolicy({
+    notice: readFileSync(path.join(root, "NOTICE"), "utf8"),
+    thirdParty: readFileSync(path.join(root, "THIRD_PARTY_NOTICES.md"), "utf8"),
+    provenance: readFileSync(provenancePath, "utf8")
+  });
+} catch (error) {
+  fail(error instanceof Error ? error.message : String(error));
 }
 
 const workspaceManifests = [
@@ -82,6 +105,41 @@ const rootPackage = readJson("package.json");
 if (rootPackage.packageManager !== "npm@11.10.1") fail("packageManager must be npm@11.10.1");
 if (rootPackage.engines?.node !== ">=22.19.0 <23") fail("Node engine must be >=22.19.0 <23");
 if (rootPackage.engines?.npm !== ">=11.10.1 <12") fail("npm engine must be >=11.10.1 <12");
+if (rootPackage.devDependencies?.typescript !== "5.7.2") fail("TypeScript must be pinned exactly to 5.7.2");
+if (rootPackage.scripts?.["test:oss-policy"] !== "node --test scripts/test/open-source-policy.test.mjs") {
+  fail("test:oss-policy must run the open-source policy regression suite");
+}
+if (rootPackage.scripts?.["verify:licenses"] !== "node scripts/verify-third-party-licenses.mjs") {
+  fail("verify:licenses must run the deterministic npm and Cargo license inventory");
+}
+
+const npmrc = readFileSync(path.join(root, ".npmrc"), "utf8");
+if (!/^registry=https:\/\/registry\.npmjs\.org\/$/mu.test(npmrc)) {
+  fail(".npmrc must pin the official npm registry used by installs and audit");
+}
+if (!/^audit=true$/mu.test(npmrc)) fail(".npmrc must keep npm audit enabled");
+if (npmrc.includes(obsoleteRegistryHost)) fail(".npmrc uses an obsolete registry mirror");
+
+const gitleaksConfig = readFileSync(path.join(root, ".gitleaks.toml"), "utf8");
+for (const expected of ["useDefault = true", "AKIA0000000000000000", "sk-test-not-a-real-secret"]) {
+  if (!gitleaksConfig.includes(expected)) fail(".gitleaks.toml is missing " + expected);
+}
+const denyConfig = readFileSync(path.join(root, "deny.toml"), "utf8");
+for (const expected of ['version = 2', '"Apache-2.0"', '"MIT"', "confidence-threshold"]) {
+  if (!denyConfig.includes(expected)) fail("deny.toml is missing " + expected);
+}
+
+const ciWorkflow = readFileSync(path.join(root, ".github/workflows/ci.yml"), "utf8");
+for (const expected of [
+  "fetch-depth: 0",
+  "GITLEAKS_VERSION: 8.30.1",
+  "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb",
+  "--log-opts=--all",
+  "npm run verify:licenses",
+  "EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25"
+]) {
+  if (!ciWorkflow.includes(expected)) fail("CI open-source gate is missing " + expected);
+}
 
 const cargoManifest = readFileSync(
   path.join(root, "apps/desktop-mac/src-tauri/Cargo.toml"),
@@ -99,54 +157,75 @@ if (!/^repository = "https:\/\/github\.com\/muniu-ai\/muniu"$/mu.test(cargoManif
 
 const lockText = readFileSync(path.join(root, "package-lock.json"), "utf8");
 if (lockText.includes(obsoleteRegistryHost)) fail("package-lock.json uses an obsolete registry mirror");
+if (lockText.includes("@tauri-apps/plugin-updater")) {
+  fail("package-lock.json must not retain the Tauri updater JavaScript plugin");
+}
+const lock = JSON.parse(lockText);
+if (lock.packages?.["node_modules/typescript"]?.version !== "5.7.2") {
+  fail("package-lock.json must resolve TypeScript 5.7.2");
+}
 
 const tauriConfig = readJson("apps/desktop-mac/src-tauri/tauri.conf.json");
 const tauriCapabilities = readJson("apps/desktop-mac/src-tauri/capabilities/default.json");
+const desktopPackage = readJson("apps/desktop-mac/package.json");
 if (tauriConfig.bundle?.createUpdaterArtifacts !== false) {
   fail("v0.1.0 must disable Tauri updater artifacts");
 }
 if (tauriConfig.plugins?.updater) fail("v0.1.0 must not configure an updater endpoint");
-if (tauriCapabilities.permissions.includes("updater:default")) {
+if (tauriCapabilities.permissions.some((permission) => JSON.stringify(permission).includes("updater:"))) {
   fail("v0.1.0 must not grant updater capabilities");
 }
+if (desktopPackage.dependencies?.["@tauri-apps/plugin-updater"] !== undefined) {
+  fail("v0.1.0 must not depend on the Tauri updater JavaScript plugin");
+}
+const updaterSourceFiles = [
+  "apps/desktop-mac/src/App.tsx",
+  "apps/desktop-mac/src-tauri/Cargo.toml",
+  "apps/desktop-mac/src-tauri/Cargo.lock",
+  "apps/desktop-mac/src-tauri/src/lib.rs",
+  "apps/desktop-mac/src-tauri/gen/schemas/acl-manifests.json",
+  "apps/desktop-mac/src-tauri/gen/schemas/desktop-schema.json",
+  "apps/desktop-mac/src-tauri/gen/schemas/macOS-schema.json"
+];
+for (const sourcePath of updaterSourceFiles) {
+  const text = readFileSync(path.join(root, sourcePath), "utf8");
+  if (/tauri-plugin-updater|@tauri-apps\/plugin-updater|tauri_plugin_updater|updater:/u.test(text)) {
+    fail("v0.1.0 updater residue in " + sourcePath);
+  }
+}
+for (const removedPath of [
+  "scripts/generate-macos-updater-manifest.mjs",
+  "packaging/updater/latest.dry-run.json"
+]) {
+  if (existsSync(path.join(root, removedPath))) fail("v0.1.0 must not ship " + removedPath);
+}
 
-const tracked = execFileSync("git", ["ls-files", "-z"], { cwd: root })
+const tracked = execFileSync(
+  "git",
+  ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+  { cwd: root }
+)
   .toString("utf8")
   .split("\0")
   .filter(Boolean);
-const secretPatterns = [
-  [
-    "private key",
-    /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]{64,}-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/
-  ],
-  ["GitHub token", /\bgh[pousr]_[A-Za-z0-9]{30,}\b/],
-  ["AWS access key", /\bAKIA[0-9A-Z]{16}\b/],
-  ["model API key", /\b(?:sk-[A-Za-z0-9]{32,}|sk-(?:ant|proj)-[A-Za-z0-9_-]{40,})\b/]
-];
+const workflowFiles = [];
 for (const relativePath of tracked) {
   const absolutePath = path.join(root, relativePath);
+  if (!existsSync(absolutePath)) continue;
   const size = statSync(absolutePath).size;
   if (size > 5 * 1024 * 1024) fail("tracked file exceeds 5 MiB: " + relativePath);
   const buffer = readFileSync(absolutePath);
-  if (buffer.includes(0)) continue;
   const text = buffer.toString("utf8");
   if (text.includes(localAbsolutePath)) fail("local absolute path in " + relativePath);
   if (text.includes(obsoleteRepositoryPath)) fail("obsolete repository URL in " + relativePath);
-  for (const [label, pattern] of secretPatterns) {
-    if (pattern.test(text)) fail("possible " + label + " in " + relativePath);
+  for (const finding of findSecretFindings(buffer, relativePath)) {
+    fail("possible " + finding.label + " in " + finding.path);
   }
+  workflowFiles.push({ path: relativePath, text });
 }
 
-for (const name of readdirSync(path.join(root, ".github/workflows"))) {
-  if (!name.endsWith(".yml") && !name.endsWith(".yaml")) continue;
-  const workflow = readFileSync(path.join(root, ".github/workflows", name), "utf8");
-  for (const line of workflow.split("\n")) {
-    if (!line.includes("uses:")) continue;
-    const revision = line.match(/uses:\s+[^@\s]+@([^\s#]+)/)?.[1];
-    if (!revision || !/^[0-9a-f]{40}$/.test(revision)) {
-      fail("GitHub Action is not pinned to a commit in .github/workflows/" + name + ": " + line.trim());
-    }
-  }
+for (const actionFailure of findUnpinnedWorkflowActions(workflowFiles)) {
+  fail("GitHub Action is not pinned to a commit in " + actionFailure);
 }
 
 if (failures.length > 0) {

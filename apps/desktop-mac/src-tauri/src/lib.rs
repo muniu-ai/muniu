@@ -121,7 +121,6 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let daemon = spawn_managed_daemon(app.handle())?;
             app.manage(ManagedDaemon(Mutex::new(daemon)));

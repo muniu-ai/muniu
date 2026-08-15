@@ -1,0 +1,90 @@
+title = "Muniu secret scanning policy"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Exact fake AWS value used by scanner policy tests"
+targetRules = ["aws-access-token"]
+condition = "AND"
+paths = [
+  '''^\.gitleaks\.toml$''',
+  '''^scripts/test/fixtures/allowed-fake-secrets\.txt$''',
+  '''^scripts/lib/open-source-policy\.mjs$''',
+  '''^scripts/test/open-source-policy\.test\.mjs$''',
+  '''^scripts/verify-open-source-baseline\.mjs$'''
+]
+regexes = ['''^AKIA0000000000000000$''']
+
+[[allowlists]]
+description = "Exact fake model-key value used by scanner policy tests"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = [
+  '''^\.gitleaks\.toml$''',
+  '''^scripts/test/fixtures/allowed-fake-secrets\.txt$''',
+  '''^scripts/lib/open-source-policy\.mjs$''',
+  '''^scripts/verify-open-source-baseline\.mjs$'''
+]
+regexes = ['''^sk-test-not-a-real-secret$''']
+
+# The remaining entries are commit-bound false positives from the imported local
+# baseline. Each exception requires the detected rule, one exact path, the exact
+# extracted value, and the one commit that introduced the test fixture. See
+# docs/security/secret-scanning.md for the review record.
+
+[[allowlists]]
+description = "Deterministic loop-budget HMAC test key"
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["4f00f46e3d80ca3e4af51e0ede467b97827e9822"]
+paths = ['''^apps/api/test/loopBudgetMeasurement\.test\.ts$''']
+regexes = ['''^loop-measurement-key-0123456789abcdef0123456789abcdef$''']
+
+[[allowlists]]
+description = "Deterministic loop-validation HMAC test key"
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["4f00f46e3d80ca3e4af51e0ede467b97827e9822"]
+paths = ['''^apps/api/test/loopMeasurementValidation\.test\.ts$''']
+regexes = ['''^loop-validation-key-0123456789abcdef0123456789abcdef$''']
+
+[[allowlists]]
+description = "Deterministic sandbox-attestation HMAC test key"
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["4f00f46e3d80ca3e4af51e0ede467b97827e9822"]
+paths = ['''^apps/api/test/sandboxAttestation\.test\.ts$''']
+regexes = ['''^0123456789abcdef0123456789abcdef$''']
+
+[[allowlists]]
+description = "S3 helper identifier misclassified as a generic API key"
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["4f00f46e3d80ca3e4af51e0ede467b97827e9822"]
+paths = ['''^apps/api/test/artifactRemoteStore\.test\.ts$''']
+regexes = ['''^s3RegionFromEnvironment$''']
+
+[[allowlists]]
+description = "Synthetic key intentionally detected by the security-gate test"
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["4f00f46e3d80ca3e4af51e0ede467b97827e9822"]
+paths = ['''^apps/worker/test/policyGates\.test\.ts$''']
+regexes = ['''^sk-1234567890abcdefghijklmnop$''']
+
+[[allowlists]]
+description = "Synthetic key intentionally exercised by usage redaction tests"
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["4f00f46e3d80ca3e4af51e0ede467b97827e9822"]
+paths = ['''^packages/usage/test/usage\.test\.ts$''']
+regexes = ['''^sk-1234567890abcdef$''']
+
+[[allowlists]]
+description = "Structurally valid but synthetic JWT used by Harness hardening tests"
+targetRules = ["jwt"]
+condition = "AND"
+commits = ["4f00f46e3d80ca3e4af51e0ede467b97827e9822"]
+paths = ['''^packages/harness/test/hardening\.test\.ts$''']
+regexes = ['''^eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiIxMjM0NTY3ODkwIn0\.signature-secret$''']

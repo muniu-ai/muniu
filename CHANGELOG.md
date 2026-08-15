@@ -21,11 +21,14 @@ during the Developer Preview.
 - Initial open-source baseline for the Muniu governance control plane.
 - Apache-2.0 licensing, DCO contribution policy, security policy, upstream
   provenance format, and release planning.
+- Full-history secret scanning and reproducible npm/Cargo license policy gates.
 
 ### Known limitations
 
 - Developer Preview; interfaces may change.
 - macOS 12+ is the only formally supported host platform.
 - No npm package or signed/notarized desktop application is published.
+- The desktop runtime updater is not shipped; v0.1.x updates require an
+  immutable new release and manual installation.
 - Claude Code and Codex CLI remain legacy executors until the embedded runtime
   is integrated by the following sub-plans.

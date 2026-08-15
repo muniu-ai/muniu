@@ -2,6 +2,8 @@
 
 本手册用于木牛的 macOS 直接分发，即通过 DMG、ZIP、GitHub Release、官网或 Homebrew 提供安装包。它不涉及 Mac App Store 上架。
 
+v0.1.0 Developer Preview 不包含运行时自动更新器，因此本手册只管理 Apple 代码签名和公证凭据。
+
 ## 是否现在必须办理
 
 | 使用方式 | Developer ID Application | Notarization | 结论 |
@@ -73,32 +75,13 @@ xcrun notarytool history --keychain-profile mniu-notary
 
 团队发布也可改用 App Store Connect API key。将 `.p8` 放在仓库外的安全目录，并通过 `APPLE_API_ISSUER`、`APPLE_API_KEY`、`APPLE_API_KEY_PATH` 管理；不要把 key 文件提交到仓库。
 
-## 4. 生成 Tauri updater 密钥
-
-Apple 证书用于 macOS 信任链；Tauri updater 密钥用于木牛应用校验升级包，两者都需要，但用途不同。
-
-```bash
-mkdir -p "$HOME/.tauri"
-npm run tauri -w @mn/desktop-mac -- signer generate -w "$HOME/.tauri/mniu-updater.key"
-```
-
-生成后：
-
-- 私钥 `mniu-updater.key` 只放在密码管理器、加密磁盘或发布机 secrets 中。
-- 公钥可以提交到 `apps/desktop-mac/src-tauri/tauri.conf.json` 的 `plugins.updater.pubkey`。
-- 私钥一旦丢失，已安装版本将无法验证后续更新，因此至少保留一份离线备份。
-
-当前仓库中的 updater 公钥和 `latest.dry-run.json` 是 dry-run 占位内容。首次正式发布前必须替换为本次生成的真实公钥和 `.sig`。
-
-## 5. 运行发布前检查
+## 4. 运行发布前检查
 
 先设置当前终端环境：
 
 ```bash
 export MNIU_MACOS_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)"
 export MNIU_NOTARY_KEYCHAIN_PROFILE="mniu-notary"
-export TAURI_SIGNING_PRIVATE_KEY_PATH="$HOME/.tauri/mniu-updater.key"
-export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="your-updater-key-password"
 npm run preflight:mac-signing -- --public
 ```
 
@@ -108,7 +91,7 @@ npm run preflight:mac-signing -- --public
 npm run preflight:mac-signing
 ```
 
-## 6. 构建签名并公证的正式产物
+## 5. 构建签名并公证的正式产物
 
 ```bash
 MNIU_MACOS_SIGN=1 \
@@ -121,12 +104,11 @@ npm run release:mac
 1. 构建 Intel + Apple Silicon universal `.app`。
 2. 校验 app 签名。
 3. 提交 app 的 ZIP 容器到 Apple 公证并将 ticket staple 到 app。
-4. 从已 staple 的 app 重建并签名版本化 updater archive，生成真实 `latest.json`。
-5. 生成最终 ZIP 和 DMG。
-6. 签名、提交并 staple DMG。
-7. 输出 ZIP 和 DMG 的 SHA-256。
+4. 生成最终 ZIP 和 DMG。
+5. 签名、提交并 staple DMG。
+6. 输出 ZIP 和 DMG 的 SHA-256。
 
-## 7. 发布验收
+## 6. 发布验收
 
 ```bash
 APP="apps/desktop-mac/src-tauri/target/universal-apple-darwin/release/bundle/macos/木牛.app"
@@ -147,20 +129,17 @@ lipo -archs "$APP/Contents/MacOS/mniu-desktop"
 - `stapler validate` 对 app 和 DMG 通过。
 - `spctl` 显示 accepted。
 - 二进制同时包含 `x86_64 arm64`。
-- updater 目录存在 `.app.tar.gz.sig`，发布的 `latest.json` 使用真实签名。
 - 从网络下载到一台干净 Mac 后，Gatekeeper 不拦截，`mniu://` 能唤起应用。
 
-## 8. 常见问题
+## 7. 常见问题
 
 - `0 valid identities found`：证书没有安装、证书下缺少私钥、证书过期，或当前 Keychain 未解锁。
 - `The signature of the binary is invalid`：检查嵌套二进制是否全部签名，并确认未在签名后修改 app 内容。
 - notarization 返回 `Invalid`：用 `xcrun notarytool log <submission-id> --keychain-profile mniu-notary` 查看 Apple 日志。
 - `spctl` 拒绝但公证成功：确认最终用户拿到的是 staple 之后重新生成的 ZIP/DMG。
-- updater 没有 `.sig`：确认私钥环境变量存在于执行 `npm run release:mac` 的同一进程环境中；`.env` 不会被 Tauri updater 签名流程自动使用。
 
 ## 官方资料
 
 - [Apple Developer ID certificates](https://developer.apple.com/help/account/certificates/create-developer-id-certificates/)
 - [Apple notarizing macOS software](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution)
 - [Tauri macOS code signing](https://v2.tauri.app/distribute/sign/macos/)
-- [Tauri updater signing](https://v2.tauri.app/plugin/updater/)

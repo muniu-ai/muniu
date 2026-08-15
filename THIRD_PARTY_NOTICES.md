@@ -1,8 +1,9 @@
 # Third-party notices
 
 Muniu is licensed under Apache License 2.0 except where a file or directory
-states otherwise. Runtime dependency licenses remain the property of their
-respective copyright holders and are included in release SBOM and notice
+states otherwise. Locked npm and Cargo dependency licenses remain the property
+of their respective copyright holders and are checked by the repository license
+policy. Shipped dependency notices are included in release SBOM and notice
 artifacts.
 
 ## DeepSeek Harness

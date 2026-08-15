@@ -33,6 +33,8 @@
     "verify:enterprise-dependencies": "node scripts/enterprise-e2e.mjs --with-compose",
     "verify:enterprise-e2e": "node scripts/enterprise-e2e.mjs --with-compose --api-flow",
     "verify:oss-baseline": "node scripts/verify-open-source-baseline.mjs",
+    "verify:licenses": "node scripts/verify-third-party-licenses.mjs",
+    "test:oss-policy": "node --test scripts/test/open-source-policy.test.mjs",
     "verify:mac-release": "node scripts/verify-macos-release.mjs",
     "verify:mac-packaged-app": "node scripts/verify-packaged-macos-app.mjs",
     "build:daemon-sidecar": "npm run build && node scripts/build-daemon-sidecar.mjs",
@@ -45,6 +47,7 @@
     "@yao-pkg/pkg": "^6.21.0",
     "ds-store": "^0.1.6",
     "esbuild": "^0.28.1",
-    "typescript": "^5.7.2"
+    "spdx-expression-parse": "3.0.1",
+    "typescript": "5.7.2"
   }
 }

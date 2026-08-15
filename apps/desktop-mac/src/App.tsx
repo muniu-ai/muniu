@@ -12,8 +12,6 @@ import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { save as showSaveDialog } from "@tauri-apps/plugin-dialog";
 import { writeFile as writeTauriFile } from "@tauri-apps/plugin-fs";
 import { openPath } from "@tauri-apps/plugin-opener";
-import { relaunch } from "@tauri-apps/plugin-process";
-import { check as checkForUpdate } from "@tauri-apps/plugin-updater";
 import {
   Activity,
   BarChart3,
@@ -585,8 +583,6 @@ function App() {
     useState<SkillRegistryFormValues>(defaultSkillRegistryForm);
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [settingsError, setSettingsError] = useState<string | null>(null);
-  const [updateBusy, setUpdateBusy] = useState(false);
-  const [updateMessage, setUpdateMessage] = useState<string | null>(null);
   const [systemDoctor, setSystemDoctor] = useState<SystemDoctorSummary | null>(null);
   const [doctorLoading, setDoctorLoading] = useState(false);
   const [envCleanup, setEnvCleanup] = useState<EnvCleanupSummary | null>(null);
@@ -1462,56 +1458,6 @@ function App() {
       setSettingsError(message);
     } finally {
       setSettingsBusy(false);
-    }
-  }
-
-  async function prepareDesktopUpdate() {
-    if (!isTauri()) {
-      setUpdateMessage("自动更新仅在已安装的桌面应用中可用");
-      return;
-    }
-    setUpdateBusy(true);
-    setUpdateMessage("正在检查更新...");
-    setActionError(null);
-    try {
-      const update = await checkForUpdate();
-      if (!update) {
-        setUpdateMessage("当前已是最新版本");
-        return;
-      }
-      setUpdateMessage(`发现 ${update.version}`);
-      setConfirmAction({
-        title: "安装木牛更新",
-        body: `${update.currentVersion} -> ${update.version}`,
-        detail: update.body || "更新包将经过签名校验后安装，随后重启应用。",
-        confirmLabel: "下载并安装",
-        run: async () => {
-          let downloaded = 0;
-          let total: number | undefined;
-          await update.downloadAndInstall((event) => {
-            if (event.event === "Started") {
-              total = event.data.contentLength;
-              setUpdateMessage(total ? `开始下载 ${formatBytes(total)}` : "开始下载更新");
-            } else if (event.event === "Progress") {
-              downloaded += event.data.chunkLength;
-              setUpdateMessage(
-                total
-                  ? `已下载 ${formatBytes(downloaded)} / ${formatBytes(total)}`
-                  : `已下载 ${formatBytes(downloaded)}`
-              );
-            } else {
-              setUpdateMessage("更新已安装，正在重启...");
-            }
-          });
-          await relaunch();
-        }
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setUpdateMessage(null);
-      setActionError(`更新检查失败: ${message}`);
-    } finally {
-      setUpdateBusy(false);
     }
   }
 
@@ -2767,16 +2713,6 @@ function App() {
               </div>
               <div className="panel-actions">
                 <button
-                  className="text-button"
-                  type="button"
-                  disabled={updateBusy}
-                  title="检查并安装更新"
-                  onClick={() => void prepareDesktopUpdate()}
-                >
-                  <RefreshCw size={16} />
-                  <span>{updateBusy ? "检查中" : "检查更新"}</span>
-                </button>
-                <button
                   className="text-button primary"
                   type="button"
                   disabled={settingsBusy}
@@ -2787,9 +2723,6 @@ function App() {
                 </button>
               </div>
             </div>
-
-            {updateMessage ? <div className="action-banner success">{updateMessage}</div> : null}
-
             <DesktopSettingsPanel
               settings={desktopSettings}
               error={settingsError}

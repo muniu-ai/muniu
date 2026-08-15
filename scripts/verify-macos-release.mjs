@@ -1,6 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import os from "node:os";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
 const rootDir = process.cwd();
@@ -9,17 +8,21 @@ const desktopPackagePath = path.join(rootDir, "apps/desktop-mac/package.json");
 const rootPackagePath = path.join(rootDir, "package.json");
 const macReleaseScriptPath = path.join(rootDir, "apps/desktop-mac/scripts/build-macos-release.mjs");
 const cargoManifestPath = path.join(rootDir, "apps/desktop-mac/src-tauri/Cargo.toml");
+const cargoLockPath = path.join(rootDir, "apps/desktop-mac/src-tauri/Cargo.lock");
 const tauriLibPath = path.join(rootDir, "apps/desktop-mac/src-tauri/src/lib.rs");
 const tauriIconSourcePath = path.join(rootDir, "apps/desktop-mac/src-tauri/app-icon.svg");
 const tauriIconDir = path.join(rootDir, "apps/desktop-mac/src-tauri/icons");
 const tauriCapabilitiesPath = path.join(rootDir, "apps/desktop-mac/src-tauri/capabilities/default.json");
+const tauriGeneratedSchemaPaths = [
+  path.join(rootDir, "apps/desktop-mac/src-tauri/gen/schemas/acl-manifests.json"),
+  path.join(rootDir, "apps/desktop-mac/src-tauri/gen/schemas/desktop-schema.json"),
+  path.join(rootDir, "apps/desktop-mac/src-tauri/gen/schemas/macOS-schema.json"),
+];
 const caskPath = path.join(rootDir, "packaging/homebrew/Casks/mniu.rb");
-const updaterManifestPath = path.join(rootDir, "packaging/updater/latest.dry-run.json");
 const releaseDocPath = path.join(rootDir, "docs/release/macos.md");
 const developerIdDocPath = path.join(rootDir, "docs/release/apple-developer-id.md");
 const dmgInstallGuidePath = path.join(rootDir, "packaging/macos/安装说明.txt");
 const signingPreflightPath = path.join(rootDir, "scripts/preflight-macos-signing.mjs");
-const updaterManifestGeneratorPath = path.join(rootDir, "scripts/generate-macos-updater-manifest.mjs");
 const daemonSidecarScriptPath = path.join(rootDir, "scripts/build-daemon-sidecar.mjs");
 const packagedAppVerifierPath = path.join(rootDir, "scripts/verify-packaged-macos-app.mjs");
 const apiSidecarPath = path.join(rootDir, "apps/api/src/sidecar.ts");
@@ -34,32 +37,16 @@ function assertIncludes(text, expected, label) {
   }
 }
 
+function assertExcludes(text, unexpected, label) {
+  if (text.includes(unexpected)) {
+    throw new Error(`${label} must not contain ${JSON.stringify(unexpected)}`);
+  }
+}
+
 function assertMatch(text, pattern, label) {
   if (!pattern.test(text)) {
     throw new Error(`${label} does not match ${pattern}`);
   }
-}
-
-function parseSemver(version) {
-  const match = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(version);
-  if (!match) {
-    throw new Error(`invalid semver: ${version}`);
-  }
-  return match.slice(1, 4).map((part) => Number.parseInt(part, 10));
-}
-
-function assertGreaterVersion(candidate, current) {
-  const candidateParts = parseSemver(candidate);
-  const currentParts = parseSemver(current);
-  for (let index = 0; index < candidateParts.length; index += 1) {
-    if (candidateParts[index] > currentParts[index]) {
-      return;
-    }
-    if (candidateParts[index] < currentParts[index]) {
-      throw new Error(`updater dry-run version ${candidate} is older than current ${current}`);
-    }
-  }
-  throw new Error(`updater dry-run version ${candidate} must be newer than current ${current}`);
 }
 
 const tauriConfig = readJson(tauriConfigPath);
@@ -68,14 +55,13 @@ const rootPackage = readJson(rootPackagePath);
 const tauriCapabilities = readJson(tauriCapabilitiesPath);
 const macReleaseScript = readFileSync(macReleaseScriptPath, "utf8");
 const cargoManifest = readFileSync(cargoManifestPath, "utf8");
+const cargoLock = readFileSync(cargoLockPath, "utf8");
 const tauriLib = readFileSync(tauriLibPath, "utf8");
 const cask = readFileSync(caskPath, "utf8");
-const updaterManifest = readJson(updaterManifestPath);
 const releaseDoc = readFileSync(releaseDocPath, "utf8");
 const developerIdDoc = readFileSync(developerIdDocPath, "utf8");
 const dmgInstallGuide = readFileSync(dmgInstallGuidePath, "utf8");
 const signingPreflight = readFileSync(signingPreflightPath, "utf8");
-const updaterManifestGenerator = readFileSync(updaterManifestGeneratorPath, "utf8");
 const daemonSidecarScript = readFileSync(daemonSidecarScriptPath, "utf8");
 const packagedAppVerifier = readFileSync(packagedAppVerifierPath, "utf8");
 const apiSidecar = readFileSync(apiSidecarPath, "utf8");
@@ -110,15 +96,15 @@ assertIncludes(cask, "REPLACE_WITH_RELEASE_SHA256", "Homebrew cask");
 assertIncludes(cask, 'sha256 "0000000000000000000000000000000000000000000000000000000000000000"', "Homebrew cask");
 assertMatch(cask, /url "https:\/\/github\.com\/[^"]+\/releases\/download\/v#\{version\}\/Muniu_#\{version\}_universal\.dmg"/, "Homebrew cask URL");
 
-if (tauriConfig.bundle?.createUpdaterArtifacts !== true) {
-  throw new Error("Tauri bundle.createUpdaterArtifacts must be true for updater dry-run artifacts");
+if (tauriConfig.bundle?.createUpdaterArtifacts !== false) {
+  throw new Error("Tauri bundle.createUpdaterArtifacts must be false for v0.1.0");
 }
-
-const updaterConfig = tauriConfig.plugins?.updater;
-if (!updaterConfig) {
-  throw new Error("Tauri plugins.updater configuration is missing");
+if (tauriConfig.plugins?.updater !== undefined) {
+  throw new Error("Tauri plugins.updater must be absent for v0.1.0");
 }
-assertIncludes(desktopPackage.dependencies?.["@tauri-apps/plugin-updater"] ?? "", "^2.", "desktop updater JS dependency");
+if (desktopPackage.dependencies?.["@tauri-apps/plugin-updater"] !== undefined) {
+  throw new Error("desktop updater JS dependency must be absent for v0.1.0");
+}
 assertIncludes(desktopPackage.dependencies?.["@tauri-apps/plugin-process"] ?? "", "^2.", "desktop process JS dependency");
 assertIncludes(desktopPackage.scripts?.["tauri:build"] ?? "", "scripts/build-macos-release.mjs", "desktop release script");
 assertIncludes(desktopPackage.scripts?.["tauri:build:raw"] ?? "", "tauri build", "desktop raw Tauri build script");
@@ -136,10 +122,9 @@ assertIncludes(macReleaseScript, "MNIU_NOTARY_KEYCHAIN_PROFILE", "macOS headless
 assertIncludes(macReleaseScript, "MNIU_MACOS_NOTARIZE=1 requires MNIU_MACOS_SIGN=1", "macOS headless release script");
 assertIncludes(macReleaseScript, "notarytool", "macOS headless release script");
 assertIncludes(macReleaseScript, "stapler", "macOS headless release script");
-assertIncludes(macReleaseScript, "updaterArchiveName", "macOS versioned updater archive");
-assertIncludes(macReleaseScript, "versioned updater archive does not contain", "macOS updater archive integrity check");
-assertIncludes(macReleaseScript, "generate-macos-updater-manifest.mjs", "macOS updater manifest generation");
-assertIncludes(macReleaseScript, "requires a Tauri updater private key", "macOS public updater key gate");
+for (const unexpected of ["updaterArchive", "generate-macos-updater-manifest", "TAURI_SIGNING_PRIVATE_KEY"]) {
+  assertExcludes(macReleaseScript, unexpected, "macOS v0.1 release script");
+}
 assertIncludes(macReleaseScript, "ditto", "macOS ZIP release script");
 assertIncludes(macReleaseScript, "CFBundleExecutable", "macOS artifact executable lookup");
 assertIncludes(macReleaseScript, "-verify_arch", "macOS universal binary verification");
@@ -148,13 +133,11 @@ assertIncludes(macReleaseScript, 'run("hdiutil", ["verify", dmgPath])', "macOS D
 if (macReleaseScript.includes("osascript")) {
   throw new Error("macOS headless release script must not depend on osascript/Finder automation");
 }
-for (const expected of ["darwin-aarch64", "darwin-x86_64", "REPLACE_WITH", "encodeURIComponent"]) {
-  assertIncludes(updaterManifestGenerator, expected, "macOS updater manifest generator");
-}
-assertIncludes(cargoManifest, 'tauri-plugin-updater = "2"', "desktop Cargo manifest");
+assertExcludes(cargoManifest, "tauri-plugin-updater", "desktop Cargo manifest");
+assertExcludes(cargoLock, 'name = "tauri-plugin-updater"', "desktop Cargo lockfile");
 assertIncludes(cargoManifest, 'tauri-plugin-process = "2"', "desktop Cargo manifest");
 assertIncludes(cargoManifest, 'tauri-plugin-shell = "2"', "desktop Cargo manifest");
-assertIncludes(tauriLib, "tauri_plugin_updater::Builder::new().build()", "desktop Tauri plugin registration");
+assertExcludes(tauriLib, "tauri_plugin_updater", "desktop Tauri plugin registration");
 assertIncludes(tauriLib, "tauri_plugin_process::init()", "desktop Tauri process plugin registration");
 assertIncludes(tauriLib, "tauri_plugin_shell::init()", "desktop Tauri shell plugin registration");
 assertIncludes(tauriLib, "spawn_managed_daemon", "desktop managed daemon");
@@ -228,41 +211,20 @@ assertIncludes(tauriLib, 'join("Logs")', "desktop panic log path");
 assertIncludes(tauriLib, 'join("dev.muniu.desktop")', "desktop panic log path");
 assertIncludes(tauriLib, 'join("panic.log")', "desktop panic log path");
 assertIncludes(tauriLib, "sanitize_panic_message", "desktop panic message redaction");
-if (!tauriCapabilities.permissions.includes("updater:default")) {
-  throw new Error("default desktop capability must allow updater:default");
+if (tauriCapabilities.permissions.some((permission) => JSON.stringify(permission).includes("updater:"))) {
+  throw new Error("default desktop capability must not allow updater permissions");
 }
 if (!tauriCapabilities.permissions.includes("process:allow-restart")) {
   throw new Error("default desktop capability must allow process restart");
 }
 const desktopAppSource = readFileSync(path.join(rootDir, "apps/desktop-mac/src/App.tsx"), "utf8");
-for (const expected of ["checkForUpdate", "downloadAndInstall", "relaunch", "检查更新"]) {
-  assertIncludes(desktopAppSource, expected, "desktop updater runtime");
+for (const unexpected of ["@tauri-apps/plugin-updater", "checkForUpdate", "downloadAndInstall", "prepareDesktopUpdate", "updateBusy", "updateMessage", "检查更新"]) {
+  assertExcludes(desktopAppSource, unexpected, "desktop v0.1 runtime");
 }
-if (!Array.isArray(updaterConfig.endpoints) || updaterConfig.endpoints.length !== 1) {
-  throw new Error("Tauri updater must define exactly one release endpoint");
-}
-const updaterEndpoint = "https://github.com/muniu-ai/muniu/releases/latest/download/latest.json";
-if (updaterConfig.endpoints[0] !== updaterEndpoint) {
-  throw new Error(`unexpected updater endpoint: ${updaterConfig.endpoints[0]}`);
-}
-const decodedPubkey = Buffer.from(updaterConfig.pubkey ?? "", "base64").toString("utf8");
-assertIncludes(decodedPubkey, "minisign public key", "Tauri updater pubkey");
-
-assertGreaterVersion(updaterManifest.version, tauriConfig.version);
-if (Number.isNaN(Date.parse(updaterManifest.pub_date))) {
-  throw new Error("updater manifest pub_date must be a valid date");
-}
-for (const platform of ["darwin-aarch64", "darwin-x86_64"]) {
-  const platformManifest = updaterManifest.platforms?.[platform];
-  if (!platformManifest) {
-    throw new Error(`updater manifest is missing ${platform}`);
-  }
-  assertIncludes(
-    platformManifest.url,
-    `https://github.com/muniu-ai/muniu/releases/download/v${updaterManifest.version}/Muniu_${updaterManifest.version}_universal.app.tar.gz`,
-    `updater ${platform} URL`
-  );
-  assertIncludes(platformManifest.signature, "REPLACE_WITH_TAURI_UPDATER_SIGNATURE", `updater ${platform} signature`);
+for (const schemaPath of tauriGeneratedSchemaPaths) {
+  const schema = readFileSync(schemaPath, "utf8");
+  assertExcludes(schema, '"updater":', path.relative(rootDir, schemaPath));
+  assertExcludes(schema, "updater:", path.relative(rootDir, schemaPath));
 }
 
 execFileSync("ruby", ["-c", caskPath], { stdio: "inherit" });
@@ -270,7 +232,7 @@ execFileSync("ruby", ["-c", caskPath], { stdio: "inherit" });
 for (const expected of [
   "# macOS 发布指南",
   "Homebrew cask",
-  "自动更新 dry-run",
+  "v0.1.0 Developer Preview 不包含运行时自动更新器",
   "Apple Developer 签名",
   "Apple 公证",
   "安装",
@@ -281,9 +243,7 @@ for (const expected of [
   "brew install --cask --dry-run",
   "brew uninstall --cask --zap",
   "REPLACE_WITH_RELEASE_SHA256",
-  "latest.dry-run.json",
   "createUpdaterArtifacts",
-  "TAURI_SIGNING_PRIVATE_KEY_PATH",
   "apple-developer-id.md",
 ]) {
   assertIncludes(releaseDoc, expected, "macOS release guide");
@@ -295,8 +255,7 @@ for (const expected of [
   "Developer ID Application",
   "notarytool store-credentials",
   "preflight:mac-signing",
-  "TAURI_SIGNING_PRIVATE_KEY",
-  "npm run tauri -w @mn/desktop-mac -- signer generate",
+  "v0.1.0 Developer Preview 不包含运行时自动更新器",
   "codesign --verify",
   "stapler validate",
   "spctl --assess",
@@ -309,10 +268,11 @@ for (const expected of [
   "security",
   "Developer ID Application",
   "MNIU_NOTARY_KEYCHAIN_PROFILE",
-  "TAURI_SIGNING_PRIVATE_KEY_PATH",
 ]) {
   assertIncludes(signingPreflight, expected, "macOS signing preflight");
 }
+assertExcludes(signingPreflight, "TAURI_SIGNING_PRIVATE_KEY", "macOS signing preflight");
+assertExcludes(packagedAppVerifier, "updater", "packaged app verifier");
 
 const fakePublicPreflight = spawnSync(
   process.execPath,
@@ -324,8 +284,6 @@ const fakePublicPreflight = spawnSync(
       ...process.env,
       MNIU_MACOS_SIGNING_IDENTITY: "Developer ID Application: Fake (FAKE)",
       MNIU_NOTARY_KEYCHAIN_PROFILE: "mniu-nonexistent-preflight-profile",
-      TAURI_SIGNING_PRIVATE_KEY_PATH: "",
-      TAURI_SIGNING_PRIVATE_KEY: "RWFAKE"
     }
   }
 );
@@ -337,74 +295,5 @@ assertIncludes(
   "Public distribution preflight failed",
   "macOS fake signing preflight"
 );
-
-const updaterKeyTempDir = mkdtempSync(path.join(os.tmpdir(), "mniu-release-verifier-updater-key-"));
-try {
-  const updaterKeyPath = path.join(updaterKeyTempDir, "updater.key");
-  const updaterKeyPassword = "mniu-release-verifier-password";
-  const updaterArchivePath = path.join(updaterKeyTempDir, "Muniu_9.8.7_universal.app.tar.gz");
-  const generatedManifestPath = path.join(updaterKeyTempDir, "latest.json");
-  execFileSync(
-    path.join(rootDir, "node_modules/.bin/tauri"),
-    ["signer", "generate", "--ci", "--password", updaterKeyPassword, "--write-keys", updaterKeyPath],
-    { cwd: rootDir, stdio: "ignore" }
-  );
-  writeFileSync(updaterArchivePath, "temporary updater archive\n", "utf8");
-  const updaterKeyEnv = {
-    ...process.env,
-    MNIU_MACOS_SIGNING_IDENTITY: "Developer ID Application: Fake (FAKE)",
-    MNIU_NOTARY_KEYCHAIN_PROFILE: "mniu-nonexistent-preflight-profile",
-    TAURI_SIGNING_PRIVATE_KEY_PATH: updaterKeyPath,
-    TAURI_SIGNING_PRIVATE_KEY_PASSWORD: updaterKeyPassword,
-  };
-  delete updaterKeyEnv.TAURI_SIGNING_PRIVATE_KEY;
-  execFileSync(path.join(rootDir, "node_modules/.bin/tauri"), ["signer", "sign", updaterArchivePath], {
-    cwd: rootDir,
-    env: updaterKeyEnv,
-    stdio: "ignore",
-  });
-  execFileSync(
-    process.execPath,
-    [
-      updaterManifestGeneratorPath,
-      "--version",
-      "9.8.7",
-      "--archive",
-      updaterArchivePath,
-      "--signature",
-      `${updaterArchivePath}.sig`,
-      "--output",
-      generatedManifestPath,
-      "--base-url",
-      "https://downloads.example.test/releases/v9.8.7",
-      "--pub-date",
-      "2026-07-11T00:00:00Z",
-    ],
-    { cwd: rootDir, stdio: "ignore" }
-  );
-  const generatedManifest = readJson(generatedManifestPath);
-  if (generatedManifest.version !== "9.8.7") throw new Error("generated updater manifest version mismatch");
-  for (const platform of ["darwin-aarch64", "darwin-x86_64"]) {
-    const entry = generatedManifest.platforms?.[platform];
-    if (!entry?.signature || !entry.url.endsWith("/Muniu_9.8.7_universal.app.tar.gz")) {
-      throw new Error(`generated updater manifest is invalid for ${platform}`);
-    }
-  }
-  const realUpdaterKeyPreflight = spawnSync(process.execPath, [signingPreflightPath, "--public"], {
-    cwd: rootDir,
-    encoding: "utf8",
-    env: updaterKeyEnv,
-  });
-  if (realUpdaterKeyPreflight.status === 0) {
-    throw new Error("macOS public signing preflight unexpectedly passed without Apple credentials");
-  }
-  assertIncludes(
-    `${realUpdaterKeyPreflight.stdout}${realUpdaterKeyPreflight.stderr}`,
-    "PASS validated Tauri updater private key",
-    "macOS real updater-key preflight"
-  );
-} finally {
-  rmSync(updaterKeyTempDir, { recursive: true, force: true });
-}
 
 console.log("macOS release packaging checks passed");

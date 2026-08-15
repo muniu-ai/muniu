@@ -17,14 +17,6 @@ const dmgPath = path.join(
   rootDir,
   "apps/desktop-mac/src-tauri/target/universal-apple-darwin/release/bundle/dmg/Muniu_0.1.0_universal.dmg"
 );
-const updaterArchivePath = path.join(
-  rootDir,
-  "apps/desktop-mac/src-tauri/target/universal-apple-darwin/release/bundle/macos/Muniu_0.1.0_universal.app.tar.gz"
-);
-const rawUpdaterArchivePath = path.join(
-  rootDir,
-  "apps/desktop-mac/src-tauri/target/universal-apple-darwin/release/bundle/macos/木牛.app.tar.gz"
-);
 const home = mkdtempSync(path.join(tmpdir(), "mniu-packaged-home-"));
 const keychainPath = path.join(home, "mniu-verification.keychain-db");
 const keychainPassword = randomUUID();
@@ -36,7 +28,6 @@ if (listenerPid()) {
 }
 
 verifyDmgContents();
-verifyUpdaterArchive();
 
 assertArchitectures(executablePath, ["arm64", "x86_64"]);
 assertArchitectures(arm64Path, ["arm64"]);
@@ -206,19 +197,6 @@ function verifyDmgContents() {
   } finally {
     execFileSync("hdiutil", ["detach", mountPath]);
     rmSync(mountPath, { recursive: true, force: true });
-  }
-}
-
-function verifyUpdaterArchive() {
-  if (!existsSync(updaterArchivePath) || statSync(updaterArchivePath).size <= 0) {
-    throw new Error("versioned updater archive is missing");
-  }
-  if (existsSync(rawUpdaterArchivePath)) {
-    throw new Error("unversioned pre-notarization updater archive must not remain in release output");
-  }
-  const entries = execFileSync("tar", ["-tzf", updaterArchivePath], { encoding: "utf8" }).split("\n");
-  if (!entries.includes("木牛.app/")) {
-    throw new Error("versioned updater archive does not contain 木牛.app");
   }
 }
 

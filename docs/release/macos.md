@@ -2,7 +2,7 @@
 
 本文记录 M7 Mac 发布阶段中可在本地重复执行的部分。它不表示应用已经通过 Developer ID 签名、Apple 公证或 Gatekeeper 验收。
 
-账号、证书、公证凭据、更新签名密钥和最终验收步骤见 [Developer ID 与 macOS 公证操作手册](./apple-developer-id.md)。
+账号、证书、公证凭据和最终验收步骤见 [Developer ID 与 macOS 公证操作手册](./apple-developer-id.md)。
 
 ## 发布输入
 
@@ -12,10 +12,7 @@
 - 最低系统版本：macOS Monterey 12.0
 - DMG 产物：`Muniu_<version>_universal.dmg`
 - ZIP 产物：`Muniu_<version>_universal.zip`
-- 自动更新产物：`Muniu_<version>_universal.app.tar.gz`
 - Homebrew cask：`packaging/homebrew/Casks/mniu.rb`
-- 自动更新地址：`https://github.com/muniu-ai/muniu/releases/latest/download/latest.json`
-- 自动更新 dry-run manifest：`packaging/updater/latest.dry-run.json`
 
 ## 构建
 
@@ -37,17 +34,15 @@ npm run release:mac
 apps/desktop-mac/src-tauri/target/universal-apple-darwin/release/bundle/dmg/Muniu_0.1.0_universal.dmg
 ```
 
-`apps/desktop-mac/src-tauri/tauri.conf.json` 设置了 `bundle.createUpdaterArtifacts`。发布脚本会从最终 app 重新生成版本化 updater archive；提供 updater 私钥时，还会生成 `.sig` 与真实 `latest.json`。
+v0.1.0 Developer Preview 不包含运行时自动更新器。`apps/desktop-mac/src-tauri/tauri.conf.json` 必须保持 `bundle.createUpdaterArtifacts: false`，发布脚本只生成 ZIP 和 DMG，不生成 updater archive、签名或 manifest。
 
-本地验证默认生成 unsigned 产物。正式发布需提供 Developer ID identity、notary profile 和 updater 私钥：
+本地验证默认生成 unsigned 产物。未来签名发布需提供 Developer ID identity 和 notary profile：
 
 ```bash
 MNIU_MACOS_SIGN=1 \
 MNIU_MACOS_NOTARIZE=1 \
 MNIU_MACOS_SIGNING_IDENTITY="Developer ID Application: <name> (<team id>)" \
 MNIU_NOTARY_KEYCHAIN_PROFILE=mniu-notary \
-TAURI_SIGNING_PRIVATE_KEY_PATH=/secure/release/mniu-updater.key \
-TAURI_SIGNING_PRIVATE_KEY_PASSWORD=<password> \
 npm run release:mac
 ```
 
@@ -75,8 +70,6 @@ MNIU_MACOS_SIGN=1 \
 MNIU_MACOS_NOTARIZE=1 \
 MNIU_MACOS_SIGNING_IDENTITY="Developer ID Application: <name> (<team id>)" \
 MNIU_NOTARY_KEYCHAIN_PROFILE=mniu-notary \
-TAURI_SIGNING_PRIVATE_KEY_PATH=/secure/release/mniu-updater.key \
-TAURI_SIGNING_PRIVATE_KEY_PASSWORD=<password> \
 npm run release:mac
 ```
 
@@ -101,34 +94,11 @@ brew install --cask --dry-run local/mniu/mniu
 
 仍含 `REPLACE_WITH_RELEASE_SHA256` 时不得发布 cask。
 
-## 自动更新 dry-run
+## v0.1.0 更新策略
 
-> v0.1.0 Developer Preview 不发布签名/公证桌面应用，运行时 updater、updater capability 和 updater artifact generation 均已禁用。以下流程只保留为未来签名发布通道的设计资料，不得用于 v0.1.0 发布。
+v0.1.0 安装包不会在应用内检查、下载或安装更新。用户需要从不可变 GitHub Release 手动下载新版本，并核对发布页面提供的 SHA-256。发布问题通过新的补丁版本（例如 `v0.1.1`）修复，不覆盖 `v0.1.0` 产物。
 
-桌面端已经接入 Tauri 2 updater：
-
-- JS 依赖：`@tauri-apps/plugin-updater`
-- Rust 插件：`tauri-plugin-updater`
-- Tauri 配置：`plugins.updater.pubkey`、`plugins.updater.endpoints`、`bundle.createUpdaterArtifacts`
-- dry-run manifest：`packaging/updater/latest.dry-run.json`
-
-仓库内的 updater 公钥与 dry-run manifest 只用于验证配置形状。正式发布前必须替换为真实公钥，并用发布环境中的私钥生成签名：
-
-```bash
-TAURI_SIGNING_PRIVATE_KEY_PATH=/secure/release/mniu-updater.key \
-TAURI_SIGNING_PRIVATE_KEY_PASSWORD=<password> \
-npm run release:mac
-```
-
-签名构建应产出：
-
-```text
-Muniu_0.1.0_universal.app.tar.gz
-Muniu_0.1.0_universal.app.tar.gz.sig
-latest.json
-```
-
-脚本会在 app 完成公证和 staple 后重建 updater archive，签名后为 `darwin-aarch64` 与 `darwin-x86_64` 写入同一个 universal archive URL 和真实签名。不得发布含 `REPLACE_WITH_TAURI_UPDATER_SIGNATURE` 的 `latest.dry-run.json`。
+未来启用自动更新必须单独进行威胁建模、密钥管理和签名发布审查，不得通过未签名配置启用。
 
 ## 安装
 
@@ -200,6 +170,4 @@ npm run verify:mac-release
 - `xcrun stapler staple` 与 `xcrun stapler validate`
 - `spctl --assess`
 - `brew install --cask --dry-run`
-- signed updater archive 和真实 `latest.json`
-- 已安装应用的 updater check/download/install 验证
 - 已安装应用的 `mniu://` 唤起验证

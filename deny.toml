@@ -1,0 +1,25 @@
+[graph]
+targets = [
+  { triple = "aarch64-apple-darwin" },
+  { triple = "x86_64-apple-darwin" }
+]
+
+[licenses]
+version = 2
+confidence-threshold = 0.93
+allow = [
+  "0BSD",
+  "Apache-2.0",
+  "BSD-3-Clause",
+  "CC0-1.0",
+  "ISC",
+  "MIT",
+  "MIT-0",
+  "MPL-2.0",
+  "Unicode-3.0",
+  "Unlicense",
+  "Zlib"
+]
+
+[licenses.private]
+ignore = true
