@@ -19,6 +19,8 @@ const tauriGeneratedSchemaPaths = [
   path.join(rootDir, "apps/desktop-mac/src-tauri/gen/schemas/macOS-schema.json"),
 ];
 const caskPath = path.join(rootDir, "packaging/homebrew/Casks/mniu.rb");
+const readmePath = path.join(rootDir, "README.md");
+const technicalDesignPath = path.join(rootDir, "docs/TECHNICAL_DESIGN.md");
 const releaseDocPath = path.join(rootDir, "docs/release/macos.md");
 const developerIdDocPath = path.join(rootDir, "docs/release/apple-developer-id.md");
 const dmgInstallGuidePath = path.join(rootDir, "packaging/macos/安装说明.txt");
@@ -58,6 +60,8 @@ const cargoManifest = readFileSync(cargoManifestPath, "utf8");
 const cargoLock = readFileSync(cargoLockPath, "utf8");
 const tauriLib = readFileSync(tauriLibPath, "utf8");
 const cask = readFileSync(caskPath, "utf8");
+const readme = readFileSync(readmePath, "utf8");
+const technicalDesign = readFileSync(technicalDesignPath, "utf8");
 const releaseDoc = readFileSync(releaseDocPath, "utf8");
 const developerIdDoc = readFileSync(developerIdDocPath, "utf8");
 const dmgInstallGuide = readFileSync(dmgInstallGuidePath, "utf8");
@@ -273,6 +277,21 @@ for (const expected of [
 }
 assertExcludes(signingPreflight, "TAURI_SIGNING_PRIVATE_KEY", "macOS signing preflight");
 assertExcludes(packagedAppVerifier, "updater", "packaged app verifier");
+
+for (const [document, label] of [
+  [readme, "README v0.1 release scope"],
+  [technicalDesign, "technical design v0.1 release scope"],
+]) {
+  for (const obsoleteClaim of [
+    "版本化 updater archive",
+    "版本化 updater archive/manifest",
+    "生成真实 `latest.json`",
+    "packaging/updater/latest.dry-run.json",
+  ]) {
+    assertExcludes(document, obsoleteClaim, label);
+  }
+  assertIncludes(document, "v0.1.0 不发布或启用桌面运行时 updater", label);
+}
 
 const fakePublicPreflight = spawnSync(
   process.execPath,

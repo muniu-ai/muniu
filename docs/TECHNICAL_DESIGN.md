@@ -435,7 +435,7 @@ v1 已有事件模型：
 
 ## 12. 发布计划
 
-当前 macOS 本地发布工程可重复生成 unsigned universal APP、ZIP、带背景/安装说明/Finder 布局的 DMG 和版本化 updater archive。`packaging/homebrew/Casks/mniu.rb` 提供 Homebrew cask 草案，`packaging/updater/latest.dry-run.json` 提供 updater manifest dry-run；正式模式会在 app 完成公证与 staple 后重建 updater archive、签名并生成真实 `latest.json`。`npm run verify:mac-release` 校验 cask、updater、DMG 和中文发布文档，`npm run verify:mac-packaged-app` 验证 DMG 内容、双架构 daemon、隔离 Keychain CRUD、进程生命周期与 `mniu://` 处理。Tauri panic hook 会把 Rust panic 追加到 `~/Library/Logs/dev.muniu.desktop/panic.log`，并保护性替换疑似 secret/token/password。API `GET /v1/system/diagnostics` 会收集受限且脱敏的木牛日志、专属 app 日志和相关 DiagnosticReports；桌面 Settings/Doctor 与 CLI `mn diagnostics export` 均可导出诊断包。Developer ID 签名、Apple 公证、Gatekeeper、真实 updater 下载/安装、packaged crash 写入与双架构干净机验收仍依赖外部发布凭据和环境。
+v0.1.0 开源发布制品固定为 `muniu-v0.1.0-source.tar.gz`、Node 22 的 `muniu-v0.1.0-node22-macos-arm64.tar.gz` / `muniu-v0.1.0-node22-macos-x64.tar.gz` portable 包，以及 `ghcr.io/muniu-ai/muniu:v0.1.0` API/demo 镜像。v0.1.0 不发布或启用桌面运行时 updater，也不生成 updater archive、manifest 或 `latest.json`；unsigned universal APP/ZIP/DMG 与 `packaging/homebrew/Casks/mniu.rb` 仅保留为后续签名桌面发布的本地验证工程，不属于 v0.1.0 公开制品。`npm run verify:mac-release` 校验该发布边界以及本地 cask、DMG 和中文发布文档，`npm run verify:mac-packaged-app` 验证 DMG 内容、双架构 daemon、隔离 Keychain CRUD、进程生命周期与 `mniu://` 处理。Tauri panic hook 会把 Rust panic 追加到 `~/Library/Logs/dev.muniu.desktop/panic.log`，并保护性替换疑似 secret/token/password。API `GET /v1/system/diagnostics` 会收集受限且脱敏的木牛日志、专属 app 日志和相关 DiagnosticReports；桌面 Settings/Doctor 与 CLI `mn diagnostics export` 均可导出诊断包。Developer ID 签名、Apple 公证、Gatekeeper、真实 updater 下载/安装、packaged crash 写入与双架构干净机验收仍属于后续生产化范围。
 
 ### 当前
 
