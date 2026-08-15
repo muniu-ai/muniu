@@ -2,7 +2,10 @@
 
 import { close, fsync, ftruncate, write } from "node:fs";
 
+import { acquireInheritedDescriptorLock } from "./descriptor-lock.js";
+
 const EVENT_FD = 3;
+const LOCK_FD = 4;
 const MAX_FRAME_BYTES = 16 * 1024 * 1024;
 const MAX_PENDING_FRAMES = 4;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -107,74 +110,84 @@ function send(value: Record<string, unknown>): void {
   process.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
-const [fdArgument, nonce] = process.argv.slice(2);
-if (fdArgument !== String(EVENT_FD) || nonce === undefined || !UUID_PATTERN.test(nonce)) {
+const [eventFdArgument, lockFdArgument, nonce] = process.argv.slice(2);
+if (eventFdArgument !== String(EVENT_FD)
+  || lockFdArgument !== String(LOCK_FD)
+  || nonce === undefined
+  || !UUID_PATTERN.test(nonce)) {
   process.exitCode = 64;
 } else {
-  let input = Buffer.alloc(0);
-  let pendingFrames = 0;
-  let closed = false;
-  let failed = false;
-  let queue = Promise.resolve();
+  try {
+    await acquireInheritedDescriptorLock(LOCK_FD);
+  } catch {
+    process.exitCode = 75;
+  }
+  if (process.exitCode === undefined) {
+    let input = Buffer.alloc(0);
+    let pendingFrames = 0;
+    let closed = false;
+    let failed = false;
+    let queue = Promise.resolve();
 
-  const fail = (): void => {
-    if (failed) return;
-    failed = true;
-    process.exitCode = 70;
-    process.stdin.destroy();
-  };
+    const fail = (): void => {
+      if (failed) return;
+      failed = true;
+      process.exitCode = 70;
+      process.stdin.destroy();
+    };
 
-  const handle = async (frame: Buffer): Promise<void> => {
-    try {
-      const request = parseRequest(frame.toString("utf8"), nonce);
-      if (closed) throw new Error("event writer is closed");
-      if (request.operation === "append") {
-        await writeAll(Buffer.from(request.line as string, "utf8"));
-        await syncFd();
-      } else if (request.operation === "truncate") {
-        await truncateFd(request.length as number);
-        await syncFd();
-      } else if (request.operation === "flush") {
-        await syncFd();
-      } else {
-        await syncFd();
-        await closeFd();
-        closed = true;
+    const handle = async (frame: Buffer): Promise<void> => {
+      try {
+        const request = parseRequest(frame.toString("utf8"), nonce);
+        if (closed) throw new Error("event writer is closed");
+        if (request.operation === "append") {
+          await writeAll(Buffer.from(request.line as string, "utf8"));
+          await syncFd();
+        } else if (request.operation === "truncate") {
+          await truncateFd(request.length as number);
+          await syncFd();
+        } else if (request.operation === "flush") {
+          await syncFd();
+        } else {
+          await syncFd();
+          await closeFd();
+          closed = true;
+        }
+        send({ nonce, requestId: request.requestId, status: "ok" });
+        if (closed) process.stdin.destroy();
+      } catch {
+        fail();
+      } finally {
+        pendingFrames -= 1;
       }
-      send({ nonce, requestId: request.requestId, status: "ok" });
-      if (closed) process.stdin.destroy();
-    } catch {
-      fail();
-    } finally {
-      pendingFrames -= 1;
-    }
-  };
+    };
 
-  process.stdin.on("data", (chunk: Buffer) => {
-    if (failed || closed) return;
-    input = Buffer.concat([input, chunk]);
-    if (input.length > MAX_FRAME_BYTES + 1) {
-      fail();
-      return;
-    }
-    let newline = input.indexOf(0x0a);
-    while (newline >= 0) {
-      const frame = input.subarray(0, newline);
-      input = input.subarray(newline + 1);
-      pendingFrames += 1;
-      if (pendingFrames > MAX_PENDING_FRAMES || frame.length === 0 || frame.length > MAX_FRAME_BYTES) {
+    process.stdin.on("data", (chunk: Buffer) => {
+      if (failed || closed) return;
+      input = Buffer.concat([input, chunk]);
+      if (input.length > MAX_FRAME_BYTES + 1) {
         fail();
         return;
       }
-      queue = queue.then(() => handle(frame));
-      newline = input.indexOf(0x0a);
-    }
-  });
-  process.stdin.on("end", () => {
-    if (!closed || input.length !== 0 || pendingFrames !== 0) fail();
-  });
-  process.stdin.on("error", fail);
-  process.stdout.on("error", fail);
-  send({ nonce, status: "ready", pid: process.pid });
-  process.stdin.resume();
+      let newline = input.indexOf(0x0a);
+      while (newline >= 0) {
+        const frame = input.subarray(0, newline);
+        input = input.subarray(newline + 1);
+        pendingFrames += 1;
+        if (pendingFrames > MAX_PENDING_FRAMES || frame.length === 0 || frame.length > MAX_FRAME_BYTES) {
+          fail();
+          return;
+        }
+        queue = queue.then(() => handle(frame));
+        newline = input.indexOf(0x0a);
+      }
+    });
+    process.stdin.on("end", () => {
+      if (!closed || input.length !== 0 || pendingFrames !== 0) fail();
+    });
+    process.stdin.on("error", fail);
+    process.stdout.on("error", fail);
+    send({ nonce, status: "ready", pid: process.pid });
+    process.stdin.resume();
+  }
 }

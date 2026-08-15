@@ -9,6 +9,7 @@ import {
   open,
   readFile,
   readdir,
+  readlink,
   realpath,
   rename,
   stat,
@@ -16,6 +17,7 @@ import {
   unlink,
   writeFile
 } from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -43,6 +45,7 @@ import {
   recoverInterruptedSession
 } from "../src/index.js";
 import type { AgentSessionExclusiveView } from "../src/index.js";
+import { settleDescriptorLockCommand } from "../src/descriptor-lock.js";
 import { acquireOsWriterLock, resolveWriterLockHelper } from "../src/writer-lock.js";
 
 const CHILD_PROCESS_ENV = { ...process.env };
@@ -105,6 +108,7 @@ const store = new JsonlAgentSessionStore(root, {
     if (event.type !== "turn/start") return;
     process.stdout.write("BEFORE_APPEND\n");
     await new Promise((resolve) => process.stdin.once("data", resolve));
+    setImmediate(() => process.stdout.write("REQUEST_DISPATCHED\n"));
   }
 });
 try {
@@ -190,15 +194,109 @@ function spawnAppendOnceProcess(root: string, sessionId: SessionId): ChildProces
   ], { env: CHILD_PROCESS_ENV, stdio: ["pipe", "pipe", "pipe"] });
 }
 
-function findDirectLockHelper(parentPid: number, lockDigest: string): number {
+function processTable(): ReadonlyArray<{ readonly pid: number; readonly parentPid: number; readonly command: string }> {
   const result = spawnSync("/bin/ps", ["-axo", "pid=,ppid=,command="], { encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
-  for (const line of result.stdout.split("\n")) {
+  return result.stdout.split("\n").flatMap((line) => {
     const match = /^\s*(\d+)\s+(\d+)\s+(.+)$/u.exec(line);
-    if (match === null || Number(match[2]) !== parentPid || !match[3]?.includes(lockDigest)) continue;
-    return Number(match[1]);
+    return match === null ? [] : [{ pid: Number(match[1]), parentPid: Number(match[2]), command: match[3] as string }];
+  });
+}
+
+function findDescendantEventWriter(ancestorPid: number): number {
+  const rows = processTable();
+  const parents = new Map(rows.map((row) => [row.pid, row.parentPid]));
+  const candidates = rows.filter((row) => path.basename(row.command.split(" ")[0] as string).startsWith("node")
+    && row.command.includes("event-writer-helper.js") && (() => {
+    let current = row.parentPid;
+    while (current > 1) {
+      if (current === ancestorPid) return true;
+      current = parents.get(current) ?? 0;
+    }
+    return false;
+  })());
+  assert.equal(candidates.length, 1, `expected one event writer below ${String(ancestorPid)}`);
+  return candidates[0]?.pid as number;
+}
+
+async function pidsWithOpenFile(filePath: string): Promise<number[]> {
+  const canonical = await realpath(filePath);
+  if (process.platform === "darwin") {
+    const result = spawnSync("/usr/sbin/lsof", ["-t", canonical], { encoding: "utf8" });
+    if (result.status === 1 && result.stdout.trim() === "") return [];
+    assert.equal(result.status, 0, result.stderr);
+    return [...new Set(result.stdout.trim().split("\n").filter(Boolean).map(Number))].sort((left, right) => left - right);
   }
-  throw new Error(`could not find lock helper ${lockDigest} for process ${String(parentPid)}`);
+  if (process.platform !== "linux") throw new Error(`unsupported test platform: ${process.platform}`);
+  const pids: number[] = [];
+  for (const processName of await readdir("/proc")) {
+    if (!/^\d+$/u.test(processName)) continue;
+    let descriptors: string[];
+    try {
+      descriptors = await readdir(`/proc/${processName}/fd`);
+    } catch {
+      continue;
+    }
+    for (const descriptor of descriptors) {
+      try {
+        if (await readlink(`/proc/${processName}/fd/${descriptor}`) === canonical) {
+          pids.push(Number(processName));
+          break;
+        }
+      } catch {
+        // The process or descriptor disappeared while taking the diagnostic snapshot.
+      }
+    }
+  }
+  return pids.sort((left, right) => left - right);
+}
+
+async function descriptorTarget(pid: number, descriptor: number): Promise<string | undefined> {
+  if (process.platform === "linux") {
+    try {
+      return await readlink(`/proc/${String(pid)}/fd/${String(descriptor)}`);
+    } catch {
+      return undefined;
+    }
+  }
+  const result = spawnSync(
+    "/usr/sbin/lsof",
+    ["-a", "-p", String(pid), "-d", String(descriptor), "-Fn"],
+    { encoding: "utf8" }
+  );
+  if (result.status === 1) return undefined;
+  assert.equal(result.status, 0, result.stderr);
+  return result.stdout.split("\n").find((line) => line.startsWith("n"))?.slice(1);
+}
+
+function signalIfAlive(pid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(pid, signal);
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+  }
+}
+
+async function descriptorLockCommand(): Promise<{ readonly executable: string; readonly args: readonly string[] }> {
+  if (process.platform === "darwin") {
+    return { executable: "/usr/bin/lockf", args: ["-s", "-t", "0", "3"] };
+  }
+  for (const executable of ["/usr/bin/flock", "/bin/flock"] as const) {
+    try {
+      await stat(executable);
+      return { executable, args: ["-n", "3"] };
+    } catch {
+      // Try the next fixed operating-system path.
+    }
+  }
+  throw new Error("descriptor lock command is unavailable");
+}
+
+async function runDescriptorLockCommand(handle: FileHandle): Promise<number | null> {
+  const command = await descriptorLockCommand();
+  return spawnSync(command.executable, [...command.args], {
+    stdio: ["ignore", "ignore", "pipe", handle.fd]
+  }).status;
 }
 
 async function waitForProcessDeath(pid: number, timeoutMs = 5_000): Promise<void> {
@@ -490,11 +588,7 @@ test("JSONL store persists mode 0700/0600 and reopens a verified session", async
   await chmod(root, 0o777);
   const store = new JsonlAgentSessionStore(root);
   const session = await store.create({ sessionId: SessionId("disk-session"), cwd: "/tmp/project" });
-  const liveEventStat = await stat(path.join(root, "sessions", "disk-session", "events.jsonl"));
-  const liveInodeDigest = createHash("sha256")
-    .update(`inode:${String(liveEventStat.dev)}:${String(liveEventStat.ino)}`)
-    .digest("hex");
-  const liveHelperPid = findDirectLockHelper(process.pid, liveInodeDigest);
+  const liveHelperPid = findDescendantEventWriter(process.pid);
   await session.append("turn/start", { turn: 1 });
   await session.flush();
 
@@ -665,6 +759,62 @@ test("OS writer locks cannot fork when Node processes use different TMPDIR value
   }
 });
 
+test("a descriptor lock survives its short acquisition command and releases only when the retained fd closes", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "muniu-fd-lock-semantics-"));
+  const lockPath = path.join(root, "writer.lock");
+  const retained = await open(lockPath, "w+", 0o600);
+  const contender = await open(lockPath, "r+");
+  try {
+    assert.equal(await runDescriptorLockCommand(retained), 0);
+    assert.notEqual(await runDescriptorLockCommand(contender), 0);
+    await retained.close();
+    assert.equal(await runDescriptorLockCommand(contender), 0);
+  } finally {
+    await Promise.allSettled([retained.close(), contender.close()]);
+  }
+});
+
+test("descriptor lock timeout waits one close observation and preserves the primary timeout", async () => {
+  const child = spawn(process.execPath, [
+    "--input-type=module",
+    "--eval",
+    "setInterval(() => {}, 1000)"
+  ], { stdio: ["ignore", "ignore", "ignore"] });
+  const startedAt = Date.now();
+  await assert.rejects(
+    () => settleDescriptorLockCommand(child, 10),
+    (error: unknown) => {
+      assert.match(String(error), /timed out/i);
+      assert.equal(error instanceof AggregateError, false);
+      return true;
+    }
+  );
+  assert.ok(Date.now() - startedAt < 1_000);
+  assert.ok(child.exitCode !== null || child.signalCode !== null);
+});
+
+test("the Node event writer itself owns both the event fd and the inode lock fd", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "muniu-session-writer-identity-"));
+  const sessionId = SessionId("writer-identity-session");
+  const store = new JsonlAgentSessionStore(root);
+  try {
+    await store.create({ sessionId });
+    const eventPath = path.join(root, "sessions", sessionId, "events.jsonl");
+    const eventStat = await stat(eventPath);
+    const inodeDigest = createHash("sha256")
+      .update(`inode:${String(eventStat.dev)}:${String(eventStat.ino)}`)
+      .digest("hex");
+    const lockPath = path.join(fixedWriterLockRoot(process.getuid?.()), `${inodeDigest}.lock`);
+    const writerPid = findDescendantEventWriter(process.pid);
+
+    assert.deepEqual(await pidsWithOpenFile(lockPath), [writerPid]);
+    assert.equal(await descriptorTarget(writerPid, 3), await realpath(eventPath));
+    assert.equal(await descriptorTarget(writerPid, 4), await realpath(lockPath));
+  } finally {
+    await store.dispose();
+  }
+});
+
 test("losing an inode helper cannot let an alias and its former parent fork the event chain", { timeout: 20_000 }, async () => {
   assert.match(process.version, /^v22\.19\./u);
   const root = await mkdtemp(path.join(os.tmpdir(), "muniu-session-helper-loss-"));
@@ -682,9 +832,12 @@ test("losing an inode helper cannot let an alias and its former parent fork the 
   const eventStat = await stat(path.join(sourceDirectory, "events.jsonl"));
   const inodeIdentity = `inode:${String(eventStat.dev)}:${String(eventStat.ino)}`;
   const inodeDigest = createHash("sha256").update(inodeIdentity).digest("hex");
+  const inodeLockPath = path.join(fixedWriterLockRoot(process.getuid?.()), `${inodeDigest}.lock`);
 
   const original = spawnGatedAppendProcess(root, sessionId);
   let alias: ChildProcessWithoutNullStreams | undefined;
+  let writerPid: number | undefined;
+  let writerWasLockHolder = false;
   let originalStdout = "";
   let originalStderr = "";
   original.stdout.on("data", (chunk: Buffer) => { originalStdout += chunk.toString("utf8"); });
@@ -703,17 +856,43 @@ test("losing an inode helper cannot let an alias and its former parent fork the 
   try {
     await waitForOriginal(/BEFORE_APPEND/u);
     assert.ok(original.pid !== undefined);
-    const helperPid = findDirectLockHelper(original.pid, inodeDigest);
-    process.kill(helperPid, "SIGKILL");
-    await waitForProcessDeath(helperPid);
+    writerPid = findDescendantEventWriter(original.pid);
+    const lockHolders = await pidsWithOpenFile(inodeLockPath);
+    assert.equal(lockHolders.length, 1);
+    const lockHolderPid = lockHolders[0] as number;
+    writerWasLockHolder = lockHolderPid === writerPid;
+
+    process.kill(writerPid, "SIGSTOP");
+    const stoppedContender = spawnAppendOnceProcess(aliasRoot, sessionId);
+    assert.match(await waitForChildOutput(stoppedContender, "stderr", /BLOCKED/u), /BLOCKED/u);
+    assert.equal(await waitForChildExit(stoppedContender), 23);
+    original.stdin.write("release-append\n");
+    await waitForOriginal(/REQUEST_DISPATCHED/u);
+    process.kill(original.pid, "SIGSTOP");
+    process.kill(lockHolderPid, "SIGKILL");
+    await waitForProcessDeath(lockHolderPid);
 
     alias = spawnAppendOnceProcess(aliasRoot, sessionId);
     const aliasOutput = await waitForChildOutput(alias, "stdout", /APPENDED/u);
     assert.match(aliasOutput, /APPENDED/u);
     assert.equal(await waitForChildExit(alias), 0);
 
-    original.stdin.write("release-append\n");
-    await waitForOriginal(/APPEND_FAILED/u);
+    if (!writerWasLockHolder) {
+      signalIfAlive(writerPid, "SIGCONT");
+      const oldWriterDeadline = Date.now() + 2_000;
+      while (Date.now() < oldWriterDeadline) {
+        const rowCount = (await readFile(path.join(sourceDirectory, "events.jsonl"), "utf8")).trimEnd().split("\n").length;
+        if (rowCount > 2) break;
+        try {
+          process.kill(writerPid, 0);
+        } catch {
+          break;
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      }
+    }
+    signalIfAlive(original.pid, "SIGCONT");
+    await waitForOriginal(/APPEND_(?:OK|FAILED)/u);
     original.stdin.end("exit\n");
     await waitForChildExit(original);
 
@@ -729,6 +908,8 @@ test("losing an inode helper cannot let an alias and its former parent fork the 
     assert.deepEqual(reopened.events.map((event) => event.seq), [0, 1]);
     await reopenedStore.dispose();
   } finally {
+    if (writerPid !== undefined && !writerWasLockHolder) signalIfAlive(writerPid, "SIGCONT");
+    if (original.pid !== undefined) signalIfAlive(original.pid, "SIGCONT");
     original.kill("SIGKILL");
     alias?.kill("SIGKILL");
   }
@@ -845,49 +1026,37 @@ test("JSONL OS writer lease never admits two holders under repeated crash conten
   assert.equal(maximumAcquired, 1);
 });
 
-test("writer lock helpers are fixed, fail closed when missing, and mark an unexpected exit lost", async () => {
+test("descriptor lock commands are fixed, fail closed when missing, and release only by closing their lease", async () => {
   const checked: string[] = [];
   await assert.rejects(
     () => resolveWriterLockHelper("darwin", async (filePath) => {
       checked.push(filePath);
-      return filePath === "/bin/cat";
+      return false;
     }),
     /helper.*unavailable/i
   );
-  assert.deepEqual(checked, ["/bin/cat", "/usr/bin/lockf"]);
+  assert.deepEqual(checked, ["/usr/bin/lockf"]);
 
   const darwin = await resolveWriterLockHelper("darwin", async () => true);
   assert.equal(darwin.executable, "/usr/bin/lockf");
-  assert.deepEqual(
-    darwin.argumentsFor("/private/fixed.lock"),
-    ["-t", "0", "-k", "/private/fixed.lock", "/bin/cat"]
-  );
+  assert.deepEqual(darwin.argumentsFor(4), ["-s", "-t", "0", "4"]);
   const linux = await resolveWriterLockHelper("linux", async (filePath) => {
-    return filePath === "/bin/cat" || filePath === "/usr/bin/flock";
+    return filePath === "/usr/bin/flock";
   });
   assert.equal(linux.executable, "/usr/bin/flock");
-  assert.deepEqual(
-    linux.argumentsFor("/private/fixed.lock"),
-    ["-n", "/private/fixed.lock", "/bin/cat"]
-  );
+  assert.deepEqual(linux.argumentsFor(4), ["-n", "4"]);
 
   const helper = await resolveWriterLockHelper(process.platform);
   assert.ok(["/usr/bin/lockf", "/usr/bin/flock", "/bin/flock"].includes(helper.executable));
-  assert.deepEqual(
-    helper.argumentsFor("/private/fixed.lock").slice(-2),
-    ["/private/fixed.lock", "/bin/cat"]
-  );
+  assert.equal(helper.argumentsFor(3).at(-1), "3");
 
-  const identity = `unexpected-exit:${await mkdtemp(path.join(os.tmpdir(), "muniu-lock-lost-"))}`;
-  const lost = await acquireOsWriterLock(identity);
-  process.kill(lost.holderPid, "SIGKILL");
-  const deadline = Date.now() + 5_000;
-  while (!lost.released && Date.now() < deadline) {
-    await new Promise<void>((resolve) => setImmediate(resolve));
-  }
-  assert.equal(lost.released, true);
-  await assert.rejects(() => lost.release(), /lost|unexpected/i);
-
+  const identity = `descriptor-release:${await mkdtemp(path.join(os.tmpdir(), "muniu-lock-release-"))}`;
+  const held = await acquireOsWriterLock(identity);
+  const identityDigest = createHash("sha256").update(identity).digest("hex");
+  const identityLockPath = path.join(fixedWriterLockRoot(process.getuid?.()), `${identityDigest}.lock`);
+  assert.deepEqual(await pidsWithOpenFile(identityLockPath), [process.pid]);
+  await assert.rejects(() => acquireOsWriterLock(identity), /held|unavailable|writer/i);
+  await held.release();
   const recovered = await acquireOsWriterLock(identity);
   await recovered.release();
 
@@ -939,12 +1108,13 @@ test("JSONL fails closed when the compiled event writer helper is missing and re
 test("compiled event writer helper rejects non-string operation values", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "muniu-session-writer-protocol-"));
   const eventHandle = await open(path.join(root, "events.jsonl"), "w+");
+  const lockHandle = await open(path.join(root, "writer.lock"), "w+");
   const helperPath = fileURLToPath(new URL("../src/event-writer-helper.js", import.meta.url));
   const nonce = crypto.randomUUID();
   const requestId = crypto.randomUUID();
-  const helper = spawn(process.execPath, [helperPath, "3", nonce], {
+  const helper = spawn(process.execPath, [helperPath, "3", "4", nonce], {
     env: CHILD_PROCESS_ENV,
-    stdio: ["pipe", "pipe", "pipe", eventHandle.fd]
+    stdio: ["pipe", "pipe", "pipe", eventHandle.fd, lockHandle.fd]
   }) as unknown as ChildProcessWithoutNullStreams;
   try {
     await waitForChildOutput(helper, "stdout", /"status":"ready"/u);
@@ -953,7 +1123,7 @@ test("compiled event writer helper rejects non-string operation values", async (
     assert.equal(await readFile(path.join(root, "events.jsonl"), "utf8"), "");
   } finally {
     helper.kill("SIGKILL");
-    await eventHandle.close();
+    await Promise.allSettled([eventHandle.close(), lockHandle.close()]);
   }
 });
 

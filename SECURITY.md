@@ -55,18 +55,22 @@ portable `openat(2)` API, so a same-user process that can concurrently rename
 store paths can still race the read-only header snapshot. Writer locks use a
 UID-private `0700` namespace rooted at `/private/tmp` on macOS and `/tmp` on
 Linux, independent of `TMPDIR`; lock files are regular, single-link, user-owned
-`0600` files opened without following symlinks. Active event appends, tail
-repairs, and fsyncs run in the packaged Node.js helper that simultaneously holds
-the event inode advisory lock. The parent closes its writable event descriptor
-after the nonce-bound READY handshake and accepts an operation only after its
-bounded request receives a matching acknowledgement. A lost helper poisons the
-writer lease, so the old parent cannot resume writing; reopen accepts a complete
-unacknowledged final record or repairs a torn tail before verifying the digest
-chain. Consequently, the residual metadata race cannot redirect an active event
-write, create a second writer for the same event inode, or turn a path
-replacement into an out-of-workspace append. This is a Developer Preview
-boundary, not protection against a malicious process already running as the
-same operating-system user.
+`0600` files opened without following symlinks. Path leases are acquired by a
+fixed, short-lived operating-system command on an inherited descriptor; the
+owning process retains the same open-file-description until release. Active
+event appends, tail repairs, and fsyncs run in a direct packaged Node.js child
+that retains both the event descriptor and the inode-lock descriptor. It sends
+the nonce-bound READY handshake only after the inherited descriptor is locked,
+and the parent then closes both of its writable/lock descriptor copies. Thus an
+inode lock cannot be released while an older helper remains able to write. The
+parent accepts an operation only after its bounded request receives a matching
+acknowledgement. A lost helper poisons the writer lease, so the old parent cannot
+resume writing; reopen accepts a complete unacknowledged final record or repairs
+a torn tail before verifying the digest chain. Consequently, the residual
+metadata race cannot redirect an active event write, create a second writer for
+the same event inode, or turn a path replacement into an out-of-workspace
+append. This is a Developer Preview boundary, not protection against a
+malicious process already running as the same operating-system user.
 
 Signed and notarized desktop binaries are not published in v0.1.0. The desktop
 updater remains disabled until a separately reviewed signed release channel

@@ -7,9 +7,12 @@ import { access, mkdir, open, type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const LOCK_START_TIMEOUT_MS = 5_000;
+import {
+  acquireInheritedDescriptorLock,
+  resolveDescriptorLockCommand
+} from "./descriptor-lock.js";
+
 const LOCK_EXIT_TIMEOUT_MS = 5_000;
-const MAX_HANDSHAKE_BYTES = 128;
 const MAX_EVENT_WRITER_FRAME_BYTES = 16 * 1024 * 1024;
 const MAX_EVENT_WRITER_ACK_BYTES = 4 * 1024;
 const uid = process.getuid?.();
@@ -22,16 +25,7 @@ const lockRoot = fixedTemporaryRoot === undefined
 const eventWriterHelperPath = fileURLToPath(new URL("./event-writer-helper.js", import.meta.url));
 const nodeExecutable = process.execPath;
 
-interface WriterLockHelper {
-  readonly executable: string;
-  readonly argumentsFor: (
-    filePath: string,
-    command?: string,
-    commandArguments?: readonly string[]
-  ) => readonly string[];
-}
-
-interface HolderState {
+interface EventWriterState {
   expectedExit: boolean;
   lost: boolean;
   closedNow: boolean;
@@ -41,7 +35,6 @@ interface HolderState {
 export interface OsWriterLock {
   readonly identity: string;
   readonly nonce: string;
-  readonly holderPid: number;
   readonly released: boolean;
   release(): Promise<void>;
 }
@@ -59,6 +52,8 @@ export class WriterLockError extends Error {
   }
 }
 
+export const resolveWriterLockHelper = resolveDescriptorLockCommand;
+
 function identityDigest(identity: string): string {
   return createHash("sha256").update(identity).digest("hex");
 }
@@ -74,40 +69,6 @@ async function isExecutable(filePath: string): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-export async function resolveWriterLockHelper(
-  platform: NodeJS.Platform = process.platform,
-  executable: (filePath: string) => Promise<boolean> = isExecutable
-): Promise<WriterLockHelper> {
-  if (!await executable("/bin/cat")) {
-    throw new WriterLockError("writer lock command helper is unavailable");
-  }
-  if (platform === "darwin") {
-    if (!await executable("/usr/bin/lockf")) {
-      throw new WriterLockError("writer lock command helper is unavailable");
-    }
-    return {
-      executable: "/usr/bin/lockf",
-      argumentsFor: (filePath, command = "/bin/cat", commandArguments = []) => [
-        "-t", "0", "-k", filePath, command, ...commandArguments
-      ]
-    };
-  }
-  if (platform === "linux") {
-    for (const candidate of ["/usr/bin/flock", "/bin/flock"] as const) {
-      if (await executable(candidate)) {
-        return {
-          executable: candidate,
-          argumentsFor: (filePath, command = "/bin/cat", commandArguments = []) => [
-            "-n", filePath, command, ...commandArguments
-          ]
-        };
-      }
-    }
-    throw new WriterLockError("writer lock command helper is unavailable");
-  }
-  throw new WriterLockError(`writer locks are unsupported on ${platform}`);
 }
 
 async function openLockDirectory(directoryPath: string): Promise<{ readonly handle: FileHandle; readonly stat: Stats }> {
@@ -192,9 +153,39 @@ async function openSafeLockFile(filePath: string): Promise<{ handle: FileHandle;
   }
 }
 
-function observeHolder(child: ChildProcessWithoutNullStreams): HolderState {
+function waitBounded<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new WriterLockError(message)), timeoutMs);
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error: unknown) => { clearTimeout(timer); reject(error); }
+    );
+  });
+}
+
+class OwnedDescriptorWriterLock implements OsWriterLock {
+  private isReleased = false;
+
+  constructor(
+    readonly identity: string,
+    readonly nonce: string,
+    private readonly handle: FileHandle
+  ) {}
+
+  get released(): boolean {
+    return this.isReleased;
+  }
+
+  async release(): Promise<void> {
+    if (this.isReleased) return;
+    this.isReleased = true;
+    await this.handle.close();
+  }
+}
+
+function observeEventWriter(child: ChildProcessWithoutNullStreams): EventWriterState {
   let settle!: (result: { readonly code: number | null; readonly signal: NodeJS.Signals | null }) => void;
-  const state: HolderState = {
+  const state: EventWriterState = {
     expectedExit: false,
     lost: false,
     closedNow: false,
@@ -218,144 +209,19 @@ function observeHolder(child: ChildProcessWithoutNullStreams): HolderState {
   return state;
 }
 
-function waitBounded<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new WriterLockError(message)), timeoutMs);
-    promise.then(
-      (value) => { clearTimeout(timer); resolve(value); },
-      (error: unknown) => { clearTimeout(timer); reject(error); }
-    );
-  });
-}
-
-async function awaitHandshake(
-  child: ChildProcessWithoutNullStreams,
-  state: HolderState,
-  nonce: string
-): Promise<void> {
-  const expected = `${nonce}\n`;
-  await waitBounded(new Promise<void>((resolve, reject) => {
-    let output = "";
-    let settled = false;
-    const finish = (completion: () => void) => {
-      if (settled) return;
-      settled = true;
-      child.stdout.off("data", onData);
-      completion();
-    };
-    const onData = (chunk: Buffer) => {
-      output += chunk.toString("utf8");
-      if (Buffer.byteLength(output, "utf8") > MAX_HANDSHAKE_BYTES) {
-        finish(() => reject(new WriterLockError("writer lock helper returned an invalid handshake")));
-      } else if (output.includes("\n")) {
-        finish(() => {
-          if (output === expected) resolve();
-          else reject(new WriterLockError("writer lock helper returned an invalid handshake"));
-        });
-      }
-    };
-    child.stdout.on("data", onData);
-    void state.closed.then(({ code, signal }) => {
-      finish(() => reject(new WriterLockError(
-        `writer lock helper exited before acquisition (code=${String(code)}, signal=${String(signal)})`
-      )));
-    });
-    child.stdin.write(expected, (error) => {
-      if (error !== null && error !== undefined) {
-        finish(() => reject(new WriterLockError("writer lock helper rejected its handshake", { cause: error })));
-      }
-    });
-  }), LOCK_START_TIMEOUT_MS, "writer lock helper acquisition timed out");
-}
-
-async function stopHolder(child: ChildProcessWithoutNullStreams, state: HolderState): Promise<void> {
-  state.expectedExit = true;
-  child.stdin.end();
-  try {
-    await waitBounded(state.closed, LOCK_EXIT_TIMEOUT_MS, "writer lock helper exit timed out");
-  } catch (error: unknown) {
-    child.kill("SIGKILL");
-    try {
-      await waitBounded(state.closed, LOCK_EXIT_TIMEOUT_MS, "writer lock helper did not terminate after SIGKILL");
-    } catch (killError: unknown) {
-      throw new AggregateError([error, killError], "writer lock helper could not be stopped", { cause: error });
-    }
-    throw error;
-  }
-}
-
-class OwnedWriterLock implements OsWriterLock {
-  private isReleased = false;
-
-  constructor(
-    readonly identity: string,
-    readonly nonce: string,
-    readonly holderPid: number,
-    private readonly child: ChildProcessWithoutNullStreams,
-    private readonly state: HolderState
-  ) {}
-
-  get released(): boolean {
-    return this.isReleased || this.state.lost;
-  }
-
-  async release(): Promise<void> {
-    if (this.isReleased) return;
-    this.isReleased = true;
-    if (this.state.lost) {
-      const lost = new WriterLockError("writer lock helper exited unexpectedly and the lease was lost");
-      try {
-        await stopHolder(this.child, this.state);
-      } catch (cleanupError: unknown) {
-        throw new AggregateError([lost, cleanupError], "lost writer lock helper cleanup failed", { cause: lost });
-      }
-      throw lost;
-    }
-    await stopHolder(this.child, this.state);
-    const result = await this.state.closed;
-    if (result.code !== 0 || result.signal !== null) {
-      throw new WriterLockError("writer lock helper exited abnormally during release");
-    }
-  }
-}
-
-interface PendingWriterRequest {
-  readonly resolve: () => void;
-  readonly reject: (error: unknown) => void;
-  readonly timer: NodeJS.Timeout;
-}
-
-function ignoreMissingProcess(error: unknown): void {
-  if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-}
-
-function killEventWriterGroup(child: ChildProcessWithoutNullStreams, helperPid?: number): void {
-  if (helperPid !== undefined) {
-    try {
-      process.kill(helperPid, "SIGKILL");
-    } catch (error: unknown) {
-      ignoreMissingProcess(error);
-    }
-  }
-  if (child.pid !== undefined) {
-    try {
-      process.kill(-child.pid, "SIGKILL");
-    } catch (error: unknown) {
-      ignoreMissingProcess(error);
-    }
-  }
+function killTrackedEventWriter(child: ChildProcessWithoutNullStreams, state: EventWriterState): void {
+  if (state.closedNow || child.exitCode !== null || child.signalCode !== null) return;
   child.kill("SIGKILL");
 }
 
 async function forceStopEventWriter(
   child: ChildProcessWithoutNullStreams,
-  state: HolderState,
-  helperPid?: number
+  state: EventWriterState
 ): Promise<void> {
   if (state.closedNow) return;
   state.expectedExit = true;
   child.stdin.destroy();
-  killEventWriterGroup(child, helperPid);
+  killTrackedEventWriter(child, state);
   await waitBounded(state.closed, LOCK_EXIT_TIMEOUT_MS, "event writer helper did not terminate after SIGKILL");
 }
 
@@ -382,10 +248,10 @@ async function assertStaticEventWriterHelper(): Promise<void> {
 
 async function awaitEventWriterReady(
   child: ChildProcessWithoutNullStreams,
-  state: HolderState,
+  state: EventWriterState,
   nonce: string
-): Promise<number> {
-  return waitBounded(new Promise<number>((resolve, reject) => {
+): Promise<void> {
+  await waitBounded(new Promise<void>((resolve, reject) => {
     let output = Buffer.alloc(0);
     let settled = false;
     const finish = (completion: () => void) => {
@@ -422,12 +288,11 @@ async function awaitEventWriterReady(
         if (Object.keys(ready).length !== 3
           || ready.nonce !== nonce
           || ready.status !== "ready"
-          || !Number.isSafeInteger(ready.pid)
-          || (ready.pid as number) <= 0) {
+          || ready.pid !== child.pid) {
           reject(new WriterLockError("event writer helper returned an invalid handshake"));
           return;
         }
-        resolve(ready.pid as number);
+        resolve();
       });
     };
     child.stdout.on("data", onData);
@@ -436,7 +301,13 @@ async function awaitEventWriterReady(
         `event writer helper exited before acquisition (code=${String(code)}, signal=${String(signal)})`
       )));
     });
-  }), LOCK_START_TIMEOUT_MS, "event writer helper acquisition timed out");
+  }), LOCK_EXIT_TIMEOUT_MS, "event writer helper acquisition timed out");
+}
+
+interface PendingWriterRequest {
+  readonly resolve: () => void;
+  readonly reject: (error: unknown) => void;
+  readonly timer: NodeJS.Timeout;
 }
 
 class OwnedEventWriterLock implements EventWriterLock {
@@ -449,9 +320,8 @@ class OwnedEventWriterLock implements EventWriterLock {
   constructor(
     readonly identity: string,
     readonly nonce: string,
-    readonly holderPid: number,
     private readonly child: ChildProcessWithoutNullStreams,
-    private readonly state: HolderState
+    private readonly state: EventWriterState
   ) {
     child.stdout.on("data", (chunk: Buffer) => { this.acceptOutput(chunk); });
     child.once("error", () => {
@@ -491,7 +361,7 @@ class OwnedEventWriterLock implements EventWriterLock {
       const failure = this.failure
         ?? new WriterLockError("event writer helper exited unexpectedly and the lease was lost");
       try {
-        await forceStopEventWriter(this.child, this.state, this.holderPid);
+        await forceStopEventWriter(this.child, this.state);
       } catch (cleanupError: unknown) {
         throw new AggregateError([failure, cleanupError], "lost event writer cleanup failed", { cause: failure });
       }
@@ -517,7 +387,7 @@ class OwnedEventWriterLock implements EventWriterLock {
       primary = error;
     }
     try {
-      await forceStopEventWriter(this.child, this.state, this.holderPid);
+      await forceStopEventWriter(this.child, this.state);
     } catch (cleanupError: unknown) {
       throw new AggregateError([primary, cleanupError], "event writer release cleanup failed", { cause: primary });
     }
@@ -544,7 +414,7 @@ class OwnedEventWriterLock implements EventWriterLock {
     return new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.lose("event writer helper acknowledgement timed out");
-      }, LOCK_START_TIMEOUT_MS);
+      }, LOCK_EXIT_TIMEOUT_MS);
       this.pending.set(requestId, { resolve, reject, timer });
       this.child.stdin.write(frame, (error) => {
         if (error !== null && error !== undefined) this.lose("event writer helper rejected a request");
@@ -600,89 +470,51 @@ class OwnedEventWriterLock implements EventWriterLock {
       request.reject(failure);
     }
     this.pending.clear();
-    try {
-      killEventWriterGroup(this.child, this.holderPid);
-    } catch {
-      // The failed helper is already unusable; release reports bounded cleanup.
-    }
+    killTrackedEventWriter(this.child, this.state);
   }
 }
 
 export async function acquireOsWriterLock(identity: string): Promise<OsWriterLock> {
   await ensureLockRoot();
   if (lockRoot === undefined) throw new WriterLockError("writer lock directory is unavailable");
-  const helper = await resolveWriterLockHelper();
   const filePath = path.join(lockRoot, `${identityDigest(identity)}.lock`);
   const root = await openLockDirectory(lockRoot);
-  const rootHandle = root.handle;
-  const rootStat = root.stat;
-  let lockFile: Awaited<ReturnType<typeof openSafeLockFile>>;
-  try {
-    lockFile = await openSafeLockFile(filePath);
-  } catch (error: unknown) {
-    try {
-      await rootHandle.close();
-    } catch (cleanupError: unknown) {
-      throw new AggregateError([error, cleanupError], "writer lock open and cleanup failed", { cause: error });
-    }
-    throw error;
-  }
-  const nonce = randomUUID();
-  let child: ChildProcessWithoutNullStreams | undefined;
-  let state: HolderState | undefined;
+  let lockFile: Awaited<ReturnType<typeof openSafeLockFile>> | undefined;
   let rootClosed = false;
-  let lockFileClosed = false;
+  let lockClosed = false;
   const closeRoot = async () => {
     if (rootClosed) return;
     rootClosed = true;
-    await rootHandle.close();
+    await root.handle.close();
   };
-  const closeLockFile = async () => {
-    if (lockFileClosed) return;
-    lockFileClosed = true;
+  const closeLock = async () => {
+    if (lockClosed || lockFile === undefined) return;
+    lockClosed = true;
     await lockFile.handle.close();
   };
   try {
-    child = spawn(helper.executable, [...helper.argumentsFor(filePath)], {
-      shell: false,
-      stdio: ["pipe", "pipe", "pipe"]
-    });
-    child.stdin.on("error", () => {});
-    child.stderr.resume();
-    state = observeHolder(child);
-    await awaitHandshake(child, state, nonce);
+    lockFile = await openSafeLockFile(filePath);
+    await acquireInheritedDescriptorLock(lockFile.handle.fd);
     const current = await openSafeLockFile(filePath);
     try {
       if (!sameFile(lockFile.stat, current.stat)) {
-        throw new WriterLockError("writer lock identity changed during helper acquisition");
+        throw new WriterLockError("writer lock identity changed during descriptor acquisition");
       }
     } finally {
       await current.handle.close();
     }
     const currentRoot = await openLockDirectory(lockRoot);
     try {
-      if (!sameFile(rootStat, currentRoot.stat)) {
-        throw new WriterLockError("writer lock directory identity changed during helper acquisition");
+      if (!sameFile(root.stat, currentRoot.stat)) {
+        throw new WriterLockError("writer lock directory identity changed during descriptor acquisition");
       }
     } finally {
       await currentRoot.handle.close();
     }
-    if (state.lost || child.pid === undefined) {
-      throw new WriterLockError("writer lock helper exited during acquisition");
-    }
-    const closed = await Promise.allSettled([closeLockFile(), closeRoot()]);
-    const closeErrors = closed.flatMap((result) => result.status === "rejected" ? [result.reason] : []);
-    if (closeErrors.length > 0) {
-      throw new AggregateError(closeErrors, "writer lock verification descriptors could not be closed");
-    }
-    return new OwnedWriterLock(identity, nonce, child.pid, child, state);
+    await closeRoot();
+    return new OwnedDescriptorWriterLock(identity, randomUUID(), lockFile.handle);
   } catch (error: unknown) {
-    const cleanup = [
-      closeLockFile(),
-      closeRoot(),
-      ...(child === undefined || state === undefined ? [] : [stopHolder(child, state)])
-    ];
-    const settled = await Promise.allSettled(cleanup);
+    const settled = await Promise.allSettled([closeLock(), closeRoot()]);
     const cleanupErrors = settled.flatMap((result) => result.status === "rejected" ? [result.reason] : []);
     if (cleanupErrors.length > 0) {
       throw new AggregateError([error, ...cleanupErrors], "writer lock acquisition and cleanup failed", {
@@ -700,56 +532,35 @@ export async function acquireEventWriterLock(
   await ensureLockRoot();
   if (lockRoot === undefined) throw new WriterLockError("writer lock directory is unavailable");
   await assertStaticEventWriterHelper();
-  const helper = await resolveWriterLockHelper();
   const filePath = path.join(lockRoot, `${identityDigest(identity)}.lock`);
   const root = await openLockDirectory(lockRoot);
-  const rootHandle = root.handle;
-  const rootStat = root.stat;
-  let lockFile: Awaited<ReturnType<typeof openSafeLockFile>>;
-  try {
-    lockFile = await openSafeLockFile(filePath);
-  } catch (error: unknown) {
-    try {
-      await rootHandle.close();
-    } catch (cleanupError: unknown) {
-      throw new AggregateError([error, cleanupError], "event writer lock open and cleanup failed", {
-        cause: error
-      });
-    }
-    throw error;
-  }
-
-  const nonce = randomUUID();
+  let lockFile: Awaited<ReturnType<typeof openSafeLockFile>> | undefined;
   let child: ChildProcessWithoutNullStreams | undefined;
-  let state: HolderState | undefined;
-  let helperPid: number | undefined;
+  let state: EventWriterState | undefined;
   let rootClosed = false;
-  let lockFileClosed = false;
+  let lockClosed = false;
   const closeRoot = async () => {
     if (rootClosed) return;
     rootClosed = true;
-    await rootHandle.close();
+    await root.handle.close();
   };
-  const closeLockFile = async () => {
-    if (lockFileClosed) return;
-    lockFileClosed = true;
+  const closeLock = async () => {
+    if (lockClosed || lockFile === undefined) return;
+    lockClosed = true;
     await lockFile.handle.close();
   };
 
   try {
-    const spawned = spawn(helper.executable, [
-      ...helper.argumentsFor(filePath, nodeExecutable, [eventWriterHelperPath, "3", nonce])
-    ], {
-      detached: true,
+    lockFile = await openSafeLockFile(filePath);
+    const nonce = randomUUID();
+    child = spawn(nodeExecutable, [eventWriterHelperPath, "3", "4", nonce], {
       shell: false,
-      stdio: ["pipe", "pipe", "pipe", eventHandle.fd]
+      stdio: ["pipe", "pipe", "pipe", eventHandle.fd, lockFile.handle.fd]
     }) as unknown as ChildProcessWithoutNullStreams;
-    child = spawned;
-    spawned.stdin.on("error", () => {});
-    spawned.stderr.resume();
-    const observed = observeHolder(spawned);
-    state = observed;
-    helperPid = await awaitEventWriterReady(spawned, observed, nonce);
+    child.stdin.on("error", () => {});
+    child.stderr.resume();
+    state = observeEventWriter(child);
+    await awaitEventWriterReady(child, state, nonce);
 
     const current = await openSafeLockFile(filePath);
     try {
@@ -761,26 +572,21 @@ export async function acquireEventWriterLock(
     }
     const currentRoot = await openLockDirectory(lockRoot);
     try {
-      if (!sameFile(rootStat, currentRoot.stat)) {
+      if (!sameFile(root.stat, currentRoot.stat)) {
         throw new WriterLockError("event writer lock directory identity changed during helper acquisition");
       }
     } finally {
       await currentRoot.handle.close();
     }
-    if (observed.lost || spawned.pid === undefined) {
-      throw new WriterLockError("event writer helper exited during acquisition");
-    }
-    const closed = await Promise.allSettled([closeLockFile(), closeRoot()]);
-    const closeErrors = closed.flatMap((result) => result.status === "rejected" ? [result.reason] : []);
+    const settled = await Promise.allSettled([closeLock(), closeRoot()]);
+    const closeErrors = settled.flatMap((result) => result.status === "rejected" ? [result.reason] : []);
     if (closeErrors.length > 0) {
       throw new AggregateError(closeErrors, "event writer verification descriptors could not be closed");
     }
-    return new OwnedEventWriterLock(identity, nonce, helperPid, spawned, observed);
+    return new OwnedEventWriterLock(identity, nonce, child, state);
   } catch (error: unknown) {
-    const cleanup = [closeLockFile(), closeRoot()];
-    if (child !== undefined && state !== undefined) {
-      cleanup.push(forceStopEventWriter(child, state, helperPid));
-    }
+    const cleanup = [closeLock(), closeRoot()];
+    if (child !== undefined && state !== undefined) cleanup.push(forceStopEventWriter(child, state));
     const settled = await Promise.allSettled(cleanup);
     const cleanupErrors = settled.flatMap((result) => result.status === "rejected" ? [result.reason] : []);
     if (cleanupErrors.length > 0) {
