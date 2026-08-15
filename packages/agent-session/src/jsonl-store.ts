@@ -50,6 +50,15 @@ async function writeExclusive(filePath: string, content: string): Promise<void> 
   await chmod(filePath, 0o600);
 }
 
+async function syncDirectory(directoryPath: string): Promise<void> {
+  const handle = await open(directoryPath, constants.O_RDONLY);
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
 async function appendEvent(filePath: string, event: AgentSessionEventV1): Promise<void> {
   const handle = await open(filePath, constants.O_APPEND | constants.O_WRONLY, 0o600);
   try {
@@ -128,6 +137,7 @@ export class JsonlAgentSessionStore {
     const paths = this.paths(sessionId);
     await mkdir(paths.dir, { mode: 0o700 });
     await chmod(paths.dir, 0o700);
+    await syncDirectory(this.sessionsRoot);
     const header: AgentSessionHeaderV1 = deepFreeze({
       schemaVersion: 1,
       sessionId,
@@ -136,6 +146,7 @@ export class JsonlAgentSessionStore {
     });
     await writeExclusive(paths.header, `${JSON.stringify(header)}\n`);
     await writeExclusive(paths.events, "");
+    await syncDirectory(paths.dir);
     const persistence = this.persistence(paths.events);
     const session = new DurableAgentSession(header, [], persistence);
     this.sessions.set(sessionId, session);
@@ -163,6 +174,13 @@ export class JsonlAgentSessionStore {
     }
     const header = validateHeader(parsedHeader, sessionId);
     const events = await loadEvents(paths.events);
+    if (events.length === 0) throw new Error(`session "${sessionId}" has an empty event log`);
+    if (events[0]?.type !== "session/created") {
+      throw new Error(`session "${sessionId}" first event must be session/created`);
+    }
+    if (events.some((event) => event.sessionId !== header.sessionId)) {
+      throw new Error(`session "${sessionId}" event session id does not match header`);
+    }
     const session = new DurableAgentSession(header, events, this.persistence(paths.events));
     this.sessions.set(sessionId, session);
     return session;

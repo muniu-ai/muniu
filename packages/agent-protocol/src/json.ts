@@ -1,5 +1,5 @@
 /*
- * Copied from DeepSeek Harness at fixed commit
+ * Adapted from DeepSeek Harness at fixed commit
  * 47f943859bef60e4160492346772ded9b24f765a.
  * Original path: packages/core/session/src/json.ts
  * Copyright (c) 2026 DeepSeek

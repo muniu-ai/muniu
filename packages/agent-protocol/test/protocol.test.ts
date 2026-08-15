@@ -88,6 +88,38 @@ test("event chain verifies monotonic sequence and detects payload tampering", ()
   assert.equal(isAgentSessionEventV1({ ...first, type: "plugin/arbitrary" }), false);
 });
 
+test("event guard rejects non-canonical envelopes and payload shapes", () => {
+  const event = createAgentSessionEvent({
+    eventId: EventId("event-strict"),
+    sessionId: SessionId("session-strict"),
+    seq: 0,
+    occurredAt: "2026-08-15T00:00:00.000Z",
+    type: "session/created",
+    payload: { cwd: "/tmp/project" }
+  });
+  const invalid: unknown[] = [
+    { ...event, unexpected: true },
+    { ...event, runId: 123 },
+    { ...event, candidateId: "" },
+    { ...event, previousDigest: "not-a-digest" },
+    { ...event, seq: Number.MAX_SAFE_INTEGER + 1 },
+    { ...event, occurredAt: "2026-08-15" },
+    { ...event, payload: { cwd: "/tmp/project", extra: true } },
+    { ...event, payload: { cwd: 42 } },
+    { ...event, payload: null }
+  ];
+  for (const candidate of invalid) assert.equal(isAgentSessionEventV1(candidate), false);
+
+  assert.throws(() => createAgentSessionEvent({
+    eventId: EventId("bad-time"),
+    sessionId: SessionId("session-strict"),
+    seq: 0,
+    occurredAt: "2026-08-15",
+    type: "session/created",
+    payload: {}
+  }), /RFC3339/i);
+});
+
 test("message helpers close the model vocabulary and freeze tool-call content", () => {
   const message = createAssistantMessage({
     id: MessageId("assistant-1"),

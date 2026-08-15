@@ -71,8 +71,8 @@ excluded:
 files:
   - upstreamPath: packages/core/session/src/json.ts
     localPath: packages/agent-protocol/src/json.ts
-    mode: copied
-    summary: Copied lossless JSON validation and detached snapshot traversal; formatting adapted to the Muniu TypeScript style.
+    mode: adapted
+    summary: Retained the lossless JSON validation and detached snapshot algorithm while adapting comments, formatting, and module ownership.
   - upstreamPath: packages/llm/llm/src/brand.ts
     localPath: packages/agent-protocol/src/ids.ts
     mode: adapted

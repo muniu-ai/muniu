@@ -6,8 +6,10 @@ import test from "node:test";
 
 import {
   CallId,
+  EventId,
   MessageId,
   SessionId,
+  createAgentSessionEvent,
   createAssistantMessage,
   createUserMessage,
   verifyAgentSessionEventChain
@@ -66,6 +68,39 @@ test("JSONL load truncates a torn final line but fails closed on middle corrupti
   const lines = committed.toString("utf8").trimEnd().split("\n");
   await writeFile(eventsPath, `${lines[0]}\nnot-json\n${lines[1]}\n`);
   await assert.rejects(() => new JsonlAgentSessionStore(root).open(SessionId("tail-session")), /corrupt.*line 2/i);
+});
+
+test("JSONL load rejects empty logs, a non-creation first event, and header/event id mismatch", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "muniu-session-binding-"));
+  const store = new JsonlAgentSessionStore(root);
+  const session = await store.create({ sessionId: SessionId("bound-session") });
+  const eventsPath = path.join(root, "sessions", "bound-session", "events.jsonl");
+
+  await writeFile(eventsPath, "");
+  await assert.rejects(() => new JsonlAgentSessionStore(root).open(SessionId("bound-session")), /empty event log/i);
+
+  const notCreated = createAgentSessionEvent({
+    eventId: EventId("not-created"),
+    sessionId: SessionId("bound-session"),
+    seq: 0,
+    occurredAt: "2026-08-15T00:00:00.000Z",
+    type: "turn/start",
+    payload: { turn: 1 }
+  });
+  await writeFile(eventsPath, `${JSON.stringify(notCreated)}\n`);
+  await assert.rejects(() => new JsonlAgentSessionStore(root).open(SessionId("bound-session")), /first event.*session\/created/i);
+
+  const mismatched = createAgentSessionEvent({
+    eventId: EventId("wrong-session"),
+    sessionId: SessionId("another-session"),
+    seq: 0,
+    occurredAt: "2026-08-15T00:00:00.000Z",
+    type: "session/created",
+    payload: {}
+  });
+  await writeFile(eventsPath, `${JSON.stringify(mismatched)}\n`);
+  await assert.rejects(() => new JsonlAgentSessionStore(root).open(SessionId("bound-session")), /event session id.*header/i);
+  assert.equal(session.events.length, 1);
 });
 
 test("recovery closes started and unstarted tool effects without replaying either", async () => {
