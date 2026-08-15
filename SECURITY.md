@@ -43,6 +43,17 @@ worktree. It is defense in depth, not a virtual machine or Docker-equivalent
 security boundary. If the required sandbox probe fails, command execution must
 return SANDBOX_UNAVAILABLE and must never run without the sandbox.
 
+The local JSONL session store validates canonical containment and directory
+identity before and after opening a session's files. Node.js does not expose a
+portable `openat(2)` API, so a same-user process that can concurrently rename
+store paths can still race the read-only header snapshot. The store keeps the
+validated session directory and event-log descriptors open for the lifetime of
+the writer lease; every append and flush uses that leased event descriptor.
+Consequently, the residual metadata race cannot redirect an active event write,
+create a second writer for the same event inode, or turn a path replacement into
+an out-of-workspace append. This is a Developer Preview boundary, not protection
+against a malicious process already running as the same operating-system user.
+
 Signed and notarized desktop binaries are not published in v0.1.0. The desktop
 updater remains disabled until a separately reviewed signed release channel
 exists.

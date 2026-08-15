@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import {
   chmod,
   link,
@@ -38,6 +39,95 @@ import {
   recoverInterruptedSession
 } from "../src/index.js";
 import type { AgentSessionExclusiveView } from "../src/index.js";
+
+const CHILD_STORE_SCRIPT = String.raw`
+const [moduleUrl, root, sessionId, command] = process.argv.slice(1);
+const { JsonlAgentSessionStore } = await import(moduleUrl);
+const store = new JsonlAgentSessionStore(root, command === "create-hold" ? {
+  beforeAppend: async (event) => {
+    if (event.type !== "session/created") return;
+    process.stdout.write("STAGED\n");
+    await new Promise((resolve) => process.stdin.once("data", resolve));
+  }
+} : {});
+try {
+  if (command === "create-hold") {
+    await store.create({ sessionId });
+    process.stdout.write("CREATED\n");
+  } else {
+    await store.open(sessionId);
+    process.stdout.write("ACQUIRED\n");
+  }
+  if (command === "hold") {
+    await new Promise((resolve) => process.stdin.once("data", resolve));
+  }
+  await store.dispose();
+} catch (error) {
+  process.stderr.write("BLOCKED " + (error instanceof Error ? error.message : String(error)) + "\n");
+  process.exitCode = 23;
+}
+`;
+
+function spawnStoreProcess(root: string, sessionId: SessionId, command: "create-hold" | "hold" | "try"):
+ChildProcessWithoutNullStreams {
+  return spawn(process.execPath, [
+    "--input-type=module",
+    "--eval",
+    CHILD_STORE_SCRIPT,
+    new URL("../src/index.js", import.meta.url).href,
+    root,
+    sessionId,
+    command
+  ], { stdio: ["pipe", "pipe", "pipe"] });
+}
+
+async function waitForChildOutput(
+  child: ChildProcessWithoutNullStreams,
+  stream: "stdout" | "stderr",
+  pattern: RegExp,
+  timeoutMs = 5_000
+): Promise<string> {
+  let output = "";
+  return new Promise<string>((resolve, reject) => {
+    const target = child[stream];
+    const onData = (chunk: Buffer) => {
+      output += chunk.toString("utf8");
+      if (pattern.test(output)) finish(() => resolve(output));
+    };
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+      finish(() => reject(new Error(
+        `child exited before ${String(pattern)} (code=${String(code)}, signal=${String(signal)}, output=${output})`
+      )));
+    };
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      finish(() => reject(new Error(`timed out waiting for child output ${String(pattern)}: ${output}`)));
+    }, timeoutMs);
+    const finish = (complete: () => void) => {
+      clearTimeout(timer);
+      target.off("data", onData);
+      child.off("exit", onExit);
+      complete();
+    };
+    target.on("data", onData);
+    child.on("exit", onExit);
+  });
+}
+
+async function waitForChildExit(child: ChildProcessWithoutNullStreams, timeoutMs = 5_000): Promise<number | null> {
+  if (child.exitCode !== null) return child.exitCode;
+  if (child.signalCode !== null) return null;
+  return new Promise<number | null>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error("timed out waiting for child exit"));
+    }, timeoutMs);
+    child.once("exit", (code) => {
+      clearTimeout(timer);
+      resolve(code);
+    });
+  });
+}
 
 test("withExclusive serializes inner operations, waits for them, and expires its scoped view", async () => {
   const sessionId = SessionId("exclusive-scope");
@@ -354,6 +444,87 @@ test("JSONL stores enforce one canonical in-process writer and coalesce concurre
   await creating.dispose();
 });
 
+test("JSONL OS leases admit only one Node 22 writer across path and event-inode aliases and recover after crash", async () => {
+  assert.match(process.version, /^v22\.19\./u);
+  const root = await mkdtemp(path.join(os.tmpdir(), "muniu-session-process-lease-"));
+  const sessionId = SessionId("process-leased-session");
+  const children = new Set<ChildProcessWithoutNullStreams>();
+  const launch = (childRoot: string, command: "hold" | "try") => {
+    const child = spawnStoreProcess(childRoot, sessionId, command);
+    children.add(child);
+    child.once("exit", () => children.delete(child));
+    return child;
+  };
+  const creator = new JsonlAgentSessionStore(root);
+  await creator.create({ sessionId });
+  await creator.dispose();
+
+  try {
+    const holder = launch(root, "hold");
+    await waitForChildOutput(holder, "stdout", /ACQUIRED/u);
+    const ownerUid = process.getuid?.();
+    assert.equal(typeof ownerUid, "number");
+    const lockRoot = path.join(os.tmpdir(), `muniu-agent-session-writer-locks-${String(ownerUid)}`);
+    const lockRootStat = await stat(lockRoot);
+    assert.equal(lockRootStat.mode & 0o777, 0o700);
+    assert.equal(lockRootStat.uid, ownerUid);
+    const holderRecords: Array<{ name: string; record: Record<string, unknown> }> = [];
+    for (const name of await readdir(lockRoot)) {
+      if (!name.endsWith(".lock")) continue;
+      const record = JSON.parse(await readFile(path.join(lockRoot, name), "utf8")) as Record<string, unknown>;
+      if (record.pid === holder.pid) holderRecords.push({ name, record });
+    }
+    assert.equal(holderRecords.length, 2);
+    for (const { name, record } of holderRecords) {
+      const lockStat = await stat(path.join(lockRoot, name));
+      assert.equal(lockStat.mode & 0o777, 0o600);
+      assert.equal(lockStat.uid, ownerUid);
+      assert.equal(lockStat.nlink, 1);
+      assert.deepEqual(Object.keys(record).sort(), [
+        "createdAt", "identityDigest", "nonce", "pid", "schemaVersion", "uid"
+      ]);
+      assert.match(String(record.identityDigest), /^[0-9a-f]{64}$/u);
+      assert.doesNotMatch(JSON.stringify(record), new RegExp(root.replaceAll(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"));
+    }
+
+    const pathContender = launch(root, "try");
+    const pathContenderExit = waitForChildExit(pathContender);
+    const pathBlocked = await waitForChildOutput(pathContender, "stderr", /BLOCKED/u);
+    assert.match(pathBlocked, /lease|writer/i);
+    assert.equal(await pathContenderExit, 23);
+
+    const holderExit = waitForChildExit(holder);
+    holder.kill("SIGKILL");
+    assert.equal(await holderExit, null);
+
+    const recovered = launch(root, "try");
+    const recoveredExit = waitForChildExit(recovered);
+    assert.match(await waitForChildOutput(recovered, "stdout", /ACQUIRED/u), /ACQUIRED/u);
+    assert.equal(await recoveredExit, 0);
+
+    const aliasRoot = await mkdtemp(path.join(os.tmpdir(), "muniu-session-process-alias-"));
+    const aliasDirectory = path.join(aliasRoot, "sessions", sessionId);
+    const sourceDirectory = path.join(root, "sessions", sessionId);
+    await mkdir(aliasDirectory, { recursive: true });
+    await link(path.join(sourceDirectory, "header.json"), path.join(aliasDirectory, "header.json"));
+    await link(path.join(sourceDirectory, "events.jsonl"), path.join(aliasDirectory, "events.jsonl"));
+
+    const inodeHolder = launch(root, "hold");
+    await waitForChildOutput(inodeHolder, "stdout", /ACQUIRED/u);
+    const inodeContender = launch(aliasRoot, "try");
+    const inodeContenderExit = waitForChildExit(inodeContender);
+    const inodeBlocked = await waitForChildOutput(inodeContender, "stderr", /BLOCKED/u);
+    assert.match(inodeBlocked, /alias|lease|writer/i);
+    assert.equal(await inodeContenderExit, 23);
+
+    const inodeHolderExit = waitForChildExit(inodeHolder);
+    inodeHolder.stdin.end("release\n");
+    assert.equal(await inodeHolderExit, 0);
+  } finally {
+    for (const child of children) child.kill("SIGKILL");
+  }
+});
+
 test("JSONL dispose holds its lease until an active durable append settles", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "muniu-session-dispose-"));
   let enterAppend!: () => void;
@@ -387,6 +558,57 @@ test("JSONL dispose holds its lease until an active durable append settles", asy
   await contender.dispose();
 });
 
+test("JSONL rejects FIFO headers and event logs without blocking", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "muniu-session-fifo-"));
+  const sessionId = SessionId("fifo-session");
+  const creator = new JsonlAgentSessionStore(root);
+  await creator.create({ sessionId });
+  await creator.dispose();
+
+  const sessionDirectory = path.join(root, "sessions", sessionId);
+  for (const fileName of ["header.json", "events.jsonl"]) {
+    const filePath = path.join(sessionDirectory, fileName);
+    const backupPath = `${filePath}.regular`;
+    await rename(filePath, backupPath);
+    const fifo = spawnSync("/usr/bin/mkfifo", [filePath], { encoding: "utf8" });
+    assert.equal(fifo.status, 0, fifo.stderr);
+    const child = spawnStoreProcess(root, sessionId, "try");
+    try {
+      const output = await waitForChildOutput(child, "stderr", /BLOCKED/u, 2_000);
+      assert.match(output, /regular file|corrupt|FIFO/i);
+      assert.equal(await waitForChildExit(child, 2_000), 23);
+    } finally {
+      child.kill("SIGKILL");
+      await unlink(filePath).catch(() => {});
+      await rename(backupPath, filePath);
+    }
+  }
+});
+
+test("JSONL rejects reentrant dispose from an I/O hook without misclassifying external disposal", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "muniu-session-reentrant-dispose-"));
+  const sessionId = SessionId("reentrant-dispose");
+  let store!: JsonlAgentSessionStore;
+  let reentrantRejected = false;
+  store = new JsonlAgentSessionStore(root, {
+    beforeAppend: async (event) => {
+      if (event.type !== "turn/start") return;
+      await assert.rejects(() => store.dispose(), /reentrant|I\/O hook/i);
+      reentrantRejected = true;
+    }
+  });
+  const session = await store.create({ sessionId });
+  await session.append("turn/start", { turn: 1 });
+  assert.equal(reentrantRejected, true);
+
+  const externalDispose = store.dispose();
+  await externalDispose;
+  const successor = new JsonlAgentSessionStore(root);
+  const reopened = await successor.open(sessionId);
+  assert.deepEqual(reopened.events.map((event) => event.type), ["session/created", "turn/start"]);
+  await successor.dispose();
+});
+
 test("JSONL create publishes a complete session atomically and can retry after the first append fails", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "muniu-session-atomic-"));
   const sessionId = SessionId("atomic-session");
@@ -405,6 +627,138 @@ test("JSONL create publishes a complete session atomically and can retry after t
   assert.deepEqual(session.events.map((event) => event.type), ["session/created"]);
   assert.equal(session.header.createdAt, session.events[0]?.occurredAt);
   await store.dispose();
+});
+
+test("JSONL clears only same-session staging left by a crashed creator after taking the OS lease", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "muniu-session-stale-staging-"));
+  const sessionId = SessionId("stale-staging-session");
+  const crashed = spawnStoreProcess(root, sessionId, "create-hold");
+  try {
+    await waitForChildOutput(crashed, "stdout", /STAGED/u);
+    const stagedBeforeCrash = await readdir(path.join(root, "sessions"));
+    assert.equal(stagedBeforeCrash.filter((name) => name.startsWith(`.${sessionId}.create-`)).length, 1);
+    const crashedExit = waitForChildExit(crashed);
+    crashed.kill("SIGKILL");
+    assert.equal(await crashedExit, null);
+
+    const retry = new JsonlAgentSessionStore(root);
+    const session = await retry.create({ sessionId });
+    assert.equal(session.header.sessionId, sessionId);
+    assert.deepEqual(await readdir(path.join(root, "sessions")), [sessionId]);
+    await retry.dispose();
+  } finally {
+    crashed.kill("SIGKILL");
+  }
+});
+
+test("JSONL create preserves the primary failure, aggregates cleanup failures, and releases every lease", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "muniu-session-create-cleanup-"));
+  const sessionsRoot = path.join(root, "sessions");
+  const sessionId = SessionId("cleanup-session");
+  let injectFailure = true;
+  const store = new JsonlAgentSessionStore(root, {
+    beforeAppend: async (event) => {
+      if (event.type !== "session/created" || !injectFailure) return;
+      injectFailure = false;
+      await chmod(sessionsRoot, 0o500);
+      throw new Error("primary create failure");
+    }
+  });
+
+  let failure: unknown;
+  try {
+    await store.create({ sessionId });
+  } catch (error: unknown) {
+    failure = error;
+  } finally {
+    await chmod(sessionsRoot, 0o700);
+  }
+
+  try {
+    assert.ok(failure instanceof AggregateError);
+    assert.match(String(failure.errors[0]), /primary create failure/i);
+    assert.ok(failure.errors.slice(1).some((error) => /permission|EACCES|operation not permitted/i.test(String(error))));
+    const retried = await store.create({ sessionId });
+    assert.equal(retried.header.sessionId, sessionId);
+  } finally {
+    await store.dispose();
+  }
+});
+
+test("JSONL classifies post-rename failures and idempotently reopens only an identical creation snapshot", async () => {
+  for (const phase of ["renamed", "committed"] as const) {
+    const root = await mkdtemp(path.join(os.tmpdir(), `muniu-session-${phase}-failure-`));
+    const sessionId = SessionId(`${phase}-session`);
+    let injected = false;
+    const store = new JsonlAgentSessionStore(root, {
+      afterPublish: (currentPhase: string) => {
+        if (currentPhase === phase && !injected) {
+          injected = true;
+          throw new Error(`injected ${phase} failure`);
+        }
+      }
+    } as never);
+
+    try {
+      await assert.rejects(
+        () => store.create({ sessionId, cwd: "/workspace", labels: { purpose: "retry" } }),
+        (error: unknown) => {
+          const outcome = (error as { outcome?: unknown }).outcome;
+          assert.equal(outcome, phase === "renamed" ? "uncertain" : "committed");
+          assert.match(String(error), new RegExp(`injected ${phase} failure`, "iu"));
+          return true;
+        }
+      );
+      const retried = await store.create({ sessionId, cwd: "/workspace", labels: { purpose: "retry" } });
+      assert.equal(retried.header.cwd, "/workspace");
+      await store.dispose();
+
+      const incompatible = new JsonlAgentSessionStore(root);
+      await assert.rejects(
+        () => incompatible.create({ sessionId, cwd: "/different", labels: { purpose: "retry" } }),
+        /different|conflict|creation snapshot|already exists/i
+      );
+      await incompatible.dispose();
+    } finally {
+      await store.dispose();
+    }
+  }
+});
+
+test("JSONL dispose during the post-rename window waits and leaves an idempotently recoverable session", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "muniu-session-dispose-published-"));
+  const sessionId = SessionId("dispose-published-session");
+  let enteredPublish!: () => void;
+  const publishEntered = new Promise<void>((resolve) => { enteredPublish = resolve; });
+  let releasePublish!: () => void;
+  const publishGate = new Promise<void>((resolve) => { releasePublish = resolve; });
+  const store = new JsonlAgentSessionStore(root, {
+    afterPublish: async (phase: string) => {
+      if (phase !== "renamed") return;
+      enteredPublish();
+      await publishGate;
+    }
+  } as never);
+  const creating = store.create({ sessionId, cwd: "/workspace" });
+  await publishEntered;
+  let disposeSettled = false;
+  const disposing = store.dispose().then(() => { disposeSettled = true; });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(disposeSettled, false);
+  releasePublish();
+  await assert.rejects(
+    () => creating,
+    (error: unknown) => {
+      assert.equal((error as { outcome?: unknown }).outcome, "uncertain");
+      return true;
+    }
+  );
+  await disposing;
+
+  const retry = new JsonlAgentSessionStore(root);
+  const recovered = await retry.create({ sessionId, cwd: "/workspace" });
+  assert.equal(recovered.header.sessionId, sessionId);
+  await retry.dispose();
 });
 
 test("JSONL open rejects symlinked session paths and files", async () => {
@@ -459,17 +813,38 @@ test("JSONL writer leases converge across symlink roots and hard-linked event al
   await owner.dispose();
 });
 
-test("JSONL append fails closed if the leased event file inode is replaced", async () => {
+test("JSONL append remains bound to its leased event descriptor if the pathname is replaced", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "muniu-session-replaced-"));
   const sessionId = SessionId("replaced-events");
   const store = new JsonlAgentSessionStore(root);
   const session = await store.create({ sessionId });
   const eventsPath = path.join(root, "sessions", sessionId, "events.jsonl");
-  await rename(eventsPath, `${eventsPath}.replaced`);
+  const leasedEventsPath = `${eventsPath}.leased`;
+  await rename(eventsPath, leasedEventsPath);
   await writeFile(eventsPath, "", { mode: 0o600 });
 
-  await assert.rejects(() => session.append("turn/start", { turn: 1 }), /lease|inode|identity|replaced/i);
-  assert.deepEqual(session.events.map((event) => event.type), ["session/created"]);
+  await session.append("turn/start", { turn: 1 });
+  assert.equal(await readFile(eventsPath, "utf8"), "");
+  assert.match(await readFile(leasedEventsPath, "utf8"), /"type":"turn\/start"/u);
+  assert.deepEqual(session.events.map((event) => event.type), ["session/created", "turn/start"]);
+  await store.dispose();
+});
+
+test("JSONL append cannot be redirected when the validated session directory is replaced", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "muniu-session-replaced-directory-"));
+  const sessionId = SessionId("replaced-directory");
+  const store = new JsonlAgentSessionStore(root);
+  const session = await store.create({ sessionId });
+  const sessionDirectory = path.join(root, "sessions", sessionId);
+  const leasedDirectory = `${sessionDirectory}.leased`;
+  await rename(sessionDirectory, leasedDirectory);
+  await mkdir(sessionDirectory, { mode: 0o700 });
+  const replacementEvents = path.join(sessionDirectory, "events.jsonl");
+  await writeFile(replacementEvents, "", { mode: 0o600 });
+
+  await session.append("turn/start", { turn: 1 });
+  assert.equal(await readFile(replacementEvents, "utf8"), "");
+  assert.match(await readFile(path.join(leasedDirectory, "events.jsonl"), "utf8"), /"type":"turn\/start"/u);
   await store.dispose();
 });
 

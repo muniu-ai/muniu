@@ -1,19 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { constants, type Stats } from "node:fs";
 import {
   lstat,
   mkdir,
   open,
+  readdir,
   realpath,
   rename,
-  rm
+  rm,
+  type FileHandle
 } from "node:fs/promises";
 import path from "node:path";
 
 import {
   SessionId,
+  digestJson,
   deepFreeze,
   isAgentSessionEventV1,
   isCanonicalRfc3339,
@@ -26,17 +30,55 @@ import { snapshotCreateAgentSessionOptions, type CreateAgentSessionOptionsSnapsh
 import { createInitialAgentSessionState } from "./initial-state.js";
 import { DurableAgentSession } from "./session.js";
 import type { AgentSessionHeaderV1, CreateAgentSessionOptions, EventPersistence } from "./types.js";
+import { acquireOsWriterLock, type OsWriterLock } from "./writer-lock.js";
 
 const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
+const STAGING_NONCE_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const PROCESS_SESSION_LEASES = new Map<string, WriterLease>();
+const ACTIVE_SESSION_IO = new AsyncLocalStorage<SessionIoContext>();
+
+interface SessionIoContext {
+  readonly store: JsonlAgentSessionStore;
+  active: boolean;
+}
 
 interface WriterLease {
   readonly owner: JsonlAgentSessionStore;
   readonly keys: Set<string>;
+  readonly osLocks: Map<string, OsWriterLock>;
+  directoryHandle?: FileHandle;
+  directoryStat?: Stats;
+  eventHandle?: FileHandle;
+  eventStat?: Stats;
 }
 
 export interface JsonlAgentSessionStoreOptions {
   readonly beforeAppend?: (event: AgentSessionEventV1) => void | Promise<void>;
+  readonly afterPublish?: (
+    phase: "renamed" | "committed",
+    sessionId: SessionId
+  ) => void | Promise<void>;
+}
+
+export type SessionCreateOutcome = "uncertain" | "committed";
+
+export class SessionCreateOutcomeError extends Error {
+  readonly cleanupErrors: readonly unknown[];
+
+  constructor(
+    readonly sessionId: SessionId,
+    readonly outcome: SessionCreateOutcome,
+    cause: unknown,
+    cleanupErrors: readonly unknown[] = []
+  ) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    const combinedCause = cleanupErrors.length === 0
+      ? cause
+      : new AggregateError([cause, ...cleanupErrors], "session creation and cleanup both failed", { cause });
+    super(`session "${sessionId}" creation ${outcome}: ${detail}`, { cause: combinedCause });
+    this.name = "SessionCreateOutcomeError";
+    this.cleanupErrors = Object.freeze([...cleanupErrors]);
+  }
 }
 
 function assertSessionId(sessionId: SessionId): void {
@@ -59,6 +101,25 @@ function validateHeader(value: unknown, expectedId: SessionId): AgentSessionHead
   return deepFreeze(header as unknown as AgentSessionHeaderV1);
 }
 
+function creationSnapshotDigest(options: CreateAgentSessionOptionsSnapshot): string {
+  return digestJson({
+    sessionId: options.sessionId,
+    ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+    ...(options.labels === undefined ? {} : { labels: options.labels })
+  });
+}
+
+function persistedCreationSnapshotDigest(
+  header: AgentSessionHeaderV1,
+  created: AgentSessionEventV1<"session/created">
+): string {
+  return digestJson({
+    sessionId: header.sessionId,
+    ...(created.payload.cwd === undefined ? {} : { cwd: created.payload.cwd }),
+    ...(created.payload.labels === undefined ? {} : { labels: created.payload.labels })
+  });
+}
+
 class SymbolicLinkError extends Error {}
 
 function symbolicLinkError(target: string): SymbolicLinkError {
@@ -68,7 +129,7 @@ function symbolicLinkError(target: string): SymbolicLinkError {
 async function openRegularNoFollow(filePath: string, flags: number, mode = 0o600) {
   let handle;
   try {
-    handle = await open(filePath, flags | constants.O_NOFOLLOW, mode);
+    handle = await open(filePath, flags | constants.O_NOFOLLOW | constants.O_NONBLOCK, mode);
   } catch (error: unknown) {
     if ((error as NodeJS.ErrnoException).code === "ELOOP") throw symbolicLinkError(filePath);
     throw error;
@@ -90,7 +151,10 @@ async function openRegularNoFollow(filePath: string, flags: number, mode = 0o600
 async function openDirectoryNoFollow(directoryPath: string) {
   let handle;
   try {
-    handle = await open(directoryPath, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    handle = await open(
+      directoryPath,
+      constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW | constants.O_NONBLOCK
+    );
   } catch (error: unknown) {
     if ((error as NodeJS.ErrnoException).code === "ELOOP") throw symbolicLinkError(directoryPath);
     throw error;
@@ -134,35 +198,27 @@ async function syncDirectory(directoryPath: string): Promise<void> {
 }
 
 async function appendEvent(
-  filePath: string,
+  handle: FileHandle,
   event: AgentSessionEventV1,
   verifyIdentity: (fileStat: Stats) => void
 ): Promise<void> {
-  const { handle, fileStat } = await openRegularNoFollow(filePath, constants.O_APPEND | constants.O_WRONLY, 0o600);
-  try {
-    verifyIdentity(fileStat);
-    await handle.writeFile(`${JSON.stringify(event)}\n`, "utf8");
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
+  const fileStat = await handle.stat();
+  verifyIdentity(fileStat);
+  await handle.writeFile(`${JSON.stringify(event)}\n`, "utf8");
+  await handle.sync();
 }
 
-async function loadEvents(filePath: string, verifyIdentity?: (fileStat: Stats) => void): Promise<AgentSessionEventV1[]> {
-  const { handle, fileStat } = await openRegularNoFollow(filePath, constants.O_RDWR);
+async function loadEvents(handle: FileHandle, verifyIdentity?: (fileStat: Stats) => void): Promise<AgentSessionEventV1[]> {
+  const fileStat = await handle.stat();
   let buffer: Buffer;
-  try {
-    verifyIdentity?.(fileStat);
-    buffer = await handle.readFile();
-    if (buffer.length > 0 && buffer.at(-1) !== 0x0a) {
-      const lastNewline = buffer.lastIndexOf(0x0a);
-      const committedLength = lastNewline < 0 ? 0 : lastNewline + 1;
-      await handle.truncate(committedLength);
-      await handle.sync();
-      buffer = buffer.subarray(0, committedLength);
-    }
-  } finally {
-    await handle.close();
+  verifyIdentity?.(fileStat);
+  buffer = await handle.readFile();
+  if (buffer.length > 0 && buffer.at(-1) !== 0x0a) {
+    const lastNewline = buffer.lastIndexOf(0x0a);
+    const committedLength = lastNewline < 0 ? 0 : lastNewline + 1;
+    await handle.truncate(committedLength);
+    await handle.sync();
+    buffer = buffer.subarray(0, committedLength);
   }
 
   const events: AgentSessionEventV1[] = [];
@@ -242,19 +298,44 @@ export class JsonlAgentSessionStore {
     canonicalSessionsRoot: string,
     sessionId: SessionId
   ): Promise<string> {
+    const directory = await this.openValidatedSessionDirectory(directoryPath, canonicalSessionsRoot, sessionId);
+    try {
+      return directory.canonicalPath;
+    } finally {
+      await directory.handle.close();
+    }
+  }
+
+  private async openValidatedSessionDirectory(
+    directoryPath: string,
+    canonicalSessionsRoot: string,
+    sessionId: SessionId
+  ): Promise<{ handle: FileHandle; stat: Stats; canonicalPath: string }> {
     const linkStat = await lstat(directoryPath);
     if (linkStat.isSymbolicLink()) throw symbolicLinkError(directoryPath);
     const directory = await openDirectoryNoFollow(directoryPath);
     try {
       await directory.handle.chmod(0o700);
-    } finally {
+      const canonicalDirectory = await realpath(directoryPath);
+      if (path.dirname(canonicalDirectory) !== canonicalSessionsRoot || path.basename(canonicalDirectory) !== sessionId) {
+        throw new Error(`session "${sessionId}" directory escapes durable storage`);
+      }
+      return { handle: directory.handle, stat: directory.directoryStat, canonicalPath: canonicalDirectory };
+    } catch (error: unknown) {
       await directory.handle.close();
+      throw error;
     }
-    const canonicalDirectory = await realpath(directoryPath);
-    if (path.dirname(canonicalDirectory) !== canonicalSessionsRoot || path.basename(canonicalDirectory) !== sessionId) {
-      throw new Error(`session "${sessionId}" directory escapes durable storage`);
+  }
+
+  private async assertDirectoryIdentity(directoryPath: string, expected: Stats): Promise<void> {
+    const current = await openDirectoryNoFollow(directoryPath);
+    try {
+      if (current.directoryStat.dev !== expected.dev || current.directoryStat.ino !== expected.ino) {
+        throw new Error("durable session directory identity changed while files were being bound");
+      }
+    } finally {
+      await current.handle.close();
     }
-    return canonicalDirectory;
   }
 
   create(options: CreateAgentSessionOptions = {}): Promise<DurableAgentSession> {
@@ -270,47 +351,161 @@ export class JsonlAgentSessionStore {
 
   private async createInternal(sessionId: SessionId, options: CreateAgentSessionOptionsSnapshot): Promise<DurableAgentSession> {
     const canonicalSessionsRoot = await this.ensureRoot();
-    const lease = this.acquireLease(`path:${path.join(canonicalSessionsRoot, sessionId)}`, sessionId);
     const paths = this.paths(sessionId);
     const stagingDir = path.join(this.sessionsRoot, `.${sessionId}.create-${randomUUID()}`);
-    let published = false;
+    let lease: WriterLease | undefined;
+    let stagingCreated = false;
+    let outcome: "unpublished" | SessionCreateOutcome = "unpublished";
+    let completed = false;
+    let result: DurableAgentSession | undefined;
+    let failure: unknown;
+    const cleanupErrors: unknown[] = [];
     try {
+      lease = await this.acquireLease(`path:${path.join(canonicalSessionsRoot, sessionId)}`, sessionId);
+      await this.clearStaleStaging(sessionId);
+      let finalExists = true;
       try {
         await lstat(paths.dir);
-        throw new Error(`session "${sessionId}" already exists`);
       } catch (error: unknown) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") finalExists = false;
+        else throw error;
       }
-      await mkdir(stagingDir, { mode: 0o700 });
-      const stagingDirectory = await openDirectoryNoFollow(stagingDir);
-      try {
-        await stagingDirectory.handle.chmod(0o700);
-      } finally {
-        await stagingDirectory.handle.close();
+
+      if (finalExists) {
+        result = await this.loadSessionWithLease(sessionId, canonicalSessionsRoot, lease, options);
+        completed = true;
+      } else {
+        await mkdir(stagingDir, { mode: 0o700 });
+        stagingCreated = true;
+        const stagingDirectory = await openDirectoryNoFollow(stagingDir);
+        try {
+          await stagingDirectory.handle.chmod(0o700);
+        } finally {
+          await stagingDirectory.handle.close();
+        }
+        const initial = createInitialAgentSessionState(options);
+        await this.options.beforeAppend?.(initial.event);
+        this.assertOpen();
+        await writeExclusive(path.join(stagingDir, "header.json"), `${JSON.stringify(initial.header)}\n`);
+        await writeExclusive(path.join(stagingDir, "events.jsonl"), `${JSON.stringify(initial.event)}\n`);
+        await syncDirectory(stagingDir);
+        await rename(stagingDir, paths.dir);
+        stagingCreated = false;
+        outcome = "uncertain";
+        await this.options.afterPublish?.("renamed", sessionId);
+        this.assertOpen();
+        await syncDirectory(this.sessionsRoot);
+        outcome = "committed";
+        await this.options.afterPublish?.("committed", sessionId);
+        this.assertOpen();
+        result = await this.loadSessionWithLease(sessionId, canonicalSessionsRoot, lease, options);
+        completed = true;
       }
-      const initial = createInitialAgentSessionState(options);
-      await this.options.beforeAppend?.(initial.event);
-      this.assertOpen();
-      await writeExclusive(path.join(stagingDir, "header.json"), `${JSON.stringify(initial.header)}\n`);
-      await writeExclusive(path.join(stagingDir, "events.jsonl"), `${JSON.stringify(initial.event)}\n`);
-      await syncDirectory(stagingDir);
-      await rename(stagingDir, paths.dir);
-      published = true;
-      await syncDirectory(this.sessionsRoot);
-      await this.addFileIdentityLease(lease, paths.events, sessionId);
-      const session = new DurableAgentSession(initial.header, [initial.event], this.persistence(paths.events, lease));
-      this.sessions.set(sessionId, session);
-      this.assertOpen();
-      return session;
     } catch (error: unknown) {
-      this.sessions.delete(sessionId);
-      if (!published) {
-        await rm(stagingDir, { recursive: true, force: true });
-        await syncDirectory(this.sessionsRoot).catch(() => {});
+      failure = error;
+    } finally {
+      if (!completed) {
+        this.sessions.delete(sessionId);
+        if (stagingCreated) {
+          try {
+            await rm(stagingDir, { recursive: true, force: true });
+          } catch (error: unknown) {
+            cleanupErrors.push(error);
+          }
+          try {
+            await syncDirectory(this.sessionsRoot);
+          } catch (error: unknown) {
+            cleanupErrors.push(error);
+          }
+        }
+        if (lease !== undefined) {
+          try {
+            await this.releaseLease(lease);
+          } catch (error: unknown) {
+            cleanupErrors.push(error);
+          }
+        }
       }
-      this.releaseLease(lease);
-      throw error;
     }
+
+    if (completed) return result as DurableAgentSession;
+    if (outcome !== "unpublished") {
+      throw new SessionCreateOutcomeError(sessionId, outcome, failure, cleanupErrors);
+    }
+    if (cleanupErrors.length > 0) {
+      throw new AggregateError([failure, ...cleanupErrors], `session "${sessionId}" creation and cleanup failed`, {
+        cause: failure
+      });
+    }
+    throw failure;
+  }
+
+  private async clearStaleStaging(sessionId: SessionId): Promise<void> {
+    const prefix = `.${sessionId}.create-`;
+    const names = await readdir(this.sessionsRoot);
+    const staleNames = names.filter((name) => name.startsWith(prefix) && STAGING_NONCE_PATTERN.test(name.slice(prefix.length)));
+    for (const name of staleNames) {
+      await rm(path.join(this.sessionsRoot, name), { recursive: true, force: true });
+    }
+    if (staleNames.length > 0) await syncDirectory(this.sessionsRoot);
+  }
+
+  private async loadSessionWithLease(
+    sessionId: SessionId,
+    canonicalSessionsRoot: string,
+    lease: WriterLease,
+    expectedCreation?: CreateAgentSessionOptionsSnapshot
+  ): Promise<DurableAgentSession> {
+    const paths = this.paths(sessionId);
+    if (lease.directoryHandle !== undefined || lease.eventHandle !== undefined) {
+      throw new Error("session file descriptors are already bound to this writer lease");
+    }
+    const directory = await this.openValidatedSessionDirectory(paths.dir, canonicalSessionsRoot, sessionId);
+    lease.directoryHandle = directory.handle;
+    lease.directoryStat = directory.stat;
+    let parsedHeader: unknown;
+    try {
+      const { handle } = await openRegularNoFollow(paths.header, constants.O_RDONLY);
+      try {
+        await handle.chmod(0o600);
+        parsedHeader = JSON.parse(await handle.readFile("utf8"));
+      } finally {
+        await handle.close();
+      }
+    } catch (error: unknown) {
+      if (error instanceof SymbolicLinkError) throw error;
+      throw new Error(`session "${sessionId}" has a corrupt header`, { cause: error });
+    }
+    const eventFile = await openRegularNoFollow(paths.events, constants.O_RDWR | constants.O_APPEND);
+    lease.eventHandle = eventFile.handle;
+    lease.eventStat = eventFile.fileStat;
+    await eventFile.handle.chmod(0o600);
+    await this.addFileIdentityLease(lease, eventFile.fileStat, sessionId);
+    await this.assertDirectoryIdentity(paths.dir, directory.stat);
+    const header = validateHeader(parsedHeader, sessionId);
+    const events = await loadEvents(eventFile.handle, (fileStat) => this.assertFileIdentity(lease, fileStat));
+    if (events.length === 0) throw new Error(`session "${sessionId}" has an empty event log`);
+    const created = events[0];
+    if (created?.type !== "session/created") {
+      throw new Error(`session "${sessionId}" first event must be session/created`);
+    }
+    if (events.some((event) => event.sessionId !== header.sessionId)) {
+      throw new Error(`session "${sessionId}" event session id does not match header`);
+    }
+    if (header.cwd !== created.payload.cwd) {
+      throw new Error(`session "${sessionId}" header cwd does not match the creation event`);
+    }
+    if (header.createdAt !== created.occurredAt) {
+      throw new Error(`session "${sessionId}" header creation time does not match the creation event`);
+    }
+    if (expectedCreation !== undefined
+      && persistedCreationSnapshotDigest(header, created) !== creationSnapshotDigest(expectedCreation)) {
+      throw new Error(`session "${sessionId}" already exists with a different creation snapshot`);
+    }
+    this.assertOpen();
+    const session = new DurableAgentSession(header, events, this.persistence(lease));
+    this.sessions.set(sessionId, session);
+    return session;
   }
 
   open(sessionId: SessionId): Promise<DurableAgentSession> {
@@ -328,55 +523,25 @@ export class JsonlAgentSessionStore {
     let lease: WriterLease | undefined;
     try {
       const canonicalDirectory = await this.validateSessionDirectory(paths.dir, canonicalSessionsRoot, sessionId);
-      lease = this.acquireLease(`path:${canonicalDirectory}`, sessionId);
-      const activeLease = lease;
-      await this.addFileIdentityLease(activeLease, paths.events, sessionId);
-      let parsedHeader: unknown;
-      try {
-        const { handle } = await openRegularNoFollow(paths.header, constants.O_RDONLY);
-        try {
-          await handle.chmod(0o600);
-          parsedHeader = JSON.parse(await handle.readFile("utf8"));
-        } finally {
-          await handle.close();
-        }
-      } catch (error: unknown) {
-        if (error instanceof SymbolicLinkError) throw error;
-        throw new Error(`session "${sessionId}" has a corrupt header`);
-      }
-      const header = validateHeader(parsedHeader, sessionId);
-      const events = await loadEvents(paths.events, (fileStat) => this.assertFileIdentity(activeLease, fileStat));
-      if (events.length === 0) throw new Error(`session "${sessionId}" has an empty event log`);
-      const created = events[0];
-      if (created?.type !== "session/created") {
-        throw new Error(`session "${sessionId}" first event must be session/created`);
-      }
-      if (events.some((event) => event.sessionId !== header.sessionId)) {
-        throw new Error(`session "${sessionId}" event session id does not match header`);
-      }
-      if (header.cwd !== created.payload.cwd) {
-        throw new Error(`session "${sessionId}" header cwd does not match the creation event`);
-      }
-      if (header.createdAt !== created.occurredAt) {
-        throw new Error(`session "${sessionId}" header creation time does not match the creation event`);
-      }
-      this.assertOpen();
-      const session = new DurableAgentSession(header, events, this.persistence(paths.events, activeLease));
-      this.sessions.set(sessionId, session);
-      return session;
+      lease = await this.acquireLease(`path:${canonicalDirectory}`, sessionId);
+      return await this.loadSessionWithLease(sessionId, canonicalSessionsRoot, lease);
     } catch (error: unknown) {
-      if (lease !== undefined) this.releaseLease(lease);
+      if (lease !== undefined) await this.releaseLease(lease);
       throw error;
     }
   }
 
   dispose(): Promise<void> {
+    const activeContext = ACTIVE_SESSION_IO.getStore();
+    if (activeContext?.store === this && activeContext.active) {
+      return Promise.reject(new Error("cannot dispose a JSONL session store reentrantly from its I/O hook"));
+    }
     if (this.disposal !== undefined) return this.disposal;
     this.disposed = true;
     this.disposal = (async () => {
       await Promise.allSettled([...this.inFlight.values(), ...this.activeIo]);
       this.sessions.clear();
-      for (const lease of [...this.leases]) this.releaseLease(lease);
+      await Promise.all([...this.leases].map((lease) => this.releaseLease(lease)));
     })();
     return this.disposal;
   }
@@ -396,25 +561,27 @@ export class JsonlAgentSessionStore {
     return tracked;
   }
 
-  private acquireLease(initialKey: string, sessionId: SessionId): WriterLease {
+  private async acquireLease(initialKey: string, sessionId: SessionId): Promise<WriterLease> {
     this.assertOpen();
     const owner = PROCESS_SESSION_LEASES.get(initialKey);
     if (owner !== undefined) {
       throw new Error(`session "${sessionId}" already has an active writer lease`);
     }
-    const lease: WriterLease = { owner: this, keys: new Set([initialKey]) };
+    const lease: WriterLease = { owner: this, keys: new Set([initialKey]), osLocks: new Map() };
     PROCESS_SESSION_LEASES.set(initialKey, lease);
     this.leases.add(lease);
-    return lease;
+    try {
+      lease.osLocks.set(initialKey, await acquireOsWriterLock(initialKey));
+      return lease;
+    } catch (error: unknown) {
+      if (PROCESS_SESSION_LEASES.get(initialKey) === lease) PROCESS_SESSION_LEASES.delete(initialKey);
+      lease.keys.clear();
+      this.leases.delete(lease);
+      throw error;
+    }
   }
 
-  private async addFileIdentityLease(lease: WriterLease, filePath: string, sessionId: SessionId): Promise<void> {
-    const { handle, fileStat } = await openRegularNoFollow(filePath, constants.O_RDONLY);
-    try {
-      await handle.chmod(0o600);
-    } finally {
-      await handle.close();
-    }
+  private async addFileIdentityLease(lease: WriterLease, fileStat: Stats, sessionId: SessionId): Promise<void> {
     const identityKey = `inode:${fileStat.dev}:${fileStat.ino}`;
     const owner = PROCESS_SESSION_LEASES.get(identityKey);
     if (owner !== undefined && owner !== lease) {
@@ -422,20 +589,56 @@ export class JsonlAgentSessionStore {
     }
     PROCESS_SESSION_LEASES.set(identityKey, lease);
     lease.keys.add(identityKey);
+    try {
+      lease.osLocks.set(identityKey, await acquireOsWriterLock(identityKey));
+    } catch (error: unknown) {
+      if (PROCESS_SESSION_LEASES.get(identityKey) === lease) PROCESS_SESSION_LEASES.delete(identityKey);
+      lease.keys.delete(identityKey);
+      throw error;
+    }
   }
 
-  private releaseLease(lease: WriterLease): void {
+  private async releaseLease(lease: WriterLease): Promise<void> {
+    const errors: unknown[] = [];
+    if (lease.eventHandle !== undefined) {
+      try {
+        await lease.eventHandle.close();
+      } catch (error: unknown) {
+        errors.push(error);
+      }
+      lease.eventHandle = undefined;
+      lease.eventStat = undefined;
+    }
+    if (lease.directoryHandle !== undefined) {
+      try {
+        await lease.directoryHandle.close();
+      } catch (error: unknown) {
+        errors.push(error);
+      }
+      lease.directoryHandle = undefined;
+      lease.directoryStat = undefined;
+    }
+    for (const lock of [...lease.osLocks.values()].reverse()) {
+      try {
+        await lock.release();
+      } catch (error: unknown) {
+        errors.push(error);
+      }
+    }
+    lease.osLocks.clear();
     for (const key of lease.keys) {
       if (PROCESS_SESSION_LEASES.get(key) === lease) PROCESS_SESSION_LEASES.delete(key);
     }
     lease.keys.clear();
     this.leases.delete(lease);
+    if (errors.length > 0) throw new AggregateError(errors, "failed to release session writer lease");
   }
 
   private assertLease(lease: WriterLease): void {
     this.assertOpen();
     if (lease.owner !== this || lease.keys.size === 0
-      || [...lease.keys].some((key) => PROCESS_SESSION_LEASES.get(key) !== lease)) {
+      || lease.osLocks.size !== lease.keys.size
+      || [...lease.keys].some((key) => PROCESS_SESSION_LEASES.get(key) !== lease || lease.osLocks.get(key)?.released !== false)) {
       throw new Error("session writer lease is not held");
     }
   }
@@ -447,24 +650,38 @@ export class JsonlAgentSessionStore {
     }
   }
 
-  private persistence(eventsPath: string, lease: WriterLease): EventPersistence {
+  private eventHandle(lease: WriterLease): FileHandle {
+    const handle = lease.eventHandle;
+    if (handle === undefined || lease.eventStat === undefined) {
+      throw new Error("durable event file descriptor is not bound to its writer lease");
+    }
+    return handle;
+  }
+
+  private persistence(lease: WriterLease): EventPersistence {
     return {
       append: (event) => this.runIo(lease, async () => {
         await this.options.beforeAppend?.(event);
-        await appendEvent(eventsPath, event, (fileStat) => this.assertFileIdentity(lease, fileStat));
+        await appendEvent(this.eventHandle(lease), event, (fileStat) => this.assertFileIdentity(lease, fileStat));
       }),
-      flush: async () => { this.assertLease(lease); }
+      flush: () => this.runIo(lease, async () => { await this.eventHandle(lease).sync(); })
     };
   }
 
   private runIo(lease: WriterLease, operation: () => Promise<void>): Promise<void> {
     this.assertLease(lease);
-    const active = operation();
+    let start!: () => void;
+    const startGate = new Promise<void>((resolve) => { start = resolve; });
+    const context: SessionIoContext = { store: this, active: true };
+    const active = startGate
+      .then(() => ACTIVE_SESSION_IO.run(context, operation))
+      .finally(() => { context.active = false; });
     this.activeIo.add(active);
     void active.then(
       () => { this.activeIo.delete(active); },
       () => { this.activeIo.delete(active); }
     );
+    start();
     return active;
   }
 }
