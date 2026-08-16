@@ -4,12 +4,6 @@ import { Buffer } from "node:buffer";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { types as utilTypes } from "node:util";
 
-import {
-  isMainlandMobile,
-  isPrcResidentIdentityNumber,
-  protectText
-} from "@mn/data-policy";
-
 import { canonicalJson } from "./canonical.js";
 import { deepFreeze } from "./freeze.js";
 import type { CandidateId, Digest, RunId, SessionId } from "./ids.js";
@@ -22,6 +16,12 @@ import {
   type ProtectedJsonViewV1,
   type ProtectedTextV1
 } from "./protection.js";
+import {
+  assertSafePublicControlIdV1,
+  assertSafePublicControlStringV1,
+  isSafePublicControlIdV1,
+  isSafePublicControlStringV1
+} from "./public-control.js";
 import { assertBoundedProtocolText, snapshotBoundedJsonValue } from "./strict-json.js";
 
 export type EffectRawInputV1 =
@@ -132,9 +132,7 @@ const BINDING_KEYS = [
   "raw"
 ] as const;
 const POLICY_BINDING_KEYS = ["governanceDigest", "harnessDigest"] as const;
-const CONTROL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const EFFECT_KIND_PATTERN = /^[a-z][a-z0-9.-]{0,63}(?:\/[a-z][a-z0-9.-]{0,63}){0,3}$/u;
-const CONTROL_EMBEDDED_CREDENTIAL_PATTERN = /(?:sk-(?:proj-|ant-)?[a-z0-9._-]{8,}|(?:AKIA|ASIA)[0-9A-Z]{16}|gh[pousr]_[a-z0-9]{20,}|github_pat_[a-z0-9_]{20,}|eyJ[a-z0-9_-]{2,}(?:\.[a-z0-9_-]*){2,4}|[a-z][a-z0-9+.-]{0,31}:\/\/[^\s\/:@]{1,128}:[^\s\/@]{1,128}@|(?:api[-_]?key|api[-_]?secret|access[-_]?key[-_]?id|access[-_]?token|auth(?:orization)?(?:[-_]?(?:code|token))?|bearer|client[-_]?secret|cookie|credential|mfa(?:[-_]?(?:secret|code))?|oauth[-_]?code|otp|passphrase|passcode|password|passwd|private[-_]?key|refresh[-_]?token|secret(?:[-_]?access)?[-_]?key|session[-_]?(?:id|token)|totp|token|口令|密码|密钥|凭证|令牌):)/iu;
 const KEY_ID_PATTERN = /^kid_[0-9a-f]{64}$/u;
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
 const TAG_PATTERN = /^[0-9a-f]{64}$/u;
@@ -144,7 +142,7 @@ const handleStates = new WeakMap<object, CommitmentState>();
 function createSafeKeyId(): string {
   for (let attempt = 0; attempt < 32; attempt += 1) {
     const candidate = `kid_${randomBytes(32).toString("hex")}`;
-    if (!containsProtectedControlMaterial(candidate)) return candidate;
+    if (isSafePublicControlStringV1(candidate, KEY_ID_PATTERN, 68)) return candidate;
   }
   throw new Error("unable to create a safe runtime effect commitment key identifier");
 }
@@ -178,41 +176,15 @@ function exactDataRecord(value: unknown, exactKeys: readonly string[], label: st
 }
 
 function validControlId(value: unknown): value is string {
-  return typeof value === "string" && CONTROL_ID_PATTERN.test(value) && !containsProtectedControlMaterial(value);
+  return isSafePublicControlIdV1(value);
 }
 
 function validEffectKind(value: unknown): value is string {
-  return typeof value === "string" && EFFECT_KIND_PATTERN.test(value) && !containsProtectedControlMaterial(value);
+  return isSafePublicControlStringV1(value, EFFECT_KIND_PATTERN, 260);
 }
 
 function validKeyId(value: unknown): value is string {
-  return typeof value === "string" && KEY_ID_PATTERN.test(value) && !containsProtectedControlMaterial(value);
-}
-
-function containsProtectedControlMaterial(value: string): boolean {
-  try {
-    if (protectText(value) !== value) return true;
-    for (let index = 0; index <= value.length - 11; index += 1) {
-      if (isMainlandMobile(value.slice(index, index + 11))) return true;
-    }
-    for (let index = 0; index <= value.length - 18; index += 1) {
-      if (isPrcResidentIdentityNumber(value.slice(index, index + 18))) return true;
-    }
-    return CONTROL_EMBEDDED_CREDENTIAL_PATTERN.test(value);
-  } catch {
-    return true;
-  }
-}
-
-function assertPublicDomainString(
-  value: unknown,
-  label: string,
-  pattern: RegExp
-): asserts value is string {
-  if (typeof value !== "string") throw new TypeError(`${label} is invalid`);
-  if (value.length > 260) throw new TypeError(`${label} is invalid`);
-  if (containsProtectedControlMaterial(value)) throw new TypeError(`${label} contains protected material`);
-  if (!pattern.test(value)) throw new TypeError(`${label} is invalid`);
+  return isSafePublicControlStringV1(value, KEY_ID_PATTERN, 68);
 }
 
 function validDigest(value: unknown): value is Digest {
@@ -280,13 +252,18 @@ function snapshotBinding(value: unknown): {
   readonly raw: EffectRawInputV1;
 } {
   const record = exactDataRecord(value, BINDING_KEYS, "effect commitment binding");
-  assertPublicDomainString(record.effectKind, "effect commitment binding effectKind", EFFECT_KIND_PATTERN);
-  assertPublicDomainString(record.sessionId, "effect commitment binding session identifier", CONTROL_ID_PATTERN);
-  assertPublicDomainString(record.runId, "effect commitment binding run identifier", CONTROL_ID_PATTERN);
-  assertPublicDomainString(record.candidateId, "effect commitment binding candidate identifier", CONTROL_ID_PATTERN);
+  assertSafePublicControlStringV1(
+    record.effectKind,
+    "effect commitment binding effectKind",
+    EFFECT_KIND_PATTERN,
+    260
+  );
+  assertSafePublicControlIdV1(record.sessionId, "effect commitment binding session identifier");
+  assertSafePublicControlIdV1(record.runId, "effect commitment binding run identifier");
+  assertSafePublicControlIdV1(record.candidateId, "effect commitment binding candidate identifier");
   if (!positiveSafeInteger(record.turn)) throw new TypeError("effect commitment binding turn must be a positive safe integer");
   if (!positiveSafeInteger(record.step)) throw new TypeError("effect commitment binding step must be a positive safe integer");
-  assertPublicDomainString(record.internalEffectId, "effect commitment binding internal effect identifier", CONTROL_ID_PATTERN);
+  assertSafePublicControlIdV1(record.internalEffectId, "effect commitment binding internal effect identifier");
   const raw = snapshotRawInput(record.raw);
   const protectedInput = snapshotProtectedInput(record.protectedInput);
   const expected = expectedProtectedInput(raw);

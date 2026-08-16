@@ -9,3 +9,8 @@ export * from "./json.js";
 export * from "./messages.js";
 export * from "./model.js";
 export * from "./protection.js";
+export * from "./session-payload.js";
+export {
+  assertSafePublicControlIdV1,
+  isSafePublicControlIdV1
+} from "./public-control.js";
