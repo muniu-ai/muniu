@@ -17,7 +17,7 @@ import {
   type TurnEndReason
 } from "@mn/agent-protocol";
 import { BlockAssembler, type LlmRuntime } from "@mn/agent-llm";
-import { projectSession } from "@mn/agent-session";
+import { projectRuntimeMessages } from "@mn/agent-session";
 import type { ToolRegistry } from "@mn/agent-tools";
 
 import type { AgentRunInput, AgentRunResult } from "./agent-registry.js";
@@ -41,7 +41,7 @@ function assertBudget(name: string, value: number, allowZero: boolean): void {
 function nextTurn(input: AgentRunInput): number {
   let turn = 0;
   for (const event of input.session.events) {
-    if (event.type === "turn/start") turn = Math.max(turn, event.payload.turn);
+    if (event.type === "turn/start") turn = Math.max(turn, event.payload.publicControls.turn);
   }
   return turn + 1;
 }
@@ -63,6 +63,10 @@ export class ReactDriver {
     assertBudget("maxSteps", maxSteps, false);
     assertBudget("maxToolCalls", maxToolCalls, true);
     if (input.prompt.length === 0) throw new Error("agent prompt must not be empty");
+    // A reopened protected history cannot be converted back into executable
+    // model messages. Fail before appending a new turn unless the caller has
+    // supplied the process-local runtime overlay for every prior message.
+    projectRuntimeMessages(input.session);
 
     const turn = nextTurn(input);
     const metadata = {
@@ -94,7 +98,7 @@ export class ReactDriver {
           for await (const chunk of this.llm.stream({
             provider: input.provider,
             model: input.model,
-            messages: projectSession(input.session.events).messages,
+            messages: projectRuntimeMessages(input.session),
             system: this.systemPrompt.render(),
             tools: this.tools.schemas(),
             ...(input.signal === undefined ? {} : { signal: input.signal })

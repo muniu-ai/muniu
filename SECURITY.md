@@ -44,6 +44,18 @@ runs settle. An adapter or tool that does not observe its supplied AbortSignal
 can therefore delay disposal indefinitely; v0.1 does not forcibly terminate
 in-process third-party code.
 
+Builtin Agent session headers and JSONL events persist only the fixed protected
+DTO profile. Phone numbers, PRC identity numbers, and credentials are replaced
+before the durable fsync boundary; ordinary names, email addresses, paths, and
+business text are not broadly hidden. Model execution uses a process-local
+overlay that always removes credentials while retaining business values needed
+by the active run. That overlay is never reconstructed from protected records:
+reopened history without an authorized overlay fails with
+`RUNTIME_OVERLAY_REQUIRED`. Legacy raw v1 Agent logs fail closed with
+`LEGACY_UNPROTECTED_SESSION` and are not rewritten implicitly. If protected
+low-entropy creation inputs make an idempotent retry ambiguous, the store also
+fails closed instead of treating two different raw values as equal.
+
 The planned macOS sandbox combines Seatbelt with an isolated canonical Git
 worktree. It is defense in depth, not a virtual machine or Docker-equivalent
 security boundary. If the required sandbox probe fails, command execution must

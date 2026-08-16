@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type {
+  AGENT_SESSION_PROTECTION_PROFILE_V1,
   AgentSessionEventPayloadMapV1,
   AgentSessionEventTypeV1,
   AgentSessionEventV1,
   CandidateId,
+  Digest,
+  Message,
+  ProtectedTextV1,
   RunId,
   SessionId
 } from "@mn/agent-protocol";
@@ -13,7 +17,9 @@ export interface AgentSessionHeaderV1 {
   readonly schemaVersion: 1;
   readonly sessionId: SessionId;
   readonly createdAt: string;
-  readonly cwd?: string;
+  readonly protectionProfile: typeof AGENT_SESSION_PROTECTION_PROFILE_V1;
+  readonly protectionPolicyDigest: Digest;
+  readonly protectedCwd?: ProtectedTextV1;
 }
 
 export interface CreateAgentSessionOptions {
@@ -39,6 +45,7 @@ export interface AgentSessionExclusiveView {
 }
 
 export interface AgentSessionLike extends AgentSessionExclusiveView {
+  runtimeMessages(): readonly Message[];
   withExclusive<T>(operation: (session: AgentSessionExclusiveView) => Promise<T>): Promise<T>;
 }
 
@@ -49,7 +56,7 @@ export interface AgentSessionStore {
 }
 
 export interface EventPersistence {
-  append(event: AgentSessionEventV1): Promise<void>;
+  commitDurable(event: AgentSessionEventV1): Promise<void>;
   flush(): Promise<void>;
 }
 

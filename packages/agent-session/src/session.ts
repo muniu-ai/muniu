@@ -1,23 +1,65 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import { randomUUID } from "node:crypto";
+import { types as utilTypes } from "node:util";
 
 import {
-  EventId,
   createAgentSessionEvent,
   deepFreeze,
+  protectAgentSessionPayloadV1,
   snapshotJsonValue,
   verifyAgentSessionEventChain,
   type AgentSessionEventPayloadMapV1,
   type AgentSessionEventTypeV1,
-  type AgentSessionEventV1
+  type AgentSessionEventV1,
+  type AgentSessionProtectedPayloadV1,
+  type Message
 } from "@mn/agent-protocol";
+import { protectJsonValue } from "@mn/data-policy";
 
 import { snapshotAgentSessionEvent } from "./event-snapshot.js";
+import { createSafeRandomEventId } from "./event-id.js";
 import type { AgentEventMetadata, AgentSessionExclusiveView, AgentSessionHeaderV1, EventPersistence } from "./types.js";
+
+export class RuntimeOverlayRequiredError extends Error {
+  readonly code = "RUNTIME_OVERLAY_REQUIRED";
+
+  constructor() {
+    super("RUNTIME_OVERLAY_REQUIRED: protected session history has no process-local runtime overlay");
+    this.name = "RuntimeOverlayRequiredError";
+  }
+}
+
+function snapshotMetadata(metadata: AgentEventMetadata): AgentEventMetadata {
+  if (metadata === null || typeof metadata !== "object" || utilTypes.isProxy(metadata) || Array.isArray(metadata)) {
+    throw new TypeError("event metadata must be an exact data-property record");
+  }
+  const prototype = Object.getPrototypeOf(metadata);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError("event metadata must be an exact data-property record");
+  }
+  const keys = Reflect.ownKeys(metadata);
+  if (keys.some((key) => typeof key !== "string" || (key !== "runId" && key !== "candidateId"))) {
+    throw new TypeError("event metadata must be an exact data-property record");
+  }
+  const snapshot: { runId?: AgentEventMetadata["runId"]; candidateId?: AgentEventMetadata["candidateId"] } = {};
+  for (const key of keys as ("runId" | "candidateId")[]) {
+    const descriptor = Object.getOwnPropertyDescriptor(metadata, key);
+    if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) {
+      throw new TypeError("event metadata must contain only enumerable data properties");
+    }
+    Object.defineProperty(snapshot, key, {
+      value: descriptor.value,
+      enumerable: true,
+      configurable: true,
+      writable: true
+    });
+  }
+  return Object.freeze(snapshot);
+}
 
 export class DurableAgentSession {
   private readonly log: AgentSessionEventV1[];
+  private readonly runtimePayloads = new Map<number, AgentSessionEventPayloadMapV1[AgentSessionEventTypeV1]>();
   private tail: Promise<void> = Promise.resolve();
   private eventsSnapshot: readonly AgentSessionEventV1[] | undefined;
   private persistencePoisoned = false;
@@ -39,6 +81,27 @@ export class DurableAgentSession {
   get events(): readonly AgentSessionEventV1[] {
     this.eventsSnapshot ??= Object.freeze([...this.log]);
     return this.eventsSnapshot;
+  }
+
+  runtimeMessages(): readonly Message[] {
+    const messages: Message[] = [];
+    for (const event of this.log) {
+      if (event.type !== "user/message"
+        && event.type !== "assistant/message"
+        && event.type !== "tool/result") continue;
+      const runtime = this.runtimePayloads.get(event.seq) as
+        | AgentSessionEventPayloadMapV1["user/message"]
+        | AgentSessionEventPayloadMapV1["assistant/message"]
+        | AgentSessionEventPayloadMapV1["tool/result"]
+        | undefined;
+      if (runtime === undefined) throw new RuntimeOverlayRequiredError();
+      const protectedMessage = protectJsonValue(runtime.message, { businessRedaction: false });
+      if (protectedMessage === null || typeof protectedMessage !== "object" || Array.isArray(protectedMessage)) {
+        throw new Error("runtime message could not be protected for model use");
+      }
+      messages.push(deepFreeze(protectedMessage as unknown as Message));
+    }
+    return Object.freeze(messages);
   }
 
   append<T extends AgentSessionEventTypeV1>(
@@ -112,50 +175,53 @@ export class DurableAgentSession {
   ): {
     type: T;
     payload: AgentSessionEventPayloadMapV1[T];
+    protectedPayload: AgentSessionProtectedPayloadV1<T>;
     metadata: AgentEventMetadata;
   } {
+    // The profile builder performs the strict, trap-free exact-data validation
+    // before the legacy snapshot helper is allowed to inspect the input.
+    const protectedPayload = protectAgentSessionPayloadV1(type, payload);
     const payloadSnapshot = snapshotJsonValue(payload);
     if (payloadSnapshot === undefined) {
       throw new Error(`event ${type} payload is not losslessly JSON-serializable`);
     }
     deepFreeze(payloadSnapshot);
-    const runId = metadata.runId;
-    const candidateId = metadata.candidateId;
+    const metadataSnapshot = snapshotMetadata(metadata);
     return {
       type,
       payload: payloadSnapshot,
-      metadata: {
-        ...(runId === undefined ? {} : { runId }),
-        ...(candidateId === undefined ? {} : { candidateId })
-      }
+      protectedPayload,
+      metadata: metadataSnapshot
     };
   }
 
   private async appendPrepared<T extends AgentSessionEventTypeV1>(prepared: {
     type: T;
     payload: AgentSessionEventPayloadMapV1[T];
+    protectedPayload: AgentSessionProtectedPayloadV1<T>;
     metadata: AgentEventMetadata;
   }): Promise<AgentSessionEventV1<T>> {
     this.assertPersistenceHealthy();
     const previous = this.log.at(-1);
     const event = createAgentSessionEvent({
-      eventId: EventId(randomUUID()),
+      eventId: createSafeRandomEventId(),
       sessionId: this.header.sessionId,
       seq: this.log.length,
       occurredAt: new Date().toISOString(),
       type: prepared.type,
-      payload: prepared.payload,
+      payload: prepared.protectedPayload,
       ...(prepared.metadata.runId === undefined ? {} : { runId: prepared.metadata.runId }),
       ...(prepared.metadata.candidateId === undefined ? {} : { candidateId: prepared.metadata.candidateId }),
       ...(previous === undefined ? {} : { previousDigest: previous.digest })
     });
     try {
-      await this.persistence.append(event);
+      await this.persistence.commitDurable(event);
     } catch (error: unknown) {
       this.poisonPersistence(error);
       throw error;
     }
     this.log.push(event);
+    this.runtimePayloads.set(event.seq, prepared.payload);
     this.eventsSnapshot = undefined;
     return event;
   }

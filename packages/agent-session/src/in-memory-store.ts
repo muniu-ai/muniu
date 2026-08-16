@@ -8,7 +8,7 @@ import { DurableAgentSession } from "./session.js";
 import type { CreateAgentSessionOptions, EventPersistence } from "./types.js";
 
 const memoryPersistence: EventPersistence = {
-  append: async (_event: AgentSessionEventV1): Promise<void> => {},
+  commitDurable: async (_event: AgentSessionEventV1): Promise<void> => {},
   flush: async (): Promise<void> => {}
 };
 

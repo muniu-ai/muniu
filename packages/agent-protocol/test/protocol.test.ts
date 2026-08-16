@@ -12,6 +12,7 @@ import {
   createUserMessage,
   isAgentSessionEventV1,
   isJsonValue,
+  protectAgentSessionPayloadV1,
   snapshotJsonValue,
   verifyAgentSessionEventChain
 } from "../src/index.js";
@@ -44,14 +45,26 @@ test("canonical JSON and event digests are stable across object key order", () =
     occurredAt: "2026-08-15T00:00:00.000Z",
     type: "session/created" as const
   };
-  const first = createAgentSessionEvent({ ...common, payload: { cwd: "/tmp/project", labels: { b: "2", a: "1" } } });
-  const second = createAgentSessionEvent({ ...common, payload: { labels: { a: "1", b: "2" }, cwd: "/tmp/project" } });
+  const first = createAgentSessionEvent({
+    ...common,
+    payload: protectAgentSessionPayloadV1("session/created", {
+      cwd: "/tmp/project",
+      labels: { b: "2", a: "1" }
+    })
+  });
+  const second = createAgentSessionEvent({
+    ...common,
+    payload: protectAgentSessionPayloadV1("session/created", {
+      labels: { a: "1", b: "2" },
+      cwd: "/tmp/project"
+    })
+  });
   assert.equal(first.payloadDigest, second.payloadDigest);
   assert.equal(first.digest, second.digest);
   assert.equal(Object.isFrozen(first), true);
   assert.equal(Object.isFrozen(first.payload), true);
   assert.throws(() => {
-    (first.payload as { cwd?: string }).cwd = "changed";
+    (first.payload as unknown as { digest: string }).digest = "0".repeat(64);
   }, TypeError);
 });
 
@@ -63,7 +76,7 @@ test("event chain verifies monotonic sequence and detects payload tampering", ()
     seq: 0,
     occurredAt: "2026-08-15T00:00:00.000Z",
     type: "session/created",
-    payload: {}
+    payload: protectAgentSessionPayloadV1("session/created", {})
   });
   const user = createUserMessage({
     id: MessageId("message-1"),
@@ -77,13 +90,13 @@ test("event chain verifies monotonic sequence and detects payload tampering", ()
     occurredAt: "2026-08-15T00:00:01.000Z",
     type: "user/message",
     previousDigest: first.digest,
-    payload: { turn: 1, message: user }
+    payload: protectAgentSessionPayloadV1("user/message", { turn: 1, message: user })
   });
   assert.doesNotThrow(() => verifyAgentSessionEventChain([first, second]));
 
   const tampered = structuredClone(second) as typeof second;
-  (tampered.payload.message.content[0] as { type: "text"; text: string }).text = "changed";
-  assert.throws(() => verifyAgentSessionEventChain([first, tampered]), /payload digest/i);
+  (tampered.payload as unknown as { digest: string }).digest = "0".repeat(64);
+  assert.throws(() => verifyAgentSessionEventChain([first, tampered]), /invalid event schema/i);
 
   assert.equal(isAgentSessionEventV1({ ...first, type: "plugin/arbitrary" }), false);
 });
@@ -95,7 +108,7 @@ test("event guard rejects non-canonical envelopes and payload shapes", () => {
     seq: 0,
     occurredAt: "2026-08-15T00:00:00.000Z",
     type: "session/created",
-    payload: { cwd: "/tmp/project" }
+    payload: protectAgentSessionPayloadV1("session/created", { cwd: "/tmp/project" })
   });
   const invalid: unknown[] = [
     { ...event, unexpected: true },
@@ -108,7 +121,8 @@ test("event guard rejects non-canonical envelopes and payload shapes", () => {
     { ...event, seq: Number.MAX_SAFE_INTEGER + 1 },
     { ...event, occurredAt: "2026-08-15" },
     { ...event, payload: { cwd: "/tmp/project", extra: true } },
-    { ...event, payload: { cwd: 42 } },
+    { ...event, protectionProfile: "legacy-unprotected" },
+    { ...event, protectionPolicyDigest: "0".repeat(64) },
     { ...event, payload: null },
     { ...event, type: "step/end", payload: { turn: 1, step: 1, status: ["completed"] } },
     { ...event, type: "turn/end", payload: { turn: 1, reason: ["completed"] } }
@@ -121,7 +135,7 @@ test("event guard rejects non-canonical envelopes and payload shapes", () => {
     seq: 0,
     occurredAt: "2026-08-15",
     type: "session/created",
-    payload: {}
+    payload: protectAgentSessionPayloadV1("session/created", {})
   }), /RFC3339/i);
 });
 

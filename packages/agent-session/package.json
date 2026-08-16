@@ -20,6 +20,7 @@
     "test:coverage": "tsc -p tsconfig.test.json && node --test --experimental-test-coverage --test-coverage-include=dist-test/src/**/*.js --test-coverage-lines=70 --test-coverage-functions=70 --test-coverage-branches=70 dist-test/test/**/*.test.js"
   },
   "dependencies": {
-    "@mn/agent-protocol": "0.1.0"
+    "@mn/agent-protocol": "0.1.0",
+    "@mn/data-policy": "0.1.0"
   }
 }

@@ -115,7 +115,7 @@ test("PATH-empty host completes a durable two-step tool turn and reloads it afte
       assert.doesNotThrow(() => verifyAgentSessionEventChain(reopened.events));
       assert.equal(projectSession(reopened.events).status, "completed");
       const finalMessage = projectSession(reopened.events).messages.at(-1);
-      assert.equal(finalMessage?.role, "assistant");
+      assert.equal(finalMessage?.publicControls.message.role, "assistant");
     } finally {
       await reopenStore.dispose();
     }
@@ -158,7 +158,7 @@ test("host forwards optional run bindings, defaults storage, and disposes once",
     maxToolCalls: 0
   });
   assert.equal(outcome.reason, "completed");
-  assert.equal(outcome.session.header.cwd, "/workspace");
+  assert.equal(outcome.session.header.protectedCwd?.text, "/workspace");
   assert.equal(observedSystem, "bound");
   assert.equal(observedAborted, false);
   await host.dispose();
@@ -432,11 +432,11 @@ test("host synchronously snapshots every run input getter and nested labels", as
   assert.deepEqual(reads, readsWhenRunReturned);
   assert.equal(outcome.reason, "completed");
   assert.equal(outcome.session.header.sessionId, SessionId("snapshotted-host-input"));
-  assert.equal(outcome.session.header.cwd, "/original");
+  assert.equal(outcome.session.header.protectedCwd?.text, "/original");
   assert.equal(outcome.session.events[0]?.type === "session/created"
-    ? outcome.session.events[0].payload.labels?.source
-    : undefined, "original");
-  assert.deepEqual(projectSession(outcome.session.events).messages[0]?.content, [
+    ? JSON.stringify(outcome.session.events[0].payload).includes("original")
+    : false, true);
+  assert.deepEqual(outcome.session.runtimeMessages()[0]?.content, [
     { type: "text", text: "original prompt" }
   ]);
   assert.equal(observedModel, "original-model");

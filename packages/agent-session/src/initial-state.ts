@@ -1,15 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import { randomUUID } from "node:crypto";
-
 import {
-  EventId,
+  AGENT_SESSION_PROTECTION_PROFILE_V1,
+  PROTECTION_POLICY_DIGEST_V1,
+  createProtectedTextV1,
   createAgentSessionEvent,
   deepFreeze,
+  protectAgentSessionPayloadV1,
+  type AgentSessionEventPayloadMapV1,
   type AgentSessionEventV1
 } from "@mn/agent-protocol";
 
 import type { CreateAgentSessionOptionsSnapshot } from "./create-options.js";
+import { createSafeRandomEventId } from "./event-id.js";
 import type { AgentSessionHeaderV1 } from "./types.js";
 
 export interface InitialAgentSessionState {
@@ -25,18 +28,21 @@ export function createInitialAgentSessionState(
     schemaVersion: 1,
     sessionId: options.sessionId,
     createdAt: occurredAt,
-    ...(options.cwd === undefined ? {} : { cwd: options.cwd })
+    protectionProfile: AGENT_SESSION_PROTECTION_PROFILE_V1,
+    protectionPolicyDigest: PROTECTION_POLICY_DIGEST_V1,
+    ...(options.cwd === undefined ? {} : { protectedCwd: createProtectedTextV1(options.cwd) })
+  });
+  const runtimePayload: AgentSessionEventPayloadMapV1["session/created"] = deepFreeze({
+    ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+    ...(options.labels === undefined ? {} : { labels: options.labels })
   });
   const event = createAgentSessionEvent({
-    eventId: EventId(randomUUID()),
+    eventId: createSafeRandomEventId(),
     sessionId: options.sessionId,
     seq: 0,
     occurredAt,
     type: "session/created",
-    payload: {
-      ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-      ...(options.labels === undefined ? {} : { labels: options.labels })
-    }
+    payload: protectAgentSessionPayloadV1("session/created", runtimePayload)
   });
   return deepFreeze({ header, event });
 }

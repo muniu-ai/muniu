@@ -16,14 +16,29 @@ import {
 import path from "node:path";
 
 import {
+  AGENT_SESSION_PROTECTION_PROFILE_V1,
+  PROTECTION_POLICY_DIGEST_V1,
   SessionId,
+  assertSafePublicControlIdV1,
+  createProtectedTextV1,
   digestJson,
   deepFreeze,
   isAgentSessionEventV1,
   isCanonicalRfc3339,
+  isProtectedTextV1,
+  protectAgentSessionPayloadV1,
   verifyAgentSessionEventChain,
-  type AgentSessionEventV1
+  type AgentSessionEventV1,
+  type ProtectedJsonNodeV1,
+  type ProtectedTextV1
 } from "@mn/agent-protocol";
+import {
+  CREDENTIAL_MARKER,
+  PHONE_MARKER,
+  PRC_ID_MARKER,
+  PRIVATE_KEY_MARKER,
+  UNSAFE_MARKER
+} from "@mn/data-policy";
 
 import { snapshotAgentSessionEvent } from "./event-snapshot.js";
 import { snapshotCreateAgentSessionOptions, type CreateAgentSessionOptionsSnapshot } from "./create-options.js";
@@ -67,6 +82,15 @@ export interface JsonlAgentSessionStoreOptions {
 
 export type SessionCreateOutcome = "uncertain" | "committed";
 
+export class LegacyUnprotectedSessionError extends Error {
+  readonly code = "LEGACY_UNPROTECTED_SESSION";
+
+  constructor() {
+    super("legacy unprotected agent session requires an explicit migration before it can be opened");
+    this.name = "LegacyUnprotectedSessionError";
+  }
+}
+
 export class SessionCreateOutcomeError extends Error {
   readonly cleanupErrors: readonly unknown[];
 
@@ -87,31 +111,86 @@ export class SessionCreateOutcomeError extends Error {
 }
 
 function assertSessionId(sessionId: SessionId): void {
+  try {
+    assertSafePublicControlIdV1(sessionId, "session identifier");
+  } catch {
+    throw new Error("session id is not safe for durable storage");
+  }
   if (!SESSION_ID_PATTERN.test(sessionId)) throw new Error("session id is not safe for durable storage");
 }
 
 function validateHeader(value: unknown, expectedId: SessionId): AgentSessionHeaderV1 {
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid session header");
   const header = value as Record<string, unknown>;
-  const required = ["schemaVersion", "sessionId", "createdAt"];
-  const allowed = new Set([...required, "cwd"]);
+  if (header.schemaVersion === 1
+    && (Object.hasOwn(header, "cwd") || !Object.hasOwn(header, "protectionProfile"))) {
+    throw new LegacyUnprotectedSessionError();
+  }
+  const required = [
+    "schemaVersion",
+    "sessionId",
+    "createdAt",
+    "protectionProfile",
+    "protectionPolicyDigest"
+  ];
+  const allowed = new Set([...required, "protectedCwd"]);
   if (!required.every((key) => Object.hasOwn(header, key))
     || !Object.keys(header).every((key) => allowed.has(key))
     || header.schemaVersion !== 1
     || header.sessionId !== expectedId
-    || !isCanonicalRfc3339(header.createdAt)) {
+    || !isCanonicalRfc3339(header.createdAt)
+    || header.protectionProfile !== AGENT_SESSION_PROTECTION_PROFILE_V1
+    || header.protectionPolicyDigest !== PROTECTION_POLICY_DIGEST_V1) {
     throw new Error("invalid session header");
   }
-  if (header.cwd !== undefined && typeof header.cwd !== "string") throw new Error("invalid session header cwd");
+  if (header.protectedCwd !== undefined && !isProtectedTextV1(header.protectedCwd)) {
+    throw new Error("invalid protected session header cwd");
+  }
   return deepFreeze(header as unknown as AgentSessionHeaderV1);
 }
 
 function creationSnapshotDigest(options: CreateAgentSessionOptionsSnapshot): string {
-  return digestJson({
-    sessionId: options.sessionId,
+  const payload = protectAgentSessionPayloadV1("session/created", {
     ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
     ...(options.labels === undefined ? {} : { labels: options.labels })
   });
+  return digestJson({
+    sessionId: options.sessionId,
+    ...(options.cwd === undefined ? {} : { protectedCwdDigest: createProtectedTextV1(options.cwd).digest }),
+    payloadDigest: payload.digest
+  });
+}
+
+const PROTECTED_MARKERS = new Set([
+  CREDENTIAL_MARKER,
+  PHONE_MARKER,
+  PRC_ID_MARKER,
+  PRIVATE_KEY_MARKER,
+  UNSAFE_MARKER
+]);
+
+function protectedTextContainsMarker(text: string): boolean {
+  return [...PROTECTED_MARKERS].some((marker) => text.includes(marker));
+}
+
+function protectedNodeContainsMarker(
+  node: ProtectedJsonNodeV1
+): boolean {
+  if (node.type === "string") return protectedTextContainsMarker(node.value.text);
+  if (node.type === "array") return node.items.some(protectedNodeContainsMarker);
+  if (node.type === "object") {
+    return node.entries.some((entry) => protectedTextContainsMarker(entry.key.text)
+      || protectedNodeContainsMarker(entry.value));
+  }
+  return false;
+}
+
+function creationSnapshotIsAmbiguous(options: CreateAgentSessionOptionsSnapshot): boolean {
+  const payload = protectAgentSessionPayloadV1("session/created", {
+    ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+    ...(options.labels === undefined ? {} : { labels: options.labels })
+  });
+  return protectedNodeContainsMarker(payload.protectedContent.root);
 }
 
 function persistedCreationSnapshotDigest(
@@ -120,9 +199,29 @@ function persistedCreationSnapshotDigest(
 ): string {
   return digestJson({
     sessionId: header.sessionId,
-    ...(created.payload.cwd === undefined ? {} : { cwd: created.payload.cwd }),
-    ...(created.payload.labels === undefined ? {} : { labels: created.payload.labels })
+    ...(header.protectedCwd === undefined ? {} : { protectedCwdDigest: header.protectedCwd.digest }),
+    payloadDigest: created.payload.digest
   });
+}
+
+function protectedCreatedCwd(event: AgentSessionEventV1<"session/created">): ProtectedTextV1 | undefined {
+  const root = event.payload.protectedContent.root;
+  if (root.type !== "object") throw new Error("protected creation payload must be an object");
+  const cwd = root.entries.find((entry) => entry.key.text === "cwd")?.value;
+  if (cwd === undefined) return undefined;
+  if (cwd.type !== "string") throw new Error("protected creation cwd must be a string");
+  return cwd.value;
+}
+
+function isLegacyUnprotectedEvent(value: unknown): boolean {
+  return value !== null
+    && typeof value === "object"
+    && !Array.isArray(value)
+    && (value as Record<string, unknown>).schemaVersion === 1
+    && Object.hasOwn(value, "payload")
+    && ((value as Record<string, unknown>).payload === null
+      || typeof (value as Record<string, unknown>).payload !== "object"
+      || (value as { payload: Record<string, unknown> }).payload.kind !== "agent-session-protected-payload");
 }
 
 class SymbolicLinkError extends Error {}
@@ -214,6 +313,14 @@ async function loadEvents(
   if (buffer.length > 0 && buffer.at(-1) !== 0x0a) {
     const lastNewline = buffer.lastIndexOf(0x0a);
     const committedLength = lastNewline < 0 ? 0 : lastNewline + 1;
+    const uncommittedTail = buffer.subarray(committedLength).toString("utf8");
+    try {
+      const parsedTail: unknown = JSON.parse(uncommittedTail);
+      if (isLegacyUnprotectedEvent(parsedTail)) throw new LegacyUnprotectedSessionError();
+    } catch (error: unknown) {
+      if (error instanceof LegacyUnprotectedSessionError) throw error;
+      // A malformed final record is a torn append and is repaired below.
+    }
     await repairTail(committedLength);
     buffer = buffer.subarray(0, committedLength);
   }
@@ -230,6 +337,7 @@ async function loadEvents(
       throw new Error(`corrupt session event at line ${index + 1}: invalid JSON`);
     }
     if (!isAgentSessionEventV1(parsed)) {
+      if (isLegacyUnprotectedEvent(parsed)) throw new LegacyUnprotectedSessionError();
       throw new Error(`corrupt session event at line ${index + 1}: invalid envelope`);
     }
     events.push(snapshotAgentSessionEvent(parsed));
@@ -398,7 +506,7 @@ export class JsonlAgentSessionStore {
         outcome = "committed";
         await this.runHook(() => this.options.afterPublish?.("committed", sessionId));
         this.assertLease(lease);
-        result = await this.loadSessionWithLease(sessionId, canonicalSessionsRoot, lease, options);
+        result = await this.loadSessionWithLease(sessionId, canonicalSessionsRoot, lease, options, true);
         completed = true;
       }
     } catch (error: unknown) {
@@ -454,7 +562,8 @@ export class JsonlAgentSessionStore {
     sessionId: SessionId,
     canonicalSessionsRoot: string,
     lease: WriterLease,
-    expectedCreation?: CreateAgentSessionOptionsSnapshot
+    expectedCreation?: CreateAgentSessionOptionsSnapshot,
+    allowAmbiguousCreation = false
   ): Promise<DurableAgentSession> {
     const paths = this.paths(sessionId);
     if (lease.directoryHandle !== undefined || lease.eventWriter !== undefined) {
@@ -473,9 +582,10 @@ export class JsonlAgentSessionStore {
         await handle.close();
       }
     } catch (error: unknown) {
-      if (error instanceof SymbolicLinkError) throw error;
+      if (error instanceof SymbolicLinkError || error instanceof LegacyUnprotectedSessionError) throw error;
       throw new Error(`session "${sessionId}" has a corrupt header`, { cause: error });
     }
+    const header = validateHeader(parsedHeader, sessionId);
     const eventReader = await openRegularNoFollow(paths.events, constants.O_RDONLY);
     let eventWriteHandle: Awaited<ReturnType<typeof openRegularNoFollow>> | undefined;
     let writeHandleClosed = false;
@@ -518,7 +628,6 @@ export class JsonlAgentSessionStore {
       }
     }
     if (eventFailure !== undefined) throw eventFailure;
-    const header = validateHeader(parsedHeader, sessionId);
     const loadedEvents = events as AgentSessionEventV1[];
     if (loadedEvents.length === 0) throw new Error(`session "${sessionId}" has an empty event log`);
     const created = loadedEvents[0];
@@ -528,15 +637,20 @@ export class JsonlAgentSessionStore {
     if (loadedEvents.some((event) => event.sessionId !== header.sessionId)) {
       throw new Error(`session "${sessionId}" event session id does not match header`);
     }
-    if (header.cwd !== created.payload.cwd) {
+    const createdCwd = protectedCreatedCwd(created);
+    if (header.protectedCwd?.digest !== createdCwd?.digest) {
       throw new Error(`session "${sessionId}" header cwd does not match the creation event`);
     }
     if (header.createdAt !== created.occurredAt) {
       throw new Error(`session "${sessionId}" header creation time does not match the creation event`);
     }
-    if (expectedCreation !== undefined
-      && persistedCreationSnapshotDigest(header, created) !== creationSnapshotDigest(expectedCreation)) {
-      throw new Error(`session "${sessionId}" already exists with a different creation snapshot`);
+    if (expectedCreation !== undefined) {
+      if (!allowAmbiguousCreation && creationSnapshotIsAmbiguous(expectedCreation)) {
+        throw new Error(`session "${sessionId}" cannot compare an ambiguous protected creation snapshot`);
+      }
+      if (persistedCreationSnapshotDigest(header, created) !== creationSnapshotDigest(expectedCreation)) {
+        throw new Error(`session "${sessionId}" already exists with a different creation snapshot`);
+      }
     }
     this.assertLease(lease);
     const session = new DurableAgentSession(header, loadedEvents, this.persistence(lease));
@@ -546,6 +660,7 @@ export class JsonlAgentSessionStore {
 
   open(sessionId: SessionId): Promise<DurableAgentSession> {
     this.assertOpen();
+    assertSessionId(sessionId);
     const live = this.sessions.get(sessionId);
     if (live !== undefined) return Promise.resolve(live);
     const pending = this.inFlight.get(sessionId);
@@ -701,7 +816,7 @@ export class JsonlAgentSessionStore {
 
   private persistence(lease: WriterLease): EventPersistence {
     return {
-      append: (event) => this.runIo(lease, async () => {
+      commitDurable: (event) => this.runIo(lease, async () => {
         await this.runHook(() => this.options.beforeAppend?.(event));
         this.assertLeaseHeld(lease);
         await this.eventWriter(lease).append(`${JSON.stringify(event)}\n`);

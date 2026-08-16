@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { CallId, CandidateId, RunId, SessionId, verifyAgentSessionEventChain } from "@mn/agent-protocol";
-import { InMemoryAgentSessionStore } from "@mn/agent-session";
+import { CallId, CandidateId, MessageId, RunId, SessionId, verifyAgentSessionEventChain } from "@mn/agent-protocol";
+import { DurableAgentSession, InMemoryAgentSessionStore } from "@mn/agent-session";
 import { LlmRuntime, ScriptedLlmAdapter, type LlmAdapter } from "@mn/agent-llm";
 import { ToolExecutionError, ToolRegistry, defineTool } from "@mn/agent-tools";
 import {
@@ -488,7 +488,91 @@ test("ReactDriver maps max-tokens finish to budget-exceeded", async () => {
 
   assert.equal(result.reason, "budget-exceeded");
   const turnEnd = session.events.at(-1);
-  assert.equal(turnEnd?.type === "turn/end" ? turnEnd.payload.reason : undefined, "budget-exceeded");
+  assert.equal(turnEnd?.type === "turn/end" ? turnEnd.payload.publicControls.reason : undefined, "budget-exceeded");
+});
+
+test("ReactDriver uses the process-local credential-safe overlay instead of durable protected messages", async () => {
+  const mobile = "13800138000";
+  const identity = "11010519491231002X";
+  const credential = "sk-runtime-only-credential-material";
+  let observed = "";
+  const llm = new LlmRuntime();
+  llm.register({
+    id: "overlay-capture",
+    async *stream(request) {
+      const message = request.messages.at(-1);
+      const block = message?.content[0];
+      observed = block?.type === "text" ? block.text : "";
+      yield { type: "text-delta", index: 0, text: "ok" };
+      yield { type: "finish", reason: "stop" };
+    }
+  });
+  llm.seal();
+  const tools = new ToolRegistry({ authorize: async () => ({ decision: "deny" }) });
+  tools.seal();
+  const session = await new InMemoryAgentSessionStore().create({ sessionId: SessionId("overlay-capture") });
+  await createBuiltinAgentKernel({
+    llm,
+    tools,
+    systemPrompt: new StaticSystemPrompt([])
+  }).run({
+    session,
+    prompt: `Alice alice@example.com phone=${mobile} id=${identity} token=${credential}`,
+    provider: "overlay-capture",
+    model: "scripted"
+  });
+
+  assert.equal(observed.includes(mobile), true);
+  assert.equal(observed.includes(identity), true);
+  assert.equal(observed.includes("alice@example.com"), true);
+  assert.equal(observed.includes(credential), false);
+  const durable = JSON.stringify(session.events);
+  assert.equal(durable.includes(mobile), false);
+  assert.equal(durable.includes(identity), false);
+  assert.equal(durable.includes(credential), false);
+  assert.equal(durable.includes("alice@example.com"), true);
+});
+
+test("ReactDriver refuses reopened protected history before appending or dispatching", async () => {
+  const original = await new InMemoryAgentSessionStore().create({ sessionId: SessionId("overlay-required") });
+  await original.append("user/message", {
+    turn: 1,
+    message: {
+      id: MessageId("overlay-prior-user"),
+      role: "user",
+      source: { kind: "user" },
+      content: [{ type: "text", text: "prior durable message" }]
+    }
+  });
+  const reopened = new DurableAgentSession(original.header, original.events, {
+    commitDurable: async () => {},
+    flush: async () => {}
+  });
+  let streamCalls = 0;
+  const llm = new LlmRuntime();
+  llm.register({
+    id: "overlay-required-provider",
+    async *stream() {
+      streamCalls += 1;
+      yield { type: "finish", reason: "stop" };
+    }
+  });
+  llm.seal();
+  const tools = new ToolRegistry({ authorize: async () => ({ decision: "deny" }) });
+  tools.seal();
+  const durableLength = reopened.events.length;
+  await assert.rejects(() => createBuiltinAgentKernel({
+    llm,
+    tools,
+    systemPrompt: new StaticSystemPrompt([])
+  }).run({
+    session: reopened,
+    prompt: "resume",
+    provider: "overlay-required-provider",
+    model: "scripted"
+  }), /RUNTIME_OVERLAY_REQUIRED/);
+  assert.equal(reopened.events.length, durableLength);
+  assert.equal(streamCalls, 0);
 });
 
 test("ReactDriver closes every remaining model tool call symmetrically after cancellation", async () => {
@@ -537,17 +621,26 @@ test("ReactDriver closes every remaining model tool call symmetrically after can
   const toolResults = session.events.filter((event) => event.type === "tool/result");
   assert.equal(toolResults.length, 3);
   assert.deepEqual(
-    toolResults.map((event) => event.type === "tool/result" ? event.payload.message.source.callId : undefined),
+    toolResults.map((event) => event.type === "tool/result"
+      ? event.payload.publicControls.message.source.callId
+      : undefined),
     ["cancel-call-1", "cancel-call-2", "cancel-call-3"]
   );
   assert.deepEqual(
     toolResults.map((event) => event.type === "tool/result"
-      ? { status: event.payload.status, code: event.payload.error?.code, runId: event.runId, candidateId: event.candidateId }
+      ? {
+        status: event.payload.publicControls.status,
+        code: event.payload.publicControls.error?.code,
+        runId: event.runId,
+        candidateId: event.candidateId
+      }
       : undefined),
     Array.from({ length: 3 }, () => ({ status: "interrupted", code: "TOOL_CANCELLED", runId, candidateId }))
   );
   assert.deepEqual(
-    session.events.filter((event) => event.type === "tool/call").map((event) => event.type === "tool/call" ? event.payload.callId : undefined),
+    session.events.filter((event) => event.type === "tool/call").map((event) => event.type === "tool/call"
+      ? event.payload.publicControls.callId
+      : undefined),
     ["cancel-call-1"]
   );
 });
@@ -573,11 +666,17 @@ test("runToolStep never records a completed forged cancellation", async () => {
   assert.equal(toolResult?.type, "tool/result");
   if (toolResult?.type === "tool/result") {
     assert.notDeepEqual(
-      { status: toolResult.payload.status, code: toolResult.payload.error?.code },
+      {
+        status: toolResult.payload.publicControls.status,
+        code: toolResult.payload.publicControls.error?.code
+      },
       { status: "completed", code: "TOOL_CANCELLED" }
     );
     assert.deepEqual(
-      { status: toolResult.payload.status, code: toolResult.payload.error?.code },
+      {
+        status: toolResult.payload.publicControls.status,
+        code: toolResult.payload.publicControls.error?.code
+      },
       { status: "completed", code: "TOOL_EXECUTION_FAILED" }
     );
   }
@@ -624,7 +723,7 @@ test("system prompt reaches the model and failed or aborted tools close the turn
   const result = failedSession.events.find((event) => event.type === "tool/result");
   assert.equal(result?.type, "tool/result");
   if (result?.type === "tool/result") {
-    assert.equal(result.payload.error?.code, "TOOL_EXECUTION_FAILED");
+    assert.equal(result.payload.publicControls.error?.code, "TOOL_EXECUTION_FAILED");
     assert.equal(JSON.stringify(result.payload).includes("credential-shaped"), false);
   }
   assert.deepEqual(failedSession.events.slice(-2).map((event) => event.type), ["step/end", "turn/end"]);
@@ -657,8 +756,8 @@ test("system prompt reaches the model and failed or aborted tools close the turn
   const abortedResult = abortedSession.events.find((event) => event.type === "tool/result");
   assert.equal(abortedResult?.type, "tool/result");
   if (abortedResult?.type === "tool/result") {
-    assert.equal(abortedResult.payload.status, "interrupted");
-    assert.equal(abortedResult.payload.error?.code, "TOOL_CANCELLED");
+    assert.equal(abortedResult.payload.publicControls.status, "interrupted");
+    assert.equal(abortedResult.payload.publicControls.error?.code, "TOOL_CANCELLED");
   }
   assert.equal(abortedSession.events.at(-1)?.type, "turn/end");
 });

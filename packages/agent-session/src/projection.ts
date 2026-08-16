@@ -6,27 +6,36 @@
  * SPDX-License-Identifier: MIT
  *
  * Adaptation: replaced the plugin-extensible surface fold with a closed v0.1
- * projection of messages, turn/step state, and pending tool effects.
+ * projection of protected messages, turn/step state, and pending tool effects.
  */
 
-import type {
-  AgentSessionEventV1,
-  CallId,
-  CandidateId,
-  RunId,
-  Message
+import {
+  UNBOUND_PROTECTED_TOOL_CALL_V1,
+  type AgentSessionEventV1,
+  type AgentSessionProtectedPayloadV1,
+  type CallId,
+  type CandidateId,
+  type Message,
+  type RunId
 } from "@mn/agent-protocol";
+
+import type { AgentSessionLike } from "./types.js";
 
 export interface PendingToolCall {
   readonly callId: CallId;
   readonly turn: number;
   readonly step: number;
   readonly name: string;
-  readonly arguments: string;
+  readonly binding: typeof UNBOUND_PROTECTED_TOOL_CALL_V1;
   readonly started: boolean;
+  readonly replayAllowed: false;
   readonly runId?: RunId;
   readonly candidateId?: CandidateId;
 }
+
+export type ProjectedProtectedMessage = AgentSessionProtectedPayloadV1<
+  "user/message" | "assistant/message" | "tool/result"
+>;
 
 export interface AgentSessionProjection {
   readonly status: "idle" | "active" | "completed" | "cancelled" | "budget-exceeded" | "interrupted" | "error";
@@ -34,12 +43,21 @@ export interface AgentSessionProjection {
   readonly openStep?: number;
   readonly openTurnRunId?: RunId;
   readonly openTurnCandidateId?: CandidateId;
-  readonly messages: readonly Message[];
+  readonly messages: readonly ProjectedProtectedMessage[];
   readonly pendingToolCalls: readonly PendingToolCall[];
 }
 
+/**
+ * Returns the current process-only model history. Reopened durable sessions do
+ * not contain an execution overlay and fail closed rather than materializing
+ * protected persistence records back into executable messages.
+ */
+export function projectRuntimeMessages(session: AgentSessionLike): readonly Message[] {
+  return session.runtimeMessages();
+}
+
 export function projectSession(events: readonly AgentSessionEventV1[]): AgentSessionProjection {
-  const messages: Message[] = [];
+  const messages: ProjectedProtectedMessage[] = [];
   const pending = new Map<CallId, PendingToolCall>();
   let status: AgentSessionProjection["status"] = "idle";
   let openTurn: number | undefined;
@@ -50,7 +68,7 @@ export function projectSession(events: readonly AgentSessionEventV1[]): AgentSes
   for (const event of events) {
     switch (event.type) {
       case "turn/start":
-        openTurn = event.payload.turn;
+        openTurn = event.payload.publicControls.turn;
         openStep = undefined;
         openTurnRunId = event.runId;
         openTurnCandidateId = event.candidateId;
@@ -58,49 +76,53 @@ export function projectSession(events: readonly AgentSessionEventV1[]): AgentSes
         status = "active";
         break;
       case "user/message":
-        messages.push(event.payload.message);
+        messages.push(event.payload);
         break;
       case "step/start":
-        openStep = event.payload.step;
+        openStep = event.payload.publicControls.step;
         break;
-      case "assistant/message":
-        messages.push(event.payload.message);
-        for (const block of event.payload.message.content) {
-          if (block.type === "tool-call") {
-            const runId = event.runId ?? openTurnRunId;
-            const candidateId = event.candidateId ?? openTurnCandidateId;
-            pending.set(block.id, {
-              callId: block.id,
-              turn: event.payload.turn,
-              step: event.payload.step,
-              name: block.name,
-              arguments: block.arguments,
-              started: false,
-              ...(runId === undefined ? {} : { runId }),
-              ...(candidateId === undefined ? {} : { candidateId })
-            });
-          }
+      case "assistant/message": {
+        messages.push(event.payload);
+        const controls = event.payload.publicControls;
+        for (const block of controls.message.content) {
+          if (block.type !== "tool-call") continue;
+          const runId = event.runId ?? openTurnRunId;
+          const candidateId = event.candidateId ?? openTurnCandidateId;
+          pending.set(block.id, {
+            callId: block.id,
+            turn: controls.turn,
+            step: controls.step,
+            name: block.name,
+            binding: block.binding,
+            started: false,
+            replayAllowed: false,
+            ...(runId === undefined ? {} : { runId }),
+            ...(candidateId === undefined ? {} : { candidateId })
+          });
         }
         break;
+      }
       case "tool/call": {
-        const existing = pending.get(event.payload.callId);
+        const controls = event.payload.publicControls;
+        const existing = pending.get(controls.callId);
         const runId = event.runId ?? existing?.runId ?? openTurnRunId;
         const candidateId = event.candidateId ?? existing?.candidateId ?? openTurnCandidateId;
-        pending.set(event.payload.callId, {
-          callId: event.payload.callId,
-          turn: event.payload.turn,
-          step: event.payload.step,
-          name: event.payload.name,
-          arguments: event.payload.arguments,
+        pending.set(controls.callId, {
+          callId: controls.callId,
+          turn: controls.turn,
+          step: controls.step,
+          name: controls.name,
+          binding: controls.binding,
           started: true,
+          replayAllowed: false,
           ...(runId === undefined ? {} : { runId }),
           ...(candidateId === undefined ? {} : { candidateId })
         });
         break;
       }
       case "tool/result":
-        messages.push(event.payload.message);
-        pending.delete(event.payload.message.source.callId);
+        messages.push(event.payload);
+        pending.delete(event.payload.publicControls.message.source.callId);
         break;
       case "step/end":
         openStep = undefined;
@@ -111,7 +133,7 @@ export function projectSession(events: readonly AgentSessionEventV1[]): AgentSes
         openTurnRunId = undefined;
         openTurnCandidateId = undefined;
         pending.clear();
-        status = event.payload.reason;
+        status = event.payload.publicControls.reason;
         break;
       case "session/created":
         break;
