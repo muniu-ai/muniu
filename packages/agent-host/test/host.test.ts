@@ -4,7 +4,15 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { CallId, CandidateId, RunId, SessionId, verifyAgentSessionEventChain } from "@mn/agent-protocol";
+import {
+  CallId,
+  CandidateId,
+  Digest,
+  RunId,
+  SessionId,
+  verifyAgentSessionEventChain,
+  type EffectPolicyBindingV1
+} from "@mn/agent-protocol";
 import {
   InMemoryAgentSessionStore,
   JsonlAgentSessionStore,
@@ -22,6 +30,10 @@ const echoParameters = {
   required: ["text"],
   additionalProperties: false
 };
+const effectPolicyBinding: EffectPolicyBindingV1 = Object.freeze({
+  governanceDigest: Digest("a".repeat(64)),
+  harnessDigest: Digest("b".repeat(64))
+});
 
 function deferred(): { readonly promise: Promise<void>; readonly resolve: () => void } {
   let resolve!: () => void;
@@ -86,8 +98,23 @@ test("PATH-empty host completes a durable two-step tool turn and reloads it afte
     });
     const runId = RunId("run-host");
     const candidateId = CandidateId("candidate-host");
+    const mutablePolicyBinding = {
+      governanceDigest: Digest("a".repeat(64)),
+      harnessDigest: Digest("b".repeat(64))
+    };
     try {
-      const outcome = await host.run({ sessionId, prompt: "echo hello", provider: "mock", model: "scripted", runId, candidateId });
+      const run = host.run({
+        sessionId,
+        prompt: "echo hello",
+        provider: "mock",
+        model: "scripted",
+        effectPolicyBinding: mutablePolicyBinding,
+        runId,
+        candidateId
+      });
+      mutablePolicyBinding.governanceDigest = Digest("invalid-after-run-returned");
+      mutablePolicyBinding.harnessDigest = Digest("invalid-after-run-returned");
+      const outcome = await run;
       assert.equal(outcome.reason, "completed");
       assert.equal(durableCallObserved, true);
       assert.deepEqual(outcome.session.events.map((event) => event.type), [
@@ -357,7 +384,8 @@ test("host synchronously snapshots every run input getter and nested labels", as
     maxSteps: 0,
     maxToolCalls: 0,
     runId: 0,
-    candidateId: 0
+    candidateId: 0,
+    effectPolicyBinding: 0
   };
   let sessionId = SessionId("snapshotted-host-input");
   let cwd = "/original";
@@ -374,6 +402,7 @@ test("host synchronously snapshots every run input getter and nested labels", as
   let maxToolCalls = 0;
   let runId = RunId("original-run");
   let candidateId = CandidateId("original-candidate");
+  let policyBinding: EffectPolicyBindingV1 = effectPolicyBinding;
   let observedModel: string | undefined;
   const host = await createAgentHost({
     adapters: [{
@@ -397,7 +426,8 @@ test("host synchronously snapshots every run input getter and nested labels", as
     get maxSteps() { reads.maxSteps += 1; return maxSteps; },
     get maxToolCalls() { reads.maxToolCalls += 1; return maxToolCalls; },
     get runId() { reads.runId += 1; return runId; },
-    get candidateId() { reads.candidateId += 1; return candidateId; }
+    get candidateId() { reads.candidateId += 1; return candidateId; },
+    get effectPolicyBinding() { reads.effectPolicyBinding += 1; return policyBinding; }
   } satisfies AgentHostRunInput;
 
   const run = host.run(input);
@@ -413,6 +443,10 @@ test("host synchronously snapshots every run input getter and nested labels", as
   maxToolCalls = 99;
   runId = RunId("mutated-run");
   candidateId = CandidateId("mutated-candidate");
+  policyBinding = {
+    governanceDigest: Digest("invalid"),
+    harnessDigest: Digest("invalid")
+  };
 
   const outcome = await run;
   assert.deepEqual(readsWhenRunReturned, {
@@ -427,7 +461,8 @@ test("host synchronously snapshots every run input getter and nested labels", as
     maxSteps: 1,
     maxToolCalls: 1,
     runId: 1,
-    candidateId: 1
+    candidateId: 1,
+    effectPolicyBinding: 1
   });
   assert.deepEqual(reads, readsWhenRunReturned);
   assert.equal(outcome.reason, "completed");

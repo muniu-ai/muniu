@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import type { AgentSessionEventV1, CandidateId, RunId } from "@mn/agent-protocol";
+import type {
+  AgentSessionEventV1,
+  CandidateId,
+  EffectPolicyBindingV1,
+  RunId
+} from "@mn/agent-protocol";
 
 import type { AgentSession as Session } from "@mn/agent-session";
 
@@ -18,6 +23,7 @@ export interface AgentRunInput {
   readonly maxToolCalls?: number;
   readonly runId?: RunId;
   readonly candidateId?: CandidateId;
+  readonly effectPolicyBinding?: EffectPolicyBindingV1;
 }
 
 export interface AgentRunResult {

@@ -16,6 +16,7 @@ import {
   createRuntimeEffectCommitmentBinderV1,
   digestJson,
   isEffectCommitmentV1,
+  isRuntimeEffectCommitmentBinderV1,
   type EffectCommitmentBindingV1,
   type EffectPolicyBindingV1,
   type EffectRawInputV1
@@ -102,6 +103,24 @@ test("runtime effect commitment uses a full HMAC tag, random nonce and complete 
   binder.dispose();
   otherBinder.release(other);
   otherBinder.dispose();
+});
+
+test("runtime effect binders have an unforgeable process-local provenance", () => {
+  const binder = createBinder();
+  const forged = {
+    bind: binder.bind,
+    verifyAndConsume: binder.verifyAndConsume,
+    release: binder.release,
+    dispose: binder.dispose
+  };
+  const revoked = Proxy.revocable({}, {});
+  revoked.revoke();
+
+  assert.equal(isRuntimeEffectCommitmentBinderV1(binder), true);
+  assert.equal(isRuntimeEffectCommitmentBinderV1(forged), false);
+  assert.equal(isRuntimeEffectCommitmentBinderV1(revoked.proxy), false);
+  binder.dispose();
+  assert.equal(isRuntimeEffectCommitmentBinderV1(binder), false);
 });
 
 test("opaque handles verify exactly once and a failed candidate consumes the handle", () => {

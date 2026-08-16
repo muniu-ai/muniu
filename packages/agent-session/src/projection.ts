@@ -15,23 +15,33 @@ import {
   type AgentSessionProtectedPayloadV1,
   type CallId,
   type CandidateId,
+  type EffectCommitmentV1,
   type Message,
   type RunId
 } from "@mn/agent-protocol";
 
 import type { AgentSessionLike } from "./types.js";
 
-export interface PendingToolCall {
+interface PendingToolCallBase {
   readonly callId: CallId;
   readonly turn: number;
   readonly step: number;
   readonly name: string;
-  readonly binding: typeof UNBOUND_PROTECTED_TOOL_CALL_V1;
-  readonly started: boolean;
   readonly replayAllowed: false;
   readonly runId?: RunId;
   readonly candidateId?: CandidateId;
 }
+
+export type PendingToolCall = PendingToolCallBase & (
+  | {
+    readonly binding: typeof UNBOUND_PROTECTED_TOOL_CALL_V1;
+    readonly started: false;
+  }
+  | {
+    readonly binding: EffectCommitmentV1;
+    readonly started: true;
+  }
+);
 
 export type ProjectedProtectedMessage = AgentSessionProtectedPayloadV1<
   "user/message" | "assistant/message" | "tool/result"

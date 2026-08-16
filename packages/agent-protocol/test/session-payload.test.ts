@@ -12,15 +12,22 @@ import {
 import {
   AGENT_SESSION_PROTECTION_PROFILE_V1,
   CallId,
+  CandidateId,
+  Digest,
   MessageId,
   PROTECTION_POLICY_DIGEST_V1,
+  RunId,
+  SessionId,
   UNBOUND_PROTECTED_TOOL_CALL_V1,
   assertAgentSessionProtectedPayloadV1,
   createAssistantMessage,
+  createProtectedTextV1,
   createProtectedJsonViewV1,
+  createRuntimeEffectCommitmentBinderV1,
   createToolResultMessage,
   createUserMessage,
   digestJson,
+  deriveToolEffectKindV1,
   inspectAgentSessionProtectedPayloadV1,
   isAgentSessionProtectedPayloadV1,
   protectAgentSessionPayloadV1
@@ -72,7 +79,7 @@ test("session payload builder publishes only a detached protected DTO under the 
   assert.equal(inspectAgentSessionProtectedPayloadV1("turn/start", payload), undefined);
 });
 
-test("assistant and explicit tool-call durable views are unbound and never expose an executable arguments field", () => {
+test("assistant proposals stay unbound while explicit tool calls carry a commitment without executable arguments", () => {
   const argumentsText = JSON.stringify({ phone: mainlandMobile, apiKey: providerCredential });
   const assistant = createAssistantMessage({
     id: MessageId("assistant-ordinary-1"),
@@ -89,20 +96,39 @@ test("assistant and explicit tool-call durable views are unbound and never expos
     step: 1,
     message: assistant
   });
+  const binder = createRuntimeEffectCommitmentBinderV1({
+    governanceDigest: "1".repeat(64) as Digest,
+    harnessDigest: "2".repeat(64) as Digest
+  });
+  const handle = binder.bind({
+    effectKind: deriveToolEffectKindV1("read_file"),
+    sessionId: SessionId("payload-session"),
+    runId: RunId("payload-run"),
+    candidateId: CandidateId("payload-candidate"),
+    turn: 1,
+    step: 1,
+    internalEffectId: CallId("call-ordinary-1"),
+    protectedInput: createProtectedTextV1(argumentsText),
+    raw: { kind: "text", value: argumentsText }
+  });
   const explicitPayload = protectAgentSessionPayloadV1("tool/call", {
     turn: 1,
     step: 1,
     callId: CallId("call-ordinary-1"),
     name: "read_file",
-    arguments: argumentsText
+    arguments: argumentsText,
+    commitment: handle.commitment
   });
 
-  for (const [payload, durableContentKey] of [
-    [assistantPayload, "blocks"],
-    [explicitPayload, "protectedArguments"]
+  const assistantSerialized = JSON.stringify(assistantPayload);
+  const explicitSerialized = JSON.stringify(explicitPayload);
+  assert.ok(assistantSerialized.includes(UNBOUND_PROTECTED_TOOL_CALL_V1));
+  assert.equal(explicitSerialized.includes(UNBOUND_PROTECTED_TOOL_CALL_V1), false);
+  assert.deepEqual(explicitPayload.publicControls.binding, handle.commitment);
+  for (const [serialized, durableContentKey] of [
+    [assistantSerialized, "blocks"],
+    [explicitSerialized, "protectedArguments"]
   ] as const) {
-    const serialized = JSON.stringify(payload);
-    assert.ok(serialized.includes(UNBOUND_PROTECTED_TOOL_CALL_V1));
     assert.ok(serialized.includes(durableContentKey));
     assert.equal(serialized.includes('"text":"arguments"'), false);
     assert.equal(serialized.includes(mainlandMobile), false);
@@ -114,6 +140,7 @@ test("assistant and explicit tool-call durable views are unbound and never expos
     name: "read_file",
     arguments: argumentsText
   });
+  binder.dispose();
 });
 
 test("session payload builder rejects raw casts, unsafe structural IDs and hostile JSON without invoking user code", () => {
@@ -147,7 +174,8 @@ test("session payload builder rejects raw casts, unsafe structural IDs and hosti
       step: 1,
       callId: CallId(`call_${providerCredential}_tail`),
       name: "read_file",
-      arguments: "{}"
+      arguments: "{}",
+      commitment: {} as never
     }),
     /protected material/iu
   );
@@ -247,6 +275,22 @@ test("session profile separates typed counters from protected content and closes
 });
 
 test("all nine protected payload variants survive JSON roundtrip without exposing raw content", () => {
+  const toolArguments = `password=${providerCredential}`;
+  const binder = createRuntimeEffectCommitmentBinderV1({
+    governanceDigest: "1".repeat(64) as Digest,
+    harnessDigest: "2".repeat(64) as Digest
+  });
+  const toolHandle = binder.bind({
+    effectKind: deriveToolEffectKindV1("read_file"),
+    sessionId: SessionId("roundtrip-session"),
+    runId: RunId("roundtrip-run"),
+    candidateId: CandidateId("roundtrip-candidate"),
+    turn: 1,
+    step: 1,
+    internalEffectId: CallId("call-roundtrip-1"),
+    protectedInput: createProtectedTextV1(toolArguments),
+    raw: { kind: "text", value: toolArguments }
+  });
   const toolResult = createToolResultMessage({
     id: MessageId("tool-result-message-1"),
     source: { kind: "tool", callId: CallId("call-roundtrip-1") },
@@ -289,7 +333,8 @@ test("all nine protected payload variants survive JSON roundtrip without exposin
       step: 1,
       callId: CallId("call-roundtrip-1"),
       name: "read_file",
-      arguments: `password=${providerCredential}`
+      arguments: toolArguments,
+      commitment: toolHandle.commitment
     }],
     ["tool/result", {
       turn: 1,
@@ -323,6 +368,7 @@ test("all nine protected payload variants survive JSON roundtrip without exposin
     assert.equal(Object.isFrozen(inspected.publicControls), true, eventType);
     assert.equal(Object.isFrozen(inspected.protectedContent), true, eventType);
   }
+  binder.dispose();
 });
 
 test("protected payload inspection rejects expected-type confusion and self-consistent semantic forgeries", () => {

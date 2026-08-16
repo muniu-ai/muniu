@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Buffer } from "node:buffer";
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { types as utilTypes } from "node:util";
 
 import { canonicalJson } from "./canonical.js";
@@ -133,11 +133,20 @@ const BINDING_KEYS = [
 ] as const;
 const POLICY_BINDING_KEYS = ["governanceDigest", "harnessDigest"] as const;
 const EFFECT_KIND_PATTERN = /^[a-z][a-z0-9.-]{0,63}(?:\/[a-z][a-z0-9.-]{0,63}){0,3}$/u;
+const TOOL_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/u;
 const KEY_ID_PATTERN = /^kid_[0-9a-f]{64}$/u;
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
 const TAG_PATTERN = /^[0-9a-f]{64}$/u;
 const NONCE_PATTERN = /^[A-Za-z0-9_-]{22}$/u;
 const handleStates = new WeakMap<object, CommitmentState>();
+const runtimeBinders = new WeakSet<object>();
+
+export function isRuntimeEffectCommitmentBinderV1(
+  value: unknown
+): value is RuntimeEffectCommitmentBinderV1 {
+  return value !== null && (typeof value === "object" || typeof value === "function")
+    && runtimeBinders.has(value);
+}
 
 function createSafeKeyId(): string {
   for (let attempt = 0; attempt < 32; attempt += 1) {
@@ -200,6 +209,17 @@ function snapshotPolicyBinding(value: unknown): EffectPolicyBindingV1 {
     governanceDigest: record.governanceDigest,
     harnessDigest: record.harnessDigest
   };
+}
+
+export function snapshotEffectPolicyBindingV1(value: unknown): EffectPolicyBindingV1 {
+  return deepFreeze(snapshotPolicyBinding(value));
+}
+
+/** Bind a public tool name into the closed effect-kind grammar without lossy normalization. */
+export function deriveToolEffectKindV1(name: unknown): string {
+  assertSafePublicControlStringV1(name, "tool effect name", TOOL_NAME_PATTERN, 64);
+  const digest = createHash("sha256").update(name, "utf8").digest("hex");
+  return `tool/n${digest.slice(0, 32)}/n${digest.slice(32)}`;
 }
 
 function positiveSafeInteger(value: unknown): value is number {
@@ -405,7 +425,7 @@ function consumeHandle(handle: unknown): CommitmentState | undefined {
 export function createRuntimeEffectCommitmentBinderV1(
   policyBinding: EffectPolicyBindingV1
 ): RuntimeEffectCommitmentBinderV1 {
-  const fixedPolicyBinding = snapshotPolicyBinding(policyBinding);
+  const fixedPolicyBinding = snapshotEffectPolicyBindingV1(policyBinding);
   const key = randomBytes(32);
   let keyId: string;
   let fixedPolicyDigest: Digest;
@@ -488,6 +508,7 @@ export function createRuntimeEffectCommitmentBinderV1(
   const dispose = (): void => {
     if (disposed) return;
     disposed = true;
+    runtimeBinders.delete(binder);
     for (const handle of activeHandles) {
       const state = handleStates.get(handle);
       if (state !== undefined) state.consumed = true;
@@ -497,5 +518,7 @@ export function createRuntimeEffectCommitmentBinderV1(
     key.fill(0);
   };
 
-  return Object.freeze({ bind, verifyAndConsume, release, dispose });
+  const binder = Object.freeze({ bind, verifyAndConsume, release, dispose });
+  runtimeBinders.add(binder);
+  return binder;
 }

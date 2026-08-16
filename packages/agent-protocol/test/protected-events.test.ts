@@ -3,13 +3,23 @@ import test from "node:test";
 
 import {
   AGENT_SESSION_PROTECTION_PROFILE_V1,
+  CallId,
+  CandidateId,
+  Digest,
   EventId,
   PROTECTION_POLICY_DIGEST_V1,
+  RunId,
   SessionId,
   createAgentSessionEvent,
+  createProtectedTextV1,
+  createRuntimeEffectCommitmentBinderV1,
+  deriveToolEffectKindV1,
   isAgentSessionEventV1,
   protectAgentSessionPayloadV1
 } from "../src/index.js";
+
+const governanceDigest = "1".repeat(64) as Digest;
+const harnessDigest = "2".repeat(64) as Digest;
 
 test("durable events accept only protected payloads and bind the protection profile", () => {
   const payload = protectAgentSessionPayloadV1("session/created", {
@@ -106,4 +116,82 @@ test("event creation rejects accessors and proxies without invoking caller code"
   }, {});
   revoke();
   assert.throws(() => createAgentSessionEvent(proxy), /event input/i);
+});
+
+test("durable tool calls require an effect commitment bound to the full event envelope", () => {
+  const sessionId = SessionId("effect-session");
+  const runId = RunId("effect-run");
+  const candidateId = CandidateId("effect-candidate");
+  const callId = CallId("effect-call");
+  const argumentsJson = '{"path":"README.md"}';
+  const binder = createRuntimeEffectCommitmentBinderV1({ governanceDigest, harnessDigest });
+  try {
+    const handle = binder.bind({
+      effectKind: deriveToolEffectKindV1("read_file"),
+      sessionId,
+      runId,
+      candidateId,
+      turn: 1,
+      step: 1,
+      internalEffectId: callId,
+      protectedInput: createProtectedTextV1(argumentsJson),
+      raw: { kind: "text", value: argumentsJson }
+    });
+    const payload = protectAgentSessionPayloadV1("tool/call", {
+      turn: 1,
+      step: 1,
+      callId,
+      name: "read_file",
+      arguments: argumentsJson,
+      commitment: handle.commitment
+    });
+    const event = createAgentSessionEvent({
+      eventId: EventId("effect-event"),
+      sessionId,
+      seq: 0,
+      occurredAt: "2026-08-16T00:00:00.000Z",
+      type: "tool/call",
+      runId,
+      candidateId,
+      payload
+    });
+
+    assert.deepEqual(event.payload.publicControls.binding, handle.commitment);
+    assert.equal(Object.hasOwn(event.payload.publicControls, "arguments"), false);
+    assert.equal(JSON.stringify(event).includes(argumentsJson), false);
+    assert.equal(isAgentSessionEventV1(event), true);
+
+    assert.throws(() => createAgentSessionEvent({
+      eventId: EventId("effect-event-mismatch"),
+      sessionId,
+      seq: 0,
+      occurredAt: "2026-08-16T00:00:00.000Z",
+      type: "tool/call",
+      runId,
+      candidateId: CandidateId("other-candidate"),
+      payload
+    }), /effect commitment.*envelope|tool call.*binding/i);
+    assert.throws(() => protectAgentSessionPayloadV1("tool/call", {
+      turn: 1,
+      step: 1,
+      callId,
+      name: "read_file",
+      arguments: '{"path":"OTHER"}',
+      commitment: handle.commitment
+    }), /effect commitment|protected.*input|binding/i);
+    const forgedJsonKind = {
+      ...handle.commitment,
+      rawKind: "json" as const
+    };
+    assert.throws(() => protectAgentSessionPayloadV1("tool/call", {
+      turn: 1,
+      step: 1,
+      callId,
+      name: "read_file",
+      arguments: argumentsJson,
+      commitment: forgedJsonKind
+    }), /effect commitment|raw kind|binding/i);
+  } finally {
+    binder.dispose();
+  }
 });

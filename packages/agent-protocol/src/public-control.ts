@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
+import { randomUUID } from "node:crypto";
+
 import {
   isMainlandMobile,
   isPrcResidentIdentityNumber,
@@ -8,6 +10,8 @@ import {
 
 const PUBLIC_CONTROL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const PUBLIC_CONTROL_LABEL_PATTERN = /^[A-Za-z][A-Za-z0-9 -]{0,63}$/u;
+const SAFE_RANDOM_PREFIX_PATTERN = /^[A-Za-z][A-Za-z._:-]{0,62}$/u;
+const SAFE_QUATERNARY_ALPHABET = "wxyz";
 const EMBEDDED_CREDENTIAL_PATTERN = /(?:sk-(?:proj-|ant-)?[a-z0-9._-]{8,}|(?:AKIA|ASIA)[0-9A-Z]{16}|gh[pousr]_[a-z0-9]{20,}|github_pat_[a-z0-9_]{20,}|eyJ[a-z0-9_-]{2,}(?:\.[a-z0-9_-]*){2,4}|[a-z][a-z0-9+.-]{0,31}:\/\/[^\s\/:@]{1,128}:[^\s\/@]{1,128}@|(?:api[-_]?key|api[-_]?secret|access[-_]?key[-_]?id|access[-_]?token|auth(?:orization)?(?:[-_]?(?:code|token))?|bearer|client[-_]?secret|cookie|credential|mfa(?:[-_]?(?:secret|code))?|oauth[-_]?code|otp|passphrase|passcode|password|passwd|private[-_]?key|refresh[-_]?token|secret(?:[-_]?access)?[-_]?key|session[-_]?(?:id|token)|totp|token|口令|密码|密钥|凭证|令牌):)/iu;
 
 type PublicControlInspection = "safe" | "invalid" | "protected";
@@ -80,4 +84,14 @@ export function assertSafePublicControlIdV1(
   label: unknown = "public control identifier"
 ): asserts value is string {
   assertSafePublicControlStringV1(value, label, PUBLIC_CONTROL_ID_PATTERN, 128);
+}
+
+/** Generate a random structural identifier whose representation cannot form phone or identity digits. */
+export function createSafeRandomPublicControlIdV1(prefix: string): string {
+  assertSafePublicControlStringV1(prefix, "random identifier prefix", SAFE_RANDOM_PREFIX_PATTERN, 63);
+  const encoded = randomUUID().replaceAll("-", "").replace(/[0-9a-f]/gu, (character) => {
+    const value = Number.parseInt(character, 16);
+    return `${SAFE_QUATERNARY_ALPHABET[value >> 2]}${SAFE_QUATERNARY_ALPHABET[value & 3]}`;
+  });
+  return `${prefix}-${encoded}`;
 }

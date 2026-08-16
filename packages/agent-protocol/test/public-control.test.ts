@@ -5,6 +5,7 @@ import test from "node:test";
 
 import {
   assertSafePublicControlIdV1,
+  createSafeRandomPublicControlIdV1,
   isSafePublicControlIdV1
 } from "../src/index.js";
 
@@ -63,4 +64,12 @@ test("public control assertions never coerce an untrusted diagnostic label", () 
     (error: unknown) => error instanceof TypeError
       && error.message === "public control identifier is invalid"
   );
+});
+
+test("random public control IDs use an alphabet that cannot resemble protected numeric material", () => {
+  for (let index = 0; index < 1_000; index += 1) {
+    const value = createSafeRandomPublicControlIdV1("message");
+    assert.match(value, /^message-[wxyz]{64}$/u);
+    assert.equal(isSafePublicControlIdV1(value), true);
+  }
 });

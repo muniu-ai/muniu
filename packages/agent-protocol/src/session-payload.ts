@@ -3,6 +3,11 @@
 import { types as utilTypes } from "node:util";
 
 import { digestJson } from "./canonical.js";
+import {
+  assertEffectCommitmentV1,
+  deriveToolEffectKindV1,
+  type EffectCommitmentV1
+} from "./effect-commitment.js";
 import { deepFreeze } from "./freeze.js";
 import type { CallId, Digest, MessageId } from "./ids.js";
 import type {
@@ -13,6 +18,7 @@ import type {
 } from "./model.js";
 import {
   PROTECTION_POLICY_DIGEST_V1,
+  createProtectedTextV1,
   createProtectedJsonViewV1,
   isProtectedJsonViewV1,
   type ProtectedJsonNodeV1,
@@ -33,7 +39,14 @@ export interface AgentSessionRawPayloadMapV1 {
   "user/message": { turn: number; message: UserMessage };
   "step/start": { turn: number; step: number };
   "assistant/message": { turn: number; step: number; message: AssistantMessage; usage?: TokenUsage };
-  "tool/call": { turn: number; step: number; callId: CallId; name: string; arguments: string };
+  "tool/call": {
+    turn: number;
+    step: number;
+    callId: CallId;
+    name: string;
+    arguments: string;
+    commitment: EffectCommitmentV1;
+  };
   "tool/result": {
     turn: number;
     step: number;
@@ -98,7 +111,7 @@ export interface AgentSessionPublicControlsMapV1 {
     readonly step: number;
     readonly callId: CallId;
     readonly name: string;
-    readonly binding: typeof UNBOUND_PROTECTED_TOOL_CALL_V1;
+    readonly binding: EffectCommitmentV1;
   };
   "tool/result": {
     readonly turn: number;
@@ -350,11 +363,12 @@ function assertRawPayload(eventType: AgentSessionProtectedEventTypeV1, value: un
       }
       break;
     case "tool/call":
-      if (hasExactKeys(value, ["turn", "step", "callId", "name", "arguments"])) {
+      if (hasExactKeys(value, ["turn", "step", "callId", "name", "arguments", "commitment"])) {
         assertPositiveSafeInteger(value.turn, "event turn");
         assertPositiveSafeInteger(value.step, "event step");
         assertSafePublicControlIdV1(value.callId, "tool call identifier");
         assertSafeName(value.name, "tool name");
+        assertEffectCommitmentV1(value.commitment);
         if (typeof value.arguments === "string") return;
       }
       break;
@@ -482,13 +496,23 @@ function buildProfileParts<T extends AgentSessionProtectedEventTypeV1>(
     }
     case "tool/call": {
       const payload = raw as AgentSessionRawPayloadMapV1["tool/call"];
+      const protectedArguments = createProtectedTextV1(payload.arguments);
+      if (payload.commitment.rawKind !== "text"
+        || payload.commitment.turn !== payload.turn
+        || payload.commitment.step !== payload.step
+        || payload.commitment.internalEffectId !== payload.callId
+        || payload.commitment.effectKind !== deriveToolEffectKindV1(payload.name)
+        || payload.commitment.protectedInputDigest !== protectedArguments.digest
+        || payload.commitment.protectionPolicyDigest !== protectedArguments.policyDigest) {
+        throw new TypeError("tool call effect commitment does not match the protected invocation");
+      }
       parts = {
         publicControls: {
           turn: payload.turn,
           step: payload.step,
           callId: payload.callId,
           name: payload.name,
-          binding: UNBOUND_PROTECTED_TOOL_CALL_V1
+          binding: payload.commitment
         },
         protectedContentInput: { protectedArguments: payload.arguments }
       };
@@ -596,7 +620,12 @@ function validateProtectedContent(
   }
   if (eventType === "tool/call") {
     const fields = protectedObjectFields(root, ["protectedArguments"]);
-    return fields !== undefined && isProtectedString(fields.protectedArguments);
+    const toolControls = controls as AgentSessionPublicControlsMapV1["tool/call"];
+    const protectedArguments = fields?.protectedArguments;
+    return fields !== undefined
+      && protectedArguments?.type === "string"
+      && toolControls.binding.protectedInputDigest === protectedArguments.value.digest
+      && toolControls.binding.protectionPolicyDigest === protectedArguments.value.policyDigest;
   }
   if (eventType === "tool/result") {
     const fields = protectedObjectFields(root, ["content"]);
@@ -678,11 +707,17 @@ function assertPublicControls(eventType: AgentSessionProtectedEventTypeV1, value
       break;
     case "tool/call":
       if (hasExactKeys(value, ["turn", "step", "callId", "name", "binding"])
-        && value.binding === UNBOUND_PROTECTED_TOOL_CALL_V1) {
+        && value.binding !== UNBOUND_PROTECTED_TOOL_CALL_V1) {
         assertPositiveSafeInteger(value.turn, "event turn");
         assertPositiveSafeInteger(value.step, "event step");
         assertSafePublicControlIdV1(value.callId, "tool call identifier");
         assertSafeName(value.name, "tool name");
+        assertEffectCommitmentV1(value.binding);
+        if (value.binding.rawKind !== "text"
+          || value.binding.turn !== value.turn
+          || value.binding.step !== value.step
+          || value.binding.internalEffectId !== value.callId
+          || value.binding.effectKind !== deriveToolEffectKindV1(value.name)) break;
         return;
       }
       break;

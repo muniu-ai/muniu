@@ -56,6 +56,28 @@ reopened history without an authorized overlay fails with
 low-entropy creation inputs make an idempotent retry ambiguous, the store also
 fails closed instead of treating two different raw values as equal.
 
+Builtin side effects use a process-local HMAC commitment gate. The runtime
+binds the protected argument digest, synchronously snapshotted governance and Harness policy
+digests, session/run/candidate identifiers, turn/step, tool identity, and call
+identifier; the protected `tool/call` record must reach the durable fsync
+boundary before that one-shot handle is verified and consumed immediately
+before tool dispatch. The HMAC key and executable arguments are never written
+to the event log. A durable commitment is an audit correlation record, not a
+restart-verifiable capability: recovery marks an incomplete effect
+`interrupted`, reports an unknown outcome when it had started, and never
+rebinds or automatically replays it. If a normal terminal result exceeds the
+protected event boundary, the runtime writes a fixed, bounded unknown-outcome
+result instead. If both terminal writes fail, it leaves the turn open so
+recovery can append that unknown result; it must not close away the pending
+effect. Missing policy bindings or run/candidate metadata fail closed before
+the handler is invoked.
+
+In v0.1 the governance and Harness policy digests supplied to this gate are
+synchronously snapshotted caller inputs. Their keyed commitment provides an
+opaque correlation for the current process; it is not evidence that the
+control plane authenticated the policy provenance. Control-plane provenance
+binding remains a required integration boundary before governed release use.
+
 The planned macOS sandbox combines Seatbelt with an isolated canonical Git
 worktree. It is defense in depth, not a virtual machine or Docker-equivalent
 security boundary. If the required sandbox probe fails, command execution must

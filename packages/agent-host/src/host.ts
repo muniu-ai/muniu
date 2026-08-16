@@ -11,7 +11,13 @@ import {
   type AgentRunReason
 } from "@mn/agent-kernel";
 import { LlmRuntime, type LlmAdapter } from "@mn/agent-llm";
-import type { CandidateId, RunId, SessionId } from "@mn/agent-protocol";
+import {
+  snapshotEffectPolicyBindingV1,
+  type CandidateId,
+  type EffectPolicyBindingV1,
+  type RunId,
+  type SessionId
+} from "@mn/agent-protocol";
 import {
   InMemoryAgentSessionStore,
   snapshotCreateAgentSessionOptions,
@@ -45,6 +51,7 @@ export interface AgentHostRunInput {
   readonly maxToolCalls?: number;
   readonly runId?: RunId;
   readonly candidateId?: CandidateId;
+  readonly effectPolicyBinding?: EffectPolicyBindingV1;
 }
 
 export interface AgentHostRunResult {
@@ -75,6 +82,7 @@ interface AgentHostRunInputSnapshot {
   readonly maxToolCalls?: number;
   readonly runId?: RunId;
   readonly candidateId?: CandidateId;
+  readonly effectPolicyBinding?: EffectPolicyBindingV1;
 }
 
 const ACTIVE_HOST_RUN = new AsyncLocalStorage<ActiveHostRunContext>();
@@ -94,7 +102,11 @@ function snapshotAgentHostRunInput(input: AgentHostRunInput): AgentHostRunInputS
   const maxToolCalls = input.maxToolCalls;
   const runId = input.runId;
   const candidateId = input.candidateId;
+  const effectPolicyBinding = input.effectPolicyBinding;
   const creation = snapshotCreateAgentSessionOptions({ sessionId, cwd, labels });
+  const fixedEffectPolicyBinding = effectPolicyBinding === undefined
+    ? undefined
+    : snapshotEffectPolicyBindingV1(effectPolicyBinding);
   return Object.freeze({
     creation,
     prompt,
@@ -104,7 +116,8 @@ function snapshotAgentHostRunInput(input: AgentHostRunInput): AgentHostRunInputS
     ...(maxSteps === undefined ? {} : { maxSteps }),
     ...(maxToolCalls === undefined ? {} : { maxToolCalls }),
     ...(runId === undefined ? {} : { runId }),
-    ...(candidateId === undefined ? {} : { candidateId })
+    ...(candidateId === undefined ? {} : { candidateId }),
+    ...(fixedEffectPolicyBinding === undefined ? {} : { effectPolicyBinding: fixedEffectPolicyBinding })
   });
 }
 
@@ -273,7 +286,8 @@ export class AgentHost {
       ...(input.maxSteps === undefined ? {} : { maxSteps: input.maxSteps }),
       ...(input.maxToolCalls === undefined ? {} : { maxToolCalls: input.maxToolCalls }),
       ...(input.runId === undefined ? {} : { runId: input.runId }),
-      ...(input.candidateId === undefined ? {} : { candidateId: input.candidateId })
+      ...(input.candidateId === undefined ? {} : { candidateId: input.candidateId }),
+      ...(input.effectPolicyBinding === undefined ? {} : { effectPolicyBinding: input.effectPolicyBinding })
     });
     return { session, reason: result.reason, steps: result.steps, toolCalls: result.toolCalls };
   }

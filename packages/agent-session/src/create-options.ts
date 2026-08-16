@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import { randomUUID } from "node:crypto";
-
-import { SessionId, deepFreeze, snapshotJsonValue } from "@mn/agent-protocol";
+import {
+  SessionId,
+  createSafeRandomPublicControlIdV1,
+  deepFreeze,
+  snapshotJsonValue
+} from "@mn/agent-protocol";
 
 import type { CreateAgentSessionOptions } from "./types.js";
 
@@ -43,7 +46,7 @@ export function snapshotCreateAgentSessionOptions(
   }
 
   return deepFreeze({
-    sessionId: suppliedSessionId ?? SessionId(`session-${randomUUID()}`),
+    sessionId: suppliedSessionId ?? SessionId(createSafeRandomPublicControlIdV1("session")),
     ...(cwd === undefined ? {} : { cwd }),
     ...(labelsSnapshot === undefined ? {} : { labels: labelsSnapshot })
   });

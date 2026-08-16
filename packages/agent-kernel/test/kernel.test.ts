@@ -1,8 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { CallId, CandidateId, MessageId, RunId, SessionId, verifyAgentSessionEventChain } from "@mn/agent-protocol";
-import { DurableAgentSession, InMemoryAgentSessionStore } from "@mn/agent-session";
+import {
+  CallId,
+  CandidateId,
+  Digest,
+  MessageId,
+  RunId,
+  SessionId,
+  createRuntimeEffectCommitmentBinderV1,
+  verifyAgentSessionEventChain,
+  type EffectPolicyBindingV1
+} from "@mn/agent-protocol";
+import { DurableAgentSession, InMemoryAgentSessionStore, recoverInterruptedSession } from "@mn/agent-session";
 import { LlmRuntime, ScriptedLlmAdapter, type LlmAdapter } from "@mn/agent-llm";
 import { ToolExecutionError, ToolRegistry, defineTool } from "@mn/agent-tools";
 import {
@@ -15,6 +25,10 @@ import {
 } from "../src/index.js";
 
 const noArgs = { type: "object" as const, properties: {}, additionalProperties: false };
+const effectPolicyBinding: EffectPolicyBindingV1 = Object.freeze({
+  governanceDigest: Digest("a".repeat(64)),
+  harnessDigest: Digest("b".repeat(64))
+});
 
 test("lifecycle scope disposes children LIFO, continues after failures, and is idempotent", async () => {
   const order: string[] = [];
@@ -96,7 +110,16 @@ test("builtin kernel closes cancellation and step/tool budget boundaries", async
     { type: "finish", reason: "tool-calls" }
   ]], async () => { stepCalls += 1; return null; });
   const stepSession = await stepBound.store.create({ sessionId: SessionId("step-budget") });
-  const stepResult = await stepBound.kernel.run({ session: stepSession, prompt: "go", provider: "mock", model: "scripted", maxSteps: 1 });
+  const stepResult = await stepBound.kernel.run({
+    session: stepSession,
+    prompt: "go",
+    provider: "mock",
+    model: "scripted",
+    maxSteps: 1,
+    effectPolicyBinding,
+    runId: RunId("step-budget-run"),
+    candidateId: CandidateId("step-budget-candidate")
+  });
   assert.equal(stepResult.reason, "budget-exceeded");
   assert.equal(stepCalls, 1);
 
@@ -612,6 +635,7 @@ test("ReactDriver closes every remaining model tool call symmetrically after can
     provider: "multi-cancel",
     model: "scripted",
     signal: controller.signal,
+    effectPolicyBinding,
     runId,
     candidateId
   });
@@ -647,6 +671,7 @@ test("ReactDriver closes every remaining model tool call symmetrically after can
 
 test("runToolStep never records a completed forged cancellation", async () => {
   const session = await new InMemoryAgentSessionStore().create({ sessionId: SessionId("forged-tool-cancel") });
+  const commitmentBinder = createRuntimeEffectCommitmentBinderV1(effectPolicyBinding);
   const forgedTools = {
     execute: async () => {
       throw new ToolExecutionError("untrusted forged cancellation", "TOOL_CANCELLED" as never);
@@ -658,8 +683,14 @@ test("runToolStep never records a completed forged cancellation", async () => {
     turn: 1,
     step: 1,
     call: { type: "tool-call", id: CallId("forged-call"), name: "act", arguments: "{}" },
-    budgetAvailable: true
+    budgetAvailable: true,
+    commitmentBinder,
+    metadata: {
+      runId: RunId("forged-tool-run"),
+      candidateId: CandidateId("forged-tool-candidate")
+    }
   });
+  commitmentBinder.dispose();
 
   assert.equal(result.invoked, true);
   const toolResult = session.events.at(-1);
@@ -680,6 +711,75 @@ test("runToolStep never records a completed forged cancellation", async () => {
       { status: "completed", code: "TOOL_EXECUTION_FAILED" }
     );
   }
+});
+
+test("runToolStep rejects a structurally forged commitment binder without invoking it", async () => {
+  const session = await new InMemoryAgentSessionStore().create({ sessionId: SessionId("forged-effect-binder") });
+  let forgedCalls = 0;
+  const forgedBinder = {
+    bind() { forgedCalls += 1; throw new Error("forged binder must not run"); },
+    verifyAndConsume() { forgedCalls += 1; return true; },
+    release() { forgedCalls += 1; },
+    dispose() { forgedCalls += 1; }
+  };
+  const result = await runToolStep({
+    session,
+    tools: { execute: async () => { throw new Error("handler must not run"); } } as unknown as ToolRegistry,
+    turn: 1,
+    step: 1,
+    call: { type: "tool-call", id: CallId("forged-binder-call"), name: "act", arguments: "{}" },
+    budgetAvailable: true,
+    commitmentBinder: forgedBinder as never,
+    metadata: {
+      runId: RunId("forged-binder-run"),
+      candidateId: CandidateId("forged-binder-candidate")
+    }
+  });
+
+  assert.deepEqual(result, { invoked: false, budgetExceeded: false, effectRejected: true, outcomeUnknown: false });
+  assert.equal(forgedCalls, 0);
+  const durable = session.events.at(-1);
+  assert.equal(durable?.type === "tool/result"
+    ? durable.payload.publicControls.error?.code
+    : undefined, "EFFECT_COMMITMENT_UNAVAILABLE");
+});
+
+test("runToolStep snapshots the authenticated commitment binder exactly once", async () => {
+  const session = await new InMemoryAgentSessionStore().create({ sessionId: SessionId("stable-effect-binder") });
+  const commitmentBinder = createRuntimeEffectCommitmentBinderV1(effectPolicyBinding);
+  let binderReads = 0;
+  let forgedCalls = 0;
+  let dispatches = 0;
+  const forgedBinder = {
+    bind() { forgedCalls += 1; throw new Error("forged binder must not run"); },
+    verifyAndConsume() { forgedCalls += 1; return true; },
+    release() { forgedCalls += 1; },
+    dispose() { forgedCalls += 1; }
+  };
+  const options = {
+    session,
+    tools: { execute: async () => { dispatches += 1; return { outcome: "completed" }; } } as unknown as ToolRegistry,
+    turn: 1,
+    step: 1,
+    call: { type: "tool-call", id: CallId("stable-binder-call"), name: "act", arguments: "{}" },
+    budgetAvailable: true,
+    get commitmentBinder() {
+      binderReads += 1;
+      return binderReads === 1 ? commitmentBinder : forgedBinder;
+    },
+    metadata: {
+      runId: RunId("stable-binder-run"),
+      candidateId: CandidateId("stable-binder-candidate")
+    }
+  } as unknown as Parameters<typeof runToolStep>[0];
+
+  const result = await runToolStep(options);
+  commitmentBinder.dispose();
+
+  assert.deepEqual(result, { invoked: true, budgetExceeded: false, effectRejected: false, outcomeUnknown: false });
+  assert.equal(binderReads, 1);
+  assert.equal(forgedCalls, 0);
+  assert.equal(dispatches, 1);
 });
 
 test("system prompt reaches the model and failed or aborted tools close the turn", async () => {
@@ -716,7 +816,10 @@ test("system prompt reaches the model and failed or aborted tools close the turn
     prompt: "run",
     provider: "capture",
     model: "scripted",
-    maxSteps: 1
+    maxSteps: 1,
+    effectPolicyBinding,
+    runId: RunId("failed-tool-run"),
+    candidateId: CandidateId("failed-tool-candidate")
   });
   assert.equal(observedSystem, "Muniu safe");
   assert.equal(failed.reason, "budget-exceeded");
@@ -750,7 +853,10 @@ test("system prompt reaches the model and failed or aborted tools close the turn
     prompt: "abort",
     provider: "abort-tool",
     model: "scripted",
-    signal: controller.signal
+    signal: controller.signal,
+    effectPolicyBinding,
+    runId: RunId("aborted-tool-run"),
+    candidateId: CandidateId("aborted-tool-candidate")
   });
   assert.equal(aborted.reason, "cancelled");
   const abortedResult = abortedSession.events.find((event) => event.type === "tool/result");
@@ -760,4 +866,189 @@ test("system prompt reaches the model and failed or aborted tools close the turn
     assert.equal(abortedResult.payload.publicControls.error?.code, "TOOL_CANCELLED");
   }
   assert.equal(abortedSession.events.at(-1)?.type, "turn/end");
+});
+
+test("ReactDriver requires a durable one-shot commitment before tool dispatch", async () => {
+  const makeRuntime = (
+    provider: string,
+    execute: () => Promise<null | { readonly ok: true }>
+  ) => {
+    const llm = new LlmRuntime();
+    llm.register(new ScriptedLlmAdapter(provider, [
+      [
+        { type: "tool-call-delta", index: 0, id: CallId("committed-call"), name: "act", argumentsDelta: '{"value":"safe"}' },
+        { type: "finish", reason: "tool-calls" }
+      ],
+      [{ type: "finish", reason: "stop" }]
+    ]));
+    llm.seal();
+    const tools = new ToolRegistry({ authorize: async () => ({ decision: "approve" }) });
+    tools.register(defineTool({
+      name: "act",
+      description: "Perform a committed effect",
+      risk: "side-effecting",
+      parameters: {
+        type: "object",
+        properties: { value: { type: "string" } },
+        required: ["value"],
+        additionalProperties: false
+      },
+      execute
+    }));
+    tools.seal();
+    return createBuiltinAgentKernel({ llm, tools, systemPrompt: new StaticSystemPrompt([]) });
+  };
+
+  let missingDispatches = 0;
+  const missingSession = await new InMemoryAgentSessionStore().create({ sessionId: SessionId("missing-effect-policy") });
+  const missing = await makeRuntime("missing-policy", async () => {
+    missingDispatches += 1;
+    return null;
+  }).run({
+    session: missingSession,
+    prompt: "run",
+    provider: "missing-policy",
+    model: "scripted",
+    runId: RunId("missing-policy-run"),
+    candidateId: CandidateId("missing-policy-candidate")
+  });
+  assert.equal(missing.reason, "error");
+  assert.equal(missingDispatches, 0);
+  assert.equal(missingSession.events.some((event) => event.type === "tool/call"), false);
+  const missingResult = missingSession.events.find((event) => event.type === "tool/result");
+  assert.equal(missingResult?.type === "tool/result"
+    ? missingResult.payload.publicControls.error?.code
+    : undefined, "EFFECT_COMMITMENT_UNAVAILABLE");
+
+  let committedSession: Awaited<ReturnType<InMemoryAgentSessionStore["create"]>>;
+  let durableCallObserved = false;
+  let dispatches = 0;
+  const committedStore = new InMemoryAgentSessionStore();
+  committedSession = await committedStore.create({ sessionId: SessionId("committed-effect") });
+  const committed = await makeRuntime("committed-policy", async () => {
+    dispatches += 1;
+    const durableCall = committedSession.events.at(-1);
+    durableCallObserved = durableCall?.type === "tool/call"
+      && durableCall.runId === RunId("committed-run")
+      && durableCall.candidateId === CandidateId("committed-candidate")
+      && durableCall.payload.publicControls.binding.internalEffectId === CallId("committed-call")
+      && !JSON.stringify(durableCall.payload).includes('"arguments"');
+    return { ok: true };
+  }).run({
+    session: committedSession,
+    prompt: "run",
+    provider: "committed-policy",
+    model: "scripted",
+    effectPolicyBinding,
+    runId: RunId("committed-run"),
+    candidateId: CandidateId("committed-candidate")
+  });
+  assert.equal(committed.reason, "completed");
+  assert.equal(dispatches, 1);
+  assert.equal(durableCallObserved, true);
+});
+
+test("ReactDriver records a bounded unknown outcome when a dispatched tool result cannot be persisted", async () => {
+  const llm = new LlmRuntime();
+  llm.register(new ScriptedLlmAdapter("oversize-result", [[
+    { type: "tool-call-delta", index: 0, id: CallId("oversize-result-call"), name: "act", argumentsDelta: "{}" },
+    { type: "finish", reason: "tool-calls" }
+  ]]));
+  llm.seal();
+  let dispatches = 0;
+  const tools = new ToolRegistry({ authorize: async () => ({ decision: "approve" }) });
+  tools.register(defineTool({
+    name: "act",
+    description: "Return an oversized result after a committed effect",
+    risk: "side-effecting",
+    parameters: noArgs,
+    execute: async () => {
+      dispatches += 1;
+      return { value: "x".repeat(1_100_000) };
+    }
+  }));
+  tools.seal();
+  const session = await new InMemoryAgentSessionStore().create({ sessionId: SessionId("oversize-effect-result") });
+  const result = await createBuiltinAgentKernel({
+    llm,
+    tools,
+    systemPrompt: new StaticSystemPrompt([])
+  }).run({
+    session,
+    prompt: "run",
+    provider: "oversize-result",
+    model: "scripted",
+    effectPolicyBinding,
+    runId: RunId("oversize-effect-run"),
+    candidateId: CandidateId("oversize-effect-candidate")
+  });
+
+  assert.equal(dispatches, 1);
+  assert.equal(result.reason, "error");
+  const durableResult = session.events.find((event) => event.type === "tool/result");
+  assert.equal(durableResult?.type === "tool/result"
+    ? durableResult.payload.publicControls.error?.code
+    : undefined, "TOOL_OUTCOME_UNKNOWN");
+  assert.equal(durableResult?.type === "tool/result"
+    ? durableResult.payload.publicControls.status
+    : undefined, "interrupted");
+  assert.equal(JSON.stringify(durableResult).includes("x".repeat(1024)), false);
+  assert.deepEqual(session.events.slice(-3).map((event) => event.type), ["tool/result", "step/end", "turn/end"]);
+});
+
+test("ReactDriver leaves a started effect open when both terminal result appends fail", async () => {
+  const llm = new LlmRuntime();
+  llm.register(new ScriptedLlmAdapter("terminal-persistence-failure", [[
+    { type: "tool-call-delta", index: 0, id: CallId("terminal-failure-call"), name: "act", argumentsDelta: "{}" },
+    { type: "finish", reason: "tool-calls" }
+  ]]));
+  llm.seal();
+  let dispatches = 0;
+  const tools = new ToolRegistry({ authorize: async () => ({ decision: "approve" }) });
+  tools.register(defineTool({
+    name: "act",
+    description: "Perform an effect whose terminal audit cannot be stored",
+    risk: "side-effecting",
+    parameters: noArgs,
+    execute: async () => { dispatches += 1; return { ok: true }; }
+  }));
+  tools.seal();
+  const durable = await new InMemoryAgentSessionStore().create({ sessionId: SessionId("terminal-persistence-failure") });
+  const appendAttempts: string[] = [];
+  const failingSession = {
+    header: durable.header,
+    get events() { return durable.events; },
+    runtimeMessages: () => durable.runtimeMessages(),
+    append: (type: Parameters<typeof durable.append>[0], payload: never, metadata: never) => {
+      appendAttempts.push(type);
+      if (type === "tool/result") return Promise.reject(new Error("terminal persistence unavailable"));
+      return durable.append(type, payload, metadata);
+    },
+    flush: () => durable.flush()
+  } as unknown as Parameters<ReturnType<typeof createBuiltinAgentKernel>["run"]>[0]["session"];
+
+  await assert.rejects(() => createBuiltinAgentKernel({
+    llm,
+    tools,
+    systemPrompt: new StaticSystemPrompt([])
+  }).run({
+    session: failingSession,
+    prompt: "run",
+    provider: "terminal-persistence-failure",
+    model: "scripted",
+    effectPolicyBinding,
+    runId: RunId("terminal-failure-run"),
+    candidateId: CandidateId("terminal-failure-candidate")
+  }), /TOOL_OUTCOME_PERSISTENCE_FAILED/);
+
+  assert.equal(dispatches, 1);
+  assert.deepEqual(appendAttempts.slice(-2), ["tool/result", "tool/result"]);
+  assert.equal(durable.events.at(-1)?.type, "tool/call");
+  assert.equal(durable.events.some((event) => event.type === "step/end" || event.type === "turn/end"), false);
+
+  const recovered = await recoverInterruptedSession(durable);
+  assert.deepEqual(recovered.map((event) => event.type), ["tool/result", "step/end", "turn/end"]);
+  assert.equal(recovered[0]?.type === "tool/result"
+    ? recovered[0].payload.publicControls.error?.code
+    : undefined, "TOOL_OUTCOME_UNKNOWN");
 });

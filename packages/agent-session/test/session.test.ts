@@ -27,6 +27,7 @@ import {
   AGENT_SESSION_PROTECTION_PROFILE_V1,
   CallId,
   CandidateId,
+  Digest,
   EventId,
   MessageId,
   PROTECTION_POLICY_DIGEST_V1,
@@ -35,7 +36,9 @@ import {
   createAgentSessionEvent,
   createAssistantMessage,
   createProtectedTextV1,
+  createRuntimeEffectCommitmentBinderV1,
   createUserMessage,
+  deriveToolEffectKindV1,
   protectAgentSessionPayloadV1,
   verifyAgentSessionEventChain
 } from "@mn/agent-protocol";
@@ -1510,6 +1513,22 @@ test("recovery closes started and unstarted tool effects without replaying eithe
   const turnCandidateId = CandidateId("recovery-turn-candidate");
   const assistantCandidateId = CandidateId("recovery-assistant-candidate");
   const startedCandidateId = CandidateId("recovery-started-candidate");
+  const binder = createRuntimeEffectCommitmentBinderV1({
+    governanceDigest: Digest("a".repeat(64)),
+    harnessDigest: Digest("b".repeat(64))
+  });
+  const startedArguments = "{}";
+  const startedHandle = binder.bind({
+    effectKind: deriveToolEffectKindV1("write"),
+    sessionId: session.header.sessionId,
+    runId,
+    candidateId: startedCandidateId,
+    turn: 1,
+    step: 1,
+    internalEffectId: started,
+    protectedInput: createProtectedTextV1(startedArguments),
+    raw: { kind: "text", value: startedArguments }
+  });
   await session.append("turn/start", { turn: 1 }, { runId, candidateId: turnCandidateId });
   await session.append("user/message", { turn: 1, message: user });
   await session.append("step/start", { turn: 1, step: 1 });
@@ -1520,9 +1539,17 @@ test("recovery closes started and unstarted tool effects without replaying eithe
   );
   await session.append(
     "tool/call",
-    { turn: 1, step: 1, callId: started, name: "write", arguments: "{}" },
+    {
+      turn: 1,
+      step: 1,
+      callId: started,
+      name: "write",
+      arguments: startedArguments,
+      commitment: startedHandle.commitment
+    },
     { runId, candidateId: startedCandidateId }
   );
+  binder.dispose();
 
   const firstRecovery = recoverInterruptedSession(session);
   const concurrentRecovery = recoverInterruptedSession(session);
@@ -1561,4 +1588,5 @@ test("recovery closes started and unstarted tool effects without replaying eithe
     "recovery-call-started",
     "recovery-call-unstarted"
   ]);
+  assert.equal(projection.pendingToolCalls.length, 0);
 });

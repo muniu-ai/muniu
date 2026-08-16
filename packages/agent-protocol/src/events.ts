@@ -87,6 +87,22 @@ function isDigest(value: unknown): value is Digest {
   return typeof value === "string" && DIGEST_PATTERN.test(value);
 }
 
+function toolCommitmentMatchesEnvelope(
+  type: AgentSessionEventTypeV1,
+  payload: AgentSessionProtectedPayloadV1,
+  sessionId: unknown,
+  runId: unknown,
+  candidateId: unknown
+): boolean {
+  if (type !== "tool/call") return true;
+  const binding = (payload as AgentSessionProtectedPayloadV1<"tool/call">).publicControls.binding;
+  return runId !== undefined
+    && candidateId !== undefined
+    && binding.sessionId === sessionId
+    && binding.runId === runId
+    && binding.candidateId === candidateId;
+}
+
 export function isCanonicalRfc3339(value: unknown): value is string {
   if (typeof value !== "string" || !RFC3339_UTC_PATTERN.test(value)) return false;
   const date = new Date(value);
@@ -166,6 +182,9 @@ export function createAgentSessionEvent<T extends AgentSessionEventTypeV1>(
   }
 
   const payload = assertAgentSessionProtectedPayloadV1(type, record.payload);
+  if (!toolCommitmentMatchesEnvelope(type, payload, sessionId, runId, candidateId)) {
+    throw new TypeError("tool call effect commitment does not match the durable event envelope");
+  }
   const envelope = {
     schemaVersion: 1 as const,
     eventId: eventId as EventId,
@@ -251,6 +270,13 @@ export function isAgentSessionEventV1(value: unknown): value is AgentSessionEven
       || payload.digest !== event.payloadDigest
       || payload.protectionProfile !== event.protectionProfile
       || payload.protectionPolicyDigest !== event.protectionPolicyDigest) return false;
+    if (!toolCommitmentMatchesEnvelope(
+      event.type as AgentSessionEventTypeV1,
+      payload,
+      event.sessionId,
+      event.runId,
+      event.candidateId
+    )) return false;
 
     const digestInput: Record<string, unknown> = { ...event, payload };
     delete digestInput.digest;
