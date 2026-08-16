@@ -194,6 +194,132 @@ test("host forwards optional run bindings, defaults storage, and disposes once",
   await assert.rejects(() => host.run({ prompt: "late", provider: "capture", model: "scripted" }), /disposed/i);
 });
 
+test("host resume opens the existing session and appends a second turn", async () => {
+  const store = new InMemoryAgentSessionStore();
+  const adapter = new ScriptedLlmAdapter("resume-mock", [
+    [
+      { type: "text-delta", index: 0, text: "first" },
+      { type: "finish", reason: "stop" }
+    ],
+    [
+      { type: "text-delta", index: 0, text: "second" },
+      { type: "finish", reason: "stop" }
+    ]
+  ]);
+  const sessionId = SessionId("host-resume-session");
+  const host = await createAgentHost({
+    sessionStore: store,
+    adapters: [adapter],
+    tools: [],
+    authorizer: { authorize: async () => ({ decision: "deny" }) }
+  });
+  try {
+    const first = await host.run({
+      sessionId,
+      prompt: "one",
+      provider: "resume-mock",
+      model: "scripted"
+    });
+    const second = await host.resume({
+      sessionId,
+      prompt: "two",
+      provider: "resume-mock",
+      model: "scripted"
+    });
+    assert.equal(first.session, second.session);
+    assert.deepEqual(
+      second.session.events
+        .filter((event) => event.type === "turn/start")
+        .map((event) => event.payload.publicControls.turn),
+      [1, 2]
+    );
+  } finally {
+    await host.dispose();
+  }
+});
+
+test("host resume rejects accessor and proxy inputs without invoking caller code", async () => {
+  const host = await createAgentHost({
+    adapters: [],
+    tools: [],
+    authorizer: { authorize: async () => ({ decision: "deny" }) }
+  });
+  let reads = 0;
+  const accessor = Object.defineProperty({}, "sessionId", {
+    enumerable: true,
+    get() {
+      reads += 1;
+      return SessionId("unsafe-accessor");
+    }
+  });
+  try {
+    await assert.rejects(
+      () => host.resume(accessor as never),
+      /exact data object/i
+    );
+    await assert.rejects(
+      () => host.resume(new Proxy({}, {}) as never),
+      /exact data object/i
+    );
+    assert.equal(reads, 0);
+  } finally {
+    await host.dispose();
+  }
+});
+
+test("host resume uses AbortSignal intrinsics without touching hostile own properties", async () => {
+  const store = new InMemoryAgentSessionStore();
+  const sessionId = SessionId("host-resume-native-signal");
+  await store.create({ sessionId });
+  const controller = new AbortController();
+  let reads = 0;
+  const secret = "RAW-NESTED-SIGNAL-SECRET";
+  for (const key of ["aborted", "reason", "addEventListener", "removeEventListener"] as const) {
+    Object.defineProperty(controller.signal, key, {
+      configurable: true,
+      get() {
+        reads += 1;
+        throw new Error(secret);
+      }
+    });
+  }
+  controller.abort(new Error(secret));
+  const host = await createAgentHost({
+    sessionStore: store,
+    adapters: [new ScriptedLlmAdapter("native-signal", [[{ type: "finish", reason: "stop" }]])],
+    tools: [],
+    authorizer: { authorize: async () => ({ decision: "deny" }) }
+  });
+  try {
+    const outcome = await host.resume({
+      sessionId,
+      prompt: "cancelled",
+      provider: "native-signal",
+      model: "test",
+      signal: controller.signal
+    });
+    assert.equal(outcome.reason, "cancelled");
+    assert.equal(reads, 0);
+    assert.doesNotMatch(JSON.stringify(outcome), new RegExp(secret, "u"));
+    const revoked = Proxy.revocable(new AbortController().signal, {});
+    revoked.revoke();
+    await assert.rejects(
+      () => host.resume({
+        sessionId,
+        prompt: "revoked",
+        provider: "native-signal",
+        model: "test",
+        signal: revoked.proxy
+      }),
+      (error: unknown) => error instanceof TypeError
+        && /native AbortSignal/u.test(error.message)
+        && !error.message.includes(secret)
+    );
+  } finally {
+    await host.dispose();
+  }
+});
+
 test("host preserves initialization cause when rollback also fails", async () => {
   const adapter: LlmAdapter = {
     id: "rollback-failure",

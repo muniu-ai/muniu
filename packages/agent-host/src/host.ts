@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { AsyncLocalStorage } from "node:async_hooks";
+import { types as utilTypes } from "node:util";
 
 import {
   AgentKernel,
@@ -54,6 +55,10 @@ export interface AgentHostRunInput {
   readonly effectPolicyBinding?: EffectPolicyBindingV1;
 }
 
+export interface AgentHostResumeInput extends Omit<AgentHostRunInput, "cwd" | "labels" | "sessionId"> {
+  readonly sessionId: SessionId;
+}
+
 export interface AgentHostRunResult {
   readonly session: AgentSession;
   readonly reason: AgentRunReason;
@@ -73,6 +78,7 @@ interface ActiveHostRun {
 }
 
 interface AgentHostRunInputSnapshot {
+  readonly mode: "create" | "open";
   readonly creation: CreateAgentSessionOptionsSnapshot;
   readonly prompt: string;
   readonly provider: string;
@@ -86,6 +92,23 @@ interface AgentHostRunInputSnapshot {
 }
 
 const ACTIVE_HOST_RUN = new AsyncLocalStorage<ActiveHostRunContext>();
+const ABORT_SIGNAL_ABORTED = Object.getOwnPropertyDescriptor(AbortSignal.prototype, "aborted")?.get;
+const ABORT_SIGNAL_REASON = Object.getOwnPropertyDescriptor(AbortSignal.prototype, "reason")?.get;
+const EVENT_TARGET_ADD = EventTarget.prototype.addEventListener;
+const EVENT_TARGET_REMOVE = EventTarget.prototype.removeEventListener;
+
+const RESUME_INPUT_KEYS = new Set([
+  "sessionId",
+  "prompt",
+  "provider",
+  "model",
+  "signal",
+  "maxSteps",
+  "maxToolCalls",
+  "runId",
+  "candidateId",
+  "effectPolicyBinding"
+]);
 
 function snapshotAgentHostRunInput(input: AgentHostRunInput): AgentHostRunInputSnapshot {
   if (input === null || typeof input !== "object" || Array.isArray(input)) {
@@ -108,6 +131,7 @@ function snapshotAgentHostRunInput(input: AgentHostRunInput): AgentHostRunInputS
     ? undefined
     : snapshotEffectPolicyBindingV1(effectPolicyBinding);
   return Object.freeze({
+    mode: "create" as const,
     creation,
     prompt,
     provider,
@@ -121,11 +145,112 @@ function snapshotAgentHostRunInput(input: AgentHostRunInput): AgentHostRunInputS
   });
 }
 
+function snapshotAgentHostResumeInput(input: AgentHostResumeInput): AgentHostRunInputSnapshot {
+  if (input === null || typeof input !== "object" || utilTypes.isProxy(input) || Array.isArray(input)) {
+    throw new TypeError("agent host resume input must be an exact data object");
+  }
+  const prototype = Object.getPrototypeOf(input);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError("agent host resume input must be an exact data object");
+  }
+  const values: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  for (const key of Reflect.ownKeys(input)) {
+    if (typeof key !== "string" || !RESUME_INPUT_KEYS.has(key)) {
+      throw new TypeError("agent host resume input must be an exact data object");
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(input, key);
+    if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) {
+      throw new TypeError("agent host resume input must be an exact data object");
+    }
+    values[key] = descriptor.value;
+  }
+  const sessionId = values.sessionId;
+  const prompt = values.prompt;
+  const provider = values.provider;
+  const model = values.model;
+  if (typeof sessionId !== "string" || sessionId.length === 0
+    || typeof prompt !== "string" || typeof provider !== "string" || typeof model !== "string") {
+    throw new TypeError("agent host resume input must contain the required data properties");
+  }
+  const signal = values.signal;
+  if (signal !== undefined) {
+    if (signal === null || typeof signal !== "object" || utilTypes.isProxy(signal)
+      || ABORT_SIGNAL_ABORTED === undefined) {
+      throw new TypeError("agent host resume signal must be a native AbortSignal");
+    }
+    try {
+      Reflect.apply(ABORT_SIGNAL_ABORTED, signal, []);
+    } catch {
+      throw new TypeError("agent host resume signal must be a native AbortSignal");
+    }
+  }
+  const effectPolicyBinding = values.effectPolicyBinding === undefined
+    ? undefined
+    : snapshotEffectPolicyBindingV1(values.effectPolicyBinding as EffectPolicyBindingV1);
+  return Object.freeze({
+    mode: "open" as const,
+    creation: snapshotCreateAgentSessionOptions({ sessionId: sessionId as SessionId }),
+    prompt,
+    provider,
+    model,
+    ...(signal === undefined ? {} : { signal: signal as AbortSignal }),
+    ...(values.maxSteps === undefined ? {} : { maxSteps: values.maxSteps as number }),
+    ...(values.maxToolCalls === undefined ? {} : { maxToolCalls: values.maxToolCalls as number }),
+    ...(values.runId === undefined ? {} : { runId: values.runId as RunId }),
+    ...(values.candidateId === undefined ? {} : { candidateId: values.candidateId as CandidateId }),
+    ...(effectPolicyBinding === undefined ? {} : { effectPolicyBinding })
+  });
+}
+
 function bindExternalSignal(
   external: AbortSignal | undefined,
   controller: AbortController
 ): () => void {
   if (external === undefined) return () => {};
+  if (!utilTypes.isProxy(external) && ABORT_SIGNAL_ABORTED !== undefined) {
+    let aborted = false;
+    let nativeSignal = false;
+    try {
+      aborted = Reflect.apply(ABORT_SIGNAL_ABORTED, external, []) === true;
+      nativeSignal = true;
+    } catch {
+      nativeSignal = false;
+    }
+    if (nativeSignal) {
+      const abort = (): void => {
+        let reason: unknown;
+        if (ABORT_SIGNAL_REASON !== undefined) {
+          try {
+            reason = Reflect.apply(ABORT_SIGNAL_REASON, external, []);
+          } catch {
+            reason = undefined;
+          }
+        }
+        controller.abort(reason);
+      };
+      if (aborted) {
+        abort();
+        return () => {};
+      }
+      try {
+        Reflect.apply(EVENT_TARGET_ADD, external, ["abort", abort, { once: true }]);
+      } catch (primary: unknown) {
+        try {
+          Reflect.apply(EVENT_TARGET_REMOVE, external, ["abort", abort]);
+        } catch (cleanup: unknown) {
+          throw new AggregateError(
+            [primary, cleanup],
+            "agent host signal registration and cleanup failed",
+            { cause: primary }
+          );
+        }
+        throw primary;
+      }
+      return (): void => {
+        Reflect.apply(EVENT_TARGET_REMOVE, external, ["abort", abort]);
+      };
+    }
+  }
   const addEventListener = external.addEventListener;
   const removeEventListener = external.removeEventListener;
   if (typeof addEventListener !== "function" || typeof removeEventListener !== "function") {
@@ -237,6 +362,14 @@ export class AgentHost {
   ) {}
 
   run(input: AgentHostRunInput): Promise<AgentHostRunResult> {
+    return this.startRun(() => snapshotAgentHostRunInput(input));
+  }
+
+  resume(input: AgentHostResumeInput): Promise<AgentHostRunResult> {
+    return this.startRun(() => snapshotAgentHostResumeInput(input));
+  }
+
+  private startRun(snapshotInput: () => AgentHostRunInputSnapshot): Promise<AgentHostRunResult> {
     if (!this.acceptingRuns) return Promise.reject(new Error("agent host is disposed"));
     const controller = new AbortController();
     const context: ActiveHostRunContext = { host: this, active: true };
@@ -262,7 +395,7 @@ export class AgentHost {
     active = { controller, context, operation };
     this.activeRuns.add(active);
     try {
-      const snapshot = snapshotAgentHostRunInput(input);
+      const snapshot = snapshotInput();
       removeExternalListener = bindExternalSignal(snapshot.signal, controller);
       start(snapshot);
     } catch (error: unknown) {
@@ -275,7 +408,9 @@ export class AgentHost {
     input: AgentHostRunInputSnapshot,
     signal: AbortSignal
   ): Promise<AgentHostRunResult> {
-    const session = await this.sessions.create(input.creation);
+    const session = input.mode === "create"
+      ? await this.sessions.create(input.creation)
+      : await this.sessions.open(input.creation.sessionId);
     const result = await this.kernel.run({
       agentId: "builtin",
       session,

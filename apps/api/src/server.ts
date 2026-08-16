@@ -100,6 +100,8 @@ import {
   defaultControlPlaneSpecRepository,
   registerControlPlaneRoutes
 } from "./controlPlane.js";
+import { LocalMockAgentSessionService } from "./agentSessionService.js";
+import { registerAgentSessionRoutes } from "./agentSessionRoutes.js";
 import {
   registerEvidenceRoutes,
   type EvidenceRouteOptions
@@ -378,6 +380,8 @@ export interface BuildServerOptions {
    */
   enterpriseProjectRoots?: readonly string[] | false;
   learningProposalSignatureVerifier?: EvidenceRouteOptions["verifyLearningProposalSignature"];
+  /** Local-only test/embedding seam. The server owns disposal when supplied. */
+  agentSessionService?: LocalMockAgentSessionService;
 }
 
 const projectSchema = z.object({
@@ -1654,6 +1658,20 @@ export function buildServer(options: BuildServerOptions = {}) {
   const homeDir = options.homeDir ?? process.env.HOME ?? process.cwd();
   const mniuRoot =
     options.mniuRoot ?? process.env.MN_MNIU_ROOT ?? defaultMniuRoot(homeDir);
+  if (runtimeProfile === "enterprise" && options.agentSessionService) {
+    throw new Error("Enterprise Agent sessions require the planned PostgreSQL/object-store backend");
+  }
+  let agentSessionService = runtimeProfile === "local"
+    ? options.agentSessionService
+    : undefined;
+  const getAgentSessionService = runtimeProfile === "local"
+    ? async (): Promise<LocalMockAgentSessionService> => {
+        agentSessionService ??= new LocalMockAgentSessionService(
+          join(mniuRoot, "agent-service")
+        );
+        return agentSessionService;
+      }
+    : undefined;
   const specRepository =
     options.specRepository ??
     defaultControlPlaneSpecRepository(join(mniuRoot, "control-plane"));
@@ -2342,6 +2360,7 @@ export function buildServer(options: BuildServerOptions = {}) {
     }
     await Promise.allSettled([...activeRunJobs.values()].map((job) => job.done));
     activeRunJobs.clear();
+    await agentSessionService?.dispose();
     await proxyServer?.stop();
     proxyServer = undefined;
     await enterprisePostgres?.close();
@@ -2431,6 +2450,10 @@ export function buildServer(options: BuildServerOptions = {}) {
   app.get("/v1/harness-profiles", async () =>
     buildHarnessProfilesDocument(capabilityCatalog)
   );
+
+  if (getAgentSessionService) {
+    registerAgentSessionRoutes(app, { getService: getAgentSessionService });
+  }
 
   registerControlPlaneRoutes(app, {
     store,

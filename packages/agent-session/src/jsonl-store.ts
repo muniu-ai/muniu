@@ -91,6 +91,15 @@ export class LegacyUnprotectedSessionError extends Error {
   }
 }
 
+export class AgentSessionNotFoundError extends Error {
+  readonly code = "AGENT_SESSION_NOT_FOUND";
+
+  constructor() {
+    super("agent session was not found");
+    this.name = "AgentSessionNotFoundError";
+  }
+}
+
 export class SessionCreateOutcomeError extends Error {
   readonly cleanupErrors: readonly unknown[];
 
@@ -673,7 +682,15 @@ export class JsonlAgentSessionStore {
     const paths = this.paths(sessionId);
     let lease: WriterLease | undefined;
     try {
-      const canonicalDirectory = await this.validateSessionDirectory(paths.dir, canonicalSessionsRoot, sessionId);
+      let canonicalDirectory: string;
+      try {
+        canonicalDirectory = await this.validateSessionDirectory(paths.dir, canonicalSessionsRoot, sessionId);
+      } catch (error: unknown) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          throw new AgentSessionNotFoundError();
+        }
+        throw error;
+      }
       lease = await this.acquireLease(`path:${canonicalDirectory}`, sessionId);
       return await this.loadSessionWithLease(sessionId, canonicalSessionsRoot, lease);
     } catch (error: unknown) {
