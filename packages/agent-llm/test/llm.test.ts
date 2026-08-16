@@ -33,6 +33,16 @@ test("assembler combines text, thinking, tool calls, usage, and terminal state",
   assert.equal(Object.isFrozen(message.content), true);
 });
 
+test("assembler default message IDs cannot resemble protected numeric material", () => {
+  const assembler = new BlockAssembler();
+  assembler.push({ type: "text-delta", index: 0, text: "safe" });
+  assembler.push({ type: "finish", reason: "stop" });
+  for (let index = 0; index < 1_000; index += 1) {
+    const message = assembler.message({ kind: "model", provider: "mock", model: "scripted" });
+    assert.match(message.id, /^assistant-[wxyz]{64}$/u);
+  }
+});
+
 test("assembler records errors and drops an incomplete tool call at max tokens", () => {
   const assembler = new BlockAssembler();
   assembler.push({ type: "tool-call-delta", index: 0, id: CallId("call-1"), name: "write", argumentsDelta: "{" });

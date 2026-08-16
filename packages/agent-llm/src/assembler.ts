@@ -12,6 +12,7 @@
 import {
   MessageId,
   createAssistantMessage,
+  createSafeRandomPublicControlIdV1,
   deepFreeze,
   snapshotJsonValue,
   type AssistantMessage,
@@ -171,7 +172,10 @@ export class BlockAssembler {
   get finish(): "stop" | "tool-calls" | "max-tokens" | "cancelled" | "error" { return this.currentFinish ?? "stop"; }
   get error(): LlmFailure | undefined { return this.currentError; }
 
-  message(source: ModelMessageSource, id: MessageIdType = MessageId(crypto.randomUUID())): AssistantMessage {
+  message(
+    source: ModelMessageSource,
+    id: MessageIdType = MessageId(createSafeRandomPublicControlIdV1("assistant"))
+  ): AssistantMessage {
     return createAssistantMessage({ id, content: this.blocks(), source });
   }
 }
