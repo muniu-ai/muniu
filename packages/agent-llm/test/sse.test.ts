@@ -290,6 +290,59 @@ test("parseSse aborts promptly and closes a pending upstream iterator", async ()
   assert.equal(closes, 1);
 });
 
+test("parseSse observes native AbortSignal state without invoking hostile instance properties", async () => {
+  const controller = new AbortController();
+  let ownPropertyUses = 0;
+  Object.defineProperties(controller.signal, {
+    aborted: {
+      configurable: true,
+      get() {
+        ownPropertyUses += 1;
+        throw new Error("hostile aborted getter must-not-leak");
+      }
+    },
+    addEventListener: {
+      configurable: true,
+      value() {
+        ownPropertyUses += 1;
+        throw new Error("hostile addEventListener must-not-leak");
+      }
+    },
+    removeEventListener: {
+      configurable: true,
+      value() {
+        ownPropertyUses += 1;
+        throw new Error("hostile removeEventListener must-not-leak");
+      }
+    }
+  });
+
+  assert.deepEqual(await collect(bytes("data: safe\n\n"), { signal: controller.signal }), [
+    { data: "safe", byteLength: encoder.encode("data: safe\n\n").byteLength }
+  ]);
+
+  let nextStarted!: () => void;
+  const started = new Promise<void>((resolve) => { nextStarted = resolve; });
+  const pending: AsyncIterable<Uint8Array> = {
+    [Symbol.asyncIterator](): AsyncIterator<Uint8Array> {
+      return {
+        next() {
+          nextStarted();
+          return new Promise<IteratorResult<Uint8Array>>(() => {});
+        },
+        async return() {
+          return { done: true, value: undefined };
+        }
+      };
+    }
+  };
+  const parsing = collect(pending, { signal: controller.signal });
+  await started;
+  controller.abort();
+  await expectSseError(parsing, "SSE_ABORTED", "SSE parsing aborted");
+  assert.equal(ownPropertyUses, 0);
+});
+
 test("parseSse delivers a primary abort without awaiting a stuck iterator close", async () => {
   const controller = new AbortController();
   let started!: () => void;

@@ -45,6 +45,9 @@ const TYPED_ARRAY_BYTE_LENGTH = Object.getOwnPropertyDescriptor(
   "byteLength"
 )?.get;
 const TYPED_ARRAY_SET = Uint8Array.prototype.set;
+const ABORT_SIGNAL_ABORTED = Object.getOwnPropertyDescriptor(AbortSignal.prototype, "aborted")?.get;
+const EVENT_TARGET_ADD = EventTarget.prototype.addEventListener;
+const EVENT_TARGET_REMOVE = EventTarget.prototype.removeEventListener;
 
 function limit(value: number | undefined, fallback: number): number {
   const resolved = value ?? fallback;
@@ -64,7 +67,13 @@ function snapshotLimits(input: Partial<SseLimits> | undefined): Readonly<SseLimi
 }
 
 function isAborted(signal: AbortSignal | undefined): boolean {
-  return signal?.aborted === true;
+  if (signal === undefined) return false;
+  if (ABORT_SIGNAL_ABORTED === undefined) return true;
+  try {
+    return Reflect.apply(ABORT_SIGNAL_ABORTED, signal, []) === true;
+  } catch {
+    return true;
+  }
 }
 
 function isSseParseError(error: unknown): error is SseParseError {
@@ -155,7 +164,7 @@ class SseFramer {
 
   *push(chunk: Uint8Array, signal: AbortSignal | undefined): Iterable<SseEvent> {
     for (let index = 0; index < chunk.byteLength; index += 1) {
-      if (signal?.aborted === true) {
+      if (isAborted(signal)) {
         throw new SseParseError("SSE_ABORTED", "SSE parsing aborted");
       }
       const byte = chunk[index] as number;
@@ -340,19 +349,19 @@ async function nextWithAbort<T>(
   next: () => Promise<IteratorResult<T>>,
   signal: AbortSignal | undefined
 ): Promise<IteratorResult<T>> {
-  if (signal?.aborted === true) throw new SseParseError("SSE_ABORTED", "SSE parsing aborted");
+  if (isAborted(signal)) throw new SseParseError("SSE_ABORTED", "SSE parsing aborted");
   const pending = readSourceResult(next);
   if (signal === undefined) return pending;
 
   let rejectAbort: ((reason: SseParseError) => void) | undefined;
   const aborted = new Promise<never>((_resolve, reject) => { rejectAbort = reject; });
   const onAbort = (): void => rejectAbort?.(new SseParseError("SSE_ABORTED", "SSE parsing aborted"));
-  signal.addEventListener("abort", onAbort, { once: true });
-  if (signal.aborted) onAbort();
+  Reflect.apply(EVENT_TARGET_ADD, signal, ["abort", onAbort, { once: true }]);
+  if (isAborted(signal)) onAbort();
   try {
     return await Promise.race([pending, aborted]);
   } finally {
-    signal.removeEventListener("abort", onAbort);
+    Reflect.apply(EVENT_TARGET_REMOVE, signal, ["abort", onAbort]);
   }
 }
 
@@ -431,7 +440,7 @@ async function* parseSseIterator(
   try {
     while (true) {
       const result = await nextWithAbort(next, signal);
-      if (signal?.aborted === true) {
+      if (isAborted(signal)) {
         throw new SseParseError("SSE_ABORTED", "SSE parsing aborted");
       }
       if (result.done) {

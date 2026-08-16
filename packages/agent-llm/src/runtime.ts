@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import type { LlmFailure, LlmRequest, StreamChunk } from "@mn/agent-protocol";
+import { types as utilTypes } from "node:util";
+
+import { assertSafePublicControlIdV1, type LlmFailure, type LlmRequest, type StreamChunk } from "@mn/agent-protocol";
+
+const ABORT_SIGNAL_ABORTED = Object.getOwnPropertyDescriptor(AbortSignal.prototype, "aborted")?.get;
 
 export interface LlmAdapter {
   readonly id: string;
@@ -21,7 +25,51 @@ function safeProviderFailure(failure: LlmFailure): LlmFailure {
 }
 
 function isAborted(signal: AbortSignal | undefined): boolean {
-  return signal?.aborted === true;
+  if (signal === undefined) return false;
+  if (ABORT_SIGNAL_ABORTED === undefined) return true;
+  try {
+    return Reflect.apply(ABORT_SIGNAL_ABORTED, signal, []) === true;
+  } catch {
+    return true;
+  }
+}
+
+function snapshotRequestHeader(value: unknown): Readonly<{
+  provider: string;
+  signal: AbortSignal | undefined;
+}> {
+  if (value === null || typeof value !== "object" || utilTypes.isProxy(value)) {
+    throw new TypeError("LLM request header is invalid");
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError("LLM request header is invalid");
+  }
+  const provider = Object.getOwnPropertyDescriptor(value, "provider");
+  const signal = Object.getOwnPropertyDescriptor(value, "signal");
+  if (provider === undefined || !("value" in provider) || !provider.enumerable || typeof provider.value !== "string") {
+    throw new TypeError("LLM request header is invalid");
+  }
+  if (signal !== undefined && (!("value" in signal) || !signal.enumerable)) {
+    throw new TypeError("LLM request header is invalid");
+  }
+  assertSafePublicControlIdV1(provider.value, "LLM request provider");
+  const signalValue = signal === undefined ? undefined : signal.value;
+  if (signalValue !== undefined) {
+    if (signalValue === null || typeof signalValue !== "object" || utilTypes.isProxy(signalValue)
+      || ABORT_SIGNAL_ABORTED === undefined) {
+      throw new TypeError("LLM request header is invalid");
+    }
+    try {
+      Reflect.apply(ABORT_SIGNAL_ABORTED, signalValue, []);
+    } catch {
+      throw new TypeError("LLM request header is invalid");
+    }
+  }
+  return Object.freeze({
+    provider: provider.value,
+    signal: signalValue as AbortSignal | undefined
+  });
 }
 
 export class LlmRuntime {
@@ -55,9 +103,10 @@ export class LlmRuntime {
   }
 
   async *stream(request: LlmRequest): AsyncIterable<StreamChunk> {
-    const adapter = this.adapters.get(request.provider);
-    if (adapter === undefined) throw new Error(`LLM adapter "${request.provider}" is not registered`);
-    const signal = request.signal;
+    const header = snapshotRequestHeader(request);
+    const adapter = this.adapters.get(header.provider);
+    if (adapter === undefined) throw new Error("LLM adapter is not registered");
+    const signal = header.signal;
     let terminalEmitted = false;
     if (isAborted(signal)) {
       terminalEmitted = true;

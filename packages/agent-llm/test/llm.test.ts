@@ -266,6 +266,87 @@ test("LLM runtime does not dispatch a pre-aborted request", async () => {
   ]);
 });
 
+test("LLM runtime reads AbortSignal state without invoking a hostile instance accessor", async () => {
+  const controller = new AbortController();
+  let getterReads = 0;
+  Object.defineProperty(controller.signal, "aborted", {
+    configurable: true,
+    get() {
+      getterReads += 1;
+      throw new Error("hostile AbortSignal accessor must not run");
+    }
+  });
+  const runtime = new LlmRuntime();
+  runtime.register({
+    id: "safe-signal",
+    async *stream(): AsyncIterable<StreamChunk> {
+      yield { type: "finish", reason: "stop" };
+    }
+  });
+
+  assert.deepEqual(await collect(runtime.stream({
+    ...request,
+    provider: "safe-signal",
+    signal: controller.signal
+  })), [{ type: "finish", reason: "stop" }]);
+  assert.equal(getterReads, 0);
+});
+
+test("LLM runtime routes without invoking request accessors or Proxy traps", async () => {
+  const runtime = new LlmRuntime();
+  runtime.register({
+    id: "safe-provider",
+    async *stream(): AsyncIterable<StreamChunk> {
+      yield { type: "finish", reason: "stop" };
+    }
+  });
+  let providerGetterReads = 0;
+  const accessorRequest = Object.defineProperty({
+    model: "scripted",
+    messages: []
+  }, "provider", {
+    enumerable: true,
+    get() {
+      providerGetterReads += 1;
+      throw new Error("request getter upstream-secret");
+    }
+  });
+  const revoked = Proxy.revocable({ ...request, provider: "safe-provider" }, {});
+  revoked.revoke();
+
+  for (const hostile of [accessorRequest, revoked.proxy]) {
+    await assert.rejects(
+      collect(runtime.stream(hostile as LlmRequest)),
+      (error: unknown) => error instanceof TypeError
+        && error.message === "LLM request header is invalid"
+        && !error.message.includes("upstream-secret")
+    );
+  }
+  assert.equal(providerGetterReads, 0);
+});
+
+test("LLM runtime rejects protected provider material and non-native signals before routing", async () => {
+  const runtime = new LlmRuntime();
+  runtime.register({
+    id: "safe-provider",
+    async *stream(): AsyncIterable<StreamChunk> {
+      yield { type: "finish", reason: "stop" };
+    }
+  });
+  const protectedProvider = "sk-synthetic-credential-material";
+
+  await assert.rejects(
+    collect(runtime.stream({ ...request, provider: protectedProvider })),
+    (error: unknown) => error instanceof TypeError
+      && !error.message.includes(protectedProvider)
+  );
+  await assert.rejects(
+    collect(runtime.stream({ ...request, provider: "safe-provider", signal: {} as AbortSignal })),
+    (error: unknown) => error instanceof TypeError
+      && error.message === "LLM request header is invalid"
+  );
+});
+
 test("LLM runtime drops a chunk completed after mid-stream abort and closes the adapter iterator", async () => {
   const controller = new AbortController();
   let secondNextStarted!: () => void;
