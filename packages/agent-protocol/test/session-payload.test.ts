@@ -80,6 +80,33 @@ test("session payload builder publishes only a detached protected DTO under the 
   assert.equal(inspectAgentSessionProtectedPayloadV1("turn/start", payload), undefined);
 });
 
+test("session creation carries one exact immutable authoritative model binding", () => {
+  const modelBinding = {
+    schemaVersion: 1 as const,
+    kind: "agent-model-binding" as const,
+    providerId: "mock",
+    modelId: "durable-mock"
+  };
+  const payload = protectAgentSessionPayloadV1("session/created", { modelBinding });
+  assert.deepEqual(payload.publicControls, { modelBinding });
+  assert.deepEqual(
+    inspectAgentSessionProtectedPayloadV1(
+      "session/created",
+      JSON.parse(JSON.stringify(payload))
+    ),
+    payload
+  );
+  assert.throws(() => protectAgentSessionPayloadV1("session/created", {
+    modelBinding: { ...modelBinding, providerId: mainlandMobile }
+  }), /model|binding|provider|control/iu);
+  assert.equal(inspectAgentSessionProtectedPayloadV1("session/created", {
+    ...payload,
+    publicControls: {
+      modelBinding: { ...modelBinding, modelId: "forged-model" }
+    }
+  }), undefined);
+});
+
 test("assistant proposals stay unbound while explicit tool calls carry a commitment without executable arguments", () => {
   const argumentsText = JSON.stringify({ phone: mainlandMobile, apiKey: providerCredential });
   const assistant = createAssistantMessage({

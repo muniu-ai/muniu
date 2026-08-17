@@ -17,6 +17,10 @@ import type {
   UserMessage
 } from "./model.js";
 import {
+  assertAgentModelBindingV1,
+  type AgentModelBindingV1
+} from "./model-binding.js";
+import {
   PROTECTION_POLICY_DIGEST_V1,
   createProtectedTextV1,
   createProtectedJsonViewV1,
@@ -47,7 +51,11 @@ export type AgentApprovalResolutionV1 = "decided" | "cancelled" | "closed" | "in
 export type AgentApprovalDecisionV1 = "approve_once" | "approve_session_scope" | "deny";
 
 export interface AgentSessionRawPayloadMapV1 {
-  "session/created": { cwd?: string; labels?: Record<string, string> };
+  "session/created": {
+    cwd?: string;
+    labels?: Record<string, string>;
+    modelBinding?: AgentModelBindingV1;
+  };
   "turn/start": { turn: number };
   "user/message": { turn: number; message: UserMessage };
   "step/start": { turn: number; step: number };
@@ -100,7 +108,7 @@ export type ProtectedMessageBlockControlV1 =
   };
 
 export interface AgentSessionPublicControlsMapV1 {
-  "session/created": Record<string, never>;
+  "session/created": { readonly modelBinding?: AgentModelBindingV1 };
   "turn/start": { readonly turn: number };
   "user/message": {
     readonly turn: number;
@@ -426,9 +434,12 @@ function assertRawPayload(eventType: AgentSessionProtectedEventTypeV1, value: un
   if (!isRecord(value)) throw new TypeError(`event ${eventType} raw payload does not match the event-specific schema`);
   switch (eventType) {
     case "session/created":
-      if (hasExactKeys(value, [], ["cwd", "labels"])
+      if (hasExactKeys(value, [], ["cwd", "labels", "modelBinding"])
         && (value.cwd === undefined || typeof value.cwd === "string")
-        && (value.labels === undefined || isLabels(value.labels))) return;
+        && (value.labels === undefined || isLabels(value.labels))) {
+        if (value.modelBinding !== undefined) assertAgentModelBindingV1(value.modelBinding);
+        return;
+      }
       break;
     case "turn/start":
       if (hasExactKeys(value, ["turn"])) {
@@ -534,7 +545,15 @@ function buildProfileParts<T extends AgentSessionProtectedEventTypeV1>(
   switch (eventType) {
     case "session/created": {
       const payload = raw as AgentSessionRawPayloadMapV1["session/created"];
-      parts = { publicControls: {}, protectedContentInput: payload };
+      parts = {
+        publicControls: payload.modelBinding === undefined
+          ? {}
+          : { modelBinding: payload.modelBinding },
+        protectedContentInput: {
+          ...(payload.cwd === undefined ? {} : { cwd: payload.cwd }),
+          ...(payload.labels === undefined ? {} : { labels: payload.labels })
+        }
+      };
       break;
     }
     case "turn/start": {
@@ -780,7 +799,10 @@ function validateProtectedContent(
 function assertPublicControls(eventType: AgentSessionProtectedEventTypeV1, value: unknown): void {
   switch (eventType) {
     case "session/created":
-      if (hasExactKeys(value, [])) return;
+      if (hasExactKeys(value, [], ["modelBinding"])) {
+        if (value.modelBinding !== undefined) assertAgentModelBindingV1(value.modelBinding);
+        return;
+      }
       break;
     case "turn/start":
       if (hasExactKeys(value, ["turn"])) {

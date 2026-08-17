@@ -123,6 +123,8 @@ test("PATH-empty host completes a durable two-step tool turn and reloads it afte
         "user/message",
         "step/start",
         "assistant/message",
+        "approval/requested",
+        "approval/resolved",
         "tool/call",
         "tool/result",
         "step/end",

@@ -3,6 +3,7 @@
 import { types as utilTypes } from "node:util";
 
 import { deepFreeze } from "./freeze.js";
+import { inspectAgentModelBindingV1, type AgentModelBindingV1 } from "./model-binding.js";
 import { isSafePublicControlIdV1 } from "./public-control.js";
 import type { AgentApprovalDecisionV1 } from "./session-payload.js";
 
@@ -18,13 +19,6 @@ export type AgentSessionViewStateV1 =
   | "interrupted"
   | "error"
   | "closed";
-
-export interface AgentModelBindingV1 {
-  readonly schemaVersion: 1;
-  readonly kind: "agent-model-binding";
-  readonly providerId: string;
-  readonly modelId: string;
-}
 
 export interface AgentSessionCreateRequestV1 {
   readonly schemaVersion: 1;
@@ -187,20 +181,6 @@ function inspectLabels(value: unknown): Readonly<Record<string, string>> | undef
 
 function inspectClientRequestId(value: unknown): value is string {
   return isSafePublicControlIdV1(value);
-}
-
-export function inspectAgentModelBindingV1(value: unknown): AgentModelBindingV1 | undefined {
-  const record = exactDataRecord(value, ["schemaVersion", "kind", "providerId", "modelId"]);
-  if (record === undefined || record.schemaVersion !== AGENT_SESSION_TRANSPORT_VERSION_V1
-    || record.kind !== "agent-model-binding"
-    || !isSafePublicControlIdV1(record.providerId)
-    || !isSafePublicControlIdV1(record.modelId)) return undefined;
-  return deepFreeze({
-    schemaVersion: 1,
-    kind: "agent-model-binding",
-    providerId: record.providerId,
-    modelId: record.modelId
-  });
 }
 
 export function inspectAgentSessionCreateRequestV1(value: unknown): AgentSessionCreateRequestV1 | undefined {
@@ -373,10 +353,6 @@ export function inspectAgentSessionControlResponseV1(
 function required<T>(value: T | undefined, label: string): T {
   if (value === undefined) throw new TypeError(`${label} must be an exact transport v1 DTO`);
   return value;
-}
-
-export function assertAgentModelBindingV1(value: unknown): AgentModelBindingV1 {
-  return required(inspectAgentModelBindingV1(value), "agent model binding");
 }
 
 export function assertAgentSessionCreateRequestV1(value: unknown): AgentSessionCreateRequestV1 {

@@ -2,9 +2,11 @@
 
 import {
   SessionId,
+  assertAgentModelBindingV1,
   createSafeRandomPublicControlIdV1,
   deepFreeze,
-  snapshotJsonValue
+  snapshotJsonValue,
+  type AgentModelBindingV1
 } from "@mn/agent-protocol";
 
 import type { CreateAgentSessionOptions } from "./types.js";
@@ -13,6 +15,7 @@ export interface CreateAgentSessionOptionsSnapshot {
   readonly sessionId: SessionId;
   readonly cwd?: string;
   readonly labels?: Readonly<Record<string, string>>;
+  readonly modelBinding?: AgentModelBindingV1;
 }
 
 export function snapshotCreateAgentSessionOptions(
@@ -27,6 +30,7 @@ export function snapshotCreateAgentSessionOptions(
   const suppliedSessionId = options.sessionId;
   const cwd = options.cwd;
   const labels = options.labels;
+  const modelBinding = options.modelBinding;
   if (suppliedSessionId !== undefined && (typeof suppliedSessionId !== "string" || suppliedSessionId.length === 0)) {
     throw new Error("session id must be a non-empty string");
   }
@@ -48,6 +52,7 @@ export function snapshotCreateAgentSessionOptions(
   return deepFreeze({
     sessionId: suppliedSessionId ?? SessionId(createSafeRandomPublicControlIdV1("session")),
     ...(cwd === undefined ? {} : { cwd }),
-    ...(labelsSnapshot === undefined ? {} : { labels: labelsSnapshot })
+    ...(labelsSnapshot === undefined ? {} : { labels: labelsSnapshot }),
+    ...(modelBinding === undefined ? {} : { modelBinding: assertAgentModelBindingV1(modelBinding) })
   });
 }

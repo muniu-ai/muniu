@@ -5,6 +5,7 @@ import type {
   AgentSessionEventPayloadMapV1,
   AgentSessionEventTypeV1,
   AgentSessionEventV1,
+  AgentModelBindingV1,
   CandidateId,
   Digest,
   Message,
@@ -20,12 +21,14 @@ export interface AgentSessionHeaderV1 {
   readonly protectionProfile: typeof AGENT_SESSION_PROTECTION_PROFILE_V1;
   readonly protectionPolicyDigest: Digest;
   readonly protectedCwd?: ProtectedTextV1;
+  readonly modelBinding?: AgentModelBindingV1;
 }
 
 export interface CreateAgentSessionOptions {
   readonly sessionId?: SessionId;
   readonly cwd?: string;
   readonly labels?: Record<string, string>;
+  readonly modelBinding?: AgentModelBindingV1;
 }
 
 export interface AgentEventMetadata {

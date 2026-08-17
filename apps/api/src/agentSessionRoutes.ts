@@ -4,31 +4,21 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
 
 import {
+  inspectAgentApprovalDecisionRequestV1,
+  inspectAgentMessageRequestV1,
+  inspectAgentSessionControlRequestV1,
+  inspectAgentSessionCreateRequestV1
+} from "@mn/agent-protocol";
+
+import {
   AgentSessionServiceError,
   type AgentSessionEventSubscription,
   type LocalMockAgentSessionService
 } from "./agentSessionService.js";
 
 const controlId = z.string().min(1).max(256);
-const clientRequestId = z.string().min(1).max(256);
 const paramsSchema = z.object({ id: controlId }).strict();
 const approvalParamsSchema = z.object({ id: controlId, approvalId: controlId }).strict();
-const createSchema = z.object({
-  clientRequestId,
-  provider: controlId.optional(),
-  model: controlId.optional(),
-  cwd: z.string().max(16_384).optional(),
-  labels: z.record(z.string().max(16_384)).optional()
-}).strict();
-const messageSchema = z.object({
-  clientRequestId,
-  prompt: z.string().min(1).max(1_000_000)
-}).strict();
-const controlSchema = z.object({ clientRequestId }).strict();
-const approvalSchema = z.object({
-  clientRequestId,
-  decision: z.enum(["approve_once", "approve_session_scope", "deny"])
-}).strict();
 const eventQuerySchema = z.object({
   after: z.coerce.number().int().min(-1).default(-1)
 }).strict();
@@ -38,17 +28,29 @@ export interface AgentSessionRouteOptions {
 }
 
 function invalid(reply: FastifyReply): FastifyReply {
-  return reply.code(400).send({ error: "INVALID_REQUEST" });
+  return reply.code(400).send({
+    schemaVersion: 1,
+    kind: "agent-error-response",
+    error: "INVALID_REQUEST"
+  });
 }
 
 function failure(reply: FastifyReply, error: unknown): FastifyReply {
   if (error instanceof AgentSessionServiceError) {
-    return reply.code(error.statusCode).send({ error: error.code });
+    return reply.code(error.statusCode).send({
+      schemaVersion: 1,
+      kind: "agent-error-response",
+      error: error.code
+    });
   }
-  return reply.code(500).send({ error: "AGENT_SESSION_SERVICE_ERROR" });
+  return reply.code(500).send({
+    schemaVersion: 1,
+    kind: "agent-error-response",
+    error: "AGENT_SESSION_SERVICE_ERROR"
+  });
 }
 
-export function registerAgentSessionRoutes(
+function registerRoutes(
   app: FastifyInstance,
   options: AgentSessionRouteOptions
 ): void {
@@ -60,10 +62,10 @@ export function registerAgentSessionRoutes(
   });
 
   app.post("/v1/agent-sessions", async (request, reply) => {
-    const parsed = createSchema.safeParse(request.body);
-    if (!parsed.success) return invalid(reply);
+    const parsed = inspectAgentSessionCreateRequestV1(request.body);
+    if (parsed === undefined) return invalid(reply);
     try {
-      const result = await (await service()).create(parsed.data);
+      const result = await (await service()).create(parsed);
       return reply.code(result.statusCode).send(result.body);
     } catch (error: unknown) {
       return failure(reply, error);
@@ -82,10 +84,10 @@ export function registerAgentSessionRoutes(
 
   app.post("/v1/agent-sessions/:id/messages", async (request, reply) => {
     const params = paramsSchema.safeParse(request.params);
-    const body = messageSchema.safeParse(request.body);
-    if (!params.success || !body.success) return invalid(reply);
+    const body = inspectAgentMessageRequestV1(request.body);
+    if (!params.success || body === undefined) return invalid(reply);
     try {
-      const result = await (await service()).message(params.data.id, body.data);
+      const result = await (await service()).message(params.data.id, body);
       return reply.code(result.statusCode).send(result.body);
     } catch (error: unknown) {
       return failure(reply, error);
@@ -206,10 +208,10 @@ export function registerAgentSessionRoutes(
 
   app.post("/v1/agent-sessions/:id/cancel", async (request, reply) => {
     const params = paramsSchema.safeParse(request.params);
-    const body = controlSchema.safeParse(request.body);
-    if (!params.success || !body.success) return invalid(reply);
+    const body = inspectAgentSessionControlRequestV1(request.body);
+    if (!params.success || body === undefined) return invalid(reply);
     try {
-      const result = await (await service()).cancel(params.data.id, body.data);
+      const result = await (await service()).cancel(params.data.id, body);
       return reply.code(result.statusCode).send(result.body);
     } catch (error: unknown) {
       return failure(reply, error);
@@ -218,10 +220,10 @@ export function registerAgentSessionRoutes(
 
   app.post("/v1/agent-sessions/:id/close", async (request, reply) => {
     const params = paramsSchema.safeParse(request.params);
-    const body = controlSchema.safeParse(request.body);
-    if (!params.success || !body.success) return invalid(reply);
+    const body = inspectAgentSessionControlRequestV1(request.body);
+    if (!params.success || body === undefined) return invalid(reply);
     try {
-      const result = await (await service()).close(params.data.id, body.data);
+      const result = await (await service()).close(params.data.id, body);
       return reply.code(result.statusCode).send(result.body);
     } catch (error: unknown) {
       return failure(reply, error);
@@ -230,17 +232,35 @@ export function registerAgentSessionRoutes(
 
   app.post("/v1/agent-sessions/:id/approvals/:approvalId", async (request, reply) => {
     const params = approvalParamsSchema.safeParse(request.params);
-    const body = approvalSchema.safeParse(request.body);
-    if (!params.success || !body.success) return invalid(reply);
+    const body = inspectAgentApprovalDecisionRequestV1(request.body);
+    if (!params.success || body === undefined) return invalid(reply);
     try {
       const result = await (await service()).approve(
         params.data.id,
         params.data.approvalId,
-        body.data
+        body
       );
       return reply.code(result.statusCode).send(result.body);
     } catch (error: unknown) {
       return failure(reply, error);
     }
+  });
+}
+
+export function registerAgentSessionRoutes(
+  app: FastifyInstance,
+  options: AgentSessionRouteOptions
+): void {
+  app.register(async (scoped) => {
+    scoped.setErrorHandler((error, _request, reply) => {
+      const statusDescriptor = error !== null && typeof error === "object"
+        ? Reflect.getOwnPropertyDescriptor(error, "statusCode")
+        : undefined;
+      if (statusDescriptor && "value" in statusDescriptor && statusDescriptor.value === 400) {
+        return invalid(reply);
+      }
+      return failure(reply, error);
+    });
+    registerRoutes(scoped, options);
   });
 }

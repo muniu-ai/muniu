@@ -3,8 +3,10 @@
 import { types as utilTypes } from "node:util";
 
 import {
+  assertAgentModelBindingV1,
   createAgentSessionEvent,
   deepFreeze,
+  digestJson,
   protectAgentSessionPayloadV1,
   snapshotJsonValue,
   verifyAgentSessionEventChain,
@@ -74,6 +76,18 @@ export class DurableAgentSession {
     verifyAgentSessionEventChain(this.log);
     if (this.log.some((event) => event.sessionId !== header.sessionId)) {
       throw new Error("session event id does not match the header");
+    }
+    const created = this.log[0];
+    if (created?.type === "session/created") {
+      const headerBinding = header.modelBinding === undefined
+        ? undefined
+        : assertAgentModelBindingV1(header.modelBinding);
+      const createdBinding = created.payload.publicControls.modelBinding;
+      if ((headerBinding === undefined) !== (createdBinding === undefined)
+        || (headerBinding !== undefined && createdBinding !== undefined
+          && digestJson(headerBinding) !== digestJson(createdBinding))) {
+        throw new Error("session header model binding does not match the creation event");
+      }
     }
     deepFreeze(this.header);
   }

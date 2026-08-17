@@ -606,6 +606,68 @@ test("JSONL store persists mode 0700/0600 and reopens a verified session", async
   await reopenStore.dispose();
 });
 
+test("JSONL persists one authoritative model binding in the header and creation fact", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "muniu-session-model-binding-"));
+  const sessionId = SessionId("model-binding-session");
+  const modelBinding = {
+    schemaVersion: 1 as const,
+    kind: "agent-model-binding" as const,
+    providerId: "mock",
+    modelId: "authoritative-mock"
+  };
+  const store = new JsonlAgentSessionStore(root);
+  const created = await store.create({ sessionId, modelBinding });
+  assert.deepEqual(created.header.modelBinding, modelBinding);
+  assert.deepEqual(
+    created.events[0]?.type === "session/created"
+      ? created.events[0].payload.publicControls.modelBinding
+      : undefined,
+    modelBinding
+  );
+  const headerPath = path.join(root, "sessions", sessionId, "header.json");
+  const durableHeader = JSON.parse(await readFile(headerPath, "utf8")) as Record<string, unknown>;
+  await store.dispose();
+
+  const reopenedStore = new JsonlAgentSessionStore(root);
+  const reopened = await reopenedStore.open(sessionId);
+  assert.deepEqual(reopened.header.modelBinding, modelBinding);
+  await reopenedStore.dispose();
+
+  await writeFile(headerPath, `${JSON.stringify({
+    ...durableHeader,
+    modelBinding: { ...modelBinding, modelId: "tampered-model" }
+  })}\n`);
+  await assert.rejects(
+    () => new JsonlAgentSessionStore(root).open(sessionId),
+    /model binding.*creation event|creation event.*model binding/iu
+  );
+});
+
+test("durable sessions reject a header binding that disagrees with the creation fact", () => {
+  const sessionId = SessionId("constructor-binding-session");
+  const headerBinding = {
+    schemaVersion: 1 as const,
+    kind: "agent-model-binding" as const,
+    providerId: "mock",
+    modelId: "header-model"
+  };
+  const created = createAgentSessionEvent({
+    eventId: EventId("constructor-binding-created"),
+    sessionId,
+    seq: 0,
+    occurredAt: "2026-08-15T00:00:00.000Z",
+    type: "session/created",
+    payload: protectAgentSessionPayloadV1("session/created", {
+      modelBinding: { ...headerBinding, modelId: "event-model" }
+    })
+  });
+  assert.throws(() => new DurableAgentSession(
+    { ...testSessionHeader(sessionId), modelBinding: headerBinding },
+    [created],
+    { commitDurable: async () => {}, flush: async () => {} }
+  ), /model binding.*creation event|creation event.*model binding/iu);
+});
+
 test("JSONL helper serializes concurrent appends and reopens one verified chain", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "muniu-session-helper-concurrency-"));
   const sessionId = SessionId("helper-concurrency-session");

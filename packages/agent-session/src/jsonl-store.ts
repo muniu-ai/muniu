@@ -23,6 +23,7 @@ import {
   createProtectedTextV1,
   digestJson,
   deepFreeze,
+  inspectAgentModelBindingV1,
   isAgentSessionEventV1,
   isCanonicalRfc3339,
   isProtectedTextV1,
@@ -142,7 +143,7 @@ function validateHeader(value: unknown, expectedId: SessionId): AgentSessionHead
     "protectionProfile",
     "protectionPolicyDigest"
   ];
-  const allowed = new Set([...required, "protectedCwd"]);
+  const allowed = new Set([...required, "protectedCwd", "modelBinding"]);
   if (!required.every((key) => Object.hasOwn(header, key))
     || !Object.keys(header).every((key) => allowed.has(key))
     || header.schemaVersion !== 1
@@ -155,16 +156,21 @@ function validateHeader(value: unknown, expectedId: SessionId): AgentSessionHead
   if (header.protectedCwd !== undefined && !isProtectedTextV1(header.protectedCwd)) {
     throw new Error("invalid protected session header cwd");
   }
+  if (header.modelBinding !== undefined && inspectAgentModelBindingV1(header.modelBinding) === undefined) {
+    throw new Error("invalid session header model binding");
+  }
   return deepFreeze(header as unknown as AgentSessionHeaderV1);
 }
 
 function creationSnapshotDigest(options: CreateAgentSessionOptionsSnapshot): string {
   const payload = protectAgentSessionPayloadV1("session/created", {
     ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-    ...(options.labels === undefined ? {} : { labels: options.labels })
+    ...(options.labels === undefined ? {} : { labels: options.labels }),
+    ...(options.modelBinding === undefined ? {} : { modelBinding: options.modelBinding })
   });
   return digestJson({
     sessionId: options.sessionId,
+    ...(options.modelBinding === undefined ? {} : { modelBinding: options.modelBinding }),
     ...(options.cwd === undefined ? {} : { protectedCwdDigest: createProtectedTextV1(options.cwd).digest }),
     payloadDigest: payload.digest
   });
@@ -197,7 +203,8 @@ function protectedNodeContainsMarker(
 function creationSnapshotIsAmbiguous(options: CreateAgentSessionOptionsSnapshot): boolean {
   const payload = protectAgentSessionPayloadV1("session/created", {
     ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-    ...(options.labels === undefined ? {} : { labels: options.labels })
+    ...(options.labels === undefined ? {} : { labels: options.labels }),
+    ...(options.modelBinding === undefined ? {} : { modelBinding: options.modelBinding })
   });
   return protectedNodeContainsMarker(payload.protectedContent.root);
 }
@@ -208,6 +215,7 @@ function persistedCreationSnapshotDigest(
 ): string {
   return digestJson({
     sessionId: header.sessionId,
+    ...(header.modelBinding === undefined ? {} : { modelBinding: header.modelBinding }),
     ...(header.protectedCwd === undefined ? {} : { protectedCwdDigest: header.protectedCwd.digest }),
     payloadDigest: created.payload.digest
   });
@@ -649,6 +657,12 @@ export class JsonlAgentSessionStore {
     const createdCwd = protectedCreatedCwd(created);
     if (header.protectedCwd?.digest !== createdCwd?.digest) {
       throw new Error(`session "${sessionId}" header cwd does not match the creation event`);
+    }
+    const createdModelBinding = created.payload.publicControls.modelBinding;
+    if ((header.modelBinding === undefined) !== (createdModelBinding === undefined)
+      || (header.modelBinding !== undefined && createdModelBinding !== undefined
+        && digestJson(header.modelBinding) !== digestJson(createdModelBinding))) {
+      throw new Error(`session "${sessionId}" header model binding does not match the creation event`);
     }
     if (header.createdAt !== created.occurredAt) {
       throw new Error(`session "${sessionId}" header creation time does not match the creation event`);

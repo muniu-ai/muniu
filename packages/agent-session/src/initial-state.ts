@@ -30,11 +30,13 @@ export function createInitialAgentSessionState(
     createdAt: occurredAt,
     protectionProfile: AGENT_SESSION_PROTECTION_PROFILE_V1,
     protectionPolicyDigest: PROTECTION_POLICY_DIGEST_V1,
-    ...(options.cwd === undefined ? {} : { protectedCwd: createProtectedTextV1(options.cwd) })
+    ...(options.cwd === undefined ? {} : { protectedCwd: createProtectedTextV1(options.cwd) }),
+    ...(options.modelBinding === undefined ? {} : { modelBinding: options.modelBinding })
   });
   const runtimePayload: AgentSessionEventPayloadMapV1["session/created"] = deepFreeze({
     ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-    ...(options.labels === undefined ? {} : { labels: options.labels })
+    ...(options.labels === undefined ? {} : { labels: options.labels }),
+    ...(options.modelBinding === undefined ? {} : { modelBinding: options.modelBinding })
   });
   const event = createAgentSessionEvent({
     eventId: createSafeRandomEventId(),

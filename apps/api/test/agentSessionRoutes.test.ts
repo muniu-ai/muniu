@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -6,10 +7,25 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
+import Fastify from "fastify";
 
 import { JsonlAgentSessionStore } from "@mn/agent-session";
-import { SessionId } from "@mn/agent-protocol";
+import {
+  CallId,
+  CandidateId,
+  Digest,
+  MessageId,
+  RunId,
+  SessionId,
+  createAssistantMessage,
+  createProtectedTextV1,
+  createRuntimeEffectCommitmentBinderV1,
+  deriveToolEffectKindV1,
+  inspectAgentErrorResponseV1,
+  inspectAgentSessionViewV1
+} from "@mn/agent-protocol";
 
+import { registerAgentSessionRoutes } from "../src/agentSessionRoutes.js";
 import { buildServer } from "../src/server.js";
 import { LocalMockAgentSessionService } from "../src/agentSessionService.js";
 
@@ -22,6 +38,215 @@ function appAt(root: string) {
   });
 }
 
+const MOCK_MODEL_BINDING_V1 = Object.freeze({
+  schemaVersion: 1 as const,
+  kind: "agent-model-binding" as const,
+  providerId: "mock",
+  modelId: "local-mock"
+});
+
+function createRequestV1(
+  clientRequestId: string,
+  options: { cwd?: string; labels?: Record<string, string> } = {}
+) {
+  return {
+    schemaVersion: 1 as const,
+    kind: "agent-session-create-request" as const,
+    clientRequestId,
+    modelBinding: MOCK_MODEL_BINDING_V1,
+    ...options
+  };
+}
+
+function messageRequestV1(clientRequestId: string, prompt: string) {
+  return {
+    schemaVersion: 1 as const,
+    kind: "agent-message-request" as const,
+    clientRequestId,
+    prompt
+  };
+}
+
+function controlRequestV1(clientRequestId: string) {
+  return {
+    schemaVersion: 1 as const,
+    kind: "agent-session-control-request" as const,
+    clientRequestId
+  };
+}
+
+function approvalRequestV1(
+  clientRequestId: string,
+  decision: "approve_once" | "approve_session_scope" | "deny"
+) {
+  return {
+    schemaVersion: 1 as const,
+    kind: "agent-approval-decision-request" as const,
+    clientRequestId,
+    decision
+  };
+}
+
+test("agent routes require exact V1 DTOs and return bounded authoritative views", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "mn-agent-api-v1-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const app = appAt(root);
+  t.after(() => app.close().catch(() => undefined));
+
+  const legacy = await app.inject({
+    method: "POST",
+    url: "/v1/agent-sessions",
+    payload: { clientRequestId: "legacy-create" }
+  });
+  assert.equal(legacy.statusCode, 400, legacy.body);
+  assert.deepEqual(inspectAgentErrorResponseV1(legacy.json()), legacy.json());
+
+  const malformed = await app.inject({
+    method: "POST",
+    url: "/v1/agent-sessions",
+    headers: { "content-type": "application/json" },
+    payload: "{"
+  });
+  assert.equal(malformed.statusCode, 400, malformed.body);
+  assert.deepEqual(inspectAgentErrorResponseV1(malformed.json()), malformed.json());
+
+  const created = await app.inject({
+    method: "POST",
+    url: "/v1/agent-sessions",
+    payload: {
+      schemaVersion: 1,
+      kind: "agent-session-create-request",
+      clientRequestId: "v1-create",
+      modelBinding: MOCK_MODEL_BINDING_V1
+    }
+  });
+  assert.equal(created.statusCode, 201, created.body);
+  const createdView = inspectAgentSessionViewV1(created.json());
+  assert.ok(createdView);
+  assert.deepEqual(createdView.modelBinding, MOCK_MODEL_BINDING_V1);
+  assert.equal(Object.hasOwn(created.json(), "events"), false);
+  assert.equal(Object.hasOwn(created.json(), "projection"), false);
+  assert.equal(Object.hasOwn(created.json(), "header"), false);
+  const header = JSON.parse(await readFile(
+    join(root, "agent-service", "sessions", createdView.sessionId, "header.json"),
+    "utf8"
+  )) as { modelBinding?: unknown };
+  assert.deepEqual(header.modelBinding, MOCK_MODEL_BINDING_V1);
+
+  const legacyMessage = await app.inject({
+    method: "POST",
+    url: `/v1/agent-sessions/${createdView.sessionId}/messages`,
+    payload: { clientRequestId: "legacy-message", prompt: "legacy" }
+  });
+  assert.equal(legacyMessage.statusCode, 400, legacyMessage.body);
+  assert.deepEqual(inspectAgentErrorResponseV1(legacyMessage.json()), legacyMessage.json());
+
+  const message = await app.inject({
+    method: "POST",
+    url: `/v1/agent-sessions/${createdView.sessionId}/messages`,
+    payload: {
+      schemaVersion: 1,
+      kind: "agent-message-request",
+      clientRequestId: "v1-message",
+      prompt: "hello"
+    }
+  });
+  assert.equal(message.statusCode, 200, message.body);
+  assert.ok(inspectAgentSessionViewV1(message.json()));
+  const inspected = await app.inject({
+    method: "GET",
+    url: `/v1/agent-sessions/${createdView.sessionId}`
+  });
+  assert.deepEqual(inspectAgentSessionViewV1(inspected.json()), inspected.json());
+
+  const missing = await app.inject({
+    method: "GET",
+    url: "/v1/agent-sessions/missing-v1-session"
+  });
+  assert.equal(missing.statusCode, 404, missing.body);
+  assert.deepEqual(inspectAgentErrorResponseV1(missing.json()), missing.json());
+
+  const unknownApproval = await app.inject({
+    method: "POST",
+    url: `/v1/agent-sessions/${createdView.sessionId}/approvals/unknown-approval`,
+    payload: {
+      schemaVersion: 1,
+      kind: "agent-approval-decision-request",
+      clientRequestId: "unknown-approval-decision",
+      decision: "deny"
+    }
+  });
+  assert.equal(unknownApproval.statusCode, 404, unknownApproval.body);
+  assert.deepEqual(inspectAgentErrorResponseV1(unknownApproval.json()), unknownApproval.json());
+  assert.doesNotMatch(unknownApproval.body, /unknown-approval/u);
+});
+
+test("an existing pending approval is a fixed versioned 409 until B4b2", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "mn-agent-api-pending-approval-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const service = new LocalMockAgentSessionService(join(root, "agent-service"));
+  t.after(() => service.dispose().catch(() => undefined));
+  await service.create(createRequestV1("initialize-pending-approval-service"));
+
+  const store = (service as unknown as { store: JsonlAgentSessionStore }).store;
+  const sessionId = SessionId("pending-approval-api-session");
+  const session = await store.create({ sessionId, modelBinding: MOCK_MODEL_BINDING_V1 });
+  const runId = RunId("pending-approval-api-run");
+  const candidateId = CandidateId("pending-approval-api-candidate");
+  const callId = CallId("pending-approval-api-call");
+  const assistant = createAssistantMessage({
+    id: MessageId("pending-approval-api-message"),
+    content: [{ type: "tool-call", id: callId, name: "write", arguments: "{}" }],
+    source: { kind: "model", provider: "mock", model: "local-mock" }
+  });
+  const binder = createRuntimeEffectCommitmentBinderV1({
+    governanceDigest: Digest("a".repeat(64)),
+    harnessDigest: Digest("b".repeat(64))
+  });
+  const handle = binder.bind({
+    effectKind: deriveToolEffectKindV1("write"),
+    sessionId,
+    runId,
+    candidateId,
+    turn: 1,
+    step: 1,
+    internalEffectId: callId,
+    protectedInput: createProtectedTextV1("{}"),
+    raw: { kind: "text", value: "{}" }
+  });
+  await session.append("turn/start", { turn: 1 }, { runId, candidateId });
+  await session.append("step/start", { turn: 1, step: 1 }, { runId, candidateId });
+  await session.append(
+    "assistant/message",
+    { turn: 1, step: 1, message: assistant },
+    { runId, candidateId }
+  );
+  await session.append("approval/requested", {
+    binding: {
+      schemaVersion: 1,
+      approvalId: "pending-approval-api",
+      scope: handle.commitment.effectKind,
+      risk: "side-effecting",
+      callId,
+      name: "write",
+      commitment: handle.commitment
+    }
+  }, { runId, candidateId });
+  binder.dispose();
+
+  const app = Fastify({ logger: false });
+  registerAgentSessionRoutes(app, { getService: async () => service });
+  t.after(() => app.close().catch(() => undefined));
+  const response = await app.inject({
+    method: "POST",
+    url: `/v1/agent-sessions/${sessionId}/approvals/pending-approval-api`,
+    payload: approvalRequestV1("pending-approval-api-decision", "deny")
+  });
+  assert.equal(response.statusCode, 409, response.body);
+  assert.equal(response.json().error, "APPROVAL_DECISION_UNAVAILABLE");
+  assert.deepEqual(inspectAgentErrorResponseV1(response.json()), response.json());
+});
+
 test("agent session routes run multiple protected mock turns and resume SSE by cursor", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "mn-agent-api-"));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -31,13 +256,10 @@ test("agent session routes run multiple protected mock turns and resume SSE by c
   const created = await app.inject({
     method: "POST",
     url: "/v1/agent-sessions",
-    payload: {
-      clientRequestId: "create-request-1",
-      provider: "mock",
-      model: "local-mock",
+    payload: createRequestV1("create-request-1", {
       cwd: "/Users/alice/project",
       labels: { owner: "Alice", email: "alice@example.com" }
-    }
+    })
   });
   assert.equal(created.statusCode, 201, created.body);
   const sessionId = (created.json() as { sessionId: string }).sessionId;
@@ -45,17 +267,14 @@ test("agent session routes run multiple protected mock turns and resume SSE by c
   const first = await app.inject({
     method: "POST",
     url: `/v1/agent-sessions/${sessionId}/messages`,
-    payload: {
-      clientRequestId: "message-request-1",
-      prompt: "Alice alice@example.com /Users/alice/project 手机：13800138000 身份证：11010519491231002X token=top-secret"
-    }
+    payload: messageRequestV1(
+      "message-request-1",
+      "Alice alice@example.com /Users/alice/project 手机：13800138000 身份证：11010519491231002X token=top-secret"
+    )
   });
   assert.equal(first.statusCode, 200, first.body);
   const firstBody = first.body;
   assert.doesNotMatch(firstBody, /13800138000|11010519491231002X|top-secret/u);
-  assert.match(firstBody, /Alice/u);
-  assert.match(firstBody, /alice@example\.com/u);
-  assert.match(firstBody, /\/Users\/alice\/project/u);
   const mutationFacts = await readFile(join(root, "agent-service", "mutations.jsonl"), "utf8");
   assert.doesNotMatch(mutationFacts, /13800138000|11010519491231002X|top-secret/u);
   const eventFacts = await readFile(
@@ -70,10 +289,7 @@ test("agent session routes run multiple protected mock turns and resume SSE by c
   const duplicate = await app.inject({
     method: "POST",
     url: `/v1/agent-sessions/${sessionId}/messages`,
-    payload: {
-      clientRequestId: "message-request-1",
-      prompt: "different input must never execute"
-    }
+    payload: messageRequestV1("message-request-1", "different input must never execute")
   });
   assert.equal(duplicate.statusCode, 200, duplicate.body);
   assert.equal(duplicate.body, first.body);
@@ -81,13 +297,14 @@ test("agent session routes run multiple protected mock turns and resume SSE by c
   const second = await app.inject({
     method: "POST",
     url: `/v1/agent-sessions/${sessionId}/messages`,
-    payload: { clientRequestId: "message-request-2", prompt: "second turn" }
+    payload: messageRequestV1("message-request-2", "second turn")
   });
   assert.equal(second.statusCode, 200, second.body);
 
   const inspected = await app.inject({ method: "GET", url: `/v1/agent-sessions/${sessionId}` });
   assert.equal(inspected.statusCode, 200, inspected.body);
-  const events = (inspected.json() as { events: Array<{ seq: number }> }).events;
+  assert.ok(inspectAgentSessionViewV1(inspected.json()));
+  const events = eventFacts.trimEnd().split("\n").map((line) => JSON.parse(line) as { seq: number });
   assert.ok(events.length > 1);
   assert.deepEqual(events.map((event) => event.seq), events.map((_, index) => index));
 
@@ -102,13 +319,13 @@ test("agent mutation DTOs are exact and approvals use the closed decision enum",
   const invalidCreate = await app.inject({
     method: "POST",
     url: "/v1/agent-sessions",
-    payload: { clientRequestId: "create-exact", unexpected: true }
+    payload: { ...createRequestV1("create-exact"), unexpected: true }
   });
   assert.equal(invalidCreate.statusCode, 400, invalidCreate.body);
   const unsafeControl = await app.inject({
     method: "POST",
     url: "/v1/agent-sessions",
-    payload: { clientRequestId: "13800138000" }
+    payload: createRequestV1("13800138000")
   });
   assert.equal(unsafeControl.statusCode, 400, unsafeControl.body);
   assert.doesNotMatch(unsafeControl.body, /13800138000/u);
@@ -116,23 +333,29 @@ test("agent mutation DTOs are exact and approvals use the closed decision enum",
   const created = await app.inject({
     method: "POST",
     url: "/v1/agent-sessions",
-    payload: { clientRequestId: "create-exact-2" }
+    payload: createRequestV1("create-exact-2")
   });
   const sessionId = (created.json() as { sessionId: string }).sessionId;
   const invalidApproval = await app.inject({
     method: "POST",
     url: `/v1/agent-sessions/${sessionId}/approvals/approval-1`,
-    payload: { clientRequestId: "approval-request-1", decision: "approve_forever" }
+    payload: {
+      ...approvalRequestV1("approval-request-1", "deny"),
+      decision: "approve_forever"
+    }
   });
   assert.equal(invalidApproval.statusCode, 400, invalidApproval.body);
   for (const [index, decision] of ["approve_once", "approve_session_scope", "deny"].entries()) {
     const approval = await app.inject({
       method: "POST",
       url: `/v1/agent-sessions/${sessionId}/approvals/approval-${index}`,
-      payload: { clientRequestId: `approval-request-${index + 2}`, decision }
+      payload: approvalRequestV1(
+        `approval-request-${index + 2}`,
+        decision as "approve_once" | "approve_session_scope" | "deny"
+      )
     });
-    assert.equal(approval.statusCode, 200, approval.body);
-    assert.equal(approval.json().decision, decision);
+    assert.equal(approval.statusCode, 404, approval.body);
+    assert.deepEqual(inspectAgentErrorResponseV1(approval.json()), approval.json());
   }
 });
 
@@ -142,7 +365,7 @@ test("agent sessions recover interrupted JSONL facts after restart without repla
   const durableRoot = join(root, "agent-service");
   const sessionId = SessionId("restart-recovery-session");
   const seed = new JsonlAgentSessionStore(durableRoot);
-  const session = await seed.create({ sessionId });
+  const session = await seed.create({ sessionId, modelBinding: MOCK_MODEL_BINDING_V1 });
   await session.append("turn/start", { turn: 1 });
   await session.flush();
   await seed.dispose();
@@ -151,15 +374,16 @@ test("agent sessions recover interrupted JSONL facts after restart without repla
   t.after(() => app.close());
   const inspected = await app.inject({ method: "GET", url: `/v1/agent-sessions/${sessionId}` });
   assert.equal(inspected.statusCode, 200, inspected.body);
-  const body = inspected.json() as {
-    state: string;
-    events: Array<{ type: string; payload: { publicControls?: { reason?: string } } }>;
-  };
+  const body = inspected.json() as { state: string };
   assert.equal(body.state, "interrupted");
-  assert.equal(body.events.at(-1)?.type, "turn/end");
-  assert.equal(body.events.at(-1)?.payload.publicControls?.reason, "interrupted");
-  assert.equal(body.events.some((event) => event.type === "assistant/message"), false);
   const afterFirstRead = await readFile(join(durableRoot, "sessions", sessionId, "events.jsonl"), "utf8");
+  const recoveredEvents = afterFirstRead.trimEnd().split("\n").map((line) => JSON.parse(line) as {
+    type: string;
+    payload: { publicControls?: { reason?: string } };
+  });
+  assert.equal(recoveredEvents.at(-1)?.type, "turn/end");
+  assert.equal(recoveredEvents.at(-1)?.payload.publicControls?.reason, "interrupted");
+  assert.equal(recoveredEvents.some((event) => event.type === "assistant/message"), false);
   const secondRead = await app.inject({ method: "GET", url: `/v1/agent-sessions/${sessionId}` });
   assert.equal(secondRead.statusCode, 200, secondRead.body);
   assert.equal(
@@ -167,6 +391,43 @@ test("agent sessions recover interrupted JSONL facts after restart without repla
     afterFirstRead,
     "ordinary GET must not append recovery facts"
   );
+});
+
+test("a legacy session without a model binding cannot poison service startup", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "mn-agent-api-legacy-binding-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const durableRoot = join(root, "agent-service");
+  const legacySessionId = SessionId("legacy-session-without-model-binding");
+  const seed = new JsonlAgentSessionStore(durableRoot);
+  await seed.create({ sessionId: legacySessionId });
+  await seed.dispose();
+
+  const app = appAt(root);
+  t.after(() => app.close().catch(() => undefined));
+  const created = await app.inject({
+    method: "POST",
+    url: "/v1/agent-sessions",
+    payload: createRequestV1("create-beside-legacy-session")
+  });
+  assert.equal(created.statusCode, 201, created.body);
+  assert.ok(inspectAgentSessionViewV1(created.json()));
+
+  const legacyGet = await app.inject({
+    method: "GET",
+    url: `/v1/agent-sessions/${legacySessionId}`
+  });
+  assert.equal(legacyGet.statusCode, 503, legacyGet.body);
+  assert.equal(legacyGet.json().error, "MODEL_BINDING_UNAVAILABLE");
+  assert.deepEqual(inspectAgentErrorResponseV1(legacyGet.json()), legacyGet.json());
+
+  const legacyMessage = await app.inject({
+    method: "POST",
+    url: `/v1/agent-sessions/${legacySessionId}/messages`,
+    payload: messageRequestV1("legacy-session-message", "must fail closed")
+  });
+  assert.equal(legacyMessage.statusCode, 409, legacyMessage.body);
+  assert.equal(legacyMessage.json().error, "MODEL_BINDING_UNAVAILABLE");
+  assert.deepEqual(inspectAgentErrorResponseV1(legacyMessage.json()), legacyMessage.json());
 });
 
 test("agent session close and cancel mutations are idempotent", async (t) => {
@@ -177,12 +438,12 @@ test("agent session close and cancel mutations are idempotent", async (t) => {
   const created = await app.inject({
     method: "POST",
     url: "/v1/agent-sessions",
-    payload: { clientRequestId: "create-controls" }
+    payload: createRequestV1("create-controls")
   });
   const sessionId = created.json().sessionId as string;
 
   for (const operation of ["cancel", "close"] as const) {
-    const payload = { clientRequestId: `${operation}-request` };
+    const payload = controlRequestV1(`${operation}-request`);
     const first = await app.inject({
       method: "POST",
       url: `/v1/agent-sessions/${sessionId}/${operation}`,
@@ -199,7 +460,7 @@ test("agent session close and cancel mutations are idempotent", async (t) => {
   const blocked = await app.inject({
     method: "POST",
     url: `/v1/agent-sessions/${sessionId}/messages`,
-    payload: { clientRequestId: "closed-message", prompt: "must not run" }
+    payload: messageRequestV1("closed-message", "must not run")
   });
   assert.equal(blocked.statusCode, 409, blocked.body);
 });
@@ -212,18 +473,23 @@ test("concurrent messages serialize monotonic turns and an active run can be can
   const created = await app.inject({
     method: "POST",
     url: "/v1/agent-sessions",
-    payload: { clientRequestId: "create-concurrent" }
+    payload: createRequestV1("create-concurrent")
   });
   const sessionId = created.json().sessionId as string;
   const concurrent = await Promise.all(["a", "b"].map((prompt, index) => app.inject({
     method: "POST",
     url: `/v1/agent-sessions/${sessionId}/messages`,
-    payload: { clientRequestId: `concurrent-${index}`, prompt }
+    payload: messageRequestV1(`concurrent-${index}`, prompt)
   })));
   assert.deepEqual(concurrent.map((response) => response.statusCode), [200, 200]);
   const afterConcurrent = await app.inject({ method: "GET", url: `/v1/agent-sessions/${sessionId}` });
-  const turnStarts = (afterConcurrent.json() as { events: Array<{ type: string; payload: { publicControls: { turn?: number } } }> })
-    .events
+  assert.ok(inspectAgentSessionViewV1(afterConcurrent.json()));
+  const concurrentFacts = await readFile(
+    join(root, "agent-service", "sessions", sessionId, "events.jsonl"),
+    "utf8"
+  );
+  const turnStarts = concurrentFacts.trimEnd().split("\n")
+    .map((line) => JSON.parse(line) as { type: string; payload: { publicControls: { turn?: number } } })
     .filter((event) => event.type === "turn/start")
     .map((event) => event.payload.publicControls.turn);
   assert.deepEqual(turnStarts, [1, 2]);
@@ -231,13 +497,13 @@ test("concurrent messages serialize monotonic turns and an active run can be can
   const running = app.inject({
     method: "POST",
     url: `/v1/agent-sessions/${sessionId}/messages`,
-    payload: { clientRequestId: "cancelled-message", prompt: "cancel me" }
+    payload: messageRequestV1("cancelled-message", "cancel me")
   });
   await new Promise<void>((resolve) => { setTimeout(resolve, 8); });
   const cancelled = await app.inject({
     method: "POST",
     url: `/v1/agent-sessions/${sessionId}/cancel`,
-    payload: { clientRequestId: "cancel-active" }
+    payload: controlRequestV1("cancel-active")
   });
   assert.equal(cancelled.statusCode, 200, cancelled.body);
   assert.equal(cancelled.json().cancelled, true);
@@ -253,20 +519,76 @@ test("completed mutation receipts survive restart and never execute twice", asyn
   const first = await firstApp.inject({
     method: "POST",
     url: "/v1/agent-sessions",
-    payload: { clientRequestId: "restart-create" }
+    payload: createRequestV1("restart-create")
   });
   assert.equal(first.statusCode, 201, first.body);
   await firstApp.close();
+  const journal = (await readFile(join(root, "agent-service", "mutations.jsonl"), "utf8"))
+    .trimEnd().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+  const completed = journal.find((record) => record.state === "completed") as {
+    receipt: Record<string, unknown>;
+  } | undefined;
+  assert.ok(completed);
+  assert.deepEqual(Object.keys(completed.receipt).sort(), [
+    "committedEventDigest",
+    "committedSeq",
+    "kind",
+    "modelBinding",
+    "sessionId",
+    "state",
+    "statusCode"
+  ]);
+  assert.deepEqual(completed.receipt.modelBinding, MOCK_MODEL_BINDING_V1);
 
   const restarted = appAt(root);
   t.after(() => restarted.close());
   const duplicate = await restarted.inject({
     method: "POST",
     url: "/v1/agent-sessions",
-    payload: { clientRequestId: "restart-create" }
+    payload: createRequestV1("restart-create")
   });
   assert.equal(duplicate.statusCode, 201, duplicate.body);
   assert.equal(duplicate.body, first.body);
+});
+
+test("a recomputed receipt digest cannot detach the authoritative model binding", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "mn-agent-api-binding-receipt-tamper-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const app = appAt(root);
+  const request = createRequestV1("binding-receipt-create");
+  const created = await app.inject({ method: "POST", url: "/v1/agent-sessions", payload: request });
+  assert.equal(created.statusCode, 201, created.body);
+  await app.close();
+
+  const journalPath = join(root, "agent-service", "mutations.jsonl");
+  const records = (await readFile(journalPath, "utf8")).trimEnd().split("\n")
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+  const completedIndex = records.findIndex((record) => record.state === "completed"
+    && record.clientRequestId === request.clientRequestId);
+  assert.notEqual(completedIndex, -1);
+  const completed = records[completedIndex]!;
+  const receipt = completed.receipt as Record<string, unknown>;
+  const tampered: Record<string, unknown> = {
+    ...completed,
+    receipt: {
+      ...receipt,
+      modelBinding: { ...MOCK_MODEL_BINDING_V1, modelId: "forged-model" }
+    }
+  };
+  delete tampered.digest;
+  records[completedIndex] = {
+    ...tampered,
+    digest: createHash("sha256").update(JSON.stringify(tampered)).digest("hex")
+  };
+  await writeFile(journalPath, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
+
+  const restarted = appAt(root);
+  t.after(() => restarted.close().catch(() => undefined));
+  const duplicate = await restarted.inject({ method: "POST", url: "/v1/agent-sessions", payload: request });
+  assert.equal(duplicate.statusCode, 503, duplicate.body);
+  assert.deepEqual(inspectAgentErrorResponseV1(duplicate.json()), duplicate.json());
+  assert.equal(duplicate.json().error, "RECEIPT_UNAVAILABLE");
+  assert.doesNotMatch(duplicate.body, /forged-model/u);
 });
 
 test("a message receipt stays byte-exact across a concurrent close and restart", async (t) => {
@@ -276,20 +598,20 @@ test("a message receipt stays byte-exact across a concurrent close and restart",
   const created = await firstApp.inject({
     method: "POST",
     url: "/v1/agent-sessions",
-    payload: { clientRequestId: "close-race-create" }
+    payload: createRequestV1("close-race-create")
   });
   const sessionId = (created.json() as { sessionId: string }).sessionId;
   const messageRequest = {
     method: "POST" as const,
     url: `/v1/agent-sessions/${sessionId}/messages`,
-    payload: { clientRequestId: "close-race-message", prompt: "close while active" }
+    payload: messageRequestV1("close-race-message", "close while active")
   };
   const firstPromise = firstApp.inject(messageRequest);
   await new Promise<void>((resolve) => { setTimeout(resolve, 8); });
   const close = await firstApp.inject({
     method: "POST",
     url: `/v1/agent-sessions/${sessionId}/close`,
-    payload: { clientRequestId: "close-race-close" }
+    payload: controlRequestV1("close-race-close")
   });
   assert.equal(close.statusCode, 200, close.body);
   const first = await firstPromise;
@@ -310,14 +632,14 @@ test("in-memory idempotency responses are detached frozen values", async (t) => 
   t.after(() => rm(root, { recursive: true, force: true }));
   const service = new LocalMockAgentSessionService(join(root, "agent-service"));
   t.after(() => service.dispose());
-  const created = await service.create({ clientRequestId: "frozen-receipt-create" });
-  const body = created.body as { state: string; events: Array<{ seq: number }> };
+  const created = await service.create(createRequestV1("frozen-receipt-create"));
+  const body = created.body as { state: string; eventCursor: { lastSeq: number } };
   assert.equal(Object.isFrozen(created), true);
   assert.equal(Object.isFrozen(body), true);
-  assert.equal(Object.isFrozen(body.events), true);
+  assert.equal(Object.isFrozen(body.eventCursor), true);
   assert.throws(() => { body.state = "forged"; }, TypeError);
-  assert.throws(() => { body.events[0]!.seq = 999; }, TypeError);
-  const duplicate = await service.create({ clientRequestId: "frozen-receipt-create" });
+  assert.throws(() => { body.eventCursor.lastSeq = 999; }, TypeError);
+  const duplicate = await service.create(createRequestV1("frozen-receipt-create"));
   assert.equal((duplicate.body as { state: string }).state, "idle");
 });
 
@@ -329,7 +651,7 @@ test("bounded receipts survive maximum legal messages and reconstruct the exact 
   const created = await app.inject({
     method: "POST",
     url: "/v1/agent-sessions",
-    payload: { clientRequestId: "max-receipt-create" }
+    payload: createRequestV1("max-receipt-create")
   });
   const sessionId = created.json().sessionId as string;
   const prompt = "x".repeat(1_000_000);
@@ -338,7 +660,7 @@ test("bounded receipts survive maximum legal messages and reconstruct the exact 
     const response = await app.inject({
       method: "POST",
       url: `/v1/agent-sessions/${sessionId}/messages`,
-      payload: { clientRequestId: `max-receipt-message-${index}`, prompt }
+      payload: messageRequestV1(`max-receipt-message-${index}`, prompt)
     });
     assert.equal(response.statusCode, 200, response.body.slice(0, 200));
     terminalBody = response.body;
@@ -352,7 +674,7 @@ test("bounded receipts survive maximum legal messages and reconstruct the exact 
   const duplicate = await restarted.inject({
     method: "POST",
     url: `/v1/agent-sessions/${sessionId}/messages`,
-    payload: { clientRequestId: "max-receipt-message-2", prompt: "different" }
+    payload: messageRequestV1("max-receipt-message-2", "different")
   });
   assert.equal(duplicate.statusCode, 200, duplicate.body.slice(0, 200));
   assert.equal(duplicate.body, terminalBody);
@@ -366,7 +688,7 @@ test("many legal messages keep the mutation journal bounded across restart", asy
   const created = await app.inject({
     method: "POST",
     url: "/v1/agent-sessions",
-    payload: { clientRequestId: "total-receipt-create" }
+    payload: createRequestV1("total-receipt-create")
   });
   const sessionId = created.json().sessionId as string;
   const prompt = "y".repeat(100_000);
@@ -374,7 +696,7 @@ test("many legal messages keep the mutation journal bounded across restart", asy
     const response = await app.inject({
       method: "POST",
       url: `/v1/agent-sessions/${sessionId}/messages`,
-      payload: { clientRequestId: `total-receipt-message-${index}`, prompt }
+      payload: messageRequestV1(`total-receipt-message-${index}`, prompt)
     });
     assert.equal(response.statusCode, 200, response.body.slice(0, 200));
   }
@@ -397,16 +719,16 @@ test("restart never guesses protected history into a runtime overlay", async (t)
   const created = await firstApp.inject({
     method: "POST",
     url: "/v1/agent-sessions",
-    payload: { clientRequestId: "overlay-create" }
+    payload: createRequestV1("overlay-create")
   });
   const sessionId = created.json().sessionId as string;
   const firstMessage = await firstApp.inject({
     method: "POST",
     url: `/v1/agent-sessions/${sessionId}/messages`,
-    payload: { clientRequestId: "overlay-first", prompt: "first" }
+    payload: messageRequestV1("overlay-first", "first")
   });
   assert.equal(firstMessage.statusCode, 200, firstMessage.body);
-  const eventCount = firstMessage.json().events.length as number;
+  const lastSeq = firstMessage.json().eventCursor.lastSeq as number;
   await firstApp.close();
 
   const restarted = appAt(root);
@@ -414,12 +736,23 @@ test("restart never guesses protected history into a runtime overlay", async (t)
   const resumed = await restarted.inject({
     method: "POST",
     url: `/v1/agent-sessions/${sessionId}/messages`,
-    payload: { clientRequestId: "overlay-second", prompt: "must fail closed" }
+    payload: messageRequestV1("overlay-second", "must fail closed")
   });
   assert.equal(resumed.statusCode, 409, resumed.body);
   assert.equal(resumed.json().error, "RUNTIME_OVERLAY_REQUIRED");
   const inspected = await restarted.inject({ method: "GET", url: `/v1/agent-sessions/${sessionId}` });
-  assert.equal(inspected.json().events.length, eventCount);
+  assert.equal(inspected.json().eventCursor.lastSeq, lastSeq);
+  await restarted.close();
+
+  const restartedAgain = appAt(root);
+  t.after(() => restartedAgain.close().catch(() => undefined));
+  const duplicate = await restartedAgain.inject({
+    method: "POST",
+    url: `/v1/agent-sessions/${sessionId}/messages`,
+    payload: messageRequestV1("overlay-second", "different input must not execute")
+  });
+  assert.equal(duplicate.statusCode, 409, duplicate.body);
+  assert.equal(duplicate.body, resumed.body);
 });
 
 test("SQLite remains a rebuildable protected projection of JSONL facts", async (t) => {
@@ -429,15 +762,15 @@ test("SQLite remains a rebuildable protected projection of JSONL facts", async (
   const created = await app.inject({
     method: "POST",
     url: "/v1/agent-sessions",
-    payload: { clientRequestId: "projection-create" }
+    payload: createRequestV1("projection-create")
   });
   const sessionId = created.json().sessionId as string;
   const message = await app.inject({
     method: "POST",
     url: `/v1/agent-sessions/${sessionId}/messages`,
-    payload: { clientRequestId: "projection-message", prompt: "Alice 手机：13800138000" }
+    payload: messageRequestV1("projection-message", "Alice 手机：13800138000")
   });
-  const lastSeq = message.json().events.at(-1).seq as number;
+  const lastSeq = message.json().eventCursor.lastSeq as number;
   await app.close();
 
   const databasePath = join(root, "agent-service", "projection.db");
@@ -473,7 +806,7 @@ test("ordinary GET leaves the derived SQLite projection unchanged", async (t) =>
   const created = await app.inject({
     method: "POST",
     url: "/v1/agent-sessions",
-    payload: { clientRequestId: "readonly-get-create" }
+    payload: createRequestV1("readonly-get-create")
   });
   const sessionId = created.json().sessionId as string;
   const databasePath = join(root, "agent-service", "projection.db");
@@ -529,7 +862,7 @@ test("oversized mutation journals fail closed without parsing an unbounded line"
   const response = await app.inject({
     method: "POST",
     url: "/v1/agent-sessions",
-    payload: { clientRequestId: "bounded-journal-request" }
+    payload: createRequestV1("bounded-journal-request")
   });
   assert.ok(response.statusCode >= 500, response.body);
 });
@@ -554,7 +887,7 @@ test("a root directory sync failure rejects acceptance before any session effect
   const response = await app.inject({
     method: "POST",
     url: "/v1/agent-sessions",
-    payload: { clientRequestId: "directory-sync-create" }
+    payload: createRequestV1("directory-sync-create")
   });
   assert.ok(response.statusCode >= 500, response.body);
   assert.equal((await readdir(serviceRoot)).includes("sessions"), false);
@@ -581,7 +914,7 @@ test("agent service refuses journal and projection symlinks without modifying th
   const journalResponse = await journalApp.inject({
     method: "POST",
     url: "/v1/agent-sessions",
-    payload: { clientRequestId: "symlink-journal-create" }
+    payload: createRequestV1("symlink-journal-create")
   });
   assert.ok(journalResponse.statusCode >= 500, journalResponse.body);
   assert.equal(await readFile(journalTarget, "utf8"), "outside-journal-sentinel");
@@ -603,7 +936,7 @@ test("agent service refuses journal and projection symlinks without modifying th
   const projectionResponse = await projectionApp.inject({
     method: "POST",
     url: "/v1/agent-sessions",
-    payload: { clientRequestId: "symlink-projection-create" }
+    payload: createRequestV1("symlink-projection-create")
   });
   assert.ok(projectionResponse.statusCode >= 500, projectionResponse.body);
   assert.equal((await readFile(projectionTarget)).byteLength, 0);
@@ -628,7 +961,7 @@ test("SSE sends cursor backlog then live events and releases the subscription on
   const created = await fetch(`${base}/v1/agent-sessions`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ clientRequestId: "live-create" })
+    body: JSON.stringify(createRequestV1("live-create"))
   });
   const sessionId = ((await created.json()) as { sessionId: string }).sessionId;
   const controller = new AbortController();
@@ -654,7 +987,7 @@ test("SSE sends cursor backlog then live events and releases the subscription on
   const message = await fetch(`${base}/v1/agent-sessions/${sessionId}/messages`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ clientRequestId: "live-message", prompt: "live" })
+    body: JSON.stringify(messageRequestV1("live-message", "live"))
   });
   assert.equal(message.status, 200);
   await readUntil(/event: assistant\/message/u);
@@ -669,9 +1002,9 @@ test("event subscriptions pause backlog delivery on backpressure and resume from
   t.after(() => rm(root, { recursive: true, force: true }));
   const service = new LocalMockAgentSessionService(join(root, "agent-service"));
   t.after(() => service.dispose());
-  const created = await service.create({ clientRequestId: "pressure-create" });
+  const created = await service.create(createRequestV1("pressure-create"));
   const sessionId = (created.body as { sessionId: string }).sessionId;
-  await service.message(sessionId, { clientRequestId: "pressure-message", prompt: "backlog" });
+  await service.message(sessionId, messageRequestV1("pressure-message", "backlog"));
   const received: number[] = [];
   const subscription = await service.subscribeEvents(sessionId, -1, (event) => {
     received.push(event.seq);
@@ -691,12 +1024,12 @@ test("service disposal permanently invalidates every subscription handle", async
   const root = await mkdtemp(join(tmpdir(), "mn-agent-api-sse-dispose-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const service = new LocalMockAgentSessionService(join(root, "agent-service"));
-  const created = await service.create({ clientRequestId: "dispose-subscription-create" });
+  const created = await service.create(createRequestV1("dispose-subscription-create"));
   const sessionId = (created.body as { sessionId: string }).sessionId;
-  await service.message(sessionId, {
-    clientRequestId: "dispose-subscription-message",
-    prompt: "backlog before dispose"
-  });
+  await service.message(
+    sessionId,
+    messageRequestV1("dispose-subscription-message", "backlog before dispose")
+  );
   let calls = 0;
   const subscription = await service.subscribeEvents(sessionId, -1, () => {
     calls += 1;
@@ -744,7 +1077,7 @@ test("SSE disconnect before session lookup completes never creates a subscriptio
   await app.listen({ host: "127.0.0.1", port: 0 });
   t.after(() => app.close());
   const address = app.server.address() as AddressInfo;
-  const created = await service.create({ clientRequestId: "early-close-create" });
+  const created = await service.create(createRequestV1("early-close-create"));
   const sessionId = (created.body as { sessionId: string }).sessionId;
   const request = httpRequest({
     host: "127.0.0.1",
@@ -797,7 +1130,7 @@ test("server shutdown cancels an SSE handler still waiting for session lookup", 
   });
   await app.listen({ host: "127.0.0.1", port: 0 });
   const address = app.server.address() as AddressInfo;
-  const created = await service.create({ clientRequestId: "pending-shutdown-create" });
+  const created = await service.create(createRequestV1("pending-shutdown-create"));
   const sessionId = (created.body as { sessionId: string }).sessionId;
   const request = httpRequest({
     host: "127.0.0.1",
@@ -840,7 +1173,7 @@ test("server shutdown closes active SSE connections without waiting for the clie
   const created = await fetch(`${base}/v1/agent-sessions`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ clientRequestId: "shutdown-create" })
+    body: JSON.stringify(createRequestV1("shutdown-create"))
   });
   const sessionId = ((await created.json()) as { sessionId: string }).sessionId;
   const stream = await fetch(`${base}/v1/agent-sessions/${sessionId}/events?after=-1`);
