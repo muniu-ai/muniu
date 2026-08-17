@@ -14,9 +14,12 @@ import {
 import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-import { createAgentHost, type AgentHost } from "@mn/agent-host";
+import { createAgentHost, type AgentHost, type AgentHostOptions } from "@mn/agent-host";
 import {
+  CandidateId,
+  RunId,
   SessionId,
+  assertAgentApprovalResponseV1,
   assertAgentErrorResponseV1,
   assertAgentModelBindingV1,
   assertAgentSessionControlResponseV1,
@@ -24,6 +27,7 @@ import {
   assertSafePublicControlIdV1,
   createSafeRandomPublicControlIdV1,
   deepFreeze,
+  digestJson,
   inspectAgentApprovalResponseV1,
   inspectAgentErrorResponseV1,
   inspectAgentSessionControlResponseV1,
@@ -38,6 +42,7 @@ import {
   type AgentSessionEventV1,
   type AgentSessionViewStateV1,
   type AgentSessionViewV1,
+  type EffectPolicyBindingV1,
   type JsonValue,
   type LlmRequest,
   type StreamChunk
@@ -50,6 +55,8 @@ import {
   recoverInterruptedSession,
   type AgentSession
 } from "@mn/agent-session";
+
+import { AgentApprovalCoordinator } from "./agentApprovalCoordinator.js";
 
 export interface AgentServiceResponse<T extends JsonValue = JsonValue> {
   readonly statusCode: number;
@@ -89,6 +96,7 @@ interface AcceptedJournalRecord {
   readonly clientRequestId: string;
   readonly scope: string;
   readonly sessionId?: string;
+  readonly semanticDigest?: string;
   readonly digest: string;
 }
 
@@ -98,6 +106,7 @@ interface CompletedJournalRecord {
   readonly clientRequestId: string;
   readonly scope: string;
   readonly sessionId?: string;
+  readonly semanticDigest?: string;
   readonly receipt: JournalReceipt;
   readonly digest: string;
 }
@@ -110,6 +119,7 @@ type UnsignedJournalRecord =
 interface JournalState {
   readonly scope: string;
   readonly sessionId?: string;
+  readonly semanticDigest?: string;
   readonly receipt?: JournalReceipt;
 }
 
@@ -134,6 +144,15 @@ type JournalReceipt = SessionViewReceipt | InlineReceipt;
 interface IdempotentEffectResult {
   readonly response: AgentServiceResponse;
   readonly receipt: JournalReceipt;
+  readonly commit?: () => void;
+  readonly rollback?: () => void;
+}
+
+export interface LocalAgentSessionServiceOptions {
+  readonly adapters?: AgentHostOptions["adapters"];
+  readonly tools?: AgentHostOptions["tools"];
+  readonly approvalCoordinator?: AgentApprovalCoordinator;
+  readonly effectPolicyBinding?: EffectPolicyBindingV1;
 }
 
 interface JournalReservation {
@@ -244,8 +263,8 @@ function asJournalRecord(value: unknown): JournalRecord {
   }
   const record = value as Record<string, unknown>;
   const allowed = record.state === "accepted"
-    ? ["schemaVersion", "state", "clientRequestId", "scope", "sessionId", "digest"]
-    : ["schemaVersion", "state", "clientRequestId", "scope", "sessionId", "receipt", "digest"];
+    ? ["schemaVersion", "state", "clientRequestId", "scope", "sessionId", "semanticDigest", "digest"]
+    : ["schemaVersion", "state", "clientRequestId", "scope", "sessionId", "semanticDigest", "receipt", "digest"];
   if (Reflect.ownKeys(record).some((key) => typeof key !== "string" || !allowed.includes(key))) {
     throw new Error("agent mutation journal contains an invalid record");
   }
@@ -254,6 +273,8 @@ function asJournalRecord(value: unknown): JournalRecord {
     || typeof record.clientRequestId !== "string"
     || typeof record.scope !== "string"
     || (record.sessionId !== undefined && typeof record.sessionId !== "string")
+    || (record.semanticDigest !== undefined
+      && (typeof record.semanticDigest !== "string" || !HEX_DIGEST.test(record.semanticDigest)))
     || typeof record.digest !== "string"
     || !HEX_DIGEST.test(record.digest)) {
     throw new Error("agent mutation journal contains an invalid record");
@@ -261,6 +282,9 @@ function asJournalRecord(value: unknown): JournalRecord {
   assertSafePublicControlIdV1(record.clientRequestId, "client request identifier");
   if (record.sessionId !== undefined) assertSafePublicControlIdV1(record.sessionId, "session identifier");
   assertJournalScope(record.scope, record.sessionId);
+  if (record.scope.startsWith("approval:") && record.semanticDigest === undefined) {
+    throw new Error("agent mutation journal approval is missing its semantic request binding");
+  }
   if (record.state === "completed") {
     let receipt = asJournalReceipt(record.receipt);
     if (receipt.kind === "session-view-v1") {
@@ -291,6 +315,15 @@ function asJournalRecord(value: unknown): JournalRecord {
         const approvalId = record.scope.slice(`approval:${record.sessionId}:`.length);
         if (inspected !== undefined && receipt.statusCode === 200
           && inspected.sessionId === record.sessionId && inspected.approvalId === approvalId) {
+          const request: AgentApprovalDecisionRequestV1 = {
+            schemaVersion: 1,
+            kind: "agent-approval-decision-request",
+            clientRequestId: record.clientRequestId,
+            decision: inspected.decision
+          };
+          if (digestJson(request as unknown as JsonValue) !== record.semanticDigest) {
+            throw new Error("agent mutation journal approval receipt is not bound to its request");
+          }
           body = inspected as unknown as JsonValue;
         }
       }
@@ -409,6 +442,7 @@ export class LocalMockAgentSessionService {
   private readonly inflight = new Map<string, {
     readonly scope: string;
     readonly sessionId?: string;
+    readonly semanticDigest?: string;
     readonly operation: Promise<AgentServiceResponse>;
   }>();
   private readonly active = new Map<string, AbortController>();
@@ -420,10 +454,28 @@ export class LocalMockAgentSessionService {
   private host: AgentHost | undefined;
   private disposed = false;
   private subscriptionPoller: NodeJS.Timeout | undefined;
+  private readonly adapters: AgentHostOptions["adapters"];
+  private readonly tools: AgentHostOptions["tools"];
+  private readonly approvalCoordinator: AgentApprovalCoordinator;
+  private readonly effectPolicyBinding: EffectPolicyBindingV1 | undefined;
 
-  constructor(private readonly root: string) {
+  constructor(
+    private readonly root: string,
+    options: LocalAgentSessionServiceOptions = {}
+  ) {
     this.store = new JsonlAgentSessionStore(root);
     this.journalPath = join(root, "mutations.jsonl");
+    this.adapters = Object.freeze([...(options.adapters ?? [{
+      id: MOCK_PROVIDER,
+      async *stream(request: LlmRequest): AsyncIterable<StreamChunk> {
+        await new Promise<void>((resolve) => { setTimeout(resolve, 25); });
+        yield { type: "text-delta", index: 0, text: mockText(request) };
+        yield { type: "finish", reason: "stop" };
+      }
+    }])]);
+    this.tools = Object.freeze([...(options.tools ?? [])]);
+    this.approvalCoordinator = options.approvalCoordinator ?? new AgentApprovalCoordinator();
+    this.effectPolicyBinding = options.effectPolicyBinding;
     this.ready = this.initialize();
   }
 
@@ -508,12 +560,16 @@ export class LocalMockAgentSessionService {
           && (existing.scope !== record.scope || existing.sessionId !== record.sessionId)) {
           throw new Error("agent mutation journal rebinds a client request identifier");
         }
+        if (existing !== undefined && existing.semanticDigest !== record.semanticDigest) {
+          throw new Error("agent mutation journal rebinds a client request input");
+        }
         if (existing?.receipt !== undefined || (existing !== undefined && record.state !== "completed")) {
           throw new Error("agent mutation journal contains an invalid state transition");
         }
         this.journal.set(record.clientRequestId, {
           scope: record.scope,
           ...(record.sessionId === undefined ? {} : { sessionId: record.sessionId }),
+          ...(record.semanticDigest === undefined ? {} : { semanticDigest: record.semanticDigest }),
           ...(record.state === "completed" ? { receipt: record.receipt } : {})
         });
         if (record.state === "completed" && record.scope === `close:${record.sessionId}` && record.sessionId) {
@@ -528,16 +584,9 @@ export class LocalMockAgentSessionService {
     }
     this.host = await createAgentHost({
       sessionStore: this.store,
-      adapters: [{
-        id: MOCK_PROVIDER,
-        async *stream(request: LlmRequest): AsyncIterable<StreamChunk> {
-          await new Promise<void>((resolve) => { setTimeout(resolve, 25); });
-          yield { type: "text-delta", index: 0, text: mockText(request) };
-          yield { type: "finish", reason: "stop" };
-        }
-      }],
-      tools: [],
-      authorizer: { authorize: async () => ({ decision: "deny" }) }
+      adapters: this.adapters,
+      tools: this.tools,
+      authorizer: this.approvalCoordinator
     });
     await this.recoverPersistedSessions();
   }
@@ -645,51 +694,112 @@ export class LocalMockAgentSessionService {
     clientRequestId: string,
     scope: string,
     sessionId: string | undefined,
-    effect: () => Promise<IdempotentEffectResult>
+    effect: () => Promise<IdempotentEffectResult>,
+    semanticDigest?: string
   ): Promise<AgentServiceResponse> {
     await this.ready;
     safeControlId(clientRequestId, "client request identifier");
+    const replay = this.replayIdempotent(clientRequestId, scope, sessionId, semanticDigest);
+    if (replay !== undefined) return replay;
+    return this.startIdempotent(clientRequestId, scope, sessionId, effect, semanticDigest);
+  }
+
+  private replayIdempotent(
+    clientRequestId: string,
+    scope: string,
+    sessionId: string | undefined,
+    semanticDigest?: string
+  ): Promise<AgentServiceResponse> | undefined {
     const prior = this.journal.get(clientRequestId);
     if (prior !== undefined) {
       if (prior.scope !== scope || prior.sessionId !== sessionId) {
-        throw new AgentSessionServiceError(409, "IDEMPOTENCY_SCOPE_CONFLICT", "client request identifier is already bound");
+        return Promise.reject(new AgentSessionServiceError(
+          409,
+          "IDEMPOTENCY_SCOPE_CONFLICT",
+          "client request identifier is already bound"
+        ));
+      }
+      if (prior.semanticDigest !== semanticDigest) {
+        return Promise.reject(new AgentSessionServiceError(
+          409,
+          "IDEMPOTENCY_INPUT_CONFLICT",
+          "client request identifier is bound to a different input"
+        ));
       }
       if (prior.receipt !== undefined) return this.materializeReceipt(prior.receipt);
-      throw new AgentSessionServiceError(409, "IDEMPOTENT_OPERATION_INTERRUPTED", "mutation was interrupted and was not replayed");
+      return Promise.reject(new AgentSessionServiceError(
+        409,
+        "IDEMPOTENT_OPERATION_INTERRUPTED",
+        "mutation was interrupted and was not replayed"
+      ));
     }
     const active = this.inflight.get(clientRequestId);
     if (active !== undefined) {
       if (active.scope !== scope || active.sessionId !== sessionId) {
-        throw new AgentSessionServiceError(409, "IDEMPOTENCY_SCOPE_CONFLICT", "client request identifier is already bound");
+        return Promise.reject(new AgentSessionServiceError(
+          409,
+          "IDEMPOTENCY_SCOPE_CONFLICT",
+          "client request identifier is already bound"
+        ));
+      }
+      if (active.semanticDigest !== semanticDigest) {
+        return Promise.reject(new AgentSessionServiceError(
+          409,
+          "IDEMPOTENCY_INPUT_CONFLICT",
+          "client request identifier is bound to a different input"
+        ));
       }
       return active.operation;
     }
+    return undefined;
+  }
+
+  private async startIdempotent(
+    clientRequestId: string,
+    scope: string,
+    sessionId: string | undefined,
+    effect: () => Promise<IdempotentEffectResult>,
+    semanticDigest?: string
+  ): Promise<AgentServiceResponse> {
     const accepted: UnsignedJournalRecord = {
       schemaVersion: 1,
       state: "accepted",
       clientRequestId,
       scope,
-      ...(sessionId === undefined ? {} : { sessionId })
+      ...(sessionId === undefined ? {} : { sessionId }),
+      ...(semanticDigest === undefined ? {} : { semanticDigest })
     };
     const reservation = this.reserveJournalMutation(accepted);
     const operation = (async () => {
       try {
         await this.appendJournal(accepted, reservation, "accepted");
-        this.journal.set(clientRequestId, { scope, ...(sessionId === undefined ? {} : { sessionId }) });
-        const result = await effect();
-        await this.appendJournal({
-          schemaVersion: 1,
-          state: "completed",
-          clientRequestId,
-          scope,
-          ...(sessionId === undefined ? {} : { sessionId }),
-          receipt: result.receipt
-        }, reservation, "completed");
         this.journal.set(clientRequestId, {
           scope,
           ...(sessionId === undefined ? {} : { sessionId }),
+          ...(semanticDigest === undefined ? {} : { semanticDigest })
+        });
+        const result = await effect();
+        try {
+          await this.appendJournal({
+            schemaVersion: 1,
+            state: "completed",
+            clientRequestId,
+            scope,
+            ...(sessionId === undefined ? {} : { sessionId }),
+            ...(semanticDigest === undefined ? {} : { semanticDigest }),
+            receipt: result.receipt
+          }, reservation, "completed");
+        } catch (error: unknown) {
+          result.rollback?.();
+          throw error;
+        }
+        this.journal.set(clientRequestId, {
+          scope,
+          ...(sessionId === undefined ? {} : { sessionId }),
+          ...(semanticDigest === undefined ? {} : { semanticDigest }),
           receipt: result.receipt
         });
+        result.commit?.();
         return result.response;
       } finally {
         this.releaseJournalReservation(reservation);
@@ -698,6 +808,7 @@ export class LocalMockAgentSessionService {
     this.inflight.set(clientRequestId, {
       scope,
       ...(sessionId === undefined ? {} : { sessionId }),
+      ...(semanticDigest === undefined ? {} : { semanticDigest }),
       operation
     });
     try {
@@ -963,7 +1074,12 @@ export class LocalMockAgentSessionService {
             prompt: input.prompt,
             provider: modelBinding.providerId,
             model: modelBinding.modelId,
-            signal: controller.signal
+            signal: controller.signal,
+            ...(this.effectPolicyBinding === undefined ? {} : {
+              effectPolicyBinding: this.effectPolicyBinding,
+              runId: RunId(createSafeRandomPublicControlIdV1("run")),
+              candidateId: CandidateId(createSafeRandomPublicControlIdV1("candidate"))
+            })
           });
           return this.sessionViewResult(200, result.session);
         } catch (error: unknown) {
@@ -983,7 +1099,7 @@ export class LocalMockAgentSessionService {
     if (!this.active.has(sessionId)) await this.open(sessionId);
     return this.idempotent(input.clientRequestId, `cancel:${sessionId}`, sessionId, async () => {
       const controller = this.active.get(sessionId);
-      if (controller) controller.abort();
+      const approvalReservation = this.approvalCoordinator.reserveSession(sessionId, "cancelled");
       const body: AgentSessionControlResponseV1 = assertAgentSessionControlResponseV1({
         schemaVersion: 1,
         kind: "agent-session-control-response",
@@ -991,7 +1107,14 @@ export class LocalMockAgentSessionService {
         action: "cancel",
         cancelled: controller !== undefined
       });
-      return this.inlineResult(200, body);
+      return {
+        ...this.inlineResult(200, body),
+        commit: () => {
+          controller?.abort();
+          approvalReservation.commit();
+        },
+        rollback: approvalReservation.rollback
+      };
     });
   }
 
@@ -1000,8 +1123,7 @@ export class LocalMockAgentSessionService {
     if (!this.active.has(sessionId)) await this.open(sessionId);
     return this.idempotent(input.clientRequestId, `close:${sessionId}`, sessionId, async () => {
       const controller = this.active.get(sessionId);
-      this.closed.add(sessionId);
-      controller?.abort();
+      const approvalReservation = this.approvalCoordinator.reserveSession(sessionId, "closed");
       const body: AgentSessionControlResponseV1 = assertAgentSessionControlResponseV1({
         schemaVersion: 1,
         kind: "agent-session-control-response",
@@ -1009,7 +1131,15 @@ export class LocalMockAgentSessionService {
         action: "close",
         state: "closed"
       });
-      return this.inlineResult(200, body);
+      return {
+        ...this.inlineResult(200, body),
+        commit: () => {
+          this.closed.add(sessionId);
+          controller?.abort();
+          approvalReservation.commit();
+        },
+        rollback: approvalReservation.rollback
+      };
     });
   }
 
@@ -1020,14 +1150,67 @@ export class LocalMockAgentSessionService {
   ): Promise<AgentServiceResponse> {
     safeControlId(sessionId, "session identifier");
     safeControlId(approvalId, "approval identifier");
+    safeControlId(input.clientRequestId, "client request identifier");
+    await this.ready;
+    const scope = `approval:${sessionId}:${approvalId}`;
+    const semanticDigest = digestJson(input as unknown as JsonValue);
+    const replay = this.replayIdempotent(
+      input.clientRequestId,
+      scope,
+      sessionId,
+      semanticDigest
+    );
+    if (replay !== undefined) return replay;
     const session = await this.open(sessionId);
-    const approval = projectSession(session.events).pendingApprovals.find(
+    const projection = projectSession(session.events);
+    const approval = projection.pendingApprovals.find(
       (candidate) => candidate.binding.approvalId === approvalId && candidate.state === "requested"
     );
     if (approval === undefined) {
+      const known = session.events.some((event) => event.type === "approval/requested"
+        && event.payload.publicControls.binding.approvalId === approvalId);
+      if (known) {
+        throw new AgentSessionServiceError(
+          409,
+          "APPROVAL_DECISION_UNAVAILABLE",
+          "approval request cannot be decided"
+        );
+      }
       throw new AgentSessionServiceError(404, "APPROVAL_NOT_FOUND", "approval request was not found");
     }
-    throw new AgentSessionServiceError(409, "APPROVAL_DECISION_UNAVAILABLE", "approval decisions are not enabled");
+    const requested = session.events.find((event): event is AgentSessionEventV1<"approval/requested"> =>
+      event.type === "approval/requested"
+      && event.eventId === approval.requestEventId
+      && event.digest === approval.requestDigest
+    );
+    if (requested === undefined) {
+      throw new AgentSessionServiceError(409, "APPROVAL_DECISION_UNAVAILABLE", "approval request is unavailable");
+    }
+    return this.idempotent(
+      input.clientRequestId,
+      scope,
+      sessionId,
+      async () => {
+        const reservation = this.approvalCoordinator.reserve(requested, input.decision);
+        if (reservation === undefined) {
+          throw new AgentSessionServiceError(409, "APPROVAL_DECISION_UNAVAILABLE", "approval request cannot be decided");
+        }
+        const body = assertAgentApprovalResponseV1({
+          schemaVersion: 1,
+          kind: "agent-approval-response",
+          sessionId,
+          approvalId,
+          decision: input.decision,
+          status: "resolved"
+        });
+        return {
+          ...this.inlineResult(200, body),
+          commit: reservation.commit,
+          rollback: reservation.rollback
+        };
+      },
+      semanticDigest
+    );
   }
 
   async dispose(): Promise<void> {

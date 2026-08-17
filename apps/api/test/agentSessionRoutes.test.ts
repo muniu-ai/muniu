@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { readFileSync, truncateSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -21,11 +22,13 @@ import {
   createProtectedTextV1,
   createRuntimeEffectCommitmentBinderV1,
   deriveToolEffectKindV1,
+  inspectAgentApprovalResponseV1,
   inspectAgentErrorResponseV1,
   inspectAgentSessionViewV1
 } from "@mn/agent-protocol";
 
 import { registerAgentSessionRoutes } from "../src/agentSessionRoutes.js";
+import { AgentApprovalCoordinator } from "../src/agentApprovalCoordinator.js";
 import { buildServer } from "../src/server.js";
 import { LocalMockAgentSessionService } from "../src/agentSessionService.js";
 
@@ -85,6 +88,26 @@ function approvalRequestV1(
     clientRequestId,
     decision
   };
+}
+
+type RequestedApprovalEvent = Extract<
+  Awaited<ReturnType<LocalMockAgentSessionService["eventsAfter"]>>[number],
+  { type: "approval/requested" }
+>;
+
+async function waitForRequestedApproval(
+  service: LocalMockAgentSessionService,
+  sessionId: string,
+  after = -1
+): Promise<RequestedApprovalEvent> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const requested = (await service.eventsAfter(sessionId, after)).find(
+      (event): event is RequestedApprovalEvent => event.type === "approval/requested"
+    );
+    if (requested !== undefined) return requested;
+    await new Promise<void>((resolve) => { setTimeout(resolve, 5); });
+  }
+  throw new Error("timed out waiting for a durable approval request");
 }
 
 test("agent routes require exact V1 DTOs and return bounded authoritative views", async (t) => {
@@ -181,7 +204,7 @@ test("agent routes require exact V1 DTOs and return bounded authoritative views"
   assert.doesNotMatch(unknownApproval.body, /unknown-approval/u);
 });
 
-test("an existing pending approval is a fixed versioned 409 until B4b2", async (t) => {
+test("a durable pending approval without its process-local waiter is a fixed versioned 409", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "mn-agent-api-pending-approval-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const service = new LocalMockAgentSessionService(join(root, "agent-service"));
@@ -245,6 +268,583 @@ test("an existing pending approval is a fixed versioned 409 until B4b2", async (
   assert.equal(response.statusCode, 409, response.body);
   assert.equal(response.json().error, "APPROVAL_DECISION_UNAVAILABLE");
   assert.deepEqual(inspectAgentErrorResponseV1(response.json()), response.json());
+});
+
+test("a durable API approval resumes one production-shaped tool run", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "mn-agent-api-functional-approval-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const durableRoot = join(root, "agent-service");
+  let modelTurns = 0;
+  let toolEffects = 0;
+  const coordinator = new AgentApprovalCoordinator();
+  const service = new LocalMockAgentSessionService(durableRoot, {
+    adapters: [{
+      id: "mock",
+      async *stream() {
+        modelTurns += 1;
+        if (modelTurns === 1) {
+          yield {
+            type: "tool-call-delta" as const,
+            index: 0,
+            id: CallId("functional-approval-call"),
+            name: "write",
+            argumentsDelta: '{"value":"safe"}'
+          };
+          yield { type: "finish" as const, reason: "tool-calls" as const };
+          return;
+        }
+        yield { type: "text-delta" as const, index: 0, text: "done" };
+        yield { type: "finish" as const, reason: "stop" as const };
+      }
+    }],
+    tools: [{
+      name: "write",
+      description: "Write one safe test value",
+      risk: "side-effecting",
+      parameters: {
+        type: "object",
+        properties: { value: { type: "string" } },
+        required: ["value"],
+        additionalProperties: false
+      },
+      execute: async () => {
+        const journal = readFileSync(join(durableRoot, "mutations.jsonl"), "utf8")
+          .trimEnd().split("\n").map((line) => JSON.parse(line) as {
+            state: string;
+            clientRequestId: string;
+          });
+        assert.ok(journal.some((record) => record.state === "completed"
+          && record.clientRequestId === "functional-approval-decision"));
+        toolEffects += 1;
+        return { ok: true };
+      }
+    }],
+    effectPolicyBinding: {
+      governanceDigest: Digest("a".repeat(64)),
+      harnessDigest: Digest("b".repeat(64))
+    },
+    approvalCoordinator: coordinator
+  });
+  t.after(() => service.dispose().catch(() => undefined));
+  const app = Fastify({ logger: false });
+  registerAgentSessionRoutes(app, { getService: async () => service });
+  t.after(() => app.close().catch(() => undefined));
+
+  const created = await service.create(createRequestV1("functional-approval-create"));
+  const sessionId = (created.body as { sessionId: string }).sessionId;
+  const running = service.message(
+    sessionId,
+    messageRequestV1("functional-approval-message", "run the tool")
+  );
+  let requested: Extract<Awaited<ReturnType<typeof service.eventsAfter>>[number], {
+    type: "approval/requested";
+  }> | undefined;
+  for (let attempt = 0; attempt < 100 && requested === undefined; attempt += 1) {
+    requested = (await service.eventsAfter(sessionId, -1)).find(
+      (event): event is typeof requested & object => event.type === "approval/requested"
+    );
+    if (requested === undefined) {
+      await new Promise<void>((resolve) => { setTimeout(resolve, 5); });
+    }
+  }
+  assert.ok(requested, "the host must durably request approval before waiting");
+  assert.equal(toolEffects, 0);
+
+  const approvalId = requested.payload.publicControls.binding.approvalId;
+  const approved = await app.inject({
+    method: "POST",
+    url: `/v1/agent-sessions/${sessionId}/approvals/${approvalId}`,
+    payload: approvalRequestV1("functional-approval-decision", "approve_once")
+  });
+  assert.equal(approved.statusCode, 200, approved.body);
+  assert.deepEqual(inspectAgentApprovalResponseV1(approved.json()), approved.json());
+  const duplicate = await app.inject({
+    method: "POST",
+    url: `/v1/agent-sessions/${sessionId}/approvals/${approvalId}`,
+    payload: approvalRequestV1("functional-approval-decision", "approve_once")
+  });
+  assert.equal(duplicate.statusCode, 200, duplicate.body);
+  assert.equal(duplicate.body, approved.body);
+  const conflict = await app.inject({
+    method: "POST",
+    url: `/v1/agent-sessions/${sessionId}/approvals/${approvalId}`,
+    payload: approvalRequestV1("functional-approval-decision", "deny")
+  });
+  assert.equal(conflict.statusCode, 409, conflict.body);
+  assert.equal(conflict.json().error, "IDEMPOTENCY_INPUT_CONFLICT");
+  assert.equal((await running).statusCode, 200);
+  assert.equal(toolEffects, 1);
+  const types = (await service.eventsAfter(sessionId, requested.seq - 1)).map((event) => event.type);
+  assert.deepEqual(types.slice(0, 3), ["approval/requested", "approval/resolved", "tool/call"]);
+  const stale = await app.inject({
+    method: "POST",
+    url: `/v1/agent-sessions/${sessionId}/approvals/${approvalId}`,
+    payload: approvalRequestV1("functional-stale-approval-decision", "approve_once")
+  });
+  assert.equal(stale.statusCode, 409, stale.body);
+  assert.equal(stale.json().error, "APPROVAL_DECISION_UNAVAILABLE");
+
+  await app.close();
+  await service.dispose();
+  const restartedService = new LocalMockAgentSessionService(join(root, "agent-service"));
+  t.after(() => restartedService.dispose().catch(() => undefined));
+  const restartedApp = Fastify({ logger: false });
+  registerAgentSessionRoutes(restartedApp, { getService: async () => restartedService });
+  t.after(() => restartedApp.close().catch(() => undefined));
+  const restartedDuplicate = await restartedApp.inject({
+    method: "POST",
+    url: `/v1/agent-sessions/${sessionId}/approvals/${approvalId}`,
+    payload: approvalRequestV1("functional-approval-decision", "approve_once")
+  });
+  assert.equal(restartedDuplicate.statusCode, 200, restartedDuplicate.body);
+  assert.equal(restartedDuplicate.body, approved.body);
+  const restartedConflict = await restartedApp.inject({
+    method: "POST",
+    url: `/v1/agent-sessions/${sessionId}/approvals/${approvalId}`,
+    payload: approvalRequestV1("functional-approval-decision", "deny")
+  });
+  assert.equal(restartedConflict.statusCode, 409, restartedConflict.body);
+  assert.equal(restartedConflict.json().error, "IDEMPOTENCY_INPUT_CONFLICT");
+
+  await restartedApp.close();
+  await restartedService.dispose();
+  const journalPath = join(durableRoot, "mutations.jsonl");
+  const records = (await readFile(journalPath, "utf8")).trimEnd().split("\n")
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+  const completedIndex = records.findIndex((record) => record.state === "completed"
+    && record.clientRequestId === "functional-approval-decision");
+  assert.notEqual(completedIndex, -1);
+  const completed = records[completedIndex]!;
+  const receipt = completed.receipt as Record<string, unknown>;
+  const body = receipt.body as Record<string, unknown>;
+  const tampered: Record<string, unknown> = {
+    ...completed,
+    receipt: { ...receipt, body: { ...body, decision: "deny" } }
+  };
+  delete tampered.digest;
+  records[completedIndex] = {
+    ...tampered,
+    digest: createHash("sha256").update(JSON.stringify(tampered)).digest("hex")
+  };
+  await writeFile(journalPath, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
+
+  const tamperedApp = appAt(root);
+  t.after(() => tamperedApp.close().catch(() => undefined));
+  const tamperedDuplicate = await tamperedApp.inject({
+    method: "POST",
+    url: `/v1/agent-sessions/${sessionId}/approvals/${approvalId}`,
+    payload: approvalRequestV1("functional-approval-decision", "approve_once")
+  });
+  assert.equal(tamperedDuplicate.statusCode, 500, tamperedDuplicate.body);
+  assert.deepEqual(inspectAgentErrorResponseV1(tamperedDuplicate.json()), tamperedDuplicate.json());
+  assert.doesNotMatch(tamperedDuplicate.body, /deny/u);
+});
+
+test("session-scope approval authorizes only its current call and a denial never dispatches", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "mn-agent-api-approval-scope-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let modelTurns = 0;
+  const handledValues: string[] = [];
+  const coordinator = new AgentApprovalCoordinator();
+  const durableRoot = join(root, "agent-service");
+  const protectedValue = "Alice alice@example.com /Users/alice/project 13800138000 11010519491231002X token=top-secret";
+  const service = new LocalMockAgentSessionService(durableRoot, {
+    adapters: [{
+      id: "mock",
+      async *stream() {
+        modelTurns += 1;
+        if (modelTurns <= 2) {
+          yield {
+            type: "tool-call-delta" as const,
+            index: 0,
+            id: CallId(`scope-approval-call-${modelTurns}`),
+            name: "write",
+            argumentsDelta: JSON.stringify({ value: protectedValue })
+          };
+          yield { type: "finish" as const, reason: "tool-calls" as const };
+          return;
+        }
+        yield { type: "finish" as const, reason: "stop" as const };
+      }
+    }],
+    tools: [{
+      name: "write",
+      description: "Write one explicitly approved value",
+      risk: "side-effecting",
+      parameters: {
+        type: "object",
+        properties: { value: { type: "string" } },
+        required: ["value"],
+        additionalProperties: false
+      },
+      execute: async (args) => {
+        handledValues.push((args as { value: string }).value);
+        return null;
+      }
+    }],
+    effectPolicyBinding: {
+      governanceDigest: Digest("1".repeat(64)),
+      harnessDigest: Digest("2".repeat(64))
+    },
+    approvalCoordinator: coordinator
+  });
+  t.after(() => service.dispose().catch(() => undefined));
+
+  const created = await service.create(createRequestV1("scope-approval-create"));
+  const sessionId = (created.body as { sessionId: string }).sessionId;
+  const running = service.message(
+    sessionId,
+    messageRequestV1("scope-approval-message", "run two independently approved tools")
+  );
+  const first = await waitForRequestedApproval(service, sessionId);
+  const firstApproved = await service.approve(
+    sessionId,
+    first.payload.publicControls.binding.approvalId,
+    approvalRequestV1("scope-approval-first-decision", "approve_session_scope")
+  );
+  assert.equal(firstApproved.statusCode, 200);
+
+  const second = await waitForRequestedApproval(service, sessionId, first.seq);
+  assert.equal(handledValues.length, 1);
+  assert.equal(coordinator.activeApprovalCount, 1, "session-scope must not auto-authorize a future call");
+  const denied = await service.approve(
+    sessionId,
+    second.payload.publicControls.binding.approvalId,
+    approvalRequestV1("scope-approval-second-decision", "deny")
+  );
+  assert.equal(denied.statusCode, 200);
+  assert.equal((await running).statusCode, 200);
+  assert.deepEqual(handledValues, [protectedValue]);
+
+  const events = await service.eventsAfter(sessionId, -1);
+  assert.equal(events.filter((event) => event.type === "approval/requested").length, 2);
+  assert.deepEqual(
+    events.filter((event) => event.type === "approval/resolved")
+      .map((event) => event.payload.publicControls.decision),
+    ["approve_session_scope", "deny"]
+  );
+  assert.equal(events.filter((event) => event.type === "tool/call").length, 1);
+  assert.equal(coordinator.activeApprovalCount, 0);
+
+  const durable = await readFile(join(durableRoot, "sessions", sessionId, "events.jsonl"), "utf8");
+  assert.match(durable, /Alice/u);
+  assert.match(durable, /alice@example\.com/u);
+  assert.match(durable, /\/Users\/alice\/project/u);
+  assert.doesNotMatch(durable, /13800138000/u);
+  assert.doesNotMatch(durable, /11010519491231002X/u);
+  assert.doesNotMatch(durable, /top-secret/u);
+});
+
+test("one session waiting for approval never blocks an independent session decision", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "mn-agent-api-independent-approvals-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let modelTurns = 0;
+  let toolEffects = 0;
+  const service = new LocalMockAgentSessionService(join(root, "agent-service"), {
+    adapters: [{
+      id: "mock",
+      async *stream() {
+        modelTurns += 1;
+        if (modelTurns <= 2) {
+          yield {
+            type: "tool-call-delta" as const,
+            index: 0,
+            id: CallId(`independent-approval-call-${modelTurns}`),
+            name: "write",
+            argumentsDelta: "{}"
+          };
+          yield { type: "finish" as const, reason: "tool-calls" as const };
+          return;
+        }
+        yield { type: "finish" as const, reason: "stop" as const };
+      }
+    }],
+    tools: [{
+      name: "write",
+      description: "Execute independently by session",
+      risk: "side-effecting",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
+      execute: async () => {
+        toolEffects += 1;
+        return null;
+      }
+    }],
+    effectPolicyBinding: {
+      governanceDigest: Digest("7".repeat(64)),
+      harnessDigest: Digest("8".repeat(64))
+    }
+  });
+  t.after(() => service.dispose().catch(() => undefined));
+  const firstCreated = await service.create(createRequestV1("independent-first-create"));
+  const firstSessionId = (firstCreated.body as { sessionId: string }).sessionId;
+  const secondCreated = await service.create(createRequestV1("independent-second-create"));
+  const secondSessionId = (secondCreated.body as { sessionId: string }).sessionId;
+  const firstRunning = service.message(
+    firstSessionId,
+    messageRequestV1("independent-first-message", "wait")
+  );
+  const firstRequested = await waitForRequestedApproval(service, firstSessionId);
+  const secondRunning = service.message(
+    secondSessionId,
+    messageRequestV1("independent-second-message", "continue independently")
+  );
+  const secondRequested = await waitForRequestedApproval(service, secondSessionId);
+
+  assert.equal((await service.approve(
+    secondSessionId,
+    secondRequested.payload.publicControls.binding.approvalId,
+    approvalRequestV1("independent-second-decision", "approve_once")
+  )).statusCode, 200);
+  assert.equal((await secondRunning).statusCode, 200);
+  assert.equal(toolEffects, 1);
+  assert.equal((await service.approve(
+    firstSessionId,
+    firstRequested.payload.publicControls.binding.approvalId,
+    approvalRequestV1("independent-first-decision", "deny")
+  )).statusCode, 200);
+  assert.equal((await firstRunning).statusCode, 200);
+  assert.equal(toolEffects, 1);
+});
+
+test("durable cancel and close resolve waiting approvals without dispatching tools", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "mn-agent-api-cancel-approval-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let toolEffects = 0;
+  let modelTurns = 0;
+  const coordinator = new AgentApprovalCoordinator();
+  const service = new LocalMockAgentSessionService(join(root, "agent-service"), {
+    adapters: [{
+      id: "mock",
+      async *stream() {
+        modelTurns += 1;
+        if (modelTurns % 2 === 1) {
+          yield {
+            type: "tool-call-delta" as const,
+            index: 0,
+            id: CallId(`control-approval-call-${modelTurns}`),
+            name: "write",
+            argumentsDelta: "{}"
+          };
+          yield { type: "finish" as const, reason: "tool-calls" as const };
+          return;
+        }
+        yield { type: "finish" as const, reason: "stop" as const };
+      }
+    }],
+    tools: [{
+      name: "write",
+      description: "Must remain uncalled after cancellation",
+      risk: "side-effecting",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
+      execute: async () => {
+        toolEffects += 1;
+        return null;
+      }
+    }],
+    effectPolicyBinding: {
+      governanceDigest: Digest("c".repeat(64)),
+      harnessDigest: Digest("d".repeat(64))
+    },
+    approvalCoordinator: coordinator
+  });
+  t.after(() => service.dispose().catch(() => undefined));
+  const created = await service.create(createRequestV1("cancel-approval-create"));
+  const sessionId = (created.body as { sessionId: string }).sessionId;
+  const running = service.message(
+    sessionId,
+    messageRequestV1("cancel-approval-message", "wait for approval")
+  );
+  let requested: Extract<Awaited<ReturnType<typeof service.eventsAfter>>[number], {
+    type: "approval/requested";
+  }> | undefined;
+  for (let attempt = 0; attempt < 100 && requested === undefined; attempt += 1) {
+    requested = (await service.eventsAfter(sessionId, -1)).find(
+      (event): event is typeof requested & object => event.type === "approval/requested"
+    );
+    if (requested === undefined) {
+      await new Promise<void>((resolve) => { setTimeout(resolve, 5); });
+    }
+  }
+  assert.ok(requested);
+  assert.equal(coordinator.activeApprovalCount, 1);
+
+  const failedConcurrentDecision = coordinator.reserve(requested, "approve_once");
+  assert.ok(failedConcurrentDecision, "the concurrent approval must hold the waiter reservation");
+  const cancelled = await service.cancel(sessionId, controlRequestV1("cancel-waiting-approval"));
+  assert.equal(cancelled.statusCode, 200);
+  failedConcurrentDecision.rollback();
+  let settled = await Promise.race([
+    running.then((response) => ({ kind: "response" as const, response })),
+    new Promise<{ kind: "timeout" }>((resolve) => {
+      setTimeout(() => { resolve({ kind: "timeout" }); }, 250);
+    })
+  ]);
+  const timedOut = settled.kind === "timeout";
+  if (timedOut) {
+    coordinator.reserve(requested, "deny", "cancelled")?.commit();
+    settled = { kind: "response", response: await running };
+  }
+  assert.equal(timedOut, false, "cancel must settle the approval waiter");
+  assert.equal(toolEffects, 0);
+  const events = await service.eventsAfter(sessionId, requested.seq - 1);
+  const resolution = events.find((event) => event.type === "approval/resolved");
+  assert.ok(resolution?.type === "approval/resolved");
+  assert.equal(resolution.payload.publicControls.decision, "deny");
+  assert.equal(resolution.payload.publicControls.resolution, "cancelled");
+  assert.equal(events.some((event) => event.type === "tool/call"), false);
+  assert.equal(coordinator.activeApprovalCount, 0);
+  assert.equal(coordinator.reserve(requested, "approve_once"), undefined);
+
+  modelTurns = 0;
+  const secondCreated = await service.create(createRequestV1("close-approval-create"));
+  const secondSessionId = (secondCreated.body as { sessionId: string }).sessionId;
+  const secondRunning = service.message(
+    secondSessionId,
+    messageRequestV1("close-approval-message", "wait for close")
+  );
+  const secondRequested = await waitForRequestedApproval(service, secondSessionId);
+  const closed = await service.close(secondSessionId, controlRequestV1("close-waiting-approval"));
+  assert.equal(closed.statusCode, 200);
+  assert.equal((await secondRunning).statusCode, 200);
+  const secondEvents = await service.eventsAfter(secondSessionId, secondRequested.seq - 1);
+  const closedResolution = secondEvents.find((event) => event.type === "approval/resolved");
+  assert.ok(closedResolution?.type === "approval/resolved");
+  assert.equal(closedResolution.payload.publicControls.decision, "deny");
+  assert.equal(closedResolution.payload.publicControls.resolution, "closed");
+  assert.equal(secondEvents.some((event) => event.type === "tool/call"), false);
+  assert.equal(toolEffects, 0);
+  assert.equal(coordinator.activeApprovalCount, 0);
+
+  modelTurns = 0;
+  const thirdCreated = await service.create(createRequestV1("dispose-approval-create"));
+  const thirdSessionId = (thirdCreated.body as { sessionId: string }).sessionId;
+  const thirdRunning = service.message(
+    thirdSessionId,
+    messageRequestV1("dispose-approval-message", "wait for disposal")
+  );
+  await waitForRequestedApproval(service, thirdSessionId);
+  const disposed = await Promise.race([
+    service.dispose().then(() => true),
+    new Promise<false>((resolve) => { setTimeout(() => { resolve(false); }, 500); })
+  ]);
+  assert.equal(disposed, true, "service disposal must release every approval waiter");
+  assert.equal((await thirdRunning).statusCode, 200);
+  assert.equal(coordinator.activeApprovalCount, 0);
+  assert.equal(toolEffects, 0);
+  const disposedDurable = await readFile(
+    join(root, "agent-service", "sessions", thirdSessionId, "events.jsonl"),
+    "utf8"
+  );
+  assert.match(disposedDurable, /approval\/resolved/u);
+  assert.match(disposedDurable, /cancelled/u);
+  assert.doesNotMatch(disposedDurable, /tool\/call/u);
+});
+
+test("a failed completed journal write rolls approval back without dispatch", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "mn-agent-api-approval-journal-failure-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const durableRoot = join(root, "agent-service");
+  class FailingApprovalCoordinator extends AgentApprovalCoordinator {
+    private armed = true;
+
+    override reserve(
+      ...args: Parameters<AgentApprovalCoordinator["reserve"]>
+    ): ReturnType<AgentApprovalCoordinator["reserve"]> {
+      const reservation = super.reserve(...args);
+      if (reservation !== undefined && this.armed) {
+        this.armed = false;
+        truncateSync(join(durableRoot, "mutations.jsonl"), 0);
+      }
+      return reservation;
+    }
+  }
+  const coordinator = new FailingApprovalCoordinator();
+  let modelTurns = 0;
+  let toolEffects = 0;
+  const service = new LocalMockAgentSessionService(durableRoot, {
+    adapters: [{
+      id: "mock",
+      async *stream() {
+        modelTurns += 1;
+        if (modelTurns === 1) {
+          yield {
+            type: "tool-call-delta" as const,
+            index: 0,
+            id: CallId("journal-failure-approval-call"),
+            name: "write",
+            argumentsDelta: "{}"
+          };
+          yield { type: "finish" as const, reason: "tool-calls" as const };
+          return;
+        }
+        yield { type: "finish" as const, reason: "stop" as const };
+      }
+    }],
+    tools: [{
+      name: "write",
+      description: "Must not run without a completed decision receipt",
+      risk: "side-effecting",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
+      execute: async () => {
+        toolEffects += 1;
+        return null;
+      }
+    }],
+    effectPolicyBinding: {
+      governanceDigest: Digest("e".repeat(64)),
+      harnessDigest: Digest("f".repeat(64))
+    },
+    approvalCoordinator: coordinator
+  });
+  t.after(() => service.dispose().catch(() => undefined));
+  const app = Fastify({ logger: false });
+  registerAgentSessionRoutes(app, { getService: async () => service });
+  t.after(() => app.close().catch(() => undefined));
+  const created = await service.create(createRequestV1("journal-failure-approval-create"));
+  const sessionId = (created.body as { sessionId: string }).sessionId;
+  const running = service.message(
+    sessionId,
+    messageRequestV1("journal-failure-approval-message", "wait for approval")
+  );
+  let requested: Extract<Awaited<ReturnType<typeof service.eventsAfter>>[number], {
+    type: "approval/requested";
+  }> | undefined;
+  for (let attempt = 0; attempt < 100 && requested === undefined; attempt += 1) {
+    requested = (await service.eventsAfter(sessionId, -1)).find(
+      (event): event is typeof requested & object => event.type === "approval/requested"
+    );
+    if (requested === undefined) {
+      await new Promise<void>((resolve) => { setTimeout(resolve, 5); });
+    }
+  }
+  assert.ok(requested);
+  const approvalId = requested.payload.publicControls.binding.approvalId;
+  const decision = approvalRequestV1("journal-failure-approval-decision", "approve_once");
+  const failed = await app.inject({
+    method: "POST",
+    url: `/v1/agent-sessions/${sessionId}/approvals/${approvalId}`,
+    payload: decision
+  });
+  assert.equal(failed.statusCode, 500, failed.body);
+  await new Promise<void>((resolve) => { setTimeout(resolve, 25); });
+  const beforeCleanup = await service.eventsAfter(sessionId, requested.seq - 1);
+  assert.deepEqual(beforeCleanup.map((event) => event.type), ["approval/requested"]);
+  assert.equal(toolEffects, 0);
+  const retry = await app.inject({
+    method: "POST",
+    url: `/v1/agent-sessions/${sessionId}/approvals/${approvalId}`,
+    payload: decision
+  });
+  assert.equal(retry.statusCode, 409, retry.body);
+  assert.equal(retry.json().error, "IDEMPOTENT_OPERATION_INTERRUPTED");
+
+  coordinator.reserve(requested, "deny", "interrupted")?.commit();
+  await running.catch(() => undefined);
+  assert.equal(toolEffects, 0);
+  assert.equal(
+    (await service.eventsAfter(sessionId, requested.seq - 1)).some((event) => event.type === "tool/call"),
+    false
+  );
 });
 
 test("agent session routes run multiple protected mock turns and resume SSE by cursor", async (t) => {
@@ -390,6 +990,81 @@ test("agent sessions recover interrupted JSONL facts after restart without repla
     await readFile(join(durableRoot, "sessions", sessionId, "events.jsonl"), "utf8"),
     afterFirstRead,
     "ordinary GET must not append recovery facts"
+  );
+});
+
+test("restart denies a pending approval as interrupted and never starts its tool", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "mn-agent-api-approval-recovery-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const durableRoot = join(root, "agent-service");
+  const sessionId = SessionId("restart-pending-approval-session");
+  const runId = RunId("restart-pending-approval-run");
+  const candidateId = CandidateId("restart-pending-approval-candidate");
+  const callId = CallId("restart-pending-approval-call");
+  const seed = new JsonlAgentSessionStore(durableRoot);
+  const session = await seed.create({ sessionId, modelBinding: MOCK_MODEL_BINDING_V1 });
+  const assistant = createAssistantMessage({
+    id: MessageId("restart-pending-approval-message"),
+    content: [{ type: "tool-call", id: callId, name: "write", arguments: "{}" }],
+    source: { kind: "model", provider: "mock", model: "local-mock" }
+  });
+  const binder = createRuntimeEffectCommitmentBinderV1({
+    governanceDigest: Digest("3".repeat(64)),
+    harnessDigest: Digest("4".repeat(64))
+  });
+  const handle = binder.bind({
+    effectKind: deriveToolEffectKindV1("write"),
+    sessionId,
+    runId,
+    candidateId,
+    turn: 1,
+    step: 1,
+    internalEffectId: callId,
+    protectedInput: createProtectedTextV1("{}"),
+    raw: { kind: "text", value: "{}" }
+  });
+  await session.append("turn/start", { turn: 1 }, { runId, candidateId });
+  await session.append("step/start", { turn: 1, step: 1 }, { runId, candidateId });
+  await session.append("assistant/message", { turn: 1, step: 1, message: assistant }, { runId, candidateId });
+  await session.append("approval/requested", {
+    binding: {
+      schemaVersion: 1,
+      approvalId: "restart-pending-approval",
+      scope: handle.commitment.effectKind,
+      risk: "side-effecting",
+      callId,
+      name: "write",
+      commitment: handle.commitment
+    }
+  }, { runId, candidateId });
+  await session.flush();
+  binder.dispose();
+  await seed.dispose();
+
+  const first = new LocalMockAgentSessionService(durableRoot);
+  assert.equal((await first.get(sessionId)).state, "interrupted");
+  const recovered = await first.eventsAfter(sessionId, -1);
+  const resolved = recovered.find((event) => event.type === "approval/resolved");
+  assert.ok(resolved?.type === "approval/resolved");
+  assert.equal(resolved.payload.publicControls.decision, "deny");
+  assert.equal(resolved.payload.publicControls.resolution, "interrupted");
+  const notStarted = recovered.find((event) => event.type === "tool/result");
+  assert.ok(notStarted?.type === "tool/result");
+  assert.equal(notStarted.payload.publicControls.error?.code, "TOOL_NOT_STARTED");
+  assert.equal(recovered.some((event) => event.type === "tool/call"), false);
+  await first.dispose();
+  const afterFirstRecovery = await readFile(
+    join(durableRoot, "sessions", sessionId, "events.jsonl"),
+    "utf8"
+  );
+
+  const second = new LocalMockAgentSessionService(durableRoot);
+  t.after(() => second.dispose().catch(() => undefined));
+  assert.equal((await second.get(sessionId)).state, "interrupted");
+  assert.equal(
+    await readFile(join(durableRoot, "sessions", sessionId, "events.jsonl"), "utf8"),
+    afterFirstRecovery,
+    "recovery must be idempotent and must not replay the proposed tool"
   );
 });
 
@@ -946,7 +1621,42 @@ test("agent service refuses journal and projection symlinks without modifying th
 test("SSE sends cursor backlog then live events and releases the subscription on disconnect", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "mn-agent-api-live-sse-"));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const service = new LocalMockAgentSessionService(join(root, "agent-service"));
+  let modelTurns = 0;
+  let toolEffects = 0;
+  const service = new LocalMockAgentSessionService(join(root, "agent-service"), {
+    adapters: [{
+      id: "mock",
+      async *stream() {
+        modelTurns += 1;
+        if (modelTurns === 1) {
+          yield {
+            type: "tool-call-delta" as const,
+            index: 0,
+            id: CallId("live-sse-approval-call"),
+            name: "write",
+            argumentsDelta: "{}"
+          };
+          yield { type: "finish" as const, reason: "tool-calls" as const };
+          return;
+        }
+        yield { type: "finish" as const, reason: "stop" as const };
+      }
+    }],
+    tools: [{
+      name: "write",
+      description: "Observe one SSE-visible approval",
+      risk: "side-effecting",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
+      execute: async () => {
+        toolEffects += 1;
+        return null;
+      }
+    }],
+    effectPolicyBinding: {
+      governanceDigest: Digest("5".repeat(64)),
+      harnessDigest: Digest("6".repeat(64))
+    }
+  });
   const app = buildServer({
     mniuRoot: root,
     agentSessionService: service,
@@ -984,13 +1694,25 @@ test("SSE sends cursor backlog then live events and releases the subscription on
   };
   await readUntil(/event: session\/created/u);
   assert.equal(service.activeSubscriptionCount, 1);
-  const message = await fetch(`${base}/v1/agent-sessions/${sessionId}/messages`, {
+  const message = fetch(`${base}/v1/agent-sessions/${sessionId}/messages`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(messageRequestV1("live-message", "live"))
   });
-  assert.equal(message.status, 200);
-  await readUntil(/event: assistant\/message/u);
+  await readUntil(/event: approval\/requested/u);
+  const requested = await waitForRequestedApproval(service, sessionId);
+  const approved = await fetch(
+    `${base}/v1/agent-sessions/${sessionId}/approvals/${requested.payload.publicControls.binding.approvalId}`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(approvalRequestV1("live-approval-decision", "approve_once"))
+    }
+  );
+  assert.equal(approved.status, 200);
+  await readUntil(/event: approval\/resolved/u);
+  assert.equal((await message).status, 200);
+  assert.equal(toolEffects, 1);
   controller.abort();
   await assert.rejects(() => reader.read(), /abort/i);
   await new Promise<void>((resolve) => { setTimeout(resolve, 20); });

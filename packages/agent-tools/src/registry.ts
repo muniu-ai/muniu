@@ -24,6 +24,7 @@ export interface ToolAuthorizationRequest {
   readonly args: Readonly<Record<string, unknown>>;
   readonly context: ToolRunContext;
   readonly approvalBinding?: AgentToolApprovalBindingV1;
+  readonly approvalRequest?: AgentSessionEventV1<"approval/requested">;
 }
 
 export type ToolAuthorizationResult =
@@ -259,13 +260,16 @@ export class ToolRegistry {
         risk: state.tool.risk,
         args: state.authorizationArgs,
         context: state.context,
-        ...(fixedBinding === undefined ? {} : { approvalBinding: fixedBinding })
+        ...(fixedBinding === undefined ? {} : {
+          approvalBinding: fixedBinding,
+          approvalRequest: requestedEvent
+        })
       }));
     } catch {
       assertToolNotCancelled(state.context.signal);
       throw new ToolExecutionError("Tool authorization failed", "TOOL_AUTHORIZATION_FAILED");
     }
-    assertToolNotCancelled(state.context.signal);
+    if (outcome.decision === "approve") assertToolNotCancelled(state.context.signal);
     state.outcome = outcome;
     if (outcome.decision === "approve") {
       state.status = requestedEvent === undefined ? "approved-legacy" : "awaiting-resolution";
