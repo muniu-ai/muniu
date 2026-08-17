@@ -42,6 +42,8 @@ const AGENT_SESSION_EVENT_TYPES_V1 = new Set<string>([
   "user/message",
   "step/start",
   "assistant/message",
+  "approval/requested",
+  "approval/resolved",
   "tool/call",
   "tool/result",
   "step/end",
@@ -87,15 +89,23 @@ function isDigest(value: unknown): value is Digest {
   return typeof value === "string" && DIGEST_PATTERN.test(value);
 }
 
-function toolCommitmentMatchesEnvelope(
+function effectCommitmentMatchesEnvelope(
   type: AgentSessionEventTypeV1,
   payload: AgentSessionProtectedPayloadV1,
   sessionId: unknown,
   runId: unknown,
   candidateId: unknown
 ): boolean {
-  if (type !== "tool/call") return true;
-  const binding = (payload as AgentSessionProtectedPayloadV1<"tool/call">).publicControls.binding;
+  const binding = type === "tool/call"
+    ? (payload as AgentSessionProtectedPayloadV1<"tool/call">).publicControls.binding
+    : type === "approval/requested"
+      ? (payload as AgentSessionProtectedPayloadV1<"approval/requested">)
+        .publicControls.binding.commitment
+      : type === "approval/resolved"
+        ? (payload as AgentSessionProtectedPayloadV1<"approval/resolved">)
+          .publicControls.binding.commitment
+        : undefined;
+  if (binding === undefined) return true;
   return runId !== undefined
     && candidateId !== undefined
     && binding.sessionId === sessionId
@@ -182,8 +192,8 @@ export function createAgentSessionEvent<T extends AgentSessionEventTypeV1>(
   }
 
   const payload = assertAgentSessionProtectedPayloadV1(type, record.payload);
-  if (!toolCommitmentMatchesEnvelope(type, payload, sessionId, runId, candidateId)) {
-    throw new TypeError("tool call effect commitment does not match the durable event envelope");
+  if (!effectCommitmentMatchesEnvelope(type, payload, sessionId, runId, candidateId)) {
+    throw new TypeError("tool or approval effect commitment does not match the durable event envelope");
   }
   const envelope = {
     schemaVersion: 1 as const,
@@ -270,7 +280,7 @@ export function isAgentSessionEventV1(value: unknown): value is AgentSessionEven
       || payload.digest !== event.payloadDigest
       || payload.protectionProfile !== event.protectionProfile
       || payload.protectionPolicyDigest !== event.protectionPolicyDigest) return false;
-    if (!toolCommitmentMatchesEnvelope(
+    if (!effectCommitmentMatchesEnvelope(
       event.type as AgentSessionEventTypeV1,
       payload,
       event.sessionId,

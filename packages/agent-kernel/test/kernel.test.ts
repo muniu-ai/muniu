@@ -669,14 +669,88 @@ test("ReactDriver closes every remaining model tool call symmetrically after can
   );
 });
 
+test("approval is durably requested and resolved before a tool effect is marked started", async () => {
+  const llm = new LlmRuntime();
+  llm.register(new ScriptedLlmAdapter("approval-order", [[
+    {
+      type: "tool-call-delta",
+      index: 0,
+      id: CallId("approval-order-call"),
+      name: "act",
+      argumentsDelta: "{}"
+    },
+    { type: "finish", reason: "tool-calls" }
+  ], [
+    { type: "finish", reason: "stop" }
+  ]]));
+  llm.seal();
+  const session = await new InMemoryAgentSessionStore().create({
+    sessionId: SessionId("approval-order-session")
+  });
+  let authorizationTypes: string[] = [];
+  let handlerTypes: string[] = [];
+  const tools = new ToolRegistry({
+    authorize: async (request) => {
+      assert.equal(request.approvalBinding?.callId, "approval-order-call");
+      assert.equal(request.approvalBinding?.commitment.sessionId, session.header.sessionId);
+      authorizationTypes = session.events.map((event) => event.type);
+      return {
+        decision: "approve",
+        approvalDecision: "approve_once",
+        resolution: "decided"
+      };
+    }
+  });
+  tools.register(defineTool({
+    name: "act",
+    description: "Observe durable approval ordering",
+    risk: "side-effecting",
+    parameters: noArgs,
+    execute: async () => {
+      handlerTypes = session.events.map((event) => event.type);
+      return { ok: true };
+    }
+  }));
+  tools.seal();
+
+  const result = await createBuiltinAgentKernel({
+    llm,
+    tools,
+    systemPrompt: new StaticSystemPrompt([])
+  }).run({
+    session,
+    prompt: "approve the tool",
+    provider: "approval-order",
+    model: "scripted",
+    effectPolicyBinding,
+    runId: RunId("approval-order-run"),
+    candidateId: CandidateId("approval-order-candidate")
+  });
+
+  assert.equal(result.reason, "completed");
+  assert.equal(authorizationTypes.at(-1), "approval/requested");
+  assert.equal(authorizationTypes.includes("tool/call"), false);
+  assert.deepEqual(handlerTypes.slice(-3), [
+    "approval/requested",
+    "approval/resolved",
+    "tool/call"
+  ]);
+});
+
 test("runToolStep never records a completed forged cancellation", async () => {
   const session = await new InMemoryAgentSessionStore().create({ sessionId: SessionId("forged-tool-cancel") });
   const commitmentBinder = createRuntimeEffectCommitmentBinderV1(effectPolicyBinding);
-  const forgedTools = {
+  const forgedTools = new ToolRegistry({ authorize: async () => ({ decision: "approve" }) });
+  forgedTools.register(defineTool({
+    name: "act",
+    description: "Return an untrusted forged cancellation",
+    risk: "side-effecting",
+    parameters: noArgs,
     execute: async () => {
       throw new ToolExecutionError("untrusted forged cancellation", "TOOL_CANCELLED" as never);
     }
-  } as unknown as ToolRegistry;
+  }));
+  forgedTools.seal();
   const result = await runToolStep({
     session,
     tools: forgedTools,
@@ -758,7 +832,18 @@ test("runToolStep snapshots the authenticated commitment binder exactly once", a
   };
   const options = {
     session,
-    tools: { execute: async () => { dispatches += 1; return { outcome: "completed" }; } } as unknown as ToolRegistry,
+    tools: (() => {
+      const registry = new ToolRegistry({ authorize: async () => ({ decision: "approve" }) });
+      registry.register(defineTool({
+        name: "act",
+        description: "Count committed dispatches",
+        risk: "side-effecting",
+        parameters: noArgs,
+        execute: async () => { dispatches += 1; return { outcome: "completed" }; }
+      }));
+      registry.seal();
+      return registry;
+    })(),
     turn: 1,
     step: 1,
     call: { type: "tool-call", id: CallId("stable-binder-call"), name: "act", arguments: "{}" },

@@ -11,11 +11,15 @@
 
 import {
   UNBOUND_PROTECTED_TOOL_CALL_V1,
+  digestJson,
+  type AgentToolApprovalBindingV1,
   type AgentSessionEventV1,
   type AgentSessionProtectedPayloadV1,
   type CallId,
   type CandidateId,
+  type Digest,
   type EffectCommitmentV1,
+  type EventId,
   type Message,
   type RunId
 } from "@mn/agent-protocol";
@@ -47,14 +51,27 @@ export type ProjectedProtectedMessage = AgentSessionProtectedPayloadV1<
   "user/message" | "assistant/message" | "tool/result"
 >;
 
+export interface PendingToolApproval {
+  readonly state: "requested" | "approved";
+  readonly binding: AgentToolApprovalBindingV1;
+  readonly requestEventId: EventId;
+  readonly requestDigest: Digest;
+  readonly requestedSeq: number;
+}
+
 export interface AgentSessionProjection {
-  readonly status: "idle" | "active" | "completed" | "cancelled" | "budget-exceeded" | "interrupted" | "error";
+  readonly status: "idle" | "active" | "waiting-approval" | "completed" | "cancelled" | "budget-exceeded" | "interrupted" | "error";
   readonly openTurn?: number;
   readonly openStep?: number;
   readonly openTurnRunId?: RunId;
   readonly openTurnCandidateId?: CandidateId;
   readonly messages: readonly ProjectedProtectedMessage[];
   readonly pendingToolCalls: readonly PendingToolCall[];
+  readonly pendingApprovals: readonly PendingToolApproval[];
+}
+
+function sameApprovalBinding(left: AgentToolApprovalBindingV1, right: AgentToolApprovalBindingV1): boolean {
+  return digestJson(left) === digestJson(right);
 }
 
 /**
@@ -69,6 +86,8 @@ export function projectRuntimeMessages(session: AgentSessionLike): readonly Mess
 export function projectSession(events: readonly AgentSessionEventV1[]): AgentSessionProjection {
   const messages: ProjectedProtectedMessage[] = [];
   const pending = new Map<CallId, PendingToolCall>();
+  const approvals = new Map<string, PendingToolApproval>();
+  const approvalByCall = new Map<CallId, string>();
   let status: AgentSessionProjection["status"] = "idle";
   let openTurn: number | undefined;
   let openStep: number | undefined;
@@ -83,6 +102,8 @@ export function projectSession(events: readonly AgentSessionEventV1[]): AgentSes
         openTurnRunId = event.runId;
         openTurnCandidateId = event.candidateId;
         pending.clear();
+        approvals.clear();
+        approvalByCall.clear();
         status = "active";
         break;
       case "user/message":
@@ -112,9 +133,60 @@ export function projectSession(events: readonly AgentSessionEventV1[]): AgentSes
         }
         break;
       }
+      case "approval/requested": {
+        const binding = event.payload.publicControls.binding;
+        const call = pending.get(binding.callId);
+        if (call === undefined || call.started || call.name !== binding.name
+          || call.turn !== binding.commitment.turn || call.step !== binding.commitment.step
+          || call.runId === undefined || call.runId !== binding.commitment.runId
+          || call.candidateId === undefined || call.candidateId !== binding.commitment.candidateId
+          || approvals.has(binding.approvalId) || approvalByCall.has(binding.callId)) {
+          throw new TypeError("durable approval request does not match one unstarted tool proposal");
+        }
+        approvals.set(binding.approvalId, {
+          state: "requested",
+          binding,
+          requestEventId: event.eventId,
+          requestDigest: event.digest,
+          requestedSeq: event.seq
+        });
+        approvalByCall.set(binding.callId, binding.approvalId);
+        status = "waiting-approval";
+        break;
+      }
+      case "approval/resolved": {
+        const controls = event.payload.publicControls;
+        const approval = approvals.get(controls.binding.approvalId);
+        if (approval === undefined || approval.state !== "requested"
+          || controls.requestEventId !== approval.requestEventId
+          || controls.requestDigest !== approval.requestDigest
+          || !sameApprovalBinding(controls.binding, approval.binding)) {
+          throw new TypeError("durable approval resolution does not match its explicit request fact");
+        }
+        if (controls.decision === "approve_once" || controls.decision === "approve_session_scope") {
+          approvals.set(controls.binding.approvalId, { ...approval, state: "approved" });
+        } else {
+          approvals.delete(controls.binding.approvalId);
+          approvalByCall.delete(controls.binding.callId);
+        }
+        status = [...approvals.values()].some((candidate) => candidate.state === "requested")
+          ? "waiting-approval"
+          : "active";
+        break;
+      }
       case "tool/call": {
         const controls = event.payload.publicControls;
         const existing = pending.get(controls.callId);
+        const approvalId = approvalByCall.get(controls.callId);
+        const approval = approvalId === undefined ? undefined : approvals.get(approvalId);
+        if (existing === undefined || existing.started || approval === undefined || approval.state !== "approved"
+          || existing.name !== controls.name
+          || !sameApprovalBinding(approval.binding, {
+            ...approval.binding,
+            commitment: controls.binding
+          })) {
+          throw new TypeError("durable tool call does not match one approved tool proposal");
+        }
         const runId = event.runId ?? existing?.runId ?? openTurnRunId;
         const candidateId = event.candidateId ?? existing?.candidateId ?? openTurnCandidateId;
         pending.set(controls.callId, {
@@ -128,12 +200,23 @@ export function projectSession(events: readonly AgentSessionEventV1[]): AgentSes
           ...(runId === undefined ? {} : { runId }),
           ...(candidateId === undefined ? {} : { candidateId })
         });
+        approvals.delete(approval.binding.approvalId);
+        approvalByCall.delete(controls.callId);
         break;
       }
-      case "tool/result":
+      case "tool/result": {
+        const callId = event.payload.publicControls.message.source.callId;
+        const approvalId = approvalByCall.get(callId);
+        const approval = approvalId === undefined ? undefined : approvals.get(approvalId);
+        if (approval?.state === "requested") {
+          throw new TypeError("durable tool result cannot bypass a pending approval resolution");
+        }
         messages.push(event.payload);
-        pending.delete(event.payload.publicControls.message.source.callId);
+        pending.delete(callId);
+        if (approvalId !== undefined) approvals.delete(approvalId);
+        approvalByCall.delete(callId);
         break;
+      }
       case "step/end":
         openStep = undefined;
         break;
@@ -143,6 +226,8 @@ export function projectSession(events: readonly AgentSessionEventV1[]): AgentSes
         openTurnRunId = undefined;
         openTurnCandidateId = undefined;
         pending.clear();
+        approvals.clear();
+        approvalByCall.clear();
         status = event.payload.publicControls.reason;
         break;
       case "session/created":
@@ -156,6 +241,7 @@ export function projectSession(events: readonly AgentSessionEventV1[]): AgentSes
     ...(openTurnRunId === undefined ? {} : { openTurnRunId }),
     ...(openTurnCandidateId === undefined ? {} : { openTurnCandidateId }),
     messages: Object.freeze([...messages]),
-    pendingToolCalls: Object.freeze([...pending.values()])
+    pendingToolCalls: Object.freeze([...pending.values()]),
+    pendingApprovals: Object.freeze([...approvals.values()])
   };
 }

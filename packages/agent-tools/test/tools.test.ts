@@ -1,7 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { SessionId } from "@mn/agent-protocol";
+import {
+  CallId,
+  CandidateId,
+  Digest,
+  EventId,
+  RunId,
+  SessionId,
+  createAgentSessionEvent,
+  createProtectedTextV1,
+  createRuntimeEffectCommitmentBinderV1,
+  deriveToolEffectKindV1,
+  protectAgentSessionPayloadV1
+} from "@mn/agent-protocol";
 import {
   JsonSchemaError,
   ToolExecutionError,
@@ -144,6 +156,154 @@ test("execute synchronously snapshots every invocation getter before queueing an
   assert.equal((authorizationContext as { signal?: AbortSignal }).signal, originalController.signal);
   assert.equal(originalController.signal.aborted, false);
   assert.deepEqual(reads, { name: 1, arguments: 1, context: 1, sessionId: 1, signal: 1 });
+});
+
+test("a session waiting for authorization never blocks an independent session", async () => {
+  let releaseWaiting!: () => void;
+  const waitingGate = new Promise<void>((resolve) => { releaseWaiting = resolve; });
+  let waitingStarted!: () => void;
+  const started = new Promise<void>((resolve) => { waitingStarted = resolve; });
+  const registry = new ToolRegistry({
+    authorize: async (request) => {
+      if (request.context.sessionId === "waiting-session") {
+        waitingStarted();
+        await waitingGate;
+      }
+      return { decision: "approve" };
+    }
+  });
+  registry.register(defineTool({
+    name: "session_isolation",
+    description: "Prove authorization isolation",
+    risk: "side-effecting",
+    parameters,
+    execute: async (_args, runContext) => ({ sessionId: runContext.sessionId })
+  }));
+
+  const waiting = registry.execute({
+    name: "session_isolation",
+    arguments: '{"path":"waiting"}',
+    context: { sessionId: "waiting-session" }
+  });
+  await started;
+  try {
+    const independent = registry.execute({
+      name: "session_isolation",
+      arguments: '{"path":"independent"}',
+      context: { sessionId: "independent-session" }
+    });
+    assert.deepEqual(await Promise.race([
+      independent,
+      new Promise((resolve) => setTimeout(() => resolve("blocked"), 50))
+    ]), { sessionId: "independent-session" });
+  } finally {
+    releaseWaiting();
+    await waiting;
+  }
+});
+
+test("durable approval resolution issues one identity-bound execute permit", async () => {
+  const registry = new ToolRegistry({ authorize: async () => ({ decision: "approve" }) });
+  registry.register(defineTool({
+    name: "permit_tool",
+    description: "Exercise a one-shot permit",
+    risk: "side-effecting",
+    parameters,
+    execute: async (args) => ({ path: String(args.path) })
+  }));
+  registry.seal();
+  const prepared = registry.prepare({
+    name: "permit_tool",
+    arguments: '{"path":"README.md"}',
+    context: { sessionId: "permit-session" }
+  });
+  const binder = createRuntimeEffectCommitmentBinderV1({
+    governanceDigest: "a".repeat(64) as Digest,
+    harnessDigest: "b".repeat(64) as Digest
+  });
+  const handle = binder.bind({
+    effectKind: deriveToolEffectKindV1("permit_tool"),
+    sessionId: SessionId("permit-session"),
+    runId: RunId("permit-run"),
+    candidateId: CandidateId("permit-candidate"),
+    turn: 1,
+    step: 1,
+    internalEffectId: CallId("permit-call"),
+    protectedInput: createProtectedTextV1('{"path":"README.md"}'),
+    raw: { kind: "text", value: '{"path":"README.md"}' }
+  });
+  const binding = {
+    schemaVersion: 1 as const,
+    approvalId: "permit-approval",
+    scope: handle.commitment.effectKind,
+    risk: "side-effecting" as const,
+    callId: CallId("permit-call"),
+    name: "permit_tool",
+    commitment: handle.commitment
+  };
+  const requested = createAgentSessionEvent({
+    eventId: EventId("permit-requested"),
+    sessionId: SessionId("permit-session"),
+    seq: 0,
+    occurredAt: "2026-08-17T00:00:00.000Z",
+    type: "approval/requested",
+    runId: RunId("permit-run"),
+    candidateId: CandidateId("permit-candidate"),
+    payload: protectAgentSessionPayloadV1("approval/requested", { binding })
+  });
+  const outcome = await registry.authorizePrepared(prepared, requested);
+  const resolved = createAgentSessionEvent({
+    eventId: EventId("permit-resolved"),
+    sessionId: SessionId("permit-session"),
+    seq: 1,
+    occurredAt: "2026-08-17T00:00:01.000Z",
+    type: "approval/resolved",
+    runId: RunId("permit-run"),
+    candidateId: CandidateId("permit-candidate"),
+    previousDigest: requested.digest,
+    payload: protectAgentSessionPayloadV1("approval/resolved", {
+      binding,
+      requestEventId: requested.eventId,
+      requestDigest: requested.digest,
+      decision: outcome.approvalDecision,
+      resolution: outcome.resolution
+    })
+  });
+  const permit = registry.issueExecutePermit(prepared, resolved);
+  assert.ok(permit);
+  const other = new ToolRegistry({ authorize: async () => ({ decision: "approve" }) });
+  await assert.rejects(() => other.executeAuthorized(permit), /authorized|permit|denied/i);
+  assert.deepEqual(await registry.executeAuthorized(permit), { path: "README.md" });
+  await assert.rejects(() => registry.executeAuthorized(permit), /authorized|permit|denied/i);
+
+  const secondPrepared = registry.prepare({
+    name: "permit_tool",
+    arguments: '{"path":"README.md"}',
+    context: { sessionId: "permit-session" }
+  });
+  await registry.authorizePrepared(secondPrepared, requested);
+  const falselyAdjacent = createAgentSessionEvent({
+    eventId: EventId("permit-resolved-forged-request-binding"),
+    sessionId: SessionId("permit-session"),
+    seq: 1,
+    occurredAt: "2026-08-17T00:00:01.000Z",
+    type: "approval/resolved",
+    runId: RunId("permit-run"),
+    candidateId: CandidateId("permit-candidate"),
+    previousDigest: requested.digest,
+    payload: protectAgentSessionPayloadV1("approval/resolved", {
+      binding,
+      requestEventId: EventId("different-request-event"),
+      requestDigest: requested.digest,
+      decision: "approve_once",
+      resolution: "decided"
+    })
+  });
+  assert.throws(
+    () => registry.issueExecutePermit(secondPrepared, falselyAdjacent),
+    /approval|resolution|request|denied/i
+  );
+  binder.dispose();
 });
 
 test("tool cancellation before authorization or dispatch never invokes a remaining side effect", async () => {

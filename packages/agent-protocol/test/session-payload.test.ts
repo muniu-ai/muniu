@@ -14,6 +14,7 @@ import {
   CallId,
   CandidateId,
   Digest,
+  EventId,
   MessageId,
   PROTECTION_POLICY_DIGEST_V1,
   RunId,
@@ -140,6 +141,106 @@ test("assistant proposals stay unbound while explicit tool calls carry a commitm
     name: "read_file",
     arguments: argumentsText
   });
+  binder.dispose();
+});
+
+test("approval payloads bind one pending decision to the exact tool effect and closed resolution", () => {
+  const binder = createRuntimeEffectCommitmentBinderV1({
+    governanceDigest: "3".repeat(64) as Digest,
+    harnessDigest: "4".repeat(64) as Digest
+  });
+  const handle = binder.bind({
+    effectKind: deriveToolEffectKindV1("write_file"),
+    sessionId: SessionId("approval-session"),
+    runId: RunId("approval-run"),
+    candidateId: CandidateId("approval-candidate"),
+    turn: 1,
+    step: 2,
+    internalEffectId: CallId("approval-call"),
+    protectedInput: createProtectedTextV1('{"path":"/Users/Alice/project"}'),
+    raw: { kind: "text", value: '{"path":"/Users/Alice/project"}' }
+  });
+  const binding = {
+    schemaVersion: 1 as const,
+    approvalId: "approval-request",
+    scope: handle.commitment.effectKind,
+    risk: "side-effecting" as const,
+    callId: CallId("approval-call"),
+    name: "write_file",
+    commitment: handle.commitment
+  };
+  const requested = protectAgentSessionPayloadV1("approval/requested", { binding });
+  const resolved = protectAgentSessionPayloadV1("approval/resolved", {
+    binding,
+    requestEventId: EventId("approval-requested-event"),
+    requestDigest: Digest("5".repeat(64)),
+    decision: "approve_once",
+    resolution: "decided"
+  });
+
+  assert.deepEqual(requested.publicControls.binding, binding);
+  assert.deepEqual(resolved.publicControls, {
+    binding,
+    requestEventId: "approval-requested-event",
+    requestDigest: "5".repeat(64),
+    decision: "approve_once",
+    resolution: "decided"
+  });
+  assert.deepEqual(
+    inspectAgentSessionProtectedPayloadV1(
+      "approval/requested",
+      JSON.parse(JSON.stringify(requested))
+    ),
+    requested
+  );
+  assert.deepEqual(
+    inspectAgentSessionProtectedPayloadV1(
+      "approval/resolved",
+      JSON.parse(JSON.stringify(resolved))
+    ),
+    resolved
+  );
+  assert.throws(() => protectAgentSessionPayloadV1("approval/requested", {
+    binding: { ...binding, callId: CallId("different-call") }
+  }), /approval|commitment|binding/iu);
+  assert.throws(() => protectAgentSessionPayloadV1("approval/requested", {
+    binding: { ...binding, scope: "different/scope" }
+  }), /approval|commitment|scope/iu);
+  assert.throws(() => protectAgentSessionPayloadV1("approval/resolved", {
+    binding,
+    requestEventId: EventId("approval-requested-event"),
+    requestDigest: Digest("5".repeat(64)),
+    decision: "approve_forever",
+    resolution: "decided"
+  } as never), /approval|decision|schema/iu);
+  assert.throws(() => protectAgentSessionPayloadV1("approval/resolved", {
+    binding,
+    requestEventId: EventId("approval-requested-event"),
+    requestDigest: Digest("5".repeat(64)),
+    decision: "approve_once",
+    resolution: "interrupted"
+  }), /approval|deny|resolution/iu);
+  assert.throws(() => protectAgentSessionPayloadV1("approval/resolved", {
+    binding,
+    requestDigest: Digest("5".repeat(64)),
+    decision: "deny",
+    resolution: "interrupted"
+  } as never), /approval|request|schema/iu);
+  assert.throws(() => protectAgentSessionPayloadV1("approval/resolved", {
+    binding,
+    requestEventId: EventId("approval-requested-event"),
+    requestDigest: Digest("not-a-digest"),
+    decision: "deny",
+    resolution: "interrupted"
+  }), /approval|request|digest|schema/iu);
+  assert.throws(() => protectAgentSessionPayloadV1("approval/resolved", {
+    binding,
+    requestEventId: EventId("approval-requested-event"),
+    requestDigest: Digest("5".repeat(64)),
+    decision: "deny",
+    resolution: "interrupted",
+    extra: true
+  } as never), /approval|request|schema/iu);
   binder.dispose();
 });
 

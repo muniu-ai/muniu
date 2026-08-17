@@ -10,6 +10,7 @@ export * from "./messages.js";
 export * from "./model.js";
 export * from "./protection.js";
 export * from "./session-payload.js";
+export * from "./transport.js";
 export { snapshotBoundedJsonValue } from "./strict-json.js";
 export {
   assertSafePublicControlIdV1,

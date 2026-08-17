@@ -25,6 +25,20 @@ async function recoverOnce(session: AgentSessionExclusiveView): Promise<AgentSes
   const projection = projectSession(session.events);
   if (projection.openTurn === undefined) return [];
   const appended: AgentSessionEventV1[] = [];
+  for (const approval of projection.pendingApprovals) {
+    if (approval.state !== "requested") continue;
+    const commitment = approval.binding.commitment;
+    appended.push(await session.append("approval/resolved", {
+      binding: approval.binding,
+      requestEventId: approval.requestEventId,
+      requestDigest: approval.requestDigest,
+      decision: "deny",
+      resolution: "interrupted"
+    }, {
+      runId: commitment.runId,
+      candidateId: commitment.candidateId
+    }));
+  }
   for (const call of projection.pendingToolCalls) {
     const code = call.started ? TOOL_OUTCOME_UNKNOWN : TOOL_NOT_STARTED;
     const text = call.started

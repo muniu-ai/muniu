@@ -11,17 +11,24 @@
 
 import {
   MessageId,
-  createProtectedTextV1,
   createSafeRandomPublicControlIdV1,
+  createProtectedTextV1,
   createToolResultMessage,
   deriveToolEffectKindV1,
   isRuntimeEffectCommitmentBinderV1,
+  type AgentApprovalResolutionV1,
+  type AgentToolApprovalBindingV1,
   type EffectCommitmentHandleV1,
   type RuntimeEffectCommitmentBinderV1,
   type ToolCallBlock
 } from "@mn/agent-protocol";
 import type { AgentEventMetadata, AgentSession } from "@mn/agent-session";
-import { ToolExecutionError, type ToolRegistry } from "@mn/agent-tools";
+import {
+  ToolExecutionError,
+  type PreparedToolInvocation,
+  type ToolAuthorizationOutcome,
+  type ToolRegistry
+} from "@mn/agent-tools";
 
 export interface ToolStepOptions {
   readonly session: AgentSession;
@@ -152,7 +159,111 @@ export async function runToolStep(options: ToolStepOptions): Promise<ToolStepRes
     return { invoked: false, budgetExceeded: false, effectRejected: true, outcomeUnknown: false };
   }
 
-  // Awaiting this append is the durable boundary before any handler side effect.
+  let prepared: PreparedToolInvocation;
+  try {
+    prepared = tools.prepare({
+      name: call.name,
+      arguments: call.arguments,
+      context: { sessionId: session.header.sessionId, ...(signal === undefined ? {} : { signal }) }
+    });
+  } catch (cause: unknown) {
+    commitmentBinder.release(handle);
+    const code = cause instanceof ToolExecutionError ? cause.code : "TOOL_EXECUTION_FAILED";
+    await session.append("tool/result", {
+      turn,
+      step,
+      message: toolResultMessage(call, `Tool execution failed (${code}).`, true),
+      status: "interrupted",
+      error: { name: "ToolExecutionError", code }
+    }, metadata);
+    return { invoked: false, budgetExceeded: false, effectRejected: false, outcomeUnknown: false };
+  }
+
+  const approvalBinding: AgentToolApprovalBindingV1 = Object.freeze({
+    schemaVersion: 1,
+    approvalId: createSafeRandomPublicControlIdV1("approval"),
+    scope: handle.commitment.effectKind,
+    risk: prepared.risk,
+    callId: call.id,
+    name: call.name,
+    commitment: handle.commitment
+  });
+
+  let requestedApproval;
+  try {
+    requestedApproval = await session.append("approval/requested", {
+      binding: approvalBinding
+    }, metadata);
+  } catch (error: unknown) {
+    commitmentBinder.release(handle);
+    throw error;
+  }
+
+  let authorization: ToolAuthorizationOutcome;
+  try {
+    authorization = await tools.authorizePrepared(prepared, requestedApproval);
+  } catch (cause: unknown) {
+    commitmentBinder.release(handle);
+    const cancelled = isAborted(signal)
+      || (cause instanceof ToolExecutionError && cause.code === "TOOL_CANCELLED");
+    const resolution: AgentApprovalResolutionV1 = cancelled ? "cancelled" : "interrupted";
+    await session.append("approval/resolved", {
+      binding: approvalBinding,
+      requestEventId: requestedApproval.eventId,
+      requestDigest: requestedApproval.digest,
+      decision: "deny",
+      resolution
+    }, metadata);
+    await session.append("tool/result", {
+      turn,
+      step,
+      message: toolResultMessage(
+        call,
+        cancelled ? "Tool execution was cancelled before dispatch." : "Tool authorization failed.",
+        true
+      ),
+      status: "interrupted",
+      error: cancelled
+        ? { name: "ToolCancelledError", code: "TOOL_CANCELLED" }
+        : { name: "ToolAuthorizationError", code: "TOOL_AUTHORIZATION_FAILED" }
+    }, metadata);
+    return { invoked: false, budgetExceeded: false, effectRejected: false, outcomeUnknown: false };
+  }
+
+  const resolvedApproval = await session.append("approval/resolved", {
+    binding: approvalBinding,
+    requestEventId: requestedApproval.eventId,
+    requestDigest: requestedApproval.digest,
+    decision: authorization.approvalDecision,
+    resolution: authorization.resolution
+  }, metadata);
+  const permit = tools.issueExecutePermit(prepared, resolvedApproval);
+  if (authorization.decision !== "approve" || permit === undefined) {
+    commitmentBinder.release(handle);
+    await session.append("tool/result", {
+      turn,
+      step,
+      message: toolResultMessage(call, "Tool execution was denied before dispatch.", true),
+      status: "interrupted",
+      error: { name: "ToolDeniedError", code: "TOOL_DENIED" }
+    }, metadata);
+    return { invoked: false, budgetExceeded: false, effectRejected: false, outcomeUnknown: false };
+  }
+
+  if (isAborted(signal)) {
+    commitmentBinder.release(handle);
+    await session.append("tool/result", {
+      turn,
+      step,
+      message: toolResultMessage(call, "Tool execution was cancelled before dispatch.", true),
+      status: "interrupted",
+      error: { name: "ToolCancelledError", code: "TOOL_CANCELLED" }
+    }, metadata);
+    return { invoked: false, budgetExceeded: false, effectRejected: false, outcomeUnknown: false };
+  }
+
+  // Awaiting this append is the durable boundary immediately before the
+  // authenticated handler side effect. Approval facts are already durable.
   try {
     await session.append("tool/call", {
       turn,
@@ -193,11 +304,7 @@ export async function runToolStep(options: ToolStepOptions): Promise<ToolStepRes
   let text: string;
   let error: { name: string; code: string } | undefined;
   try {
-    const result = await tools.execute({
-      name: call.name,
-      arguments: call.arguments,
-      context: { sessionId: session.header.sessionId, ...(signal === undefined ? {} : { signal }) }
-    });
+    const result = await tools.executeAuthorized(permit);
     text = JSON.stringify(result);
   } catch (cause: unknown) {
     const code = cause instanceof ToolExecutionError && String(cause.code) !== "TOOL_CANCELLED"

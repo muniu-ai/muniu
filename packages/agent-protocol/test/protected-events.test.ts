@@ -195,3 +195,57 @@ test("durable tool calls require an effect commitment bound to the full event en
     binder.dispose();
   }
 });
+
+test("durable approval events bind the pending decision to the effect envelope", () => {
+  const sessionId = SessionId("approval-event-session");
+  const runId = RunId("approval-event-run");
+  const candidateId = CandidateId("approval-event-candidate");
+  const callId = CallId("approval-event-call");
+  const binder = createRuntimeEffectCommitmentBinderV1({ governanceDigest, harnessDigest });
+  try {
+    const handle = binder.bind({
+      effectKind: deriveToolEffectKindV1("write_file"),
+      sessionId,
+      runId,
+      candidateId,
+      turn: 1,
+      step: 1,
+      internalEffectId: callId,
+      protectedInput: createProtectedTextV1('{"path":"README.md"}'),
+      raw: { kind: "text", value: '{"path":"README.md"}' }
+    });
+    const binding = {
+      schemaVersion: 1 as const,
+      approvalId: "approval-event-id",
+      scope: handle.commitment.effectKind,
+      risk: "side-effecting" as const,
+      callId,
+      name: "write_file",
+      commitment: handle.commitment
+    };
+    const payload = protectAgentSessionPayloadV1("approval/requested", { binding });
+    const event = createAgentSessionEvent({
+      eventId: EventId("approval-requested-event"),
+      sessionId,
+      seq: 0,
+      occurredAt: "2026-08-17T00:00:00.000Z",
+      type: "approval/requested",
+      runId,
+      candidateId,
+      payload
+    });
+    assert.equal(isAgentSessionEventV1(event), true);
+    assert.throws(() => createAgentSessionEvent({
+      eventId: EventId("approval-requested-mismatch"),
+      sessionId,
+      seq: 0,
+      occurredAt: "2026-08-17T00:00:00.000Z",
+      type: "approval/requested",
+      runId: RunId("other-run"),
+      candidateId,
+      payload
+    }), /approval|effect commitment|envelope/iu);
+  } finally {
+    binder.dispose();
+  }
+});

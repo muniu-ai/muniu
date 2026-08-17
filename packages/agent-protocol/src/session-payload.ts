@@ -9,7 +9,7 @@ import {
   type EffectCommitmentV1
 } from "./effect-commitment.js";
 import { deepFreeze } from "./freeze.js";
-import type { CallId, Digest, MessageId } from "./ids.js";
+import type { CallId, Digest, EventId, MessageId } from "./ids.js";
 import type {
   AssistantMessage,
   ToolResultMessage,
@@ -33,6 +33,19 @@ import { snapshotBoundedJsonValue } from "./strict-json.js";
 export const AGENT_SESSION_PROTECTION_PROFILE_V1 = "muniu-agent-session-protected-payload-v1";
 export const UNBOUND_PROTECTED_TOOL_CALL_V1 = "unbound-protected-v1";
 
+export interface AgentToolApprovalBindingV1 {
+  readonly schemaVersion: 1;
+  readonly approvalId: string;
+  readonly scope: string;
+  readonly risk: "read-only" | "side-effecting";
+  readonly callId: CallId;
+  readonly name: string;
+  readonly commitment: EffectCommitmentV1;
+}
+
+export type AgentApprovalResolutionV1 = "decided" | "cancelled" | "closed" | "interrupted";
+export type AgentApprovalDecisionV1 = "approve_once" | "approve_session_scope" | "deny";
+
 export interface AgentSessionRawPayloadMapV1 {
   "session/created": { cwd?: string; labels?: Record<string, string> };
   "turn/start": { turn: number };
@@ -46,6 +59,14 @@ export interface AgentSessionRawPayloadMapV1 {
     name: string;
     arguments: string;
     commitment: EffectCommitmentV1;
+  };
+  "approval/requested": { binding: AgentToolApprovalBindingV1 };
+  "approval/resolved": {
+    binding: AgentToolApprovalBindingV1;
+    requestEventId: EventId;
+    requestDigest: Digest;
+    decision: AgentApprovalDecisionV1;
+    resolution: AgentApprovalResolutionV1;
   };
   "tool/result": {
     turn: number;
@@ -113,6 +134,14 @@ export interface AgentSessionPublicControlsMapV1 {
     readonly name: string;
     readonly binding: EffectCommitmentV1;
   };
+  "approval/requested": { readonly binding: AgentToolApprovalBindingV1 };
+  "approval/resolved": {
+    readonly binding: AgentToolApprovalBindingV1;
+    readonly requestEventId: EventId;
+    readonly requestDigest: Digest;
+    readonly decision: AgentApprovalDecisionV1;
+    readonly resolution: AgentApprovalResolutionV1;
+  };
   "tool/result": {
     readonly turn: number;
     readonly step: number;
@@ -165,6 +194,8 @@ const AGENT_SESSION_EVENT_TYPES_V1 = new Set<string>([
   "step/start",
   "assistant/message",
   "tool/call",
+  "approval/requested",
+  "approval/resolved",
   "tool/result",
   "step/end",
   "turn/end"
@@ -173,6 +204,17 @@ const PUBLIC_CONTROL_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/u;
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
 const STEP_END_STATUSES = new Set(["completed", "cancelled", "budget-exceeded", "interrupted", "error"]);
 const TURN_END_REASONS = new Set(["completed", "cancelled", "budget-exceeded", "interrupted", "error"]);
+const APPROVAL_DECISIONS = new Set<AgentApprovalDecisionV1>([
+  "approve_once",
+  "approve_session_scope",
+  "deny"
+]);
+const APPROVAL_RESOLUTIONS = new Set<AgentApprovalResolutionV1>([
+  "decided",
+  "cancelled",
+  "closed",
+  "interrupted"
+]);
 
 function exactDataRecord(value: unknown, exactKeys: readonly string[]): Record<string, unknown> | undefined {
   if (value === null || typeof value !== "object" || utilTypes.isProxy(value) || Array.isArray(value)) {
@@ -326,6 +368,60 @@ function isLabels(value: unknown): boolean {
   return isRecord(value) && Object.values(value).every((label) => typeof label === "string");
 }
 
+function assertApprovalBinding(value: unknown): asserts value is AgentToolApprovalBindingV1 {
+  if (!hasExactKeys(
+    value,
+    ["schemaVersion", "approvalId", "scope", "risk", "callId", "name", "commitment"]
+  ) || value.schemaVersion !== 1) {
+    throw new TypeError("approval binding does not match the exact v1 schema");
+  }
+  assertSafePublicControlIdV1(value.approvalId, "approval identifier");
+  assertSafePublicControlIdV1(value.callId, "approval call identifier");
+  assertSafeName(value.name, "approval tool name");
+  if (value.risk !== "read-only" && value.risk !== "side-effecting") {
+    throw new TypeError("approval binding risk is invalid");
+  }
+  assertEffectCommitmentV1(value.commitment);
+  if (value.commitment.rawKind !== "text"
+    || value.commitment.internalEffectId !== value.callId
+    || value.commitment.effectKind !== value.scope
+    || value.commitment.effectKind !== deriveToolEffectKindV1(value.name)) {
+    throw new TypeError("approval binding does not match its exact tool effect commitment");
+  }
+}
+
+export function inspectAgentToolApprovalBindingV1(
+  value: unknown
+): AgentToolApprovalBindingV1 | undefined {
+  try {
+    const snapshot = snapshotBoundedJsonValue(value);
+    assertApprovalBinding(snapshot);
+    return deepFreeze(snapshot as unknown as AgentToolApprovalBindingV1);
+  } catch {
+    return undefined;
+  }
+}
+
+export function assertAgentToolApprovalBindingV1(value: unknown): AgentToolApprovalBindingV1 {
+  const inspected = inspectAgentToolApprovalBindingV1(value);
+  if (inspected === undefined) {
+    throw new TypeError("value does not match the exact tool approval binding v1 schema");
+  }
+  return inspected;
+}
+
+function assertApprovalResolution(
+  decision: unknown,
+  resolution: unknown
+): asserts decision is AgentApprovalDecisionV1 {
+  if (typeof decision !== "string" || !APPROVAL_DECISIONS.has(decision as AgentApprovalDecisionV1)
+    || typeof resolution !== "string"
+    || !APPROVAL_RESOLUTIONS.has(resolution as AgentApprovalResolutionV1)
+    || (resolution !== "decided" && decision !== "deny")) {
+    throw new TypeError("approval resolution must use the closed decision and resolution vocabulary");
+  }
+}
+
 function assertRawPayload(eventType: AgentSessionProtectedEventTypeV1, value: unknown): void {
   if (!isRecord(value)) throw new TypeError(`event ${eventType} raw payload does not match the event-specific schema`);
   switch (eventType) {
@@ -370,6 +466,23 @@ function assertRawPayload(eventType: AgentSessionProtectedEventTypeV1, value: un
         assertSafeName(value.name, "tool name");
         assertEffectCommitmentV1(value.commitment);
         if (typeof value.arguments === "string") return;
+      }
+      break;
+    case "approval/requested":
+      if (hasExactKeys(value, ["binding"])) {
+        assertApprovalBinding(value.binding);
+        return;
+      }
+      break;
+    case "approval/resolved":
+      if (hasExactKeys(value, ["binding", "requestEventId", "requestDigest", "decision", "resolution"])) {
+        assertApprovalBinding(value.binding);
+        assertSafePublicControlIdV1(value.requestEventId, "approval request event identifier");
+        if (typeof value.requestDigest !== "string" || !DIGEST_PATTERN.test(value.requestDigest)) {
+          throw new TypeError("approval request digest must be a sha256 digest");
+        }
+        assertApprovalResolution(value.decision, value.resolution);
+        return;
       }
       break;
     case "tool/result":
@@ -518,6 +631,28 @@ function buildProfileParts<T extends AgentSessionProtectedEventTypeV1>(
       };
       break;
     }
+    case "approval/requested": {
+      const payload = raw as AgentSessionRawPayloadMapV1["approval/requested"];
+      parts = {
+        publicControls: { binding: payload.binding },
+        protectedContentInput: null
+      };
+      break;
+    }
+    case "approval/resolved": {
+      const payload = raw as AgentSessionRawPayloadMapV1["approval/resolved"];
+      parts = {
+        publicControls: {
+          binding: payload.binding,
+          requestEventId: payload.requestEventId,
+          requestDigest: payload.requestDigest,
+          decision: payload.decision,
+          resolution: payload.resolution
+        },
+        protectedContentInput: null
+      };
+      break;
+    }
     case "tool/result": {
       const payload = raw as AgentSessionRawPayloadMapV1["tool/result"];
       const block = payload.message.content[0];
@@ -603,6 +738,9 @@ function validateProtectedContent(
   root: ProtectedJsonNodeV1
 ): boolean {
   if (eventType === "turn/start" || eventType === "step/start" || eventType === "step/end") {
+    return root.type === "null";
+  }
+  if (eventType === "approval/requested" || eventType === "approval/resolved") {
     return root.type === "null";
   }
   if (eventType === "session/created") {
@@ -718,6 +856,23 @@ function assertPublicControls(eventType: AgentSessionProtectedEventTypeV1, value
           || value.binding.step !== value.step
           || value.binding.internalEffectId !== value.callId
           || value.binding.effectKind !== deriveToolEffectKindV1(value.name)) break;
+        return;
+      }
+      break;
+    case "approval/requested":
+      if (hasExactKeys(value, ["binding"])) {
+        assertApprovalBinding(value.binding);
+        return;
+      }
+      break;
+    case "approval/resolved":
+      if (hasExactKeys(value, ["binding", "requestEventId", "requestDigest", "decision", "resolution"])) {
+        assertApprovalBinding(value.binding);
+        assertSafePublicControlIdV1(value.requestEventId, "approval request event identifier");
+        if (typeof value.requestDigest !== "string" || !DIGEST_PATTERN.test(value.requestDigest)) {
+          throw new TypeError("approval request digest must be a sha256 digest");
+        }
+        assertApprovalResolution(value.decision, value.resolution);
         return;
       }
       break;

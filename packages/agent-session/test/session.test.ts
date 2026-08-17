@@ -1512,7 +1512,6 @@ test("recovery closes started and unstarted tool effects without replaying eithe
   const runId = RunId("recovery-run");
   const turnCandidateId = CandidateId("recovery-turn-candidate");
   const assistantCandidateId = CandidateId("recovery-assistant-candidate");
-  const startedCandidateId = CandidateId("recovery-started-candidate");
   const binder = createRuntimeEffectCommitmentBinderV1({
     governanceDigest: Digest("a".repeat(64)),
     harnessDigest: Digest("b".repeat(64))
@@ -1522,12 +1521,23 @@ test("recovery closes started and unstarted tool effects without replaying eithe
     effectKind: deriveToolEffectKindV1("write"),
     sessionId: session.header.sessionId,
     runId,
-    candidateId: startedCandidateId,
+    candidateId: assistantCandidateId,
     turn: 1,
     step: 1,
     internalEffectId: started,
     protectedInput: createProtectedTextV1(startedArguments),
     raw: { kind: "text", value: startedArguments }
+  });
+  const unstartedHandle = binder.bind({
+    effectKind: deriveToolEffectKindV1("read"),
+    sessionId: session.header.sessionId,
+    runId,
+    candidateId: assistantCandidateId,
+    turn: 1,
+    step: 1,
+    internalEffectId: unstarted,
+    protectedInput: createProtectedTextV1("{}"),
+    raw: { kind: "text", value: "{}" }
   });
   await session.append("turn/start", { turn: 1 }, { runId, candidateId: turnCandidateId });
   await session.append("user/message", { turn: 1, message: user });
@@ -1535,6 +1545,31 @@ test("recovery closes started and unstarted tool effects without replaying eithe
   await session.append(
     "assistant/message",
     { turn: 1, step: 1, message: assistant },
+    { runId, candidateId: assistantCandidateId }
+  );
+  const startedBinding = {
+    schemaVersion: 1 as const,
+    approvalId: "recovery-approval-started",
+    scope: startedHandle.commitment.effectKind,
+    risk: "side-effecting" as const,
+    callId: started,
+    name: "write",
+    commitment: startedHandle.commitment
+  };
+  const startedRequest = await session.append(
+    "approval/requested",
+    { binding: startedBinding },
+    { runId, candidateId: assistantCandidateId }
+  );
+  await session.append(
+    "approval/resolved",
+    {
+      binding: startedBinding,
+      requestEventId: startedRequest.eventId,
+      requestDigest: startedRequest.digest,
+      decision: "approve_once",
+      resolution: "decided"
+    },
     { runId, candidateId: assistantCandidateId }
   );
   await session.append(
@@ -1547,9 +1582,37 @@ test("recovery closes started and unstarted tool effects without replaying eithe
       arguments: startedArguments,
       commitment: startedHandle.commitment
     },
-    { runId, candidateId: startedCandidateId }
+    { runId, candidateId: assistantCandidateId }
+  );
+  const unstartedBinding = {
+    schemaVersion: 1 as const,
+    approvalId: "recovery-approval-unstarted",
+    scope: unstartedHandle.commitment.effectKind,
+    risk: "read-only" as const,
+    callId: unstarted,
+    name: "read",
+    commitment: unstartedHandle.commitment
+  };
+  const unstartedRequest = await session.append(
+    "approval/requested",
+    { binding: unstartedBinding },
+    { runId, candidateId: assistantCandidateId }
   );
   binder.dispose();
+
+  const waitingProjection = projectSession(session.events);
+  assert.equal(waitingProjection.status, "waiting-approval");
+  assert.deepEqual(waitingProjection.pendingApprovals.map((approval) => ({
+    approvalId: approval.binding.approvalId,
+    state: approval.state,
+    requestEventId: approval.requestEventId,
+    requestDigest: approval.requestDigest
+  })), [{
+    approvalId: "recovery-approval-unstarted",
+    state: "requested",
+    requestEventId: unstartedRequest.eventId,
+    requestDigest: unstartedRequest.digest
+  }]);
 
   const firstRecovery = recoverInterruptedSession(session);
   const concurrentRecovery = recoverInterruptedSession(session);
@@ -1561,11 +1624,21 @@ test("recovery closes started and unstarted tool effects without replaying eithe
       : undefined),
     [TOOL_OUTCOME_UNKNOWN, TOOL_NOT_STARTED]
   );
+  const interruptedApproval = recovered.find((event) => event.type === "approval/resolved");
+  assert.deepEqual(interruptedApproval?.type === "approval/resolved"
+    ? interruptedApproval.payload.publicControls
+    : undefined, {
+    binding: unstartedBinding,
+    requestEventId: unstartedRequest.eventId,
+    requestDigest: unstartedRequest.digest,
+    decision: "deny",
+    resolution: "interrupted"
+  });
   assert.deepEqual(recovered.slice(-2).map((event) => event.type), ["step/end", "turn/end"]);
   const recoveredToolResults = recovered.filter((event) => event.type === "tool/result");
   assert.deepEqual(
     recoveredToolResults.map((event) => event.candidateId),
-    [startedCandidateId, assistantCandidateId]
+    [assistantCandidateId, assistantCandidateId]
   );
   assert.deepEqual(recoveredToolResults.map((event) => event.runId), [runId, runId]);
   assert.deepEqual(
@@ -1582,6 +1655,7 @@ test("recovery closes started and unstarted tool effects without replaying eithe
   const projection = projectSession(session.events);
   assert.equal(projection.status, "interrupted");
   assert.equal(projection.pendingToolCalls.length, 0);
+  assert.equal(projection.pendingApprovals.length, 0);
   assert.deepEqual(projection.messages.map((message) => message.publicControls.message.id), [
     "user-1",
     "assistant-1",
@@ -1589,4 +1663,131 @@ test("recovery closes started and unstarted tool effects without replaying eithe
     "recovery-call-unstarted"
   ]);
   assert.equal(projection.pendingToolCalls.length, 0);
+});
+
+test("recovery treats approved but not started tools as not started without replay", async () => {
+  const store = new InMemoryAgentSessionStore();
+  const session = await store.create({ sessionId: SessionId("recover-approved-not-started") });
+  const callId = CallId("approved-not-started-call");
+  const runId = RunId("approved-not-started-run");
+  const candidateId = CandidateId("approved-not-started-candidate");
+  const assistant = createAssistantMessage({
+    id: MessageId("approved-not-started-assistant"),
+    content: [{ type: "tool-call", id: callId, name: "write", arguments: "{}" }],
+    source: { kind: "model", provider: "mock", model: "scripted" }
+  });
+  const binder = createRuntimeEffectCommitmentBinderV1({
+    governanceDigest: Digest("c".repeat(64)),
+    harnessDigest: Digest("d".repeat(64))
+  });
+  const handle = binder.bind({
+    effectKind: deriveToolEffectKindV1("write"),
+    sessionId: session.header.sessionId,
+    runId,
+    candidateId,
+    turn: 1,
+    step: 1,
+    internalEffectId: callId,
+    protectedInput: createProtectedTextV1("{}"),
+    raw: { kind: "text", value: "{}" }
+  });
+  const binding = {
+    schemaVersion: 1 as const,
+    approvalId: "approved-not-started-approval",
+    scope: handle.commitment.effectKind,
+    risk: "side-effecting" as const,
+    callId,
+    name: "write",
+    commitment: handle.commitment
+  };
+  await session.append("turn/start", { turn: 1 }, { runId, candidateId });
+  await session.append("step/start", { turn: 1, step: 1 }, { runId, candidateId });
+  await session.append(
+    "assistant/message",
+    { turn: 1, step: 1, message: assistant },
+    { runId, candidateId }
+  );
+  const requested = await session.append(
+    "approval/requested",
+    { binding },
+    { runId, candidateId }
+  );
+  await session.append("approval/resolved", {
+    binding,
+    requestEventId: requested.eventId,
+    requestDigest: requested.digest,
+    decision: "approve_once",
+    resolution: "decided"
+  }, { runId, candidateId });
+  binder.dispose();
+
+  const before = projectSession(session.events);
+  assert.equal(before.status, "active");
+  assert.deepEqual(before.pendingApprovals.map((approval) => approval.state), ["approved"]);
+
+  const recovered = await recoverInterruptedSession(session);
+  assert.deepEqual(recovered.map((event) => event.type), ["tool/result", "step/end", "turn/end"]);
+  const result = recovered[0];
+  assert.equal(result?.type === "tool/result" ? result.payload.publicControls.error?.code : undefined, TOOL_NOT_STARTED);
+  assert.deepEqual(await recoverInterruptedSession(session), []);
+  assert.equal(projectSession(session.events).pendingApprovals.length, 0);
+});
+
+test("projection rejects an approval request forged across the proposal run or candidate", async () => {
+  const store = new InMemoryAgentSessionStore();
+  const session = await store.create({ sessionId: SessionId("approval-proposal-binding") });
+  const callId = CallId("proposal-bound-call");
+  const proposalRunId = RunId("proposal-run");
+  const proposalCandidateId = CandidateId("proposal-candidate");
+  const forgedRunId = RunId("forged-approval-run");
+  const forgedCandidateId = CandidateId("forged-approval-candidate");
+  const assistant = createAssistantMessage({
+    id: MessageId("proposal-bound-assistant"),
+    content: [{ type: "tool-call", id: callId, name: "write", arguments: "{}" }],
+    source: { kind: "model", provider: "mock", model: "scripted" }
+  });
+  const binder = createRuntimeEffectCommitmentBinderV1({
+    governanceDigest: Digest("e".repeat(64)),
+    harnessDigest: Digest("f".repeat(64))
+  });
+  const handle = binder.bind({
+    effectKind: deriveToolEffectKindV1("write"),
+    sessionId: session.header.sessionId,
+    runId: forgedRunId,
+    candidateId: forgedCandidateId,
+    turn: 1,
+    step: 1,
+    internalEffectId: callId,
+    protectedInput: createProtectedTextV1("{}"),
+    raw: { kind: "text", value: "{}" }
+  });
+  await session.append("turn/start", { turn: 1 }, {
+    runId: proposalRunId,
+    candidateId: proposalCandidateId
+  });
+  await session.append("step/start", { turn: 1, step: 1 }, {
+    runId: proposalRunId,
+    candidateId: proposalCandidateId
+  });
+  await session.append("assistant/message", { turn: 1, step: 1, message: assistant }, {
+    runId: proposalRunId,
+    candidateId: proposalCandidateId
+  });
+  await session.append("approval/requested", {
+    binding: {
+      schemaVersion: 1,
+      approvalId: "forged-proposal-approval",
+      scope: handle.commitment.effectKind,
+      risk: "side-effecting",
+      callId,
+      name: "write",
+      commitment: handle.commitment
+    }
+  }, { runId: forgedRunId, candidateId: forgedCandidateId });
+  binder.dispose();
+
+  assert.throws(
+    () => projectSession(session.events),
+    /approval|proposal|run|candidate/iu
+  );
 });
