@@ -24,6 +24,12 @@ import {
 } from "@mn/agent-protocol";
 
 import { ModelOutcomePersistenceError } from "./errors.js";
+import {
+  classifyHttpUsageV1,
+  dispatchHttpRequest,
+  type HttpDispatchResult,
+  type HttpResponseSnapshot
+} from "./http-transport.js";
 import { parseSse, type SseEvent } from "./sse.js";
 import type { LlmAttemptAuditSink, LlmStreamExecutionContext } from "./runtime.js";
 
@@ -96,14 +102,6 @@ const ABORTED = Symbol("model-operation-aborted");
 
 class ModelReceiptObserverError extends Error {}
 
-interface NativeResponseSnapshot {
-  readonly status: number;
-  readonly ok: boolean;
-  readonly body: ReadableStream<Uint8Array> | null;
-}
-
-const responseStatusGetter = Object.getOwnPropertyDescriptor(Response.prototype, "status")?.get;
-const responseBodyGetter = Object.getOwnPropertyDescriptor(Response.prototype, "body")?.get;
 const abortSignalAbortedGetter = Object.getOwnPropertyDescriptor(AbortSignal.prototype, "aborted")?.get;
 
 type UnknownRecord = Record<string, unknown>;
@@ -147,32 +145,6 @@ function exactDataArray(value: unknown, label: string): readonly unknown[] {
     output.push(descriptor.value);
   }
   return output;
-}
-
-function snapshotNativeResponse(value: unknown): NativeResponseSnapshot {
-  if (typeof value !== "object" || value === null || utilTypes.isProxy(value) || !(value instanceof Response)
-    || responseStatusGetter === undefined || responseBodyGetter === undefined) {
-    throw new TypeError("model fetch returned an invalid response");
-  }
-  let status: unknown;
-  let body: unknown;
-  try {
-    status = Reflect.apply(responseStatusGetter, value, []);
-    body = Reflect.apply(responseBodyGetter, value, []);
-  } catch {
-    throw new TypeError("model fetch returned an invalid response");
-  }
-  if (!Number.isSafeInteger(status) || (status as number) < 100 || (status as number) > 599) {
-    throw new TypeError("model fetch returned an invalid response");
-  }
-  if (body !== null && (!(body instanceof ReadableStream) || utilTypes.isProxy(body))) {
-    throw new TypeError("model fetch returned an invalid response");
-  }
-  return Object.freeze({
-    status: status as number,
-    ok: (status as number) >= 200 && (status as number) <= 299,
-    body: body as ReadableStream<Uint8Array> | null
-  });
 }
 
 function snapshotSecretRef(value: unknown): ModelSecretRef {
@@ -323,26 +295,6 @@ function isAborted(signal: AbortSignal | undefined): boolean {
   } catch {
     return true;
   }
-}
-
-function createAbortSignalBridge(source: AbortSignal | undefined): Readonly<{
-  signal: AbortSignal | undefined;
-  dispose: () => void;
-}> {
-  if (source === undefined) return Object.freeze({ signal: undefined, dispose: () => undefined });
-  const controller = new AbortController();
-  let active = true;
-  const onAbort = (): void => { controller.abort(); };
-  EventTarget.prototype.addEventListener.call(source, "abort", onAbort, { once: true });
-  if (isAborted(source)) onAbort();
-  return Object.freeze({
-    signal: controller.signal,
-    dispose: () => {
-      if (!active) return;
-      active = false;
-      EventTarget.prototype.removeEventListener.call(source, "abort", onAbort);
-    }
-  });
 }
 
 async function awaitAbortable<T>(operation: Promise<T>, signal: AbortSignal | undefined): Promise<T | typeof ABORTED> {
@@ -560,9 +512,13 @@ function usageSnapshot(usage: MutableUsage): {
   complete?: TokenUsage;
 } {
   const partial = Object.freeze({ ...usage });
-  const count = Object.keys(partial).length;
-  if (count === 0) return { state: "missing" };
-  if (partial.inputTokens === undefined || partial.outputTokens === undefined) {
+  const classified = classifyHttpUsageV1({
+    observed: Object.keys(partial).length > 0,
+    ...(partial.inputTokens === undefined ? {} : { inputTokens: partial.inputTokens }),
+    ...(partial.outputTokens === undefined ? {} : { outputTokens: partial.outputTokens })
+  });
+  if (classified.state === "missing") return { state: "missing" };
+  if (classified.state === "partial") {
     return { state: "partial", partial };
   }
   return {
@@ -941,16 +897,13 @@ export class HttpModelAdapter {
       }
 
       let outbound: Request;
-      const requestSignal = createAbortSignalBridge(stableRequest.signal);
       try {
         outbound = new Request(routeEndpoint(route), {
           method: "POST",
           headers: requestHeaders(route, secretValue),
-          body: JSON.stringify(requestBody(route, stableRequest)),
-          ...(requestSignal.signal === undefined ? {} : { signal: requestSignal.signal })
+          body: JSON.stringify(requestBody(route, stableRequest))
         });
       } catch {
-        requestSignal.dispose();
         await publishAttemptReceipt({
           schemaVersion: 1,
           providerId: route.providerId,
@@ -972,13 +925,16 @@ export class HttpModelAdapter {
         return;
       }
 
-      let response: NativeResponseSnapshot;
+      let dispatch: HttpDispatchResult | undefined;
+      let response: HttpResponseSnapshot;
       try {
-        const fetched = await awaitAbortable(this.fetchImpl(outbound), stableRequest.signal);
-        if (fetched === ABORTED) throw new Error("MODEL_FETCH_CANCELLED");
-        response = snapshotNativeResponse(fetched);
+        dispatch = await dispatchHttpRequest({
+          request: outbound,
+          ...(stableRequest.signal === undefined ? {} : { signal: stableRequest.signal }),
+          fetch: this.fetchImpl
+        });
+        response = dispatch.response;
       } catch {
-        requestSignal.dispose();
         const cancelled = isAborted(stableRequest.signal);
         await publishAttemptReceipt({
           schemaVersion: 1,
@@ -1056,7 +1012,7 @@ export class HttpModelAdapter {
         }
         try {
           for await (const event of parseSse(response.body as unknown as AsyncIterable<Uint8Array>, {
-            ...(requestSignal.signal === undefined ? {} : { signal: requestSignal.signal })
+            ...(dispatch?.signal === undefined ? {} : { signal: dispatch.signal })
           })) {
             const chunks = route.apiFormat === "openai_chat"
               ? decodeOpenAiChat(event, state)
@@ -1111,7 +1067,7 @@ export class HttpModelAdapter {
         }
         return;
       } finally {
-        requestSignal.dispose();
+        dispatch?.dispose();
         if (failureCode === undefined && outcome === "failed") {
           outcome = "interrupted";
           failureCode = isAborted(stableRequest.signal) ? "cancelled" : "stream_interrupted";

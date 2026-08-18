@@ -6,3 +6,4 @@ export * from "./runtime.js";
 export * from "./model-client.js";
 export * from "./scripted-adapter.js";
 export * from "./sse.js";
+export * from "./http-transport.js";

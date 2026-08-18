@@ -1,6 +1,13 @@
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import {
+  HttpTransportError,
+  classifyHttpUsageV1,
+  dispatchHttpRequest,
+  type HttpDispatchResult,
+  type HttpResponseSnapshot
+} from "@mn/agent-llm";
 import type {
   ManagedAgentApp,
   ProxyReplayRecord,
@@ -511,6 +518,7 @@ export class LocalProxyServer {
       let dispatchIntent: ProviderUsageDispatchIntent | undefined;
       let dispatchCommitted = false;
       let dispatchPhase: ProviderDispatchPhase | undefined;
+      let upstreamDispatch: HttpDispatchResult | undefined;
       try {
         const {
           routedRequest,
@@ -597,7 +605,11 @@ export class LocalProxyServer {
           }
         }
         dispatchPhase = "fetch";
-        const upstream = await fetchWithTimeout(upstreamRequest, this.upstreamTimeoutMs);
+        upstreamDispatch = await dispatchHttpRequest({
+          request: upstreamRequest,
+          timeoutMs: this.upstreamTimeoutMs
+        });
+        const upstream = upstreamDispatch.response;
         statusCode = upstream.status;
         if (shouldFailover(statusCode) && hasFallback) {
           dispatchPhase = "response_read";
@@ -669,11 +681,7 @@ export class LocalProxyServer {
               );
             }
             authoritativeStreamUsage = usage.usage;
-            streamSource = new Response(rawStreamBody, {
-              status: upstream.status,
-              statusText: upstream.statusText,
-              headers: upstream.headers
-            });
+            streamSource = upstream.withBody(rawStreamBody);
           }
           dispatchPhase = "stream";
           const streamResponse = governedEnterprise
@@ -961,6 +969,8 @@ export class LocalProxyServer {
           response.destroy(error instanceof Error ? error : undefined);
         }
         return;
+      } finally {
+        upstreamDispatch?.dispose();
       }
     }
 
@@ -1502,11 +1512,14 @@ function authoritativeUsageState(body: Buffer): "complete" | "partial" | "missin
     .some((field) => valid(field));
   const outputPresent = ["output_tokens", "completion_tokens", "outputTokens"]
     .some((field) => valid(field));
-  if (inputPresent && outputPresent) return "complete";
   const anyUsage = Object.keys(usage).some((field) =>
     /token/i.test(field) && valid(field)
   );
-  return anyUsage ? "partial" : "missing";
+  return classifyHttpUsageV1({
+    observed: anyUsage,
+    ...(inputPresent ? { inputTokens: 0 } : {}),
+    ...(outputPresent ? { outputTokens: 0 } : {})
+  }).state;
 }
 
 function authoritativeEventStreamUsage(body: Buffer): {
@@ -1565,8 +1578,14 @@ function authoritativeEventStreamUsage(body: Buffer): {
       sawUsage = sawUsage || Object.keys(source).some((name) => /token/iu.test(name));
     }
   }
+  const classification = classifyHttpUsageV1({
+    observed: sawUsage,
+    ...(inputTokens === undefined ? {} : { inputTokens }),
+    ...(outputTokens === undefined ? {} : { outputTokens })
+  });
+  if (classification.state !== "complete") return { state: classification.state };
   if (inputTokens === undefined || outputTokens === undefined) {
-    return { state: sawUsage ? "partial" : "missing" };
+    throw new TypeError("complete provider usage is missing aggregate counters");
   }
   if (!sawTerminalMarker) {
     // A clean HTTP EOF is not an application-level SSE completion signal.
@@ -2656,25 +2675,13 @@ function parseJsonObject(body: Buffer): Record<string, unknown> {
   }
 }
 
-async function fetchWithTimeout(
-  request: Request,
-  timeoutMs: number
-): Promise<Response> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(request, { signal: controller.signal });
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
 function shouldFailover(statusCode: number): boolean {
   return statusCode === 429 || statusCode >= 500;
 }
 
 function isAbortError(error: unknown): boolean {
-  return error instanceof DOMException && error.name === "AbortError";
+  return error instanceof HttpTransportError
+    && (error.code === "aborted" || error.code === "timeout");
 }
 
 function joinUrl(baseUrl: string, requestUrl: string): string {
@@ -2688,7 +2695,7 @@ function joinUrl(baseUrl: string, requestUrl: string): string {
 
 function writeUpstreamResponse(
   response: ServerResponse,
-  upstream: Response,
+  upstream: HttpResponseSnapshot,
   body: Buffer
 ): void {
   const headers = buildResponseHeaders(upstream);
@@ -2747,7 +2754,7 @@ function bufferedServerResponse(): ServerResponse {
 
 async function streamUpstreamResponse(
   response: ServerResponse,
-  upstream: Response,
+  upstream: HttpResponseSnapshot,
   conversion: ResponseConversion | undefined,
   requestBody: Buffer
 ): Promise<StreamUsageResult> {
@@ -2825,7 +2832,7 @@ function startResponseBodyRecording(response: ServerResponse): () => Buffer {
 
 async function streamResponsesAsAnthropic(
   response: ServerResponse,
-  upstream: Response,
+  upstream: HttpResponseSnapshot,
   requestBody: Buffer
 ): Promise<StreamUsageResult> {
   const reader = upstream.body?.getReader();
@@ -2877,7 +2884,7 @@ async function streamResponsesAsAnthropic(
 
 async function streamChatCompletionsAsAnthropic(
   response: ServerResponse,
-  upstream: Response,
+  upstream: HttpResponseSnapshot,
   requestBody: Buffer
 ): Promise<StreamUsageResult> {
   const reader = upstream.body?.getReader();
@@ -2929,7 +2936,7 @@ async function streamChatCompletionsAsAnthropic(
 
 async function streamChatCompletionsAsResponses(
   response: ServerResponse,
-  upstream: Response,
+  upstream: HttpResponseSnapshot,
   requestBody: Buffer
 ): Promise<StreamUsageResult> {
   const reader = upstream.body?.getReader();
@@ -3795,9 +3802,9 @@ function writeSseEvent(
   response.write(`data: ${JSON.stringify(data)}\n\n`);
 }
 
-function buildResponseHeaders(upstream: Response): Record<string, string> {
+function buildResponseHeaders(upstream: HttpResponseSnapshot): Record<string, string> {
   const headers: Record<string, string> = {};
-  upstream.headers.forEach((value, key) => {
+  upstream.forEachHeader((value, key) => {
     if (
       key !== "transfer-encoding" &&
       key !== "content-encoding" &&
@@ -3809,8 +3816,8 @@ function buildResponseHeaders(upstream: Response): Record<string, string> {
   return headers;
 }
 
-function isEventStream(upstream: Response): boolean {
-  return (upstream.headers.get("content-type") ?? "")
+function isEventStream(upstream: HttpResponseSnapshot): boolean {
+  return (upstream.header("content-type") ?? "")
     .toLowerCase()
     .includes("text/event-stream");
 }

@@ -91,6 +91,15 @@ fact is recovered as an unknown, interrupted outcome and is never replayed
 automatically. These records are local audit facts; they are not provider-signed
 billing evidence.
 
+Agent model traffic and the local compatibility proxy share one bounded HTTP
+dispatch boundary. It validates native Request/Response objects without
+invoking caller accessors, snapshots a capped header view, races cancellation
+and timeout even when fetch does not cooperate, and normalizes transport and
+body-read failures without reflecting upstream exception text. The transport
+does not persist headers or response bytes. The local proxy remains responsible
+for client protocol conversion, enterprise accounting, and replay policy; the
+Agent runtime never performs a post-dispatch automatic provider fallback.
+
 The planned macOS sandbox combines Seatbelt with an isolated canonical Git
 worktree. It is defense in depth, not a virtual machine or Docker-equivalent
 security boundary. If the required sandbox probe fails, command execution must
