@@ -1,6 +1,6 @@
 # 木牛 macOS 桌面端
 
-木牛桌面端采用 Tauri 2 + React。首版只面向 Claude Code 与 Codex，连接本地 mn API 获取状态。
+木牛桌面端采用 Tauri 2 + React，连接本地 mn API 管理内嵌 Agent、模型 Provider、会话、审批和可观测性。运行桌面端不要求安装 Claude Code 或 Codex CLI；两者的配置、历史会话和 legacy executor 页面只用于可选兼容与迁移。
 
 ```bash
 npm run dev:api

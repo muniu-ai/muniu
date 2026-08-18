@@ -1,10 +1,10 @@
 # mn（木牛）
 
-`mn` 是面向企业微服务研发场景的 AI Coding Agent 控制平面。它把 Claude Code 与 Codex CLI 作为同级执行器，围绕项目、任务、候选实现、隔离工作区、确定性门禁、候选对比和审计事件组织一次可恢复、可验证的工程闭环。
+`mn` 是面向企业微服务研发场景的 AI Coding Agent 控制平面。它以内嵌 Agent 内核直接调用已配置的模型 Provider API，围绕项目、任务、候选实现、隔离工作区、确定性门禁、候选对比和审计事件组织一次可恢复、可验证的工程闭环。
 
 中文名“木牛”取自“木牛流马”之意：它不是替代工匠的魔法，而是服务工程运输、调度和供给的机械化载具。`mn` 也取这个含义，把分散的 agent、候选实现、门禁和审批装进一套可搬运、可追踪、可复用的工程流程里。
 
-当前仓库同时提供 `local` 与 `enterprise` profile。local 保留桌面端、单机 SSOT 和 classic-v1 体验；enterprise 提供版本化 Spec、可定制 Standard Pack、不可变 Governance/Harness、受限 Loop、OIDC/RBAC、PostgreSQL queue/metadata、S3-compatible artifact、OTLP 和追加式审计。默认执行器仍是 Claude Code 与 Codex CLI；Mock 模式适合 CI、演示和排障。
+当前仓库同时提供 `local` 与 `enterprise` profile。local 保留桌面端、单机 SSOT 和 classic-v1 体验；enterprise 提供版本化 Spec、可定制 Standard Pack、不可变 Governance/Harness、受限 Loop、OIDC/RBAC、PostgreSQL queue/metadata、S3-compatible artifact、OTLP 和追加式审计。内嵌 Agent 会话是默认模型执行路径，运行木牛不要求安装 Claude Code 或 Codex CLI；二者只作为显式启用的 legacy 兼容执行器和本地配置/会话集成目标。Mock 模式适合 CI、演示和排障。
 
 ## 目录
 
@@ -20,7 +20,7 @@
 - [HTTP API 使用手册](#http-api-使用手册)
 - [完整案例一：Mock 模式端到端跑通](#完整案例一mock-模式端到端跑通)
 - [完整案例二：策略拒绝与人工审批](#完整案例二策略拒绝与人工审批)
-- [完整案例三：真实 Claude Code/Codex 执行器](#完整案例三真实-claude-codecodex-执行器)
+- [完整案例三：可选 legacy Claude Code/Codex 执行器](#完整案例三可选-legacy-claude-codecodex-执行器)
 - [完整案例四：纯 HTTP API 流程](#完整案例四纯-http-api-流程)
 - [门禁与候选选择](#门禁与候选选择)
 - [工作区与数据](#工作区与数据)
@@ -39,7 +39,7 @@
 
 - 在一个仓库或 monorepo 中注册项目，并自动发现服务边界。
 - 把自然语言需求转成结构化任务，指定目标服务、验收标准、候选数量和门禁。
-- 同时或轮换使用 Claude Code 与 Codex 生成多个候选实现。
+- 通过内嵌 Agent 使用一个或多个模型 Provider 生成候选实现。
 - 在隔离工作区里运行候选实现，避免直接污染源仓库。
 - 用 `test`、`typecheck`、`lint` 和 verifier 信号筛选 winner。
 - 对跨服务任务或高风险任务保留人工审批状态。
@@ -55,7 +55,7 @@
 
 - 本地 API：项目注册、项目查询、仓库索引、任务创建、后台 run 创建、SSE 事件流、artifact 查询/内容下载、审批、取消和显式 replacement resume。
 - 本地 CLI：`init`、`doctor`、`diagnostics export`、`provider list/add/export/import/enable/test/delete`、`proxy status/start/stop/logs/health/health-reset/takeover/restore`、`usage summary/requests/models`、`session list/show/export`、`artifact-store summary/cleanup`、`mcp list/add/project`、`prompt list/add/activate`、`skill discover/list/add/registry-sync/registry-profile/install/uninstall/delete`、`project register`、`project index`、`task create`、`run`、`run worker`、`run workers`、`run artifacts`、`run artifacts-download`、`run artifact`、`run resume`、`run cleanup`、`run watch`、`gates report`；`provider add` 可通过 flags 写入 legacy replay opt-in 和工具级 replay policy。
-- Provider 管理：Claude/Codex provider 预设、本地 SSOT、加密本地 secret vault、可选 macOS Keychain backend、duplicate、安全导入/导出、`mniu://import/provider` 深链导入预览、live HTTP probe、临时 HOME 配置投影、Codex `auth.json` 默认保护。
+- Provider 管理：内嵌 Agent、Claude/Codex 兼容 provider 预设、本地 SSOT、加密本地 secret vault、可选 macOS Keychain backend、duplicate、安全导入/导出、`mniu://import/provider` 深链导入预览、live HTTP probe、临时 HOME 配置投影、Codex `auth.json` 默认保护。
 - 配置适配器：Claude `settings.json` 与 Codex `config.toml` 结构化读写、原子写入、自动备份、dry-run。
 - 本地代理基础：可启动/停止本地 HTTP/SSE proxy，按 Claude/Codex 当前 provider 转发请求，记录请求日志、token usage、可选成本估算、run/candidate 关联和 provider health，并在 429/5xx/timeout 时切到后备 provider；连续失败会打开基础熔断并临时跳过异常 provider，默认阈值/窗口为 3 次/60 秒，也可通过 provider `config.healthPolicy.failureThreshold` 和 `config.healthPolicy.circuitOpenMs` 调整，桌面 Provider 表单也可编辑这两个字段；用户可通过 API/CLI/桌面清除指定 provider/app 的 health/circuit 记录，让下一次真实请求重新评估。proxy 支持从内部 header 或 `/mn/runs/:runId/candidates/:candidateId/...` 路径前缀恢复关联，并在转发 upstream 前剔除内部元数据；API 在 proxy 运行时会给 executor 进程注入带此前缀的 base URL。已关联 run/candidate 的非流式和文本 event-stream 2xx provider 响应会写入本地 replay cache，重复请求命中时返回 `x-mn-proxy-replay: hit` 并在 proxy logs 标记 `replayed`；包含 tool-call 的响应默认不缓存也不回放；provider 可用 `config.toolReplayPolicy.tools` 按工具名声明 `readonly` 或 `idempotent` 后允许安全工具 replay，旧 `config.replayToolCalls: true` 仍作为兼容的全量 opt-in。
 - Provider replay policy 桌面编辑：Provider 表单可编辑 legacy `replayToolCalls` checkbox，以及 readonly、idempotent、side-effect 三类工具名；保存后写入 `config.toolReplayPolicy.tools`，由 local proxy 按工具级安全契约决定是否 replay。
@@ -66,7 +66,7 @@
 - Mac 桌面端 scaffold：Tauri 2 + React，展示 API、Claude/Codex、Provider、Extensions、Proxy、Observability、任务闭环和 Settings 状态；Provider 行可新增、编辑、复制、删除、导入、导出、dry-run 后启用、触发 live HTTP probe 并展示 status/error 与 latency；Settings 面板可手动预览 `mniu://import/provider|mcp|prompt` 深链并在确认后导入本地 SSOT，Tauri 配置也已注册 `mniu` scheme；Settings Doctor 区块可展示 process env、shell profile、launchd LaunchAgent 和 VS Code/Cursor/Windsurf user settings 中的 managed env 冲突，并对 shell profile、launchd 与 IDE settings 冲突执行 dry-run 预览和确认清理，确认时由 API 先备份再删除匹配项；process env 冲突会显示 `unset NAME` manual action，不会显示成自动清理；同一区块也可导出不含原始 secret 的 `mniu.diagnostics` JSON 排障包，包含 doctor/runtime/settings、脱敏后的本地日志尾部样本、专属 app 日志尾部样本和 Muniu-scoped macOS DiagnosticReports 尾部样本；Extensions 面板可按应用查看 MCP、Prompt、Skills 和本地发现的 skill source，支持基础新增/编辑/删除、保存/选择 registry trust profile、带 trusted key ID / revoked key ID / release metadata 要求的 signed registry sync 预览确认，并在投影、激活、安装前先 dry-run 再确认写入；Observability 面板展示 usage 指标、provider health/circuit 状态、degraded/circuit provider health reset、session 搜索/翻页/预览/详情、默认开启的 session 脱敏开关、当前 session JSON 导出按钮、本地敏感内容提示和 proxy logs，关联日志会显示短 run/candidate；Task Fusion 面板可从桌面创建项目/task、启动后台 mock run、查看 candidates/gates/events/artifacts、按 candidate/kind/persisted 筛选 artifacts、下载单个 artifact content 或当前筛选的 artifacts archive、查看 artifact store 汇总、dry-run/确认本地 retention cleanup、查看 worker fleet summary 与 idle/running/stale worker、取消运行中 run、对 failed/cancelled run 启动 replacement resume，并在 Run Detail 展示 run-scoped usage、candidate workspace 打开入口和 terminal run workspace cleanup 确认入口；桌面 Provider/Session/artifact/archive 导出下载在 Tauri 环境中优先打开原生保存对话框，非 Tauri 或保存失败时回退浏览器下载；Settings 面板支持 theme、关闭行为、开机自启、轻量模式和 API URL，开机自启在 Tauri 环境通过 autostart plugin 同步 login item，非 Tauri/E2E 环境回退为偏好保存；`npm run verify:desktop-extensions`、`npm run verify:desktop-observability`、`npm run verify:desktop-task-fusion` 与 `npm run verify:desktop-settings` 可重复验证核心交互并生成截图证据。
 - 桌面关闭行为：Tauri 环境会订阅当前窗口 `onCloseRequested`，`quit` 放行原生关闭，`tray` 阻止关闭并隐藏窗口，`lightweight` 阻止关闭后销毁主 WebView；托盘打开入口会在主窗口不存在时按 Tauri window config 重建。Rust 已编译并通过测试，universal packaged app 也已运行；真实已安装窗口的 close/tray/lightweight 交互仍需系统级验收。
 - v0.1.0 开源发布工程：制品范围固定为 `muniu-v0.1.0-source.tar.gz`、Node 22 的 `muniu-v0.1.0-node22-macos-arm64.tar.gz` / `muniu-v0.1.0-node22-macos-x64.tar.gz` portable 包，以及 `ghcr.io/muniu-ai/muniu:v0.1.0` API/demo 镜像。v0.1.0 不发布或启用桌面运行时 updater，也不生成 updater archive、manifest 或 `latest.json`；现有 unsigned universal APP/ZIP/DMG 工具仅用于后续签名桌面发布的本地验证，不属于 v0.1.0 公开制品。
-- 执行器：Claude Code、Codex CLI、Mock executor。
+- 执行器：内嵌 Agent 为默认路径；Claude Code、Codex CLI 为可选 legacy 兼容执行器；Mock executor 用于测试和演示。
 - 工作区：默认 `isolated-worktree`；Git 仓库优先使用 `git worktree`，非 Git 目录复制源码 snapshot。
 - 门禁：classic-v1 保持历史兼容；governed-increment-v1 使用 capability registry，支持 Node、Go、Java、Python、Rust 项目命令，以及 Spec、protected path、diff scope、OpenAPI/AsyncAPI contract、migration safety 和 security adapter。企业 required Gate fail-closed。
 - 策略：跨服务任务默认需要人工审批；违反策略的任务会被 API 拒绝。
@@ -88,10 +88,11 @@ flowchart TD
   api --> store["MemoryStore"]
   api --> localstore["Local SSOT"]
   api --> worker["apps/worker"]
-  worker --> claude["Claude Code Executor"]
-  worker --> codex["Codex Executor"]
-  claude --> workspace["Candidate Workspace"]
-  codex --> workspace
+  worker --> kernel["Embedded Agent Kernel"]
+  kernel --> provider["Model Provider API"]
+  kernel --> workspace["Candidate Workspace / Governed Tools"]
+  worker -.->|optional legacy| claude["Claude Code / Codex CLI"]
+  claude -.-> workspace
   workspace --> gates["Gate Engine + Verifier"]
   gates --> audit["Run Record / Events / Artifacts"]
 ```
@@ -110,13 +111,14 @@ flowchart TD
 | `packages/harness` | 确定性 context 编译、Gate/Sandbox 能力绑定、预算与不可变 HarnessManifest。 |
 | `packages/loop` | governed-increment-v1 七阶段、有界 repair、checkpoint/resume 与人工审批。 |
 | `packages/evidence` | Eval Asset、Trace Graph、drift、Learning Proposal 与成熟度指标。 |
-| `packages/provider-catalog` | Claude/Codex provider 类型、预设和脱敏工具。 |
+| `packages/provider-catalog` | 模型 Provider、consumer、预设和安全配置模型。 |
 | `packages/usage` | token usage 归一、代理请求日志聚合、用量 summary、session JSONL 索引和基于模型定价的基础成本估算。 |
 | `packages/store` | 本地 Provider/Projection/Proxy/MCP/Prompt/Skill SSOT 与加密本地 secret vault。 |
 | `packages/config-manager` | Claude/Codex live config 读写、备份、dry-run、环境变量冲突检测。 |
 | `packages/extensions` | MCP server、prompt preset 和 skill source 的本地模型、投影、prompt live backfill、skill registry 校验同步、skill copy/symlink 同步。 |
 | `packages/local-proxy` | 本地 HTTP/SSE proxy、provider 路由、请求日志、provider health 和基础故障转移/熔断。 |
-| `packages/executors` | Claude Code、Codex CLI 和 Mock executor。 |
+| `packages/agent-protocol`、`agent-session`、`agent-llm`、`agent-tools`、`agent-kernel`、`agent-host` | 内嵌 Agent 的协议、持久会话、模型流、工具边界、执行状态机和宿主。 |
+| `packages/executors` | 可选 Claude Code/Codex CLI legacy 适配器和 Mock executor。 |
 | `packages/verifier` | 候选评分、候选对比和 winner 选择。 |
 | `packages/connectors` | `.mn/project.yaml`、服务/字段所有权、契约/迁移发现与 L0–L4 影响分析。 |
 | `docs/TECHNICAL_DESIGN.md` | 技术实现设计。 |
@@ -126,10 +128,9 @@ flowchart TD
 
 - Node.js 22+
 - npm 11+
+- 使用内嵌 Agent 时只需要配置目标模型 Provider 及其 secret reference，不需要安装 Claude Code 或 Codex CLI。
 - Mock 模式不需要模型凭据。
-- 真实执行器模式需要：
-  - Claude Code CLI：`claude --version`
-  - Codex CLI：`codex --version`
+- 只有显式选择 legacy executor 时，才需要对应的 `claude` 或 `codex` binary。
 
 检查当前工具链：
 
@@ -295,9 +296,9 @@ node apps/api/dist/index.js
 - 没有模型凭据的环境。
 - 排查 policy、workspace、gate 和 verifier 行为。
 
-### 真实执行器模式
+### 内嵌 Agent 模式（默认）
 
-不设置 `MN_USE_MOCK_EXECUTORS=1` 时，API 会使用真实 Claude Code 和 Codex CLI。
+版本化 `/v1/agent-sessions` REST/SSE 接口通过内嵌 Agent Kernel 直接使用会话绑定的模型 Provider。Provider secret 在请求边界临时解析，不进入事件、回执或日志；该路径不启动也不探测 Claude Code/Codex CLI。
 
 启动方式：
 
@@ -306,6 +307,12 @@ mkdir -p /tmp/mn-worktrees
 MN_WORKSPACE_ROOT=/tmp/mn-worktrees \
 node apps/api/dist/index.js
 ```
+
+在 Provider 管理中启用 `agent` consumer，并为会话选择已启用的 `providerId` / `modelId`。会话创建、续轮、事件续传、取消、关闭和审批均使用版本化 Agent API；工具副作用只会在审批事实持久化后执行。
+
+### 可选 legacy CLI 执行器模式
+
+`classic-v1` 任务/run 兼容路径仍可显式选择 Claude Code 或 Codex CLI。只有使用这条兼容路径时才需要安装相应 binary；它不是木牛启动、Provider 管理或内嵌 Agent 会话的前置条件。
 
 Claude Code executor 默认命令形态：
 
@@ -325,13 +332,13 @@ codex --ask-for-approval never exec \
   --ephemeral <prompt>
 ```
 
-真实模式建议：
+legacy CLI 模式建议：
 
-- 先用 Mock 模式跑通控制平面。
+- 优先使用内嵌 Agent；仅在迁移已有 classic-v1 工作流时启用 legacy executor。
 - 把 `MN_WORKSPACE_ROOT` 指到临时目录或专用磁盘路径。
 - 第一次接真实模型时，把 `--providers` 设为单个 provider，并把 `--candidates` 设为 `1`。
 - 对跨服务、迁移、权限、数据写入任务使用 `--approval on-risk` 或 `--approval before-merge`。
-- 真实执行器可能产生模型费用，也可能在 candidate workspace 中修改文件。
+- legacy executor 可能产生模型费用，也可能在 candidate workspace 中修改文件。
 
 ## CLI 使用手册
 
@@ -376,7 +383,7 @@ Initialized .mn/config.json
 
 ### `mn doctor`
 
-检查 API 和本机执行器 binary：
+检查 API、内嵌 Agent 配置和可选 legacy executor binary：
 
 ```bash
 node apps/cli/dist/index.js doctor
@@ -395,8 +402,8 @@ Codex CLI: failed (codex: spawn codex ENOENT)
 
 说明：
 
-- Mock 模式下，Claude/Codex binary 检查失败不影响 mock run。
-- 真实模式下，需要先修复 binary 路径或设置 `MN_CLAUDE_BINARY`、`MN_CODEX_BINARY`。
+- 内嵌 Agent 与 Mock 模式都不依赖 Claude/Codex binary；对应检查失败只是可选兼容能力不可用。
+- 只有显式使用 legacy executor 时，才需要修复 binary 路径或设置 `MN_CLAUDE_BINARY`、`MN_CODEX_BINARY`。
 - 新版 API 会额外返回 Claude/Codex 配置目录和 `ANTHROPIC_API_KEY`、`ANTHROPIC_BASE_URL`、`OPENAI_API_KEY` 环境变量冲突，密钥会脱敏显示；shell profile 中明确写出的 `export ...`、`declare/typeset -x ...`、fish `set -gx/-Ux ...`、fish `conf.d/*.fish`、csh/tcsh `setenv ...`，以及用户 `LaunchAgents/*.plist` 的 `EnvironmentVariables`、VS Code/Cursor/Windsurf user `settings.json` 的 `terminal.integrated.env.*`，都会带来源、文件和行号显示。
 
 环境变量清理默认只 dry-run；没有指定 `--source` 时保持 shell profile-only 兼容行为，确认时会先备份目标文件到 `~/.mniu/backups/env-profile-cleanup/`，再删除匹配项。当前进程里的 `process.env` 无法由子进程反向修改父 shell 环境，因此 `/v1/system/env-cleanup` 会返回 manual action，例如 `unset OPENAI_API_KEY`，并提示重启相关终端或 IDE；launchd LaunchAgent 和 IDE settings 需要显式 `--source`：
@@ -1437,9 +1444,9 @@ curl -sS -X POST "http://127.0.0.1:7318/v1/runs/$RUN_ID/approve" \
 
 期望审批后状态为 `completed`。
 
-## 完整案例三：真实 Claude Code/Codex 执行器
+## 完整案例三：可选 legacy Claude Code/Codex 执行器
 
-这个案例会调用真实执行器。请先确认你知道本机 Claude Code 和 Codex CLI 的登录、权限、费用和 sandbox 行为。
+内嵌 Agent 用户无需执行本案例。这里只演示迁移旧 `classic-v1` 工作流时如何显式调用 legacy executor；请先确认你知道本机 Claude Code 和 Codex CLI 的登录、权限、费用和 sandbox 行为。
 
 ### 1. 检查 binary
 
@@ -1455,7 +1462,7 @@ export MN_CLAUDE_BINARY=/absolute/path/to/claude
 export MN_CODEX_BINARY=/absolute/path/to/codex
 ```
 
-### 2. 启动真实模式 API
+### 2. 启动 legacy executor 兼容模式 API
 
 ```bash
 cd /path/to/muniu
@@ -1914,9 +1921,9 @@ cat .mn/config.json
 MN_API_URL=http://127.0.0.1:7318 node apps/cli/dist/index.js doctor
 ```
 
-### `Claude Code failed` 或 `Codex CLI failed`
+### 可选 legacy executor 报 `Claude Code failed` 或 `Codex CLI failed`
 
-先直接运行：
+如果没有启用 legacy executor，可以忽略此项，木牛内嵌 Agent 不受影响。显式启用后可先直接运行：
 
 ```bash
 claude --version
@@ -1930,7 +1937,7 @@ export MN_CLAUDE_BINARY=/absolute/path/to/claude
 export MN_CODEX_BINARY=/absolute/path/to/codex
 ```
 
-### Codex 报参数错误
+### 可选 legacy Codex executor 报参数错误
 
 当前代码生成的 Codex 参数形态是：
 
@@ -2065,7 +2072,7 @@ mn 的 v0.1 取舍来自 AI coding agent 研究和工程实践里的几个稳定
 
 ### 当前仓库
 
-- local：桌面、Provider/Proxy/Extensions SSOT、classic-v1、Claude Code/Codex/Mock executor。
+- local：桌面、Provider/Proxy/Extensions SSOT、版本化内嵌 Agent 会话，以及可选 classic-v1 Claude Code/Codex legacy executor 和 Mock executor。
 - enterprise：Spec/Governance/Harness/Loop/Evidence 领域包与动态 capability API。
 - 声明式签名 Standard Pack、Spec Kit 适配、微服务影响分析和多语言 Gate registry。
 - OIDC/JWT、租户/项目 RBAC、PostgreSQL metadata/queue/outbox、安全 claim、S3-compatible SigV4 artifact、OTLP 和追加式审计。

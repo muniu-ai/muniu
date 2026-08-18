@@ -1,8 +1,10 @@
 # 子计划 05：木牛控制面与产品集成实现计划
 
-> **致 Claude：** 必须使用子技能 dev-executing-plans 逐任务执行此计划。
+> **执行要求：** 使用 `dev-executing-plans` 逐任务执行此计划；计划执行不绑定任何外部 Agent CLI。
 
 **目标：** 将 builtin Agent 作为默认候选执行器接入治理 Loop，并向 CLI、API、桌面和旧数据提供兼容路径。
+
+**范围说明：** 版本化 Agent 会话和模型 Provider 调用已经由内嵌 runtime 执行，不依赖 Claude Code/Codex CLI。本计划只负责把同一 builtin runtime 接入仍保留的 classic `task/run` 产品面；不得把 legacy CLI 重新引入为隐式依赖或 fallback。
 
 **架构：** executeGovernedIncrement 继续控制 discovery、implementation、verification 与 repair；ExecutorRegistry 只切换执行实现。不可变 Harness binding 将上下文、权限、预算、停止条件和输出 schema 传入内循环。
 

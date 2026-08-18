@@ -2,12 +2,12 @@
 
 ## 1. 定位
 
-木牛 `mn` 是企业级微服务研发场景中的 AI Coding Agent 控制平面。名字取自“木牛流马”：取其工程化运输、调度和供给之意，把分散的 agent、候选实现、门禁和审批装进一套可搬运、可追踪、可复用的研发流程中。它不把 Claude Code 或 Codex 当成一次性命令，而是把它们纳入可恢复、可审计、可验证的工程闭环。
+木牛 `mn` 是企业级微服务研发场景中的 AI Coding Agent 控制平面。名字取自“木牛流马”：取其工程化运输、调度和供给之意，把分散的 agent、候选实现、门禁和审批装进一套可搬运、可追踪、可复用的研发流程中。默认执行路径是直接连接模型 Provider 的内嵌 Agent Kernel，不依赖 Claude Code 或 Codex CLI 进程。
 
 核心目标：
 
 - 将自然语言需求转化为结构化任务、候选实现、验证报告和审批建议。
-- 同级支持 Claude Code 与 Codex，允许单 provider、双 provider 或多候选运行。
+- 通过稳定模型协议支持 DeepSeek、OpenAI-compatible、OpenAI Responses 与 Anthropic Messages provider，并允许多候选运行。
 - 面向微服务系统提供架构影响分析、接口契约检查、数据迁移风险检查和 owner 审批。
 - 为长任务提供 checkpoint、compact summary、artifact 和 resume 能力。
 - 默认自托管、本地优先，不上传源码遥测。
@@ -28,10 +28,12 @@ flowchart TD
   cli -- "HTTP" --> api["apps/api"]
   api --> store["Task Store"]
   api --> worker["apps/worker"]
-  worker --> claude["Claude Code Executor"]
-  worker --> codex["Codex Executor"]
-  claude --> worktrees["Isolated Worktrees"]
-  codex --> worktrees
+  worker --> host["Embedded Agent Host"]
+  host --> kernel["Agent Kernel / Tools"]
+  kernel --> model["Model Provider API"]
+  kernel --> worktrees["Isolated Worktrees"]
+  worker -.->|optional legacy| legacy["Claude Code / Codex CLI"]
+  legacy -.-> worktrees
   worktrees --> gates["Gate Engine + Verifier"]
   gates --> audit["Artifacts / Audit / Events"]
 ```
@@ -47,7 +49,8 @@ flowchart TD
 - `packages/harness`：context、Gate/Sandbox capability、预算和不可变 Manifest 编译。
 - `packages/loop`：七阶段 governed workflow、有界 repair、checkpoint/resume 与审批。
 - `packages/evidence`：Eval Asset、Trace Graph、drift、Learning Proposal 与成熟度。
-- `packages/executors`：Claude Code、Codex、Mock executor 的适配层。
+- `packages/agent-*`：闭合协议、append-only 会话、LLM 流、工具授权、Kernel 与 Host 的内嵌 Agent 运行时。
+- `packages/executors`：可选 Claude Code/Codex CLI legacy 适配器和 Mock executor。
 - `packages/verifier`：候选评分、候选对比、LLM verifier 扩展点。
 - `packages/connectors`：Git 仓库索引、服务发现、契约发现，后续扩展 GitHub/GitLab/Slack/Feishu。
 
@@ -262,7 +265,9 @@ mn audit export
 
 桌面 close behavior 在 Tauri 环境订阅当前窗口 `onCloseRequested`：`quit` 不阻止原生关闭，`tray` 调用 `preventDefault()` 后隐藏当前窗口，`lightweight` 调用 native `enter_lightweight_mode` 销毁主 WebView，命令不可用时回退到 Tauri JS `destroy()`。托盘 `open` 会在 `main` 窗口不存在时用 `WebviewWindowBuilder::from_config()` 按原窗口配置重建主窗口，托盘 `light_mode` 会销毁现有主窗口。非 Tauri 浏览器验证环境只覆盖设置持久化。`npm run verify:desktop-close-behavior` 会静态校验 close-request listener、最新 settings ref、quit 放行、tray hide、lightweight destroy、native command、托盘重建和 listener cleanup；真实 macOS WebView 关闭按钮、托盘恢复和轻量模式压力 smoke 仍需 native build/E2E 证据。
 
-### 4.3 Executor Interface
+### 4.3 可选 legacy Executor Interface
+
+以下接口只服务于 `classic-v1` 兼容路径。内嵌 Agent 使用 `agent-protocol`、`agent-llm`、`agent-tools`、`agent-kernel` 与 `agent-host`，不会生成或启动外部 CLI 命令。
 
 ```ts
 export interface AgentExecutor {
@@ -422,7 +427,7 @@ v1 已有事件模型：
 
 当前测试覆盖 Spec revision/Spec Kit、规范单调合并/签名/waiver、Harness 确定性与 secret 脱敏、Gate runner/evidence、七阶段 Loop/预算/无进展/恢复、Eval/Trace/Learning、API/OIDC/RBAC/跨租户、PostgreSQL restart/reclaim/CAS、S3/OTLP、path traversal/symlink escape、Docker enforced sandbox、CLI 和桌面回归。企业 fixture 另外覆盖跨服务正例，以及 contract breaking、共享数据所有权、无 rollback 与 protected path 四类负例。
 
-仍属于外部生产验收而非仓库测试的范围：真实 Claude/Codex/provider smoke、企业 IdP/Vault/KMS、生产 scanner 规则库、remote sandbox fleet、数据库 HA/灾备、对象存储 lifecycle、集群容量/混沌、Apple 签名与公证。
+仍属于外部生产验收而非仓库测试的范围：真实模型 provider smoke、可选 legacy Claude/Codex executor smoke、企业 IdP/Vault/KMS、生产 scanner 规则库、remote sandbox fleet、数据库 HA/灾备、对象存储 lifecycle、集群容量/混沌、Apple 签名与公证。
 
 验收标准：
 
@@ -430,7 +435,7 @@ v1 已有事件模型：
 - `npm run typecheck` 通过。
 - `npm test` 通过。
 - Docker Compose enterprise E2E 完成 approved Spec → Governance/Harness → cross-service Gate/repair → owner approval → evidence/audit/learning。
-- Claude Code 与 Codex adapter 编译通过。
+- 内嵌 Agent 的协议、会话、模型、工具、Kernel、Host 与 REST/SSE 测试通过；可选 legacy adapter 保持编译通过。
 - 文档能让新工程师独立理解系统边界和实现路径。
 
 ## 12. 发布计划
@@ -439,7 +444,7 @@ v0.1.0 开源发布制品固定为 `muniu-v0.1.0-source.tar.gz`、Node 22 的 `m
 
 ### 当前
 
-- local/enterprise 双 profile、Claude Code/Codex/Mock executor。
+- local/enterprise 双 profile、内嵌 Agent 默认执行路径，以及可选 Claude Code/Codex legacy executor 和 Mock executor。
 - Spec/Governance/Harness/Loop/Evidence、动态 capabilities、微服务影响分析和多语言 Gate。
 - OIDC/RBAC、PostgreSQL、S3、OTLP、签名规范包、Docker Compose 企业验收 fixture。
 

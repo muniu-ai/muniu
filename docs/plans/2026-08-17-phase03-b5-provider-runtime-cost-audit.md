@@ -1,6 +1,6 @@
 # Phase03 B5 Provider Runtime 与成本审计实现计划
 
-> **致 Claude：** 必须使用子技能 dev-executing-plans 逐任务执行此计划。
+> **执行要求：** 使用 `dev-executing-plans` 逐任务执行此计划；计划执行不绑定任何外部 Agent CLI。
 
 **目标：** 让内嵌 Agent 从本地权威 Provider 配置安全构造真实三协议模型运行时，生成受保护、可恢复、成本状态精确的模型审计事实，并让 local-proxy 复用共同的安全传输核心。
 

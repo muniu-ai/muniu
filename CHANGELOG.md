@@ -8,11 +8,16 @@ during the Developer Preview.
 
 ### Planned
 
-- Embedded, event-sourced Agent runtime.
-- DeepSeek-first model provider with OpenAI-compatible and Anthropic Messages
-  adapters.
-- Versioned Agent session REST/SSE API and CLI session commands.
 - Built-in, policy-controlled tools and macOS fail-closed sandboxing.
+
+### Added
+
+- Embedded, event-sourced Agent runtime that connects directly to configured
+  model providers without requiring Claude Code or Codex CLI.
+- DeepSeek-first model provider with OpenAI-compatible, OpenAI Responses, and
+  Anthropic Messages adapters.
+- Versioned Agent session REST/SSE API, resumable sessions, durable approvals,
+  protected event history, and bounded model audit receipts.
 
 ## 0.1.0 - Unreleased
 
@@ -30,5 +35,5 @@ during the Developer Preview.
 - No npm package or signed/notarized desktop application is published.
 - The desktop runtime updater is not shipped; v0.1.x updates require an
   immutable new release and manual installation.
-- Claude Code and Codex CLI remain legacy executors until the embedded runtime
-  is integrated by the following sub-plans.
+- Claude Code and Codex CLI are optional legacy compatibility executors. They
+  are not installation or runtime prerequisites for embedded Agent sessions.

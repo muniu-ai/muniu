@@ -1,6 +1,6 @@
 # 子计划 04：完整工具集与安全边界实现计划
 
-> **致 Claude：** 必须使用子技能 dev-executing-plans 逐任务执行此计划。
+> **执行要求：** 使用 `dev-executing-plans` 逐任务执行此计划；计划执行不绑定任何外部 Agent CLI。
 
 **目标：** 提供接近 DSH 全工具集的内置能力，同时在 macOS 上默认 fail-closed。
 

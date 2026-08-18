@@ -1,6 +1,6 @@
 # 子计划 02：内嵌 Agent 核心实现计划
 
-> **致 Claude：** 必须使用子技能 dev-executing-plans 逐任务执行此计划。
+> **执行要求：** 使用 `dev-executing-plans` 逐任务执行此计划；计划执行不绑定任何外部 Agent CLI。
 
 **目标：** 在没有 Claude Code/Codex 可执行文件时，由进程内 mock 模型完成一轮 Agent 执行并产生可恢复事件日志。
 

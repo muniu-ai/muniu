@@ -2,19 +2,21 @@
 
 版本：2026-07-05
 
-命名说明：木牛取自“木牛流马”之意。诸葛亮的木牛流马常被理解为辅助运输、降低消耗、稳定供给的巧器；木牛项目也沿用这个寓意，定位为研发者在本机调度 Claude Code 与 Codex 的“运载与补给系统”，把供应商、配置、代理、会话、用量和任务闭环稳定送到需要的位置。
+> **历史文档（已被取代）：** 本计划记录 2026-07 的桌面兼容层设计，不再描述木牛的默认运行时。当前木牛以内嵌 Agent 直接连接模型 Provider API，不依赖 Claude Code 或 Codex CLI；本文中的“只管理 Claude Code 与 Codex”仅适用于可选 legacy 配置、会话迁移和 executor 兼容范围。当前权威设计见 `docs/plans/2026-08-15-muniu-v0.1-master-design.md`。
+
+命名说明：木牛取自“木牛流马”之意。诸葛亮的木牛流马常被理解为辅助运输、降低消耗、稳定供给的巧器；木牛项目也沿用这个寓意，把模型供应、配置、代理、会话、用量和任务闭环稳定送到需要的位置。下文仍保留当时围绕 Claude Code 与 Codex 兼容层的原始表述，以便追溯设计演进。
 
 ## 1. 目标结论
 
 木牛接下来不应复制 CC Switch 的全量产品范围，而应吸收其“本地配置控制面 + 桌面交互 + 代理观测”的成熟设计，叠加木牛当前已经具备的“任务 / run / candidate / gate 工程闭环”。
 
-最终产品定位：
+当前产品定位：
 
-> 木牛是面向 Claude Code 与 Codex 的本地优先 AI Coding Agent 管理平台。它同时管理本机 CLI 配置、供应商切换、本地代理、用量和会话，并把这些能力接入木牛已有的任务编排、候选执行和门禁验证流程。
+> 木牛是本地优先的 AI Coding Agent 控制平面。内嵌 Agent 直接连接模型 Provider；Claude Code 与 Codex 仅作为可选的本机配置、历史会话和 legacy executor 兼容目标。
 
 必须坚持的边界：
 
-- 只管理 Claude Code 和 Codex。
+- 核心运行时不依赖 Claude Code 或 Codex CLI；兼容层只管理这两类外部应用。
 - 不做 Gemini、OpenCode、OpenClaw、Hermes。
 - 不做 Claude Desktop。
 - 不做逆向 OAuth 代理，不复刻 CC Switch 的 Codex OAuth 反向代理能力。
@@ -669,7 +671,7 @@ mn desktop open
 交付物：
 
 - 本计划文档。
-- ADR：木牛只管理 Claude Code / Codex。
+- ADR：Claude Code / Codex 兼容范围（该历史 ADR 已由内嵌 Agent 架构取代）。
 - ADR：Mac desktop 技术栈选择。
 - ADR：SQLite local store 与 Postgres server store 分层。
 - provider/config/proxy 的领域模型草案。
