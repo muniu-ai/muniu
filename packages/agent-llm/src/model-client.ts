@@ -5,17 +5,27 @@ import { types as utilTypes } from "node:util";
 import {
   CallId,
   assertSafePublicControlIdV1,
+  createModelAttemptStartedV1,
+  createModelAttemptTerminalV1,
+  createModelPricingSnapshotV1,
+  createProtectedJsonViewV1,
   deepFreeze,
+  digestJson,
+  inspectModelPricingSnapshotV1,
   snapshotBoundedJsonValue,
   type FinishReason,
   type JsonValue,
   type LlmRequest,
   type Message,
+  type ModelAttemptStartedV1,
+  type ModelPricingSnapshotV1,
   type StreamChunk,
   type TokenUsage
 } from "@mn/agent-protocol";
 
+import { ModelOutcomePersistenceError } from "./errors.js";
 import { parseSse, type SseEvent } from "./sse.js";
+import type { LlmAttemptAuditSink, LlmStreamExecutionContext } from "./runtime.js";
 
 export type ModelApiFormat = "openai_chat" | "openai_responses" | "anthropic_messages";
 
@@ -29,6 +39,7 @@ export interface ModelProviderRoute {
   readonly apiFormat: ModelApiFormat;
   readonly baseUrl: string;
   readonly apiKeyRef?: ModelSecretRef;
+  readonly pricing?: ModelPricingSnapshotV1;
 }
 
 export interface ModelPartialUsage {
@@ -174,7 +185,7 @@ function snapshotSecretRef(value: unknown): ModelSecretRef {
 }
 
 function snapshotRoute(value: unknown): ModelProviderRoute {
-  const source = exactDataRecord(value, ["providerId", "apiFormat", "baseUrl", "apiKeyRef"], "model provider route");
+  const source = exactDataRecord(value, ["providerId", "apiFormat", "baseUrl", "apiKeyRef", "pricing"], "model provider route");
   assertSafePublicControlIdV1(source.providerId, "model provider identifier");
   if (source.apiFormat !== "openai_chat" && source.apiFormat !== "openai_responses" && source.apiFormat !== "anthropic_messages") {
     throw new TypeError("model provider API format is invalid");
@@ -202,11 +213,59 @@ function snapshotRoute(value: unknown): ModelProviderRoute {
     throw new TypeError("model provider base URL is invalid");
   }
   const apiKeyRef = source.apiKeyRef === undefined ? undefined : snapshotSecretRef(source.apiKeyRef);
+  const pricing = source.pricing === undefined
+    ? createModelPricingSnapshotV1({})
+    : inspectModelPricingSnapshotV1(source.pricing);
+  if (pricing === undefined) throw new TypeError("model provider pricing is invalid");
   return Object.freeze({
     providerId: source.providerId,
     apiFormat: source.apiFormat,
     baseUrl: parsed.toString(),
-    ...(apiKeyRef === undefined ? {} : { apiKeyRef })
+    ...(apiKeyRef === undefined ? {} : { apiKeyRef }),
+    pricing
+  });
+}
+
+function snapshotAttemptAudit(value: LlmStreamExecutionContext | undefined): LlmAttemptAuditSink | undefined {
+  if (value === undefined) return undefined;
+  const context = exactDataRecord(value, ["attemptAudit"], "model execution context");
+  const sink = exactDataRecord(context.attemptAudit, ["started", "terminal"], "model attempt audit sink");
+  if (typeof sink.started !== "function" || utilTypes.isProxy(sink.started)
+    || typeof sink.terminal !== "function" || utilTypes.isProxy(sink.terminal)) {
+    throw new TypeError("model attempt audit sink is invalid");
+  }
+  const target = context.attemptAudit as object;
+  return Object.freeze({
+    started: (sink.started as LlmAttemptAuditSink["started"]).bind(target),
+    terminal: (sink.terminal as LlmAttemptAuditSink["terminal"]).bind(target)
+  });
+}
+
+function createAttemptStarted(
+  route: ModelProviderRoute,
+  request: LlmRequest,
+  attempt: number
+): ModelAttemptStartedV1 {
+  const protectedRequest = createProtectedJsonViewV1({
+    provider: request.provider,
+    model: request.model,
+    messages: request.messages,
+    ...(request.system === undefined ? {} : { system: request.system }),
+    ...(request.tools === undefined ? {} : { tools: request.tools })
+  });
+  return createModelAttemptStartedV1({
+    providerId: route.providerId,
+    modelId: request.model,
+    apiFormat: route.apiFormat,
+    attempt,
+    protectedRequestDigest: protectedRequest.digest,
+    routeDigest: digestJson({
+      providerId: route.providerId,
+      apiFormat: route.apiFormat,
+      baseUrl: route.baseUrl,
+      ...(route.apiKeyRef === undefined ? {} : { apiKeyRef: route.apiKeyRef })
+    }),
+    pricing: route.pricing ?? createModelPricingSnapshotV1({})
   });
 }
 
@@ -739,8 +798,9 @@ export class HttpModelAdapter {
     this.onReceipt = source.onReceipt as HttpModelAdapterOptions["onReceipt"];
   }
 
-  async *stream(request: LlmRequest): AsyncIterable<StreamChunk> {
+  async *stream(request: LlmRequest, execution?: LlmStreamExecutionContext): AsyncIterable<StreamChunk> {
     const stableRequest = snapshotRequest(request);
+    const attemptAudit = snapshotAttemptAudit(execution);
     if (stableRequest.provider !== this.id) throw new TypeError("model request provider does not match the adapter");
     const firstRoute = this.routes[0] as ModelProviderRoute;
     if (isAborted(stableRequest.signal)) {
@@ -765,8 +825,22 @@ export class HttpModelAdapter {
       const route = this.routes[routeIndex] as ModelProviderRoute;
       const attempt = routeIndex + 1;
       const hasFallback = attempt < this.routes.length;
+      const started = createAttemptStarted(route, stableRequest, attempt);
+      if (attemptAudit !== undefined) {
+        try {
+          await attemptAudit.started(started);
+        } catch {
+          throw new ModelOutcomePersistenceError();
+        }
+      }
+      const publishAttemptReceipt = (receipt: ModelClientReceipt): Promise<void> => this.publishReceipt(
+        receipt,
+        stableRequest.signal,
+        attemptAudit,
+        started
+      );
       if (isAborted(stableRequest.signal)) {
-        await this.publishReceipt({
+        await publishAttemptReceipt({
           schemaVersion: 1,
           providerId: route.providerId,
           model: stableRequest.model,
@@ -778,7 +852,7 @@ export class HttpModelAdapter {
           fallbackAllowed: false,
           failureCode: "cancelled",
           usageState: "missing"
-        }, stableRequest.signal);
+        });
         for (const chunk of cancelledChunks()) yield chunk;
         return;
       }
@@ -787,7 +861,7 @@ export class HttpModelAdapter {
         try {
           const resolved = await awaitAbortable(this.resolveSecret(route.apiKeyRef), stableRequest.signal);
           if (resolved === ABORTED) {
-            await this.publishReceipt({
+            await publishAttemptReceipt({
               schemaVersion: 1,
               providerId: route.providerId,
               model: stableRequest.model,
@@ -799,7 +873,7 @@ export class HttpModelAdapter {
               fallbackAllowed: false,
               failureCode: "cancelled",
               usageState: "missing"
-            }, stableRequest.signal);
+            });
             for (const chunk of cancelledChunks()) yield chunk;
             return;
           }
@@ -808,7 +882,7 @@ export class HttpModelAdapter {
           secretValue = undefined;
         }
         if (isAborted(stableRequest.signal)) {
-          await this.publishReceipt({
+          await publishAttemptReceipt({
             schemaVersion: 1,
             providerId: route.providerId,
             model: stableRequest.model,
@@ -820,12 +894,12 @@ export class HttpModelAdapter {
             fallbackAllowed: false,
             failureCode: "cancelled",
             usageState: "missing"
-          }, stableRequest.signal);
+          });
           for (const chunk of cancelledChunks()) yield chunk;
           return;
         }
         if (typeof secretValue !== "string" || secretValue.length === 0) {
-          await this.publishReceipt({
+          await publishAttemptReceipt({
             schemaVersion: 1,
             providerId: route.providerId,
             model: stableRequest.model,
@@ -837,7 +911,7 @@ export class HttpModelAdapter {
             fallbackAllowed: hasFallback,
             failureCode: "secret_unavailable",
             usageState: "missing"
-          }, stableRequest.signal);
+          });
           if (hasFallback) continue;
           yield {
             type: "error",
@@ -849,7 +923,7 @@ export class HttpModelAdapter {
       }
 
       if (isAborted(stableRequest.signal)) {
-        await this.publishReceipt({
+        await publishAttemptReceipt({
           schemaVersion: 1,
           providerId: route.providerId,
           model: stableRequest.model,
@@ -861,7 +935,7 @@ export class HttpModelAdapter {
           fallbackAllowed: false,
           failureCode: "cancelled",
           usageState: "missing"
-        }, stableRequest.signal);
+        });
         for (const chunk of cancelledChunks()) yield chunk;
         return;
       }
@@ -877,7 +951,7 @@ export class HttpModelAdapter {
         });
       } catch {
         requestSignal.dispose();
-        await this.publishReceipt({
+        await publishAttemptReceipt({
           schemaVersion: 1,
           providerId: route.providerId,
           model: stableRequest.model,
@@ -889,7 +963,7 @@ export class HttpModelAdapter {
           fallbackAllowed: false,
           failureCode: "request_invalid",
           usageState: "missing"
-        }, stableRequest.signal);
+        });
         yield {
           type: "error",
           error: { code: "LLM_REQUEST_INVALID", message: "Model request is invalid", retryable: false }
@@ -906,7 +980,7 @@ export class HttpModelAdapter {
       } catch {
         requestSignal.dispose();
         const cancelled = isAborted(stableRequest.signal);
-        await this.publishReceipt({
+        await publishAttemptReceipt({
           schemaVersion: 1,
           providerId: route.providerId,
           model: stableRequest.model,
@@ -918,7 +992,7 @@ export class HttpModelAdapter {
           fallbackAllowed: false,
           failureCode: cancelled ? "cancelled" : "transport_error",
           usageState: "missing"
-        }, stableRequest.signal);
+        });
         if (cancelled) {
           for (const chunk of cancelledChunks()) yield chunk;
         } else {
@@ -946,7 +1020,7 @@ export class HttpModelAdapter {
         if (receiptPublished) return;
         receiptPublished = true;
         const usage = usageSnapshot(state.usage);
-        await this.publishReceipt({
+        await publishAttemptReceipt({
           schemaVersion: 1,
           providerId: route.providerId,
           model: stableRequest.model,
@@ -960,7 +1034,7 @@ export class HttpModelAdapter {
           ...(failureCode === undefined ? {} : { failureCode }),
           usageState: usage.state,
           ...(usage.partial === undefined ? {} : { usage: usage.partial })
-        }, stableRequest.signal);
+        });
       };
       try {
         if (!response.ok || response.body === null) {
@@ -1006,6 +1080,7 @@ export class HttpModelAdapter {
             }
           }
         } catch (error) {
+          if (error instanceof ModelOutcomePersistenceError) throw error;
           if (error instanceof ModelReceiptObserverError) throw error;
           if (isAborted(stableRequest.signal)) {
             outcome = "interrupted";
@@ -1046,7 +1121,29 @@ export class HttpModelAdapter {
     }
   }
 
-  private async publishReceipt(receipt: ModelClientReceipt, signal?: AbortSignal): Promise<void> {
+  private async publishReceipt(
+    receipt: ModelClientReceipt,
+    signal?: AbortSignal,
+    attemptAudit?: LlmAttemptAuditSink,
+    started?: ModelAttemptStartedV1
+  ): Promise<void> {
+    if (attemptAudit !== undefined && started !== undefined) {
+      try {
+        await attemptAudit.terminal(createModelAttemptTerminalV1({
+          started,
+          dispatchState: receipt.dispatched ? "dispatched" : "not-dispatched",
+          outcome: receipt.outcome,
+          ...(receipt.statusCode === undefined ? {} : { statusCode: receipt.statusCode }),
+          retryable: receipt.retryable,
+          fallbackAllowed: receipt.fallbackAllowed,
+          ...(receipt.failureCode === undefined ? {} : { failureCode: receipt.failureCode }),
+          usageState: receipt.usageState,
+          ...(receipt.usage === undefined ? {} : { usage: receipt.usage })
+        }));
+      } catch {
+        throw new ModelOutcomePersistenceError();
+      }
+    }
     if (this.onReceipt === undefined) return;
     try {
       const observation = this.onReceipt(Object.freeze(receipt));

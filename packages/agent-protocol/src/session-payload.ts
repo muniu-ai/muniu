@@ -17,6 +17,12 @@ import type {
   UserMessage
 } from "./model.js";
 import {
+  inspectModelAttemptStartedV1,
+  inspectModelAttemptTerminalV1,
+  type ModelAttemptStartedV1,
+  type ModelAttemptTerminalV1
+} from "./model-audit.js";
+import {
   assertAgentModelBindingV1,
   type AgentModelBindingV1
 } from "./model-binding.js";
@@ -60,6 +66,14 @@ export interface AgentSessionRawPayloadMapV1 {
   "user/message": { turn: number; message: UserMessage };
   "step/start": { turn: number; step: number };
   "assistant/message": { turn: number; step: number; message: AssistantMessage; usage?: TokenUsage };
+  "model/attempt-started": { turn: number; step: number; attempt: ModelAttemptStartedV1 };
+  "model/audit": {
+    turn: number;
+    step: number;
+    startedEventId: EventId;
+    startedDigest: Digest;
+    terminal: ModelAttemptTerminalV1;
+  };
   "tool/call": {
     turn: number;
     step: number;
@@ -135,6 +149,18 @@ export interface AgentSessionPublicControlsMapV1 {
     };
     readonly usage?: TokenUsage;
   };
+  "model/attempt-started": {
+    readonly turn: number;
+    readonly step: number;
+    readonly attempt: ModelAttemptStartedV1;
+  };
+  "model/audit": {
+    readonly turn: number;
+    readonly step: number;
+    readonly startedEventId: EventId;
+    readonly startedDigest: Digest;
+    readonly terminal: ModelAttemptTerminalV1;
+  };
   "tool/call": {
     readonly turn: number;
     readonly step: number;
@@ -201,6 +227,8 @@ const AGENT_SESSION_EVENT_TYPES_V1 = new Set<string>([
   "user/message",
   "step/start",
   "assistant/message",
+  "model/attempt-started",
+  "model/audit",
   "tool/call",
   "approval/requested",
   "approval/resolved",
@@ -469,6 +497,24 @@ function assertRawPayload(eventType: AgentSessionProtectedEventTypeV1, value: un
         if (value.usage === undefined || isTokenUsage(value.usage)) return;
       }
       break;
+    case "model/attempt-started":
+      if (hasExactKeys(value, ["turn", "step", "attempt"])) {
+        assertPositiveSafeInteger(value.turn, "event turn");
+        assertPositiveSafeInteger(value.step, "event step");
+        if (inspectModelAttemptStartedV1(value.attempt) !== undefined) return;
+      }
+      break;
+    case "model/audit":
+      if (hasExactKeys(value, ["turn", "step", "startedEventId", "startedDigest", "terminal"])) {
+        assertPositiveSafeInteger(value.turn, "event turn");
+        assertPositiveSafeInteger(value.step, "event step");
+        assertSafePublicControlIdV1(value.startedEventId, "model attempt event identifier");
+        if (typeof value.startedDigest !== "string" || !DIGEST_PATTERN.test(value.startedDigest)) {
+          throw new TypeError("model attempt digest must be a sha256 digest");
+        }
+        if (inspectModelAttemptTerminalV1(value.terminal) !== undefined) return;
+      }
+      break;
     case "tool/call":
       if (hasExactKeys(value, ["turn", "step", "callId", "name", "arguments", "commitment"])) {
         assertPositiveSafeInteger(value.turn, "event turn");
@@ -626,6 +672,32 @@ function buildProfileParts<T extends AgentSessionProtectedEventTypeV1>(
       };
       break;
     }
+    case "model/attempt-started": {
+      const payload = raw as AgentSessionRawPayloadMapV1["model/attempt-started"];
+      const attempt = inspectModelAttemptStartedV1(payload.attempt);
+      if (attempt === undefined) throw new TypeError("model attempt start is invalid");
+      parts = {
+        publicControls: { turn: payload.turn, step: payload.step, attempt },
+        protectedContentInput: null
+      };
+      break;
+    }
+    case "model/audit": {
+      const payload = raw as AgentSessionRawPayloadMapV1["model/audit"];
+      const terminal = inspectModelAttemptTerminalV1(payload.terminal);
+      if (terminal === undefined) throw new TypeError("model attempt terminal audit is invalid");
+      parts = {
+        publicControls: {
+          turn: payload.turn,
+          step: payload.step,
+          startedEventId: payload.startedEventId,
+          startedDigest: payload.startedDigest,
+          terminal
+        },
+        protectedContentInput: null
+      };
+      break;
+    }
     case "tool/call": {
       const payload = raw as AgentSessionRawPayloadMapV1["tool/call"];
       const protectedArguments = createProtectedTextV1(payload.arguments);
@@ -756,7 +828,8 @@ function validateProtectedContent(
   controls: AgentSessionPublicControlsMapV1[AgentSessionProtectedEventTypeV1],
   root: ProtectedJsonNodeV1
 ): boolean {
-  if (eventType === "turn/start" || eventType === "step/start" || eventType === "step/end") {
+  if (eventType === "turn/start" || eventType === "step/start" || eventType === "step/end"
+    || eventType === "model/attempt-started" || eventType === "model/audit") {
     return root.type === "null";
   }
   if (eventType === "approval/requested" || eventType === "approval/resolved") {
@@ -863,6 +936,24 @@ function assertPublicControls(eventType: AgentSessionProtectedEventTypeV1, value
             && block.type === "tool-call"
             && block.binding === UNBOUND_PROTECTED_TOOL_CALL_V1)
           && (value.usage === undefined || isTokenUsage(value.usage))) return;
+      }
+      break;
+    case "model/attempt-started":
+      if (hasExactKeys(value, ["turn", "step", "attempt"])) {
+        assertPositiveSafeInteger(value.turn, "event turn");
+        assertPositiveSafeInteger(value.step, "event step");
+        if (inspectModelAttemptStartedV1(value.attempt) !== undefined) return;
+      }
+      break;
+    case "model/audit":
+      if (hasExactKeys(value, ["turn", "step", "startedEventId", "startedDigest", "terminal"])) {
+        assertPositiveSafeInteger(value.turn, "event turn");
+        assertPositiveSafeInteger(value.step, "event step");
+        assertSafePublicControlIdV1(value.startedEventId, "model attempt event identifier");
+        if (typeof value.startedDigest !== "string" || !DIGEST_PATTERN.test(value.startedDigest)) {
+          throw new TypeError("model attempt digest must be a sha256 digest");
+        }
+        if (inspectModelAttemptTerminalV1(value.terminal) !== undefined) return;
       }
       break;
     case "tool/call":

@@ -35,6 +35,7 @@ import { LocalMockAgentSessionService } from "../src/agentSessionService.js";
 function appAt(root: string) {
   return buildServer({
     mniuRoot: root,
+    agentSessionService: new LocalMockAgentSessionService(join(root, "agent-service")),
     useMockExecutors: true,
     autoResumeRuns: false,
     providerModelCatalogSyncScheduler: false

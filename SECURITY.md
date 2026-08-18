@@ -78,6 +78,19 @@ opaque correlation for the current process; it is not evidence that the
 control plane authenticated the policy provenance. Control-plane provenance
 binding remains a required integration boundary before governed release use.
 
+Production Agent model calls use the session's durable provider/model binding.
+The provider configuration is revalidated before every run and credentials are
+resolved only for the individual request; API keys, authorization headers and
+raw request bodies are not written to model audit events. Before the HTTP side
+effect, the runtime fsyncs a protected request digest, route digest and pricing
+snapshot. It then fsyncs a terminal fact with a conservative dispatch state,
+bounded usage and fixed-point cost estimate before closing the step. Missing or
+partial usage is retained as missing or partial, and an unavailable price is
+retained as unpriced rather than being reported as zero. A crash after the start
+fact is recovered as an unknown, interrupted outcome and is never replayed
+automatically. These records are local audit facts; they are not provider-signed
+billing evidence.
+
 The planned macOS sandbox combines Seatbelt with an isolated canonical Git
 worktree. It is defense in depth, not a virtual machine or Docker-equivalent
 security boundary. If the required sandbox probe fails, command execution must

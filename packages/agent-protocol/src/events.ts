@@ -42,6 +42,8 @@ const AGENT_SESSION_EVENT_TYPES_V1 = new Set<string>([
   "user/message",
   "step/start",
   "assistant/message",
+  "model/attempt-started",
+  "model/audit",
   "approval/requested",
   "approval/resolved",
   "tool/call",
@@ -111,6 +113,15 @@ function effectCommitmentMatchesEnvelope(
     && binding.sessionId === sessionId
     && binding.runId === runId
     && binding.candidateId === candidateId;
+}
+
+function modelAttemptHasEnvelopeContext(
+  type: AgentSessionEventTypeV1,
+  runId: unknown,
+  candidateId: unknown
+): boolean {
+  return type !== "model/attempt-started" && type !== "model/audit"
+    || runId !== undefined && candidateId !== undefined;
 }
 
 export function isCanonicalRfc3339(value: unknown): value is string {
@@ -184,6 +195,9 @@ export function createAgentSessionEvent<T extends AgentSessionEventTypeV1>(
   if (runId !== undefined) assertSafePublicControlIdV1(runId, "run identifier");
   if (candidateId !== undefined) {
     assertSafePublicControlIdV1(candidateId, "candidate identifier");
+  }
+  if (!modelAttemptHasEnvelopeContext(type, runId, candidateId)) {
+    throw new TypeError("model attempt events require run and candidate bindings");
   }
   if (seq === 0) {
     if (previousDigest !== undefined) throw new Error("first event must not have a previous digest");
@@ -284,6 +298,11 @@ export function isAgentSessionEventV1(value: unknown): value is AgentSessionEven
       event.type as AgentSessionEventTypeV1,
       payload,
       event.sessionId,
+      event.runId,
+      event.candidateId
+    )) return false;
+    if (!modelAttemptHasEnvelopeContext(
+      event.type as AgentSessionEventTypeV1,
       event.runId,
       event.candidateId
     )) return false;

@@ -196,6 +196,50 @@ test("host forwards optional run bindings, defaults storage, and disposes once",
   await assert.rejects(() => host.run({ prompt: "late", provider: "capture", model: "scripted" }), /disposed/i);
 });
 
+test("host resolves a production adapter per run without taking ownership of it", async () => {
+  let resolutions = 0;
+  let borrowedDisposals = 0;
+  const host = await createAgentHost({
+    adapters: [],
+    resolveAdapterLease: async ({ providerId, modelId }) => {
+      resolutions += 1;
+      return {
+        adapter: {
+          id: providerId,
+          async *stream() {
+            yield { type: "text-delta" as const, index: 0, text: "resolved" };
+            yield { type: "finish" as const, reason: "stop" as const };
+          },
+          dispose: () => { borrowedDisposals += 100; }
+        },
+        resolution: {
+          schemaVersion: 1 as const,
+          kind: "llm-adapter-resolution" as const,
+          providerId,
+          modelId,
+          configDigest: "a".repeat(64)
+        },
+        release: () => { borrowedDisposals += 1; }
+      };
+    },
+    tools: [],
+    authorizer: { authorize: async () => ({ decision: "deny" }) }
+  });
+  try {
+    const outcome = await host.run({
+      sessionId: SessionId("resolved-host-session"),
+      prompt: "hello",
+      provider: "provider-runtime",
+      model: "model-runtime"
+    });
+    assert.equal(outcome.reason, "completed");
+    assert.equal(resolutions, 1);
+  } finally {
+    await host.dispose();
+  }
+  assert.equal(borrowedDisposals, 1);
+});
+
 test("host resume opens the existing session and appends a second turn", async () => {
   const store = new InMemoryAgentSessionStore();
   const adapter = new ScriptedLlmAdapter("resume-mock", [

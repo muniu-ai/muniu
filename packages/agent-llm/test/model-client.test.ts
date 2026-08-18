@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   CallId,
   MessageId,
+  createModelPricingSnapshotV1,
   createAssistantMessage,
   createToolResultMessage,
   createUserMessage,
@@ -13,6 +14,8 @@ import {
 import {
   HttpModelAdapter,
   LlmRuntime,
+  ModelOutcomePersistenceError,
+  type LlmStreamExecutionContext,
   type ModelClientReceipt,
   type ModelProviderRoute
 } from "../src/index.js";
@@ -815,6 +818,81 @@ test("cancellation does not wait forever for a pending receipt observer", async 
   rejectObserver(new Error(`late receipt rejection ${secret}`));
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(JSON.stringify(chunks).includes(secret), false);
+});
+
+test("durable model audit starts before dispatch and commits terminal cost before finish", async () => {
+  const order: string[] = [];
+  const starts: unknown[] = [];
+  const terminals: unknown[] = [];
+  const provider = route("openai_chat", {
+    pricing: createModelPricingSnapshotV1({
+      inputUsdPerMillion: "1",
+      outputUsdPerMillion: "2"
+    })
+  });
+  const execution: LlmStreamExecutionContext = {
+    attemptAudit: {
+      started: async (attempt) => {
+        order.push("started");
+        starts.push(attempt);
+      },
+      terminal: async (terminal) => {
+        order.push("terminal");
+        terminals.push(terminal);
+      }
+    }
+  };
+  const adapter = new HttpModelAdapter({
+    id: provider.providerId,
+    routes: [provider],
+    resolveSecret: async () => secret,
+    fetch: async () => {
+      order.push("fetch");
+      return sse([{
+        data: {
+          choices: [{ delta: { content: "ok" }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 3, completion_tokens: 2 }
+        }
+      }]);
+    }
+  });
+  const chunks = await collect(adapter.stream(request(provider.providerId), execution));
+  assert.deepEqual(order, ["started", "fetch", "terminal"]);
+  assert.equal(starts.length, 1);
+  assert.equal(terminals.length, 1);
+  assert.deepEqual(chunks.at(-1), { type: "finish", reason: "stop" });
+  assert.equal((terminals[0] as { dispatchState: string }).dispatchState, "dispatched");
+  assert.equal((terminals[0] as { cost: { status: string } }).cost.status, "estimated");
+  assert.equal(JSON.stringify({ starts, terminals }).includes(secret), false);
+});
+
+test("terminal audit persistence failure escapes the runtime and never emits a false finish", async () => {
+  const provider = route("openai_responses", {
+    pricing: createModelPricingSnapshotV1({})
+  });
+  const adapter = new HttpModelAdapter({
+    id: provider.providerId,
+    routes: [provider],
+    resolveSecret: async () => secret,
+    fetch: async () => sse([{
+      event: "response.completed",
+      data: { type: "response.completed", response: { usage: { input_tokens: 1, output_tokens: 1 } } }
+    }])
+  });
+  const runtime = new LlmRuntime();
+  runtime.register(adapter);
+  runtime.seal();
+  const execution: LlmStreamExecutionContext = {
+    attemptAudit: {
+      started: async () => undefined,
+      terminal: async () => { throw new Error(`disk failed ${secret}`); }
+    }
+  };
+  await assert.rejects(
+    collect(runtime.stream(request(provider.providerId), execution)),
+    (error: unknown) => error instanceof ModelOutcomePersistenceError
+      && !String(error).includes(secret)
+  );
 });
 
 test("reads native Response state without invoking hostile instance accessors", async () => {

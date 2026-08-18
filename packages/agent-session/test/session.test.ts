@@ -35,6 +35,8 @@ import {
   SessionId,
   createAgentSessionEvent,
   createAssistantMessage,
+  createModelAttemptStartedV1,
+  createModelPricingSnapshotV1,
   createProtectedTextV1,
   createRuntimeEffectCommitmentBinderV1,
   createUserMessage,
@@ -1323,15 +1325,17 @@ test("JSONL create publishes a complete session atomically and can retry after t
       if (event.type === "session/created" && attempts++ === 0) throw new Error("injected initial append failure");
     }
   });
+  try {
+    await assert.rejects(() => store.create({ sessionId }), /injected initial append failure/i);
+    await assert.rejects(() => stat(path.join(root, "sessions", sessionId)), /ENOENT/);
+    assert.deepEqual(await readdir(path.join(root, "sessions")), []);
 
-  await assert.rejects(() => store.create({ sessionId }), /injected initial append failure/i);
-  await assert.rejects(() => stat(path.join(root, "sessions", sessionId)), /ENOENT/);
-  assert.deepEqual(await readdir(path.join(root, "sessions")), []);
-
-  const session = await store.create({ sessionId });
-  assert.deepEqual(session.events.map((event) => event.type), ["session/created"]);
-  assert.equal(session.header.createdAt, session.events[0]?.occurredAt);
-  await store.dispose();
+    const session = await store.create({ sessionId });
+    assert.deepEqual(session.events.map((event) => event.type), ["session/created"]);
+    assert.equal(session.header.createdAt, session.events[0]?.occurredAt);
+  } finally {
+    await store.dispose();
+  }
 });
 
 test("JSONL clears only same-session staging left by a crashed creator after taking the OS lease", async () => {
@@ -1852,4 +1856,49 @@ test("projection rejects an approval request forged across the proposal run or c
     () => projectSession(session.events),
     /approval|proposal|run|candidate/iu
   );
+});
+
+test("recovery closes a durably started model attempt as unknown without replay", async () => {
+  const store = new InMemoryAgentSessionStore();
+  const session = await store.create({ sessionId: SessionId("recover-model-attempt") });
+  const runId = RunId("recover-model-run");
+  const candidateId = CandidateId("recover-model-candidate");
+  await session.append("turn/start", { turn: 1 }, { runId, candidateId });
+  await session.append("step/start", { turn: 1, step: 1 }, { runId, candidateId });
+  const started = createModelAttemptStartedV1({
+    providerId: "provider-safe",
+    modelId: "model-safe",
+    apiFormat: "openai_chat",
+    attempt: 1,
+    protectedRequestDigest: "a".repeat(64),
+    routeDigest: "b".repeat(64),
+    pricing: createModelPricingSnapshotV1({ inputUsdPerMillion: "1" })
+  });
+  const startedEvent = await session.append("model/attempt-started", {
+    turn: 1,
+    step: 1,
+    attempt: started
+  }, { runId, candidateId });
+
+  const before = projectSession(session.events);
+  assert.deepEqual(before.pendingModelAttempts.map((attempt) => ({
+    eventId: attempt.startedEventId,
+    digest: attempt.startedDigest,
+    attempt: attempt.started.attempt
+  })), [{ eventId: startedEvent.eventId, digest: startedEvent.digest, attempt: 1 }]);
+
+  const recovered = await recoverInterruptedSession(session);
+  assert.deepEqual(recovered.map((event) => event.type), ["model/audit", "step/end", "turn/end"]);
+  const audit = recovered[0];
+  assert.equal(audit?.type, "model/audit");
+  if (audit?.type !== "model/audit") throw new Error("model audit recovery event was not appended");
+  assert.equal(audit.payload.publicControls.startedEventId, startedEvent.eventId);
+  assert.equal(audit.payload.publicControls.startedDigest, startedEvent.digest);
+  assert.equal(audit.payload.publicControls.terminal.outcome, "interrupted");
+  assert.equal(audit.payload.publicControls.terminal.dispatchState, "unknown");
+  assert.equal(audit.payload.publicControls.terminal.failureCode, "stream_interrupted");
+  assert.equal(audit.runId, runId);
+  assert.equal(audit.candidateId, candidateId);
+  assert.deepEqual(await recoverInterruptedSession(session), []);
+  assert.equal(projectSession(session.events).pendingModelAttempts.length, 0);
 });

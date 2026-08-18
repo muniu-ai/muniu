@@ -11,6 +11,8 @@
 
 import {
   MessageId,
+  CandidateId,
+  RunId,
   createSafeRandomPublicControlIdV1,
   createRuntimeEffectCommitmentBinderV1,
   createUserMessage,
@@ -18,7 +20,12 @@ import {
   type ToolCallBlock,
   type TurnEndReason
 } from "@mn/agent-protocol";
-import { BlockAssembler, type LlmRuntime } from "@mn/agent-llm";
+import {
+  BlockAssembler,
+  ModelOutcomePersistenceError,
+  type LlmRuntime,
+  type LlmStreamExecutionContext
+} from "@mn/agent-llm";
 import { projectRuntimeMessages } from "@mn/agent-session";
 import type { ToolRegistry } from "@mn/agent-tools";
 
@@ -78,8 +85,8 @@ export class ReactDriver {
     try {
       const turn = nextTurn(input);
       const metadata = {
-        ...(input.runId === undefined ? {} : { runId: input.runId }),
-        ...(input.candidateId === undefined ? {} : { candidateId: input.candidateId })
+        runId: input.runId ?? RunId(createSafeRandomPublicControlIdV1("run")),
+        candidateId: input.candidateId ?? CandidateId(createSafeRandomPublicControlIdV1("candidate"))
       };
       let steps = 0;
       let toolCalls = 0;
@@ -103,6 +110,32 @@ export class ReactDriver {
             reason = "cancelled";
           } else {
             const assembler = new BlockAssembler();
+            let pendingModelAttempt: AgentSessionEventV1<"model/attempt-started"> | undefined;
+            const execution: LlmStreamExecutionContext = {
+              attemptAudit: {
+                started: async (attempt) => {
+                  if (pendingModelAttempt !== undefined) throw new ModelOutcomePersistenceError();
+                  pendingModelAttempt = await input.session.append("model/attempt-started", {
+                    turn,
+                    step,
+                    attempt
+                  }, metadata);
+                  lastEvent = pendingModelAttempt;
+                },
+                terminal: async (terminal) => {
+                  const startedEvent = pendingModelAttempt;
+                  if (startedEvent === undefined) throw new ModelOutcomePersistenceError();
+                  lastEvent = await input.session.append("model/audit", {
+                    turn,
+                    step,
+                    startedEventId: startedEvent.eventId,
+                    startedDigest: startedEvent.digest,
+                    terminal
+                  }, metadata);
+                  pendingModelAttempt = undefined;
+                }
+              }
+            };
             for await (const chunk of this.llm.stream({
               provider: input.provider,
               model: input.model,
@@ -110,13 +143,14 @@ export class ReactDriver {
               system: this.systemPrompt.render(),
               tools: this.tools.schemas(),
               ...(input.signal === undefined ? {} : { signal: input.signal })
-            })) {
+            }, execution)) {
               if (isAborted(input.signal)) {
                 reason = "cancelled";
                 break;
               }
               assembler.push(chunk);
             }
+            if (pendingModelAttempt !== undefined) throw new ModelOutcomePersistenceError();
 
             if (reason !== "cancelled") {
               const message = assembler.message({ kind: "model", provider: input.provider, model: input.model });
@@ -178,7 +212,8 @@ export class ReactDriver {
             }
           }
         } catch (error: unknown) {
-          if (error instanceof ToolOutcomePersistenceError) throw error;
+          if (error instanceof ToolOutcomePersistenceError
+            || error instanceof ModelOutcomePersistenceError) throw error;
           reason = isAborted(input.signal) ? "cancelled" : "error";
         }
 

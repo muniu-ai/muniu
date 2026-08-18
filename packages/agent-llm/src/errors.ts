@@ -19,3 +19,11 @@ export class SseParseError extends Error {
     super(message);
   }
 }
+
+export class ModelOutcomePersistenceError extends Error {
+  override readonly name = "ModelOutcomePersistenceError";
+
+  constructor() {
+    super("Model attempt audit persistence failed");
+  }
+}

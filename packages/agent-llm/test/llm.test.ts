@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { CallId, MessageId, type LlmRequest, type StreamChunk } from "@mn/agent-protocol";
-import { BlockAssembler, LlmRuntime, ScriptedLlmAdapter } from "../src/index.js";
+import {
+  BlockAssembler,
+  LlmRuntime,
+  ScriptedLlmAdapter,
+  type LlmAdapterLease
+} from "../src/index.js";
 
 const request: LlmRequest = { provider: "mock", model: "scripted", messages: [] };
 
@@ -10,6 +15,25 @@ async function collect(stream: AsyncIterable<StreamChunk>): Promise<StreamChunk[
   const chunks: StreamChunk[] = [];
   for await (const chunk of stream) chunks.push(chunk);
   return chunks;
+}
+
+function adapterLease(
+  providerId: string,
+  modelId: string,
+  stream: LlmAdapterLease["adapter"]["stream"],
+  release: () => void = () => undefined
+): LlmAdapterLease {
+  return {
+    adapter: { id: providerId, stream },
+    resolution: {
+      schemaVersion: 1,
+      kind: "llm-adapter-resolution",
+      providerId,
+      modelId,
+      configDigest: "a".repeat(64)
+    },
+    release
+  };
 }
 
 test("assembler combines text, thinking, tool calls, usage, and terminal state", () => {
@@ -166,6 +190,159 @@ test("LLM runtime is static, sealed, and normalizes adapter failures", async () 
     { type: "finish", reason: "error" }
   ]);
   assert.equal(JSON.stringify(failed).includes("secret-provider-credential"), false);
+});
+
+test("LLM runtime resolves one borrowed exact adapter for every stream", async () => {
+  const calls: string[] = [];
+  let releases = 0;
+  const runtime = new LlmRuntime({
+    resolveAdapterLease: async (input) => {
+      calls.push(`${input.providerId}:${input.modelId}`);
+      return adapterLease(
+        input.providerId,
+        input.modelId,
+        async function* (): AsyncIterable<StreamChunk> {
+          yield { type: "text-delta", index: 0, text: input.providerId };
+          yield { type: "finish", reason: "stop" };
+        },
+        () => { releases += 1; }
+      );
+    }
+  });
+  runtime.seal();
+
+  const [first, duplicate, second] = await Promise.all([
+    collect(runtime.stream({ ...request, provider: "provider-first" })),
+    collect(runtime.stream({ ...request, provider: "provider-first" })),
+    collect(runtime.stream({ ...request, provider: "provider-second" }))
+  ]);
+  assert.equal(first[0]?.type === "text-delta" ? first[0].text : undefined, "provider-first");
+  assert.deepEqual(duplicate, first);
+  assert.equal(second[0]?.type === "text-delta" ? second[0].text : undefined, "provider-second");
+  assert.deepEqual(calls.sort(), [
+    "provider-first:scripted",
+    "provider-first:scripted",
+    "provider-second:scripted"
+  ]);
+  assert.equal(releases, 3);
+});
+
+test("LLM runtime releases a borrowed adapter without replacing its completed terminal", async () => {
+  let releases = 0;
+  const runtime = new LlmRuntime({
+    resolveAdapterLease: async (input) => adapterLease(
+      input.providerId,
+      input.modelId,
+      async function* (): AsyncIterable<StreamChunk> {
+        yield { type: "text-delta", index: 0, text: "complete" };
+        yield { type: "finish", reason: "stop" };
+      },
+      () => {
+        releases += 1;
+        throw new Error("RAW-LEASE-RELEASE-SECRET");
+      }
+    )
+  });
+
+  assert.deepEqual(await collect(runtime.stream({ ...request, provider: "provider-release" })), [
+    { type: "text-delta", index: 0, text: "complete" },
+    { type: "finish", reason: "stop" }
+  ]);
+  assert.equal(releases, 1);
+});
+
+test("LLM runtime rejects mismatched and hostile resolved adapters without invoking accessors", async () => {
+  let idReads = 0;
+  const accessor = Object.defineProperty({
+    async *stream(): AsyncIterable<StreamChunk> {
+      yield { type: "finish", reason: "stop" };
+    }
+  }, "id", {
+    enumerable: true,
+    get() {
+      idReads += 1;
+      throw new Error("RAW-ADAPTER-SECRET");
+    }
+  });
+  const values: unknown[] = [
+    { id: "different-provider", async *stream() { yield { type: "finish" as const, reason: "stop" as const }; } },
+    accessor,
+    new Proxy({ id: "provider-hostile", async *stream() { yield { type: "finish" as const, reason: "stop" as const }; } }, {
+      getOwnPropertyDescriptor() {
+        throw new Error("RAW-PROXY-SECRET");
+      }
+    })
+  ];
+  for (const value of values) {
+    const runtime = new LlmRuntime({
+      resolveAdapterLease: async () => ({
+        adapter: value as never,
+        resolution: {
+          schemaVersion: 1,
+          kind: "llm-adapter-resolution",
+          providerId: "provider-hostile",
+          modelId: "scripted",
+          configDigest: "a".repeat(64)
+        },
+        release: () => undefined
+      })
+    });
+    await assert.rejects(
+      collect(runtime.stream({ ...request, provider: "provider-hostile" })),
+      (error: unknown) => error instanceof Error
+        && error.message === "LLM adapter resolution failed"
+        && !error.message.includes("RAW-")
+    );
+  }
+  assert.equal(idReads, 0);
+});
+
+test("LLM runtime never resolves an adapter for a pre-aborted request", async () => {
+  const controller = new AbortController();
+  controller.abort();
+  let resolutions = 0;
+  const runtime = new LlmRuntime({
+    resolveAdapterLease: async () => {
+      resolutions += 1;
+      throw new Error("must not resolve");
+    }
+  });
+  assert.deepEqual(await collect(runtime.stream({
+    ...request,
+    provider: "provider-aborted",
+    signal: controller.signal
+  })), [
+    { type: "error", error: { code: "LLM_CANCELLED", message: "Model stream cancelled" } },
+    { type: "finish", reason: "cancelled" }
+  ]);
+  assert.equal(resolutions, 0);
+});
+
+test("LLM runtime cancels during adapter resolution and absorbs a late resolver rejection", async () => {
+  const controller = new AbortController();
+  let started!: () => void;
+  const resolutionStarted = new Promise<void>((resolve) => { started = resolve; });
+  let rejectLate!: (error: Error) => void;
+  const late = new Promise<never>((_resolve, reject) => { rejectLate = reject; });
+  const runtime = new LlmRuntime({
+    resolveAdapterLease: async () => {
+      started();
+      return late;
+    }
+  });
+  const operation = collect(runtime.stream({
+    ...request,
+    provider: "provider-cancelling",
+    signal: controller.signal
+  }));
+  await resolutionStarted;
+  controller.abort();
+  assert.deepEqual(await operation, [
+    { type: "error", error: { code: "LLM_CANCELLED", message: "Model stream cancelled" } },
+    { type: "finish", reason: "cancelled" }
+  ]);
+  rejectLate(new Error("RAW-LATE-RESOLVER-SECRET"));
+  await new Promise<void>((resolve) => { setImmediate(resolve); });
 });
 
 test("LLM runtime emits one safe terminal for provider errors and post-finish throws", async () => {

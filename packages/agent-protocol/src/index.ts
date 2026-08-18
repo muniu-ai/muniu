@@ -8,6 +8,7 @@ export * from "./ids.js";
 export * from "./json.js";
 export * from "./messages.js";
 export * from "./model-binding.js";
+export * from "./model-audit.js";
 export * from "./model.js";
 export * from "./protection.js";
 export * from "./session-payload.js";

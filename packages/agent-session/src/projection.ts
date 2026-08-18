@@ -21,6 +21,7 @@ import {
   type EffectCommitmentV1,
   type EventId,
   type Message,
+  type ModelAttemptStartedV1,
   type RunId
 } from "@mn/agent-protocol";
 
@@ -59,6 +60,16 @@ export interface PendingToolApproval {
   readonly requestedSeq: number;
 }
 
+export interface PendingModelAttempt {
+  readonly startedEventId: EventId;
+  readonly startedDigest: Digest;
+  readonly started: ModelAttemptStartedV1;
+  readonly turn: number;
+  readonly step: number;
+  readonly runId: RunId;
+  readonly candidateId: CandidateId;
+}
+
 export interface AgentSessionProjection {
   readonly status: "idle" | "active" | "waiting-approval" | "completed" | "cancelled" | "budget-exceeded" | "interrupted" | "error";
   readonly openTurn?: number;
@@ -68,6 +79,7 @@ export interface AgentSessionProjection {
   readonly messages: readonly ProjectedProtectedMessage[];
   readonly pendingToolCalls: readonly PendingToolCall[];
   readonly pendingApprovals: readonly PendingToolApproval[];
+  readonly pendingModelAttempts: readonly PendingModelAttempt[];
 }
 
 function sameApprovalBinding(left: AgentToolApprovalBindingV1, right: AgentToolApprovalBindingV1): boolean {
@@ -88,6 +100,7 @@ export function projectSession(events: readonly AgentSessionEventV1[]): AgentSes
   const pending = new Map<CallId, PendingToolCall>();
   const approvals = new Map<string, PendingToolApproval>();
   const approvalByCall = new Map<CallId, string>();
+  const modelAttempts = new Map<EventId, PendingModelAttempt>();
   let status: AgentSessionProjection["status"] = "idle";
   let openTurn: number | undefined;
   let openStep: number | undefined;
@@ -97,6 +110,9 @@ export function projectSession(events: readonly AgentSessionEventV1[]): AgentSes
   for (const event of events) {
     switch (event.type) {
       case "turn/start":
+        if (modelAttempts.size !== 0) {
+          throw new TypeError("a new turn cannot bypass a pending model attempt audit");
+        }
         openTurn = event.payload.publicControls.turn;
         openStep = undefined;
         openTurnRunId = event.runId;
@@ -131,6 +147,44 @@ export function projectSession(events: readonly AgentSessionEventV1[]): AgentSes
             ...(candidateId === undefined ? {} : { candidateId })
           });
         }
+        break;
+      }
+      case "model/attempt-started": {
+        const controls = event.payload.publicControls;
+        if (openTurn !== controls.turn || openStep !== controls.step
+          || event.runId === undefined || event.candidateId === undefined
+          || event.runId !== openTurnRunId || event.candidateId !== openTurnCandidateId
+          || modelAttempts.size !== 0) {
+          throw new TypeError("durable model attempt start does not match one open step");
+        }
+        modelAttempts.set(event.eventId, {
+          startedEventId: event.eventId,
+          startedDigest: event.digest,
+          started: controls.attempt,
+          turn: controls.turn,
+          step: controls.step,
+          runId: event.runId,
+          candidateId: event.candidateId
+        });
+        break;
+      }
+      case "model/audit": {
+        const controls = event.payload.publicControls;
+        const pendingAttempt = modelAttempts.get(controls.startedEventId);
+        const terminal = controls.terminal;
+        const started = pendingAttempt?.started;
+        if (pendingAttempt === undefined || started === undefined
+          || controls.startedDigest !== pendingAttempt.startedDigest
+          || controls.turn !== pendingAttempt.turn || controls.step !== pendingAttempt.step
+          || event.runId !== pendingAttempt.runId || event.candidateId !== pendingAttempt.candidateId
+          || terminal.providerId !== started.providerId || terminal.modelId !== started.modelId
+          || terminal.apiFormat !== started.apiFormat || terminal.attempt !== started.attempt
+          || terminal.protectedRequestDigest !== started.protectedRequestDigest
+          || terminal.routeDigest !== started.routeDigest
+          || terminal.pricingDigest !== started.pricingDigest) {
+          throw new TypeError("durable model audit does not match its explicit attempt start fact");
+        }
+        modelAttempts.delete(controls.startedEventId);
         break;
       }
       case "approval/requested": {
@@ -218,9 +272,15 @@ export function projectSession(events: readonly AgentSessionEventV1[]): AgentSes
         break;
       }
       case "step/end":
+        if (modelAttempts.size !== 0) {
+          throw new TypeError("step end cannot bypass a pending model attempt audit");
+        }
         openStep = undefined;
         break;
       case "turn/end":
+        if (modelAttempts.size !== 0) {
+          throw new TypeError("turn end cannot bypass a pending model attempt audit");
+        }
         openTurn = undefined;
         openStep = undefined;
         openTurnRunId = undefined;
@@ -242,6 +302,7 @@ export function projectSession(events: readonly AgentSessionEventV1[]): AgentSes
     ...(openTurnCandidateId === undefined ? {} : { openTurnCandidateId }),
     messages: Object.freeze([...messages]),
     pendingToolCalls: Object.freeze([...pending.values()]),
-    pendingApprovals: Object.freeze([...approvals.values()])
+    pendingApprovals: Object.freeze([...approvals.values()]),
+    pendingModelAttempts: Object.freeze([...modelAttempts.values()])
   };
 }

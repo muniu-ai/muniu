@@ -8,12 +8,19 @@ import {
   MessageId,
   RunId,
   SessionId,
+  createModelPricingSnapshotV1,
   createRuntimeEffectCommitmentBinderV1,
   verifyAgentSessionEventChain,
   type EffectPolicyBindingV1
 } from "@mn/agent-protocol";
 import { DurableAgentSession, InMemoryAgentSessionStore, recoverInterruptedSession } from "@mn/agent-session";
-import { LlmRuntime, ScriptedLlmAdapter, type LlmAdapter } from "@mn/agent-llm";
+import {
+  HttpModelAdapter,
+  LlmRuntime,
+  ModelOutcomePersistenceError,
+  ScriptedLlmAdapter,
+  type LlmAdapter
+} from "@mn/agent-llm";
 import { ToolExecutionError, ToolRegistry, defineTool } from "@mn/agent-tools";
 import {
   AgentKernel,
@@ -1136,4 +1143,126 @@ test("ReactDriver leaves a started effect open when both terminal result appends
   assert.equal(recovered[0]?.type === "tool/result"
     ? recovered[0].payload.publicControls.error?.code
     : undefined, "TOOL_OUTCOME_UNKNOWN");
+});
+
+test("kernel durably audits the model attempt before dispatch and before publishing assistant output", async () => {
+  const store = new InMemoryAgentSessionStore();
+  const session = await store.create({ sessionId: SessionId("kernel-model-audit") });
+  let fetches = 0;
+  let startedWasDurable = false;
+  const encoder = new TextEncoder();
+  const llm = new LlmRuntime();
+  llm.register(new HttpModelAdapter({
+    id: "provider-safe",
+    routes: [{
+      providerId: "provider-safe",
+      apiFormat: "openai_chat",
+      baseUrl: "https://provider.invalid/v1",
+      pricing: createModelPricingSnapshotV1({
+        inputUsdPerMillion: "1",
+        outputUsdPerMillion: "2"
+      })
+    }],
+    resolveSecret: async () => undefined,
+    fetch: async () => {
+      fetches += 1;
+      startedWasDurable = session.events.at(-1)?.type === "model/attempt-started";
+      return new Response(encoder.encode(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2}}\n\n"
+      ), { status: 200 });
+    }
+  }));
+  llm.seal();
+  const tools = new ToolRegistry({ authorize: async () => ({ decision: "approve" }) });
+  tools.seal();
+
+  const result = await createBuiltinAgentKernel({
+    llm,
+    tools,
+    systemPrompt: new StaticSystemPrompt([])
+  }).run({
+    session,
+    prompt: "hello",
+    provider: "provider-safe",
+    model: "model-safe",
+    runId: RunId("kernel-model-run"),
+    candidateId: CandidateId("kernel-model-candidate")
+  });
+
+  assert.equal(result.reason, "completed");
+  assert.equal(fetches, 1);
+  assert.equal(startedWasDurable, true);
+  assert.deepEqual(session.events.map((event) => event.type), [
+    "session/created",
+    "turn/start",
+    "user/message",
+    "step/start",
+    "model/attempt-started",
+    "model/audit",
+    "assistant/message",
+    "step/end",
+    "turn/end"
+  ]);
+  const audit = session.events.find((event) => event.type === "model/audit");
+  assert.equal(audit?.type === "model/audit"
+    ? audit.payload.publicControls.terminal.cost.estimatedCostPicoUsd
+    : undefined, "7000000");
+});
+
+test("kernel leaves a model attempt open when terminal audit persistence fails", async () => {
+  const encoder = new TextEncoder();
+  const store = new InMemoryAgentSessionStore();
+  const durable = await store.create({ sessionId: SessionId("kernel-model-audit-failure") });
+  let fetches = 0;
+  const llm = new LlmRuntime();
+  llm.register(new HttpModelAdapter({
+    id: "provider-safe",
+    routes: [{
+      providerId: "provider-safe",
+      apiFormat: "openai_responses",
+      baseUrl: "https://provider.invalid/v1",
+      pricing: createModelPricingSnapshotV1({})
+    }],
+    resolveSecret: async () => undefined,
+    fetch: async () => {
+      fetches += 1;
+      return new Response(encoder.encode(
+        "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n"
+      ), { status: 200 });
+    }
+  }));
+  llm.seal();
+  const tools = new ToolRegistry({ authorize: async () => ({ decision: "approve" }) });
+  tools.seal();
+  const failingSession = {
+    header: durable.header,
+    get events() { return durable.events; },
+    runtimeMessages: () => durable.runtimeMessages(),
+    withExclusive: durable.withExclusive.bind(durable),
+    append: (type: Parameters<typeof durable.append>[0], payload: never, metadata?: never) => {
+      if (type === "model/audit") return Promise.reject(new Error("model audit disk failure"));
+      return durable.append(type, payload, metadata);
+    },
+    flush: () => durable.flush()
+  } as unknown as Parameters<ReturnType<typeof createBuiltinAgentKernel>["run"]>[0]["session"];
+
+  await assert.rejects(() => createBuiltinAgentKernel({
+    llm,
+    tools,
+    systemPrompt: new StaticSystemPrompt([])
+  }).run({
+    session: failingSession,
+    prompt: "hello",
+    provider: "provider-safe",
+    model: "model-safe",
+    runId: RunId("kernel-model-failure-run"),
+    candidateId: CandidateId("kernel-model-failure-candidate")
+  }), ModelOutcomePersistenceError);
+  assert.equal(fetches, 1);
+  assert.equal(durable.events.at(-1)?.type, "model/attempt-started");
+  assert.equal(durable.events.some((event) => event.type === "assistant/message"
+    || event.type === "step/end" || event.type === "turn/end"), false);
+  const recovered = await recoverInterruptedSession(durable);
+  assert.deepEqual(recovered.map((event) => event.type), ["model/audit", "step/end", "turn/end"]);
+  assert.equal(fetches, 1);
 });

@@ -15,6 +15,7 @@ import {
   type AgentSessionEventSubscription,
   type LocalMockAgentSessionService
 } from "./agentSessionService.js";
+import { AgentRuntimeResolutionError } from "./agentRuntimeFactory.js";
 
 const controlId = z.string().min(1).max(256);
 const paramsSchema = z.object({ id: controlId }).strict();
@@ -36,6 +37,20 @@ function invalid(reply: FastifyReply): FastifyReply {
 }
 
 function failure(reply: FastifyReply, error: unknown): FastifyReply {
+  if (error instanceof AgentRuntimeResolutionError) {
+    const statusCode = error.code === "PROVIDER_NOT_FOUND"
+      ? 404
+      : error.code === "PROVIDER_DISABLED"
+          || error.code === "PROVIDER_CONSUMER_UNAVAILABLE"
+          || error.code === "MODEL_NOT_FOUND"
+        ? 409
+        : 503;
+    return reply.code(statusCode).send({
+      schemaVersion: 1,
+      kind: "agent-error-response",
+      error: error.code
+    });
+  }
   if (error instanceof AgentSessionServiceError) {
     return reply.code(error.statusCode).send({
       schemaVersion: 1,

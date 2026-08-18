@@ -11,6 +11,7 @@
 
 import {
   MessageId,
+  createModelAttemptTerminalV1,
   createToolResultMessage,
   type AgentSessionEventV1
 } from "@mn/agent-protocol";
@@ -25,6 +26,26 @@ async function recoverOnce(session: AgentSessionExclusiveView): Promise<AgentSes
   const projection = projectSession(session.events);
   if (projection.openTurn === undefined) return [];
   const appended: AgentSessionEventV1[] = [];
+  for (const attempt of projection.pendingModelAttempts) {
+    appended.push(await session.append("model/audit", {
+      turn: attempt.turn,
+      step: attempt.step,
+      startedEventId: attempt.startedEventId,
+      startedDigest: attempt.startedDigest,
+      terminal: createModelAttemptTerminalV1({
+        started: attempt.started,
+        dispatchState: "unknown",
+        outcome: "interrupted",
+        retryable: false,
+        fallbackAllowed: false,
+        failureCode: "stream_interrupted",
+        usageState: "missing"
+      })
+    }, {
+      runId: attempt.runId,
+      candidateId: attempt.candidateId
+    }));
+  }
   for (const approval of projection.pendingApprovals) {
     if (approval.state !== "requested") continue;
     const commitment = approval.binding.commitment;

@@ -101,6 +101,7 @@ import {
   registerControlPlaneRoutes
 } from "./controlPlane.js";
 import { LocalMockAgentSessionService } from "./agentSessionService.js";
+import { createProductionAgentRuntimeFactory } from "./agentRuntimeFactory.js";
 import { registerAgentSessionRoutes } from "./agentSessionRoutes.js";
 import {
   registerEvidenceRoutes,
@@ -1664,14 +1665,7 @@ export function buildServer(options: BuildServerOptions = {}) {
   let agentSessionService = runtimeProfile === "local"
     ? options.agentSessionService
     : undefined;
-  const getAgentSessionService = runtimeProfile === "local"
-    ? async (): Promise<LocalMockAgentSessionService> => {
-        agentSessionService ??= new LocalMockAgentSessionService(
-          join(mniuRoot, "agent-service")
-        );
-        return agentSessionService;
-      }
-    : undefined;
+  let getAgentSessionService: (() => Promise<LocalMockAgentSessionService>) | undefined;
   const specRepository =
     options.specRepository ??
     defaultControlPlaneSpecRepository(join(mniuRoot, "control-plane"));
@@ -1847,6 +1841,22 @@ export function buildServer(options: BuildServerOptions = {}) {
         keychainPath: process.env.MN_SECRET_VAULT_KEYCHAIN_PATH
       }
     });
+  if (runtimeProfile === "local") {
+    getAgentSessionService = async (): Promise<LocalMockAgentSessionService> => {
+      if (agentSessionService !== undefined) return agentSessionService;
+      const runtimeFactory = createProductionAgentRuntimeFactory({
+        providerSource: {
+          getProvider: (providerId) => localStore.getProvider(providerId)
+        },
+        resolveStoredSecret: (reference) => resolveStoredSecret(reference)
+      });
+      agentSessionService = new LocalMockAgentSessionService(
+        join(mniuRoot, "agent-service"),
+        { mode: "production", runtimeFactory }
+      );
+      return agentSessionService;
+    };
+  }
   const useMockExecutors = options.useMockExecutors ?? false;
   const runJobLeases = new RunJobLeaseManager({
     rootDir: join(mniuRoot, "run-job-leases")

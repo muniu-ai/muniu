@@ -57,6 +57,7 @@ import {
 } from "@mn/agent-session";
 
 import { AgentApprovalCoordinator } from "./agentApprovalCoordinator.js";
+import type { ProductionAgentRuntimeFactory } from "./agentRuntimeFactory.js";
 
 export interface AgentServiceResponse<T extends JsonValue = JsonValue> {
   readonly statusCode: number;
@@ -149,6 +150,8 @@ interface IdempotentEffectResult {
 }
 
 export interface LocalAgentSessionServiceOptions {
+  readonly mode?: "mock" | "production";
+  readonly runtimeFactory?: ProductionAgentRuntimeFactory;
   readonly adapters?: AgentHostOptions["adapters"];
   readonly tools?: AgentHostOptions["tools"];
   readonly approvalCoordinator?: AgentApprovalCoordinator;
@@ -455,6 +458,8 @@ export class LocalMockAgentSessionService {
   private disposed = false;
   private subscriptionPoller: NodeJS.Timeout | undefined;
   private readonly adapters: AgentHostOptions["adapters"];
+  private readonly mode: "mock" | "production";
+  private readonly runtimeFactory: ProductionAgentRuntimeFactory | undefined;
   private readonly tools: AgentHostOptions["tools"];
   private readonly approvalCoordinator: AgentApprovalCoordinator;
   private readonly effectPolicyBinding: EffectPolicyBindingV1 | undefined;
@@ -465,14 +470,26 @@ export class LocalMockAgentSessionService {
   ) {
     this.store = new JsonlAgentSessionStore(root);
     this.journalPath = join(root, "mutations.jsonl");
-    this.adapters = Object.freeze([...(options.adapters ?? [{
-      id: MOCK_PROVIDER,
-      async *stream(request: LlmRequest): AsyncIterable<StreamChunk> {
-        await new Promise<void>((resolve) => { setTimeout(resolve, 25); });
-        yield { type: "text-delta", index: 0, text: mockText(request) };
-        yield { type: "finish", reason: "stop" };
+    this.mode = options.mode ?? "mock";
+    this.runtimeFactory = options.runtimeFactory;
+    if (this.mode === "production") {
+      if (options.runtimeFactory === undefined || options.adapters !== undefined) {
+        throw new TypeError("production agent service requires only its runtime factory");
       }
-    }])]);
+      this.adapters = Object.freeze([]);
+    } else {
+      if (options.runtimeFactory !== undefined) {
+        throw new TypeError("mock agent service must not receive a production runtime factory");
+      }
+      this.adapters = Object.freeze([...(options.adapters ?? [{
+        id: MOCK_PROVIDER,
+        async *stream(request: LlmRequest): AsyncIterable<StreamChunk> {
+          await new Promise<void>((resolve) => { setTimeout(resolve, 25); });
+          yield { type: "text-delta", index: 0, text: mockText(request) };
+          yield { type: "finish", reason: "stop" };
+        }
+      }])]);
+    }
     this.tools = Object.freeze([...(options.tools ?? [])]);
     this.approvalCoordinator = options.approvalCoordinator ?? new AgentApprovalCoordinator();
     this.effectPolicyBinding = options.effectPolicyBinding;
@@ -585,6 +602,9 @@ export class LocalMockAgentSessionService {
     this.host = await createAgentHost({
       sessionStore: this.store,
       adapters: this.adapters,
+      ...(this.runtimeFactory === undefined ? {} : {
+        resolveAdapterLease: this.runtimeFactory.resolveAdapterLease
+      }),
       tools: this.tools,
       authorizer: this.approvalCoordinator
     });
@@ -954,9 +974,17 @@ export class LocalMockAgentSessionService {
     return deepFreeze({ statusCode: receipt.statusCode, body: body as unknown as JsonValue });
   }
 
-  create(input: AgentSessionCreateRequestV1): Promise<AgentServiceResponse> {
-    if (input.modelBinding.providerId !== MOCK_PROVIDER || input.modelBinding.modelId !== MOCK_MODEL) {
-      return Promise.reject(new AgentSessionServiceError(400, "MODEL_UNAVAILABLE", "local mock service supports only its fixed model"));
+  async create(input: AgentSessionCreateRequestV1): Promise<AgentServiceResponse> {
+    if (this.mode === "mock"
+      && (input.modelBinding.providerId !== MOCK_PROVIDER || input.modelBinding.modelId !== MOCK_MODEL)) {
+      throw new AgentSessionServiceError(400, "MODEL_UNAVAILABLE", "local mock service supports only its fixed model");
+    }
+    if (this.mode === "production") {
+      await this.ready;
+      safeControlId(input.clientRequestId, "client request identifier");
+      const replay = this.replayIdempotent(input.clientRequestId, "create", undefined);
+      if (replay !== undefined) return replay;
+      await this.runtimeFactory?.resolveAdapter(input.modelBinding);
     }
     const sessionId = SessionId(createSafeRandomPublicControlIdV1("session"));
     return this.idempotent(input.clientRequestId, "create", undefined, async () => {
@@ -964,7 +992,7 @@ export class LocalMockAgentSessionService {
         sessionId,
         ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
         ...(input.labels === undefined ? {} : { labels: { ...input.labels } }),
-        modelBinding: MOCK_MODEL_BINDING_V1
+        modelBinding: this.mode === "mock" ? MOCK_MODEL_BINDING_V1 : input.modelBinding
       });
       return this.sessionViewResult(201, session);
     });

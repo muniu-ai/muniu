@@ -11,7 +11,11 @@ import {
   createBuiltinAgentKernel,
   type AgentRunReason
 } from "@mn/agent-kernel";
-import { LlmRuntime, type LlmAdapter } from "@mn/agent-llm";
+import {
+  LlmRuntime,
+  type LlmAdapter,
+  type LlmRuntimeOptions
+} from "@mn/agent-llm";
 import {
   snapshotEffectPolicyBindingV1,
   type CandidateId,
@@ -34,6 +38,7 @@ import {
 
 export interface AgentHostOptions {
   readonly adapters: readonly LlmAdapter[];
+  readonly resolveAdapterLease?: LlmRuntimeOptions["resolveAdapterLease"];
   readonly tools: readonly ToolDefinition[];
   readonly authorizer: ToolAuthorizer;
   readonly sessionStore?: AgentSessionStore;
@@ -497,7 +502,17 @@ export async function createAgentHost(options: AgentHostOptions): Promise<AgentH
       options.sessionStore ?? new InMemoryAgentSessionStore(),
       lifecycle
     );
-    const llm = new LlmRuntime();
+    const resolverDescriptor = Object.getOwnPropertyDescriptor(options, "resolveAdapterLease");
+    if (resolverDescriptor !== undefined
+      && (!("value" in resolverDescriptor) || !resolverDescriptor.enumerable)) {
+      throw new TypeError("agent host adapter resolver must be an enumerable data property");
+    }
+    const resolveAdapterLease = resolverDescriptor === undefined
+      ? undefined
+      : resolverDescriptor.value as LlmRuntimeOptions["resolveAdapterLease"];
+    const llm = new LlmRuntime(
+      resolveAdapterLease === undefined ? {} : { resolveAdapterLease }
+    );
     for (const adapter of options.adapters) lifecycle.defer(llm.register(adapter));
 
     const tools = new ToolRegistry(options.authorizer);
