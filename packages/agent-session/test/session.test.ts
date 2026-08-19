@@ -395,7 +395,7 @@ async function waitForChildDecision(
       stderr += chunk.toString("utf8");
       if (/BLOCKED/u.test(stderr)) finish(() => resolve("blocked"));
     };
-    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+    const onClose = (code: number | null, signal: NodeJS.Signals | null) => {
       finish(() => reject(new Error(
         `child exited without a lock decision (code=${String(code)}, signal=${String(signal)}, stdout=${stdout}, stderr=${stderr})`
       )));
@@ -408,12 +408,12 @@ async function waitForChildDecision(
       clearTimeout(timer);
       child.stdout.off("data", onStdout);
       child.stderr.off("data", onStderr);
-      child.off("exit", onExit);
+      child.off("close", onClose);
       complete();
     };
     child.stdout.on("data", onStdout);
     child.stderr.on("data", onStderr);
-    child.on("exit", onExit);
+    child.on("close", onClose);
   });
 }
 
