@@ -264,6 +264,10 @@ wait_for_http http://127.0.0.1:57318/healthz
 wait_for_http http://127.0.0.1:58080/health
 
 run_failover_controller bootstrap
+docker run --rm --network none --user 0 \
+  --entrypoint /bin/chown \
+  --volume "${fixture_state_dir}:/state" \
+  "${image}" "$(id -u):$(id -g)" /state/worker-token
 kubectl -n muniu-kind create secret generic muniu-worker-auth \
   --from-file="token=${fixture_state_dir}/worker-token" \
   --dry-run=client \
