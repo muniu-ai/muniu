@@ -93,7 +93,7 @@ interface ApprovalRow {
   request_digest: string;
   binding_digest: string;
   decision: AgentApprovalDecisionV1 | null;
-  resolution: "decided" | null;
+  resolution: "decided" | "interrupted" | null;
   client_request_id: string | null;
   decision_digest: string | null;
 }
@@ -175,7 +175,7 @@ export class EnterpriseBuiltinAgentPersistence {
         request_digest char(64) NOT NULL,
         binding_digest char(64) NOT NULL,
         decision text CHECK (decision IN ('approve_once','approve_session_scope','deny')),
-        resolution text CHECK (resolution = 'decided'),
+        resolution text CHECK (resolution IN ('decided','interrupted')),
         client_request_id text,
         decision_digest char(64),
         created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
@@ -187,6 +187,10 @@ export class EnterpriseBuiltinAgentPersistence {
       );
       CREATE INDEX IF NOT EXISTS mn_builtin_agent_approval_execution_idx
         ON mn_builtin_agent_approvals (tenant_id, execution_id, generation);
+      ALTER TABLE mn_builtin_agent_approvals
+        DROP CONSTRAINT IF EXISTS mn_builtin_agent_approvals_resolution_check,
+        ADD CONSTRAINT mn_builtin_agent_approvals_resolution_check
+          CHECK (resolution IN ('decided','interrupted'));
     `);
   }
 
@@ -757,6 +761,42 @@ export class EnterpriseBuiltinAgentPersistence {
       OWNER_LEASE_MS
     ]);
     if (!inserted.rows[0]) throw new Error("enterprise builtin execution generation was not created");
+    const interruptedApprovals = await client.query<ApprovalRow>(`
+      SELECT tenant_id,session_id,approval_id,execution_id,generation,
+             request_event_id,request_digest,binding_digest,decision,resolution,
+             client_request_id,decision_digest
+      FROM mn_builtin_agent_approvals
+      WHERE tenant_id=$1 AND execution_id=$2 AND generation=$3
+        AND decision IS NULL
+      FOR UPDATE
+    `, [input.tenantId, input.executionId, current.generation]);
+    for (const approval of interruptedApprovals.rows) {
+      const clientRequestId = "owner-takeover";
+      const decisionDigest = sha256Canonical({
+        schemaVersion: 1,
+        tenantId: approval.tenant_id,
+        sessionId: approval.session_id,
+        approvalId: approval.approval_id,
+        requestEventId: approval.request_event_id,
+        requestDigest: approval.request_digest,
+        bindingDigest: approval.binding_digest,
+        clientRequestId,
+        decision: "deny",
+        resolution: "interrupted"
+      });
+      await client.query(`
+        UPDATE mn_builtin_agent_approvals
+        SET decision='deny',resolution='interrupted',client_request_id=$4,
+            decision_digest=$5,decided_at=clock_timestamp()
+        WHERE tenant_id=$1 AND session_id=$2 AND approval_id=$3
+      `, [
+        approval.tenant_id,
+        approval.session_id,
+        approval.approval_id,
+        clientRequestId,
+        decisionDigest
+      ]);
+    }
     return inserted.rows[0];
   }
 

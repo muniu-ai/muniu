@@ -37,3 +37,41 @@ test("local JWKS stub issues an RS256 token that matches its published key", asy
   );
 });
 
+test("fixture model retries an interrupted tool call and completes only after a result", async (t) => {
+  const server = createJwksServer();
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const baseUrl = `http://127.0.0.1:${address.port}`;
+  const respond = (input) => fetch(`${baseUrl}/v1/responses`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "fixture", input, stream: true })
+  }).then(async (response) => {
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("content-type") ?? "", /^text\/event-stream/u);
+    return response.text();
+  });
+
+  const first = await respond([{ type: "message", role: "user", content: "repair" }]);
+  assert.match(first, /"name":"write_file"/u);
+  const interrupted = await respond([{
+    type: "function_call_output",
+    call_id: "kind-write-1",
+    output: "TOOL_NOT_STARTED: interrupted and not replayed"
+  }]);
+  assert.match(interrupted, /"call_id":"kind-write-2"/u);
+  const completed = await respond([{
+    type: "function_call_output",
+    call_id: "kind-write-2",
+    output: "{\"path\":\"kind-failover.txt\",\"bytes\":45}"
+  }]);
+  assert.match(completed, /response\.output_text\.delta/u);
+  assert.doesNotMatch(completed, /"name":"write_file"/u);
+  const status = await fetch(`${baseUrl}/model/status`).then((response) => response.json());
+  assert.deepEqual(status, { modelRequests: 3, modelToolCalls: 2 });
+});

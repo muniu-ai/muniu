@@ -102,8 +102,13 @@ export class EnterpriseBuiltinAgentBroker {
   readonly #instanceId: string;
   #disposed = false;
 
-  constructor(private readonly persistence?: EnterpriseBuiltinAgentPersistence) {
-    this.#instanceId = randomUUID();
+  constructor(
+    private readonly persistence?: EnterpriseBuiltinAgentPersistence,
+    instanceId?: string
+  ) {
+    this.#instanceId = instanceId === undefined
+      ? randomUUID()
+      : safeIdentity(instanceId, "instanceId");
   }
 
   migrate(): Promise<void> {

@@ -4,10 +4,13 @@ import { spawnSync } from "node:child_process";
 
 const chart = "deploy/helm/muniu";
 const values = `${chart}/values-ci.yaml`;
+const kindValues = `${chart}/values-kind.yaml`;
 
 function helm(args, expectSuccess = true) {
   const result = spawnSync("helm", args, { encoding: "utf8" });
-  const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+  const output = `${result.stdout ?? ""}${result.stderr ?? ""}${
+    result.error ? `${result.error.message}\n` : ""
+  }`;
   if (expectSuccess && result.status !== 0) {
     throw new Error(`helm ${args.join(" ")} failed:\n${output}`);
   }
@@ -59,6 +62,10 @@ for (const required of [
     throw new Error(`production chart is missing Kubernetes boundary: ${required}`);
   }
 }
+if (!production.includes("name: MN_API_INSTANCE_ID") ||
+    !production.includes("fieldPath: metadata.name")) {
+  throw new Error("production API does not bind durable ownership to its Pod identity");
+}
 if (!/name: muniu-candidate[\s\S]*?automountServiceAccountToken: false/u.test(production)) {
   throw new Error("candidate ServiceAccount must not mount a Kubernetes token");
 }
@@ -92,6 +99,30 @@ const fixture = helm([
 ]);
 if (!fixture.includes("            - --mock\n")) {
   throw new Error("fixture Worker does not explicitly use the mock executor");
+}
+
+const kind = helm([
+  "template",
+  "muniu",
+  chart,
+  "--namespace",
+  "muniu-kind",
+  "--values",
+  kindValues,
+  "--set",
+  "api.replicas=2",
+  "--set",
+  "worker.enabled=true"
+]);
+for (const required of [
+  "name: muniu-postgres",
+  "http://muniu-kind-minio:9000",
+  "http://muniu-kind-fixture:8080",
+  "claimName: muniu-kind-sandboxes"
+]) {
+  if (!kind.includes(required)) {
+    throw new Error(`Kind profile is missing the enterprise fixture binding: ${required}`);
+  }
 }
 
 console.log("Helm chart verification passed");

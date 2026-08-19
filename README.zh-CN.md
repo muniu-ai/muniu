@@ -27,8 +27,10 @@ task → run → candidate → gate → evidence
 | PostgreSQL/S3 企业会话 | 实验性 | 租户 CAS 和篡改检测 |
 | 多副本运行队列 | 已实现 | PostgreSQL 权威存储 |
 | Helm API/Worker 部署 | 实验性 | 共享 PVC、最小 RBAC 与独立副本 |
-| Kubernetes 候选沙箱 Pod | 实验性 | CAS 源码、运行时校验、权威 Gate Pod 与 Kind 探针 |
+| Kubernetes 候选沙箱 Pod | 实验性 | CAS 源码、运行时校验、权威 Gate Pod 与 Kind 故障注入 |
+| 企业 builtin 模型/工具中继 | 实验性 | PostgreSQL generation/mailbox/审批；Kind 多副本恢复 |
 | macOS Desktop 构建 | 已实现 | 不承诺 v0.1 签名、公证、自动更新 |
+| 发布/SBOM/provenance | 发布工作流 | 正式 tag 时生成 |
 
 v0.1.0 不发布或启用桌面运行时 updater；签名、公证和自动更新制品不属于本次发布。
 
@@ -114,7 +116,7 @@ mn plugin remove PLUGIN_ID
 
 ## 企业部署
 
-`deploy/helm/muniu` 包含 API 多副本、迁移 Job、Service、Ingress、HPA、PDB、ServiceAccount 和 NetworkPolicy。v0.1.0 默认关闭 Worker，仅允许在显式 mock fixture 模式下启用；生产 values 只引用外部 PostgreSQL、S3、OIDC/JWKS、OTLP、KMS/Vault，不绑定云厂商。
+`deploy/helm/muniu` 包含 API/Worker 多副本、迁移 Job、Service、Ingress、HPA、PDB、ServiceAccount 和 NetworkPolicy。Worker 默认关闭；启用后的非 fixture Worker 默认声明 `builtin`，mock 只用于确定性验收。生产 values 只引用外部 PostgreSQL、S3、OIDC/JWKS、OTLP、KMS/Vault，不绑定云厂商。
 
 ```bash
 helm upgrade --install muniu deploy/helm/muniu \
@@ -124,7 +126,11 @@ helm upgrade --install muniu deploy/helm/muniu \
 
 每个候选任务从 S3 支撑的内容寻址源码快照物化到独立 Pod。候选 Pod 不获得 ServiceAccount token、`hostPath`、sidecar、Secret、特权或网络访问。API 会独立解析并验证该 Pod，再在第二个由 API 创建的不可变 Pod 中重放 Gate。`RuntimeClass` 为必填项，也是集群管理员落实 PID 等运行时限制的信任边界。
 
-`worker.fixtureMode=true` 使用确定性的验收执行器。非 fixture Worker 只能使用候选镜像中预装的 Claude/Codex 兼容运行时；在 builtin Agent 模型代理移出候选 Pod 前，不开放托管模型网络访问，避免通过放宽候选网络来掩盖架构缺口。
+`worker.fixtureMode=true` 使用确定性的验收执行器。非 fixture Worker 默认使用 `builtin`：模型流和 Provider 凭据留在 API，读取、搜索、补丁、写入、进程和 Git 工具通过 PostgreSQL 活跃 claim 交给 Worker，并只在同一个已检查的候选 Pod 中执行。候选 Pod 不获得模型凭据、对象存储凭据或 Kubernetes token，也不开放托管模型网络。Claude/Codex CLI 仍是显式兼容运行时，企业非 fixture Worker 不会默认依赖它们。
+
+builtin execution generation、owner lease、工具 mailbox 与运行绑定的审批决定由 PostgreSQL 管理，因此 start/poll/result 和运行绑定的 `on-risk` 审批可以落到不同 API 副本；独立 `/v1/agent-sessions` 审批仍属于服务该会话的 API 进程。API 优雅退出会释放 owner。owner 丢失时，旧 generation 保留为不可变历史，未确认工具不会重放：旧审批以 `interrupted/deny` 关闭，恢复同一受保护会话后，模型必须产生新的工具调用和审批。Provider 非敏感目录由 PostgreSQL 恢复到替换副本，密钥仍必须由环境变量或 Vault/KMS 提供。
+
+Kind + Calico 发布门禁会启动两个 API、两个 Worker，删除正在等待工具审批的精确 owner Pod，验证 generation/会话恢复与新审批，导出完成证据，再重启 PostgreSQL 并确认结果仍可读取。该路径仍标记为实验性，因为仓库验收环境不等同生产可用性或强隔离认证。
 
 ## 门禁
 
@@ -136,10 +142,14 @@ npm test
 npm run test:coverage:agent
 npm run verify:oss-baseline
 npm run verify:enterprise-fixture
+npm run verify:helm
+npm run verify:kind
 npm audit --omit=dev
 npm run typecheck:desktop
 npm run build:desktop
 ```
+
+`verify:kind` 需要 Docker、Kind、kubectl、Helm、buildx 和 curl；它覆盖源码物化、Pod 执行、token 缺失、Kubernetes API 网络拒绝、多副本 owner 丢失、PostgreSQL 重启、证据导出和租约清理。
 
 ## Cordis 来源
 

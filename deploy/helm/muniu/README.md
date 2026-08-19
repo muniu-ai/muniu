@@ -18,8 +18,10 @@ guess external CIDRs.
 The Worker is disabled by default. With `worker.enabled=true`, each claim is
 executed in an independent candidate Pod from an S3-backed content-addressed
 source snapshot. `worker.fixtureMode=true` selects the deterministic acceptance
-executor. Non-fixture mode requires compatible CLI binaries already present in
-the candidate image and does not receive hosted-provider network access.
+executor. Non-fixture mode advertises the builtin runtime: the model stream and
+provider credentials remain in the API, while bounded workspace tools execute
+through the active claim in the inspected candidate Pod. Claude/Codex remain
+explicit compatibility runtimes rather than default Worker dependencies.
 
 Candidate and API authority Pods use the
 `muniu.ai/component=candidate-sandbox` label, no `hostPath`, no service-account
@@ -34,4 +36,5 @@ enforcement. The chart never silently falls back to the cluster default.
 
 Run `npm run verify:helm` for static rendering checks. `npm run verify:kind`
 uses an ephemeral Kind + Calico cluster to execute the real Pod backend and
-verify token absence, network denial, source integrity and cleanup.
+verify token absence, network denial, source integrity, two-API/two-Worker
+owner loss, fresh approval, evidence export, PostgreSQL restart and cleanup.

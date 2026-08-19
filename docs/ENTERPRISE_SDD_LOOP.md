@@ -117,7 +117,7 @@ MN_API_TOKEN="$WORKER_JWT" node apps/cli/dist/index.js run worker \
   --language javascript --tool node --tool npm
 ```
 
-`--mock` 仅用于仓库内 `locally_verified` fixture：mock agent 本身仍在真实 enforced Docker backend 中运行，真实项目命令和 Gate 不会旁路到宿主机。企业内嵌 Agent 不依赖 Claude Code/Codex CLI 凭据；真实 provider 执行仍必须经过受治理的 provider broker、临时 secret resolution 和 network policy。Phase03 企业 PostgreSQL/S3 Agent 会话后端完成前，enterprise profile 对该路径保持 fail-closed，不应把本地 Agent 能力描述为已完成生产部署。
+`--mock` 仅用于仓库内 `locally_verified` fixture：mock agent 本身仍在真实 enforced sandbox backend 中运行，真实项目命令和 Gate 不会旁路到宿主机。企业内嵌 Agent 不依赖 Claude Code/Codex CLI 凭据；真实 provider 执行经过 API 内受治理的 provider broker，工作区工具经活跃 claim 进入已检查的候选 Pod。PostgreSQL/S3 Agent 会话、execution generation、owner lease、工具 mailbox 与运行绑定审批已经进入企业链路；Kind + Calico 门禁以双 API/Worker 注入 owner Pod 丢失和 PostgreSQL 重启。该验收仍只代表实验性 `locally_verified`，不应描述为生产认证。
 
 ## 本地验收
 

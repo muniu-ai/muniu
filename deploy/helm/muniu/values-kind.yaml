@@ -1,0 +1,74 @@
+image:
+  repository: localhost:5001/muniu-kind
+  tag: ci
+  pullPolicy: Always
+
+api:
+  replicas: 1
+
+worker:
+  enabled: false
+  fixtureMode: false
+  replicas: 2
+  capacity: 1
+  claimTtlMs: 15000
+
+corsAllowlist: [http://127.0.0.1:4173]
+enterpriseProjectRoots: [/work/sandboxes]
+
+autoscaling:
+  api: { enabled: false }
+  worker: { enabled: false }
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+networkPolicy:
+  enabled: true
+  ingressNamespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: muniu-kind
+  kubernetesApiEgress:
+    - ipBlock: { cidr: 10.96.0.1/32 }
+  apiEgress:
+    - to:
+        - podSelector:
+            matchLabels: { muniu.ai/adapter: "true" }
+      ports:
+        - { protocol: TCP, port: 5432 }
+        - { protocol: TCP, port: 9000 }
+        - { protocol: TCP, port: 8080 }
+
+postgres:
+  existingSecret: muniu-postgres
+
+s3:
+  endpointUrl: http://muniu-kind-minio:9000
+  bucket: muniu-kind
+  region: us-east-1
+  prefix: kind-failover
+  existingSecret: muniu-s3
+
+oidc:
+  issuer: http://muniu-kind-fixture:8080
+  audience: muniu-kind
+  jwksUrl: http://muniu-kind-fixture:8080/jwks.json
+
+otlp:
+  endpoint: http://muniu-kind-fixture:8080/otlp
+  serviceName: muniu-kind-api
+
+standardPackTrust:
+  existingSecret: muniu-standard-pack-trust
+
+sandbox:
+  driver: kubernetes
+  image: localhost:5001/muniu-kind:ci
+  imageDigest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  attestationExistingSecret: muniu-sandbox-attestation
+  runtimeClassName: muniu-sandbox
+  sharedWorkspace:
+    create: false
+    existingClaim: muniu-kind-sandboxes
+    mountPath: /work/sandboxes

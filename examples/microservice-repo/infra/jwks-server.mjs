@@ -68,6 +68,8 @@ async function readJsonBody(request, maxBytes = 1024 * 1024) {
 
 export function createJwksServer() {
   let acceptedTraceSpans = 0;
+  let modelRequests = 0;
+  let modelToolCalls = 0;
   return createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", issuer);
     if (request.method === "GET" && url.pathname === "/health") {
@@ -88,6 +90,10 @@ export function createJwksServer() {
     }
     if (request.method === "GET" && url.pathname === "/otlp/status") {
       json(response, 200, { acceptedTraceSpans });
+      return;
+    }
+    if (request.method === "GET" && url.pathname === "/model/status") {
+      json(response, 200, { modelRequests, modelToolCalls });
       return;
     }
     if (request.method === "POST" && url.pathname === "/otlp/v1/traces") {
@@ -127,6 +133,79 @@ export function createJwksServer() {
         token_type: "Bearer",
         expires_in: 300
       });
+      return;
+    }
+    if (request.method === "POST" && url.pathname === "/v1/responses") {
+      try {
+        const body = await readJsonBody(request);
+        modelRequests += 1;
+        const toolOutputs = Array.isArray(body.input)
+          ? body.input.filter((item) =>
+              item && typeof item === "object" && item.type === "function_call_output"
+            )
+          : [];
+        const latestOutput = String(toolOutputs.at(-1)?.output ?? "");
+        const needsTool = toolOutputs.length === 0 ||
+          /TOOL_NOT_STARTED|interrupted|not replayed/iu.test(latestOutput);
+        const events = [];
+        if (needsTool) {
+          modelToolCalls += 1;
+          const callId = `kind-write-${modelToolCalls}`;
+          events.push(
+            {
+              event: "response.output_item.added",
+              data: {
+                type: "response.output_item.added",
+                output_index: 0,
+                item: { type: "function_call", call_id: callId, name: "write_file" }
+              }
+            },
+            {
+              event: "response.function_call_arguments.delta",
+              data: {
+                type: "response.function_call_arguments.delta",
+                output_index: 0,
+                delta: JSON.stringify({
+                  path: "kind-failover.txt",
+                  content: "recovered by a replacement Muniu API replica\n"
+                })
+              }
+            }
+          );
+        } else {
+          events.push({
+            event: "response.output_text.delta",
+            data: {
+              type: "response.output_text.delta",
+              output_index: 0,
+              delta: "The failover fixture was updated and is ready for verification."
+            }
+          });
+        }
+        events.push({
+          event: "response.completed",
+          data: {
+            type: "response.completed",
+            response: {
+              status: "completed",
+              usage: { input_tokens: 12, output_tokens: 8, total_tokens: 20 }
+            }
+          }
+        });
+        const payload = events.map(({ event, data }) =>
+          `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
+        ).join("");
+        response.writeHead(200, {
+          "content-type": "text/event-stream; charset=utf-8",
+          "content-length": Buffer.byteLength(payload),
+          "cache-control": "no-store"
+        });
+        response.end(payload);
+      } catch (error) {
+        json(response, 400, {
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
       return;
     }
     json(response, 404, { code: "NOT_FOUND" });

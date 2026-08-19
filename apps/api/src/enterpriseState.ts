@@ -21,6 +21,8 @@ import type {
 import type { Waiver } from "@mn/governance";
 import type { GovernedRunState } from "@mn/loop";
 import type { FileSpecRepository, SpecRepositoryRecord } from "@mn/specs";
+import type { ProviderRecord } from "@mn/provider-catalog";
+import type { FileLocalStore } from "@mn/store";
 import type {
   EnterpriseMetadataRecord,
   EnterpriseStateSnapshot
@@ -43,7 +45,8 @@ export const ENTERPRISE_METADATA_KINDS = Object.freeze([
   "learning_proposal",
   "maturity_report",
   "gate_artifact_handle",
-  "authoritative_gate_receipt"
+  "authoritative_gate_receipt",
+  "provider"
 ] as const);
 
 function objectPayload(record: EnterpriseMetadataRecord): Record<string, unknown> {
@@ -151,6 +154,7 @@ function validateCheckpointState(
 export async function restoreEnterpriseSnapshot(input: {
   store: MemoryStore;
   specRepository: FileSpecRepository;
+  localStore?: Pick<FileLocalStore, "restoreProviders">;
   snapshot: EnterpriseStateSnapshot;
 }): Promise<void> {
   const projects = new Map<string, Project>();
@@ -173,6 +177,7 @@ export async function restoreEnterpriseSnapshot(input: {
     string,
     AuthoritativeGateReceiptRecord
   >();
+  const providers = new Map<string, ProviderRecord>();
 
   for (const record of input.snapshot.metadata) {
     const payload = objectPayload(record);
@@ -307,6 +312,26 @@ export async function restoreEnterpriseSnapshot(input: {
           "authoritative Gate receipt"
         );
         break;
+      case "provider": {
+        matchingString(record, payload, "id", record.id);
+        const config = payload.config;
+        const scope = config && typeof config === "object" && !Array.isArray(config)
+          ? (config as Record<string, unknown>).enterpriseScope
+          : undefined;
+        const tenantIds = scope && typeof scope === "object" && !Array.isArray(scope)
+          ? (scope as Record<string, unknown>).tenantIds
+          : undefined;
+        if (!Array.isArray(tenantIds) || tenantIds.length !== 1 || tenantIds[0] !== record.tenantId) {
+          throw new Error(`Enterprise metadata provider/${record.id} has mismatched tenant scope`);
+        }
+        setUnique(
+          providers,
+          record.id,
+          payload as unknown as ProviderRecord,
+          "provider"
+        );
+        break;
+      }
       default:
         // Forward-compatible readers retain unknown metadata in PostgreSQL but
         // do not expose it through an older API process.
@@ -327,6 +352,7 @@ export async function restoreEnterpriseSnapshot(input: {
     }
     await input.specRepository.restore(record);
   }
+  await input.localStore?.restoreProviders([...providers.values()]);
 
   const runJobs = input.snapshot.runJobs.map(({ item, payload }) => {
     const run = validateCheckpointRun(

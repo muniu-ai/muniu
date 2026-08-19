@@ -64,6 +64,22 @@ export class FileLocalStore {
     return data.providers.find((provider) => provider.id === id);
   }
 
+  /** Replaces only the provider catalog while retaining proxy, extension and
+   * health state. Enterprise API replicas use this to rebuild their local
+   * read model from the PostgreSQL metadata snapshot at startup. */
+  async restoreProviders(providers: readonly ProviderRecord[]): Promise<void> {
+    const data = await this.read();
+    const ids = new Set<string>();
+    data.providers = providers.map((provider) => {
+      if (ids.has(provider.id)) {
+        throw new Error(`Duplicate provider id in authoritative restore: ${provider.id}`);
+      }
+      ids.add(provider.id);
+      return normalizeProviderActivationRecord(provider);
+    });
+    await this.write(data);
+  }
+
   async createProvider(input: ProviderCreateInput): Promise<ProviderRecord> {
     const data = await this.read();
     const now = new Date().toISOString();

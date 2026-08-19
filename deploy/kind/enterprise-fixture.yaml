@@ -1,0 +1,288 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: muniu-kind-postgres
+spec:
+  capacity: { storage: 1Gi }
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Delete
+  storageClassName: muniu-kind-postgres
+  hostPath:
+    path: /var/local/muniu-kind-postgres
+    type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: muniu-kind-postgres
+  namespace: muniu-kind
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: muniu-kind-postgres
+  volumeName: muniu-kind-postgres
+  resources:
+    requests: { storage: 1Gi }
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: muniu-kind-minio
+spec:
+  capacity: { storage: 1Gi }
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Delete
+  storageClassName: muniu-kind-minio
+  hostPath:
+    path: /var/local/muniu-kind-minio
+    type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: muniu-kind-minio
+  namespace: muniu-kind
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: muniu-kind-minio
+  volumeName: muniu-kind-minio
+  resources:
+    requests: { storage: 1Gi }
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: muniu-postgres
+  namespace: muniu-kind
+type: Opaque
+stringData:
+  url: postgresql://mn:mn-kind-only@muniu-kind-postgres:5432/muniu
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: muniu-s3
+  namespace: muniu-kind
+type: Opaque
+stringData:
+  access-key-id: mn-kind
+  secret-access-key: mn-kind-secret-only
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: muniu-sandbox-attestation
+  namespace: muniu-kind
+type: Opaque
+stringData:
+  key: muniu-kind-attestation-key-0123456789abcdef0123456789abcdef
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: muniu-standard-pack-trust
+  namespace: muniu-kind
+type: Opaque
+stringData:
+  trust.json: |-
+    {
+      "id": "enterprise-fixture-trust",
+      "requireSignature": true,
+      "requireReleaseMetadata": false,
+      "requireReleaseSignature": false,
+      "trustedPublicKeys": [{
+        "id": "enterprise-fixture-2026",
+        "publicKey": "MCowBQYDK2VwAyEA3s2YZ56XbCL2rwtgZjU/FQDdDm51hvGt0xtTWZLCvC0=",
+        "status": "active"
+      }],
+      "revokedPublicKeyIds": [],
+      "verificationTime": "2026-07-11T02:00:00.000Z"
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: muniu-kind-postgres
+  namespace: muniu-kind
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: muniu-kind-postgres }
+  template:
+    metadata:
+      labels: { app: muniu-kind-postgres, muniu.ai/adapter: "true" }
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          env:
+            - { name: POSTGRES_USER, value: mn }
+            - { name: POSTGRES_PASSWORD, value: mn-kind-only }
+            - { name: POSTGRES_DB, value: muniu }
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          ports: [{ name: postgres, containerPort: 5432 }]
+          readinessProbe:
+            exec: { command: [pg_isready, -U, mn, -d, muniu] }
+            periodSeconds: 2
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: muniu-kind-postgres }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: muniu-kind-postgres
+  namespace: muniu-kind
+spec:
+  selector: { app: muniu-kind-postgres }
+  ports: [{ name: postgres, port: 5432, targetPort: postgres }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: muniu-kind-minio
+  namespace: muniu-kind
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: muniu-kind-minio }
+  template:
+    metadata:
+      labels: { app: muniu-kind-minio, muniu.ai/adapter: "true" }
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: minio
+          image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+          args: [server, /data]
+          env:
+            - { name: MINIO_ROOT_USER, value: mn-kind }
+            - { name: MINIO_ROOT_PASSWORD, value: mn-kind-secret-only }
+          ports: [{ name: s3, containerPort: 9000 }]
+          readinessProbe:
+            httpGet: { path: /minio/health/live, port: s3 }
+            periodSeconds: 2
+          volumeMounts:
+            - { name: data, mountPath: /data }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: muniu-kind-minio }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: muniu-kind-minio
+  namespace: muniu-kind
+spec:
+  selector: { app: muniu-kind-minio }
+  ports: [{ name: s3, port: 9000, targetPort: s3 }]
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: muniu-kind-minio-init
+  namespace: muniu-kind
+spec:
+  backoffLimit: 5
+  template:
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      containers:
+        - name: minio-client
+          image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+          command: [/bin/sh, -ec]
+          args:
+            - |-
+              until mc alias set kind http://muniu-kind-minio:9000 mn-kind mn-kind-secret-only; do sleep 1; done
+              mc mb --ignore-existing kind/muniu-kind
+              mc anonymous set none kind/muniu-kind
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: muniu-kind-fixture
+  namespace: muniu-kind
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: muniu-kind-fixture }
+  template:
+    metadata:
+      labels: { app: muniu-kind-fixture, muniu.ai/adapter: "true" }
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: fixture
+          image: muniu-kind:ci
+          imagePullPolicy: Never
+          command: [node, examples/microservice-repo/infra/jwks-server.mjs]
+          env:
+            - { name: JWKS_PORT, value: "8080" }
+            - { name: JWKS_ISSUER, value: http://muniu-kind-fixture:8080 }
+            - { name: JWKS_AUDIENCE, value: muniu-kind }
+          ports: [{ name: http, containerPort: 8080 }]
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 2
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts: [{ name: tmp, mountPath: /tmp }]
+      volumes: [{ name: tmp, emptyDir: {} }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: muniu-kind-fixture
+  namespace: muniu-kind
+spec:
+  selector: { app: muniu-kind-fixture }
+  ports: [{ name: http, port: 8080, targetPort: http }]
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: muniu-kind-source-seed
+  namespace: muniu-kind
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: seed
+          image: muniu-kind:ci
+          imagePullPolicy: Never
+          command: [node, -e]
+          args:
+            - |-
+              const fs=require('node:fs');
+              fs.rmSync('/work/sandboxes/fixture',{recursive:true,force:true});
+              fs.cpSync('/opt/muniu/examples/microservice-repo','/work/sandboxes/fixture',{recursive:true});
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: workspaces, mountPath: /work/sandboxes }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: workspaces
+          persistentVolumeClaim: { claimName: muniu-kind-sandboxes }
+        - { name: tmp, emptyDir: {} }

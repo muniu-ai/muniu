@@ -113,9 +113,9 @@ jobs:
       - run: npm run verify:enterprise-fixture
 
   kubernetes-sandbox:
-    name: Kind candidate Pod boundary
+    name: Kind enterprise failover and Pod boundary
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -128,7 +128,7 @@ jobs:
           mkdir -p "${GOBIN}"
           go install sigs.k8s.io/kind@v0.27.0
           echo "${GOBIN}" >> "${GITHUB_PATH}"
-      - name: Run candidate Pod and network-isolation probe
+      - name: Run enterprise failover and network-isolation probes
         run: scripts/verify-kind-sandbox.sh
 
   desktop:

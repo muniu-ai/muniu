@@ -381,6 +381,9 @@ export interface BuildServerOptions {
    * enterprise profile never opts out.
    */
   enterprisePostgres?: EnterprisePostgresOptions | false;
+  /** Stable replica identity used by the durable builtin execution owner
+   * lease. Kubernetes supplies the API Pod name through the Downward API. */
+  enterpriseBuiltinInstanceId?: string;
   /** false is reserved for isolated enterprise unit tests. */
   telemetry?: OtlpHttpTelemetryOptions | false;
   /** false is reserved for isolated enterprise unit tests. */
@@ -1744,6 +1747,19 @@ export function buildServer(options: BuildServerOptions = {}) {
     for (const record of store.authoritativeGateReceipts.values()) {
       add(record.tenantId, "authoritative_gate_receipt", record.id, record);
     }
+    for (const provider of await localStore.listProviders()) {
+      const scope = provider.config.enterpriseScope;
+      const tenantIds = scope && typeof scope === "object" && !Array.isArray(scope)
+        ? (scope as Record<string, unknown>).tenantIds
+        : undefined;
+      if (!Array.isArray(tenantIds) || tenantIds.length !== 1 || typeof tenantIds[0] !== "string") {
+        if (runtimeProfile === "enterprise") {
+          throw new TypeError(`Enterprise provider ${provider.id} has no unique tenant scope`);
+        }
+        continue;
+      }
+      add(tenantIds[0], "provider", provider.id, provider);
+    }
     return records.map((record) => ({
       ...record,
       digest: sha256Canonical(record.payload)
@@ -1757,6 +1773,21 @@ export function buildServer(options: BuildServerOptions = {}) {
       managedKinds: ENTERPRISE_METADATA_KINDS
     });
   };
+  const migrateEnterpriseProviderMetadata = async (): Promise<boolean> => {
+    if (!enterprisePostgres) return false;
+    const providerRecords = (await collectEnterpriseMetadata()).filter(
+      (record) => record.kind === "provider"
+    );
+    if (providerRecords.length === 0) return false;
+    // Provider metadata was added after the original enterprise snapshot
+    // format. Only append that new kind here: reconciling the whole in-memory
+    // image before the PostgreSQL snapshot is restored could delete durable
+    // records that this process has not loaded yet.
+    for (const record of providerRecords) {
+      await enterprisePostgres.upsertMetadata(record);
+    }
+    return true;
+  };
   if (runtimeProfile === "enterprise" && options.agentSessionService) {
     throw new Error("Enterprise Agent sessions cannot replace the enforced PostgreSQL/S3 backend");
   }
@@ -1767,7 +1798,8 @@ export function buildServer(options: BuildServerOptions = {}) {
   const enterpriseBuiltinAgentBroker = new EnterpriseBuiltinAgentBroker(
     enterprisePostgres
       ? new EnterpriseBuiltinAgentPersistence(enterprisePostgres.pool)
-      : undefined
+      : undefined,
+    options.enterpriseBuiltinInstanceId
   );
   let getAgentSessionService:
     | ((request?: FastifyRequest) => Promise<LocalMockAgentSessionService>)
@@ -2266,7 +2298,13 @@ export function buildServer(options: BuildServerOptions = {}) {
         await syncEnterpriseMetadata();
         snapshot = await enterprisePostgres.readStateSnapshot();
       }
-      await restoreEnterpriseSnapshot({ store, specRepository, snapshot });
+      if (
+        !snapshot.metadata.some((record) => record.kind === "provider") &&
+        await migrateEnterpriseProviderMetadata()
+      ) {
+        snapshot = await enterprisePostgres.readStateSnapshot();
+      }
+      await restoreEnterpriseSnapshot({ store, specRepository, localStore, snapshot });
       if (providerUsageTerminalJournal) {
         await providerUsageTerminalJournal.replayAll((log, ref) =>
           enterprisePostgres.appendProviderUsageLog(log, ref)
@@ -2484,7 +2522,7 @@ export function buildServer(options: BuildServerOptions = {}) {
           // enterprise profile, so a failed atomic commit must restore that
           // durable image before the failed response is exposed to callers.
           const snapshot = await enterprisePostgres.readStateSnapshot();
-          await restoreEnterpriseSnapshot({ store, specRepository, snapshot });
+          await restoreEnterpriseSnapshot({ store, specRepository, localStore, snapshot });
           const failedAt = new Date().toISOString();
           for (const domainEvent of domainEvents) {
             const {
@@ -7288,7 +7326,7 @@ export function buildServer(options: BuildServerOptions = {}) {
       });
     } catch (error) {
       const snapshot = await enterprisePostgres.readStateSnapshot();
-      await restoreEnterpriseSnapshot({ store, specRepository, snapshot });
+      await restoreEnterpriseSnapshot({ store, specRepository, localStore, snapshot });
       throw error;
     }
   }

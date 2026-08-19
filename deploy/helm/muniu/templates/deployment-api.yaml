@@ -24,6 +24,8 @@ spec:
           ports: [{ name: http, containerPort: {{ .Values.api.port }} }]
           envFrom: [{ configMapRef: { name: {{ include "muniu.fullname" . }} } }]
           env:
+            - name: MN_API_INSTANCE_ID
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
             - name: MN_POSTGRES_URL
               valueFrom: { secretKeyRef: { name: {{ .Values.postgres.existingSecret }}, key: {{ .Values.postgres.urlKey }} } }
             - name: MN_ARTIFACT_S3_ACCESS_KEY_ID
