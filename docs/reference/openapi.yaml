@@ -517,6 +517,34 @@ paths:
         "200":
           description: Successful response
       x-muniu-source: apps/api/src/server.ts
+  /v1/run-jobs/queue/{id}/builtin-executions:
+    post:
+      operationId: post__v1_run_jobs_queue_id_builtin_executions
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/enterpriseBuiltinAgentRoutes.ts
+  /v1/run-jobs/queue/{id}/builtin-executions/{executionId}/cancel:
+    post:
+      operationId: post__v1_run_jobs_queue_id_builtin_executions_executionId_cancel
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/enterpriseBuiltinAgentRoutes.ts
+  /v1/run-jobs/queue/{id}/builtin-executions/{executionId}/poll:
+    post:
+      operationId: post__v1_run_jobs_queue_id_builtin_executions_executionId_poll
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/enterpriseBuiltinAgentRoutes.ts
+  /v1/run-jobs/queue/{id}/builtin-executions/{executionId}/tool-results:
+    post:
+      operationId: post__v1_run_jobs_queue_id_builtin_executions_executionId_tool_results
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/enterpriseBuiltinAgentRoutes.ts
   /v1/run-jobs/queue/{id}/events:
     post:
       operationId: post__v1_run_jobs_queue_id_events

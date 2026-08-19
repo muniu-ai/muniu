@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type {
+  SandboxExecutionEvidence,
   SandboxLeaseAttestation,
   SandboxRuntimeProof
 } from "@mn/harness";
@@ -100,6 +101,31 @@ export function verifySandboxRuntimeProof(
     return { valid: false, reason: "runtime proof active claim or runtime binding mismatch" };
   }
   return { valid: true };
+}
+
+/** Structural binding shared by every API boundary that accepts inspected
+ * runtime evidence. Signature and freshness are verified separately. */
+export function sandboxExecutionMatchesAttestation(
+  execution: SandboxExecutionEvidence | undefined,
+  attestation: SandboxLeaseAttestation | undefined
+): boolean {
+  return Boolean(
+    execution &&
+    attestation &&
+    execution.backendId === attestation.backend.id &&
+    execution.backendVersion === attestation.backend.version &&
+    execution.leaseId === attestation.leaseId &&
+    execution.attestationDigest === attestation.digest &&
+    /^[a-f0-9]{64}$/u.test(execution.runtimeId) &&
+    /^[a-f0-9]{64}$/u.test(execution.runtimeDigest) &&
+    typeof execution.imageDigest === "string" &&
+    execution.imageDigest === attestation.policy.runtimeImage?.digest &&
+    execution.runtimeProof?.attestationDigest === execution.attestationDigest &&
+    execution.runtimeProof?.runtimeId === execution.runtimeId &&
+    execution.runtimeProof?.runtimeDigest === execution.runtimeDigest &&
+    execution.runtimeProof?.imageDigest === execution.imageDigest &&
+    execution.runtimeProof?.claimDigest === attestation.claimDigest
+  );
 }
 
 /** Verifies append-only historical runtime evidence without requiring its old

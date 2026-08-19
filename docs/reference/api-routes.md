@@ -79,6 +79,10 @@
 | GET | `/v1/run-jobs/queue` | `apps/api/src/server.ts` |
 | GET | `/v1/run-jobs/queue/:id` | `apps/api/src/server.ts` |
 | POST | `/v1/run-jobs/queue/:id/artifacts` | `apps/api/src/server.ts` |
+| POST | `/v1/run-jobs/queue/:id/builtin-executions` | `apps/api/src/enterpriseBuiltinAgentRoutes.ts` |
+| POST | `/v1/run-jobs/queue/:id/builtin-executions/:executionId/cancel` | `apps/api/src/enterpriseBuiltinAgentRoutes.ts` |
+| POST | `/v1/run-jobs/queue/:id/builtin-executions/:executionId/poll` | `apps/api/src/enterpriseBuiltinAgentRoutes.ts` |
+| POST | `/v1/run-jobs/queue/:id/builtin-executions/:executionId/tool-results` | `apps/api/src/enterpriseBuiltinAgentRoutes.ts` |
 | POST | `/v1/run-jobs/queue/:id/events` | `apps/api/src/server.ts` |
 | POST | `/v1/run-jobs/queue/:id/finish` | `apps/api/src/server.ts` |
 | POST | `/v1/run-jobs/queue/:id/heartbeat` | `apps/api/src/server.ts` |

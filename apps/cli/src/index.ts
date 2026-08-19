@@ -12,7 +12,11 @@ import type {
   RunEvent,
   RunRecord
 } from "@mn/core";
-import { createDefaultExecutors, MockExecutor } from "@mn/executors";
+import {
+  BuiltinAgentExecutor,
+  createDefaultExecutors,
+  MockExecutor
+} from "@mn/executors";
 import type {
   SandboxExecutionEvidence,
   SandboxLeaseAttestation,
@@ -44,6 +48,7 @@ import {
 } from "@mn/worker";
 import { parse as parseYaml } from "yaml";
 import { agentCommand } from "./agent-commands.js";
+import { runEnterpriseBuiltinAgentCandidate as runRemoteEnterpriseBuiltinAgentCandidate } from "./enterprise-builtin-runner.js";
 import { pluginCommand, profileCommand } from "./runtime-commands.js";
 
 const defaultApiUrl = "http://127.0.0.1:7318";
@@ -222,7 +227,7 @@ interface EnterpriseWorkerHeartbeatResponse {
 }
 
 interface WorkerRequirements {
-  requiredProviders: AgentProvider[];
+  requiredProviders: WorkerRuntimeId[];
   requiredLanguages: string[];
   requiredGateRunnerIds: string[];
   sandbox: {
@@ -234,7 +239,7 @@ interface WorkerRequirements {
 }
 
 interface WorkerCapabilities {
-  providers: AgentProvider[];
+  providers: WorkerRuntimeId[];
   languages: string[];
   gateRunnerIds: string[];
   sandboxBackends: Array<{
@@ -245,6 +250,8 @@ interface WorkerCapabilities {
   tenantIds: string[];
   tools: string[];
 }
+
+type WorkerRuntimeId = "builtin" | AgentProvider;
 
 interface EnterpriseSourceSnapshotRef {
   schemaVersion: 1;
@@ -2014,11 +2021,11 @@ async function runWorker(args: string[]): Promise<void> {
     if (!process.env.MN_API_TOKEN?.trim()) {
       throw new Error("Enterprise worker requires a machine JWT in MN_API_TOKEN.");
     }
-    if (!useMockExecutors && sandboxDriver === "docker") {
+    if (!useMockExecutors && capabilities?.providers.some((provider) => provider !== "builtin")) {
       throw new Error(
-        "Enterprise managed-provider execution is not available yet: the enforced " +
-        "container runtime does not inject Claude/Codex credentials or network access. " +
-        "Use --mock only for the local enterprise acceptance fixture."
+        "Enterprise Claude/Codex compatibility execution is unavailable in the " +
+        "network-denied candidate runtime. Use the builtin provider broker, or --mock " +
+        "only for the deterministic acceptance fixture."
       );
     }
     await postJson("/v1/run-jobs/workers/heartbeat", {
@@ -2169,17 +2176,17 @@ function enterpriseWorkerCapabilities(args: readonly string[]): WorkerCapabiliti
     args,
     "--provider",
     "MN_WORKER_PROVIDERS",
-    ["claude", "codex"]
+    ["builtin"]
   );
-  if (providers.some((provider) => provider !== "claude" && provider !== "codex")) {
-    throw new Error("Enterprise worker providers must be claude or codex.");
+  if (providers.some((provider) => provider !== "builtin" && provider !== "claude" && provider !== "codex")) {
+    throw new Error("Enterprise worker providers must be builtin, claude or codex.");
   }
   const backendId =
     readOption([...args], "--sandbox-backend") ??
     process.env.MN_WORKER_SANDBOX_BACKEND?.trim() ??
     "enterprise-container";
   return {
-    providers: providers as AgentProvider[],
+    providers: providers as WorkerRuntimeId[],
     languages: repeatedStringOptions(
       args,
       "--language",
@@ -2490,6 +2497,8 @@ async function runEnterpriseClaimedJob(
       throw new Error("Enforced Docker backend did not return a sandbox lease id.");
     }
     leaseId = prepared.leaseId;
+    const builtinBackend = backend;
+    const builtinLeaseId = leaseId;
     const sandboxExecution = backend.executionEvidence(leaseId);
     const sandboxWorkspaceRoot = backend.workspaceRoot(leaseId);
     const sandboxProject: Project = {
@@ -2550,6 +2559,19 @@ async function runEnterpriseClaimedJob(
       return response.measurement;
     };
     const sandboxExecutors = {
+      builtin: new BuiltinAgentExecutor({
+        run: (input) => runRemoteEnterpriseBuiltinAgentCandidate({
+          runId: item.runId,
+          ownerId: options.ownerId,
+          claimToken: options.claimToken,
+          backend: builtinBackend,
+          leaseId: builtinLeaseId,
+          attestation,
+          sandboxExecution,
+          input,
+          transport: { post: (path, body) => postJson(path, body) }
+        })
+      }),
       claude: new DockerSandboxAgentExecutor({
         provider: "claude",
         backend,
@@ -3819,7 +3841,7 @@ Commands:
   mn run --spec <id@revision> --workflow <id[@version]> [--harness-profile id[@version]]
          [--title "..."] [--prompt "..."] [--wait] [--queue-only] [--priority -1000..1000]
   mn run worker [--once] [--mock] [--owner worker-id] [--capacity 1] [--ttl-ms 30000] [--workspace-root .mn/worktrees] [--proxy-base-url http://127.0.0.1:15721]
-  mn run worker --enterprise --mock [--once] [--owner machine-jwt-sub] [--sandbox-image approved-image-assertion] [--sandbox-backend id] [--sandbox-capability id] [--provider claude|codex] [--language javascript] [--gate-runner id] [--tool executable]
+  mn run worker --enterprise [--once] [--owner machine-jwt-sub] [--sandbox-image approved-image-assertion] [--sandbox-backend id] [--sandbox-capability id] [--provider builtin|claude|codex] [--language javascript] [--gate-runner id] [--tool executable]
   mn run workers [--state idle|running|stale] [--owner worker-id]
   mn run artifacts <run-id> [--candidate candidate-id] [--provider claude|codex] [--kind log|summary|test-report] [--gate gate] [--source source] [--persisted true|false]
   mn run artifacts-download <run-id> [--candidate candidate-id] [--provider claude|codex] [--kind log|summary|test-report] [--gate gate] [--source source] [--persisted true|false] [--out artifacts.tar]

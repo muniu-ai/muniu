@@ -17,6 +17,10 @@ import {
 type ToolAuthorizationRequest = Parameters<AgentHostOptions["authorizer"]["authorize"]>[0];
 type ToolAuthorizationResult = Awaited<ReturnType<AgentHostOptions["authorizer"]["authorize"]>>;
 
+export interface AgentApprovalCoordinatorOptions {
+  readonly autoApprove?: (request: ToolAuthorizationRequest) => boolean;
+}
+
 interface PendingApproval {
   readonly request: AgentSessionEventV1<"approval/requested">;
   readonly binding: AgentToolApprovalBindingV1;
@@ -53,6 +57,8 @@ function authorizationResult(
 export class AgentApprovalCoordinator {
   private readonly pending = new Map<string, PendingApproval>();
 
+  constructor(private readonly options: AgentApprovalCoordinatorOptions = {}) {}
+
   get activeApprovalCount(): number {
     return this.pending.size;
   }
@@ -85,6 +91,9 @@ export class AgentApprovalCoordinator {
       || durable.runId !== binding.commitment.runId
       || durable.candidateId !== binding.commitment.candidateId) {
       throw new TypeError("tool approval request is not bound to the durable effect");
+    }
+    if (this.options.autoApprove?.(request) === true) {
+      return authorizationResult("approve_once", "decided");
     }
     const key = approvalKey(durable.sessionId, binding.approvalId);
     if (this.pending.has(key)) throw new TypeError("tool approval request is already registered");

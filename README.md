@@ -36,6 +36,7 @@ The default runtime is the embedded `builtin` Agent. Claude Code and Codex CLI r
 | Multi-replica run queue | Implemented | PostgreSQL authoritative |
 | Helm API/Worker deployment | Experimental | Shared PVC, least-privilege RBAC and independent replicas |
 | Kubernetes candidate sandbox Pods | Experimental | CAS source, runtime verification, authority Gate Pod and Kind probe |
+| Enterprise builtin model/tool relay | Experimental | API owns model credentials; Worker executes tools in the inspected candidate Pod |
 | macOS Desktop build | Implemented | No v0.1 signing/notarization/updater promise |
 | Release/SBOM/provenance | Release workflow | Produced for published tags |
 
@@ -142,7 +143,9 @@ helm upgrade --install muniu deploy/helm/muniu \
 
 Each claimed candidate is materialized from an S3-backed content-addressed source snapshot into an independent Pod. Candidate Pods receive no ServiceAccount token, `hostPath`, sidecar, secret, privilege or network access. The API resolves and verifies the Pod independently and replays Gates in a second API-created immutable Pod. `RuntimeClass` is mandatory and is the cluster administrator's enforcement boundary for runtime-specific controls such as PID limits.
 
-`worker.fixtureMode=true` runs the deterministic acceptance executor. A non-fixture Worker uses a pre-installed Claude/Codex compatibility runtime inside the network-denied candidate image; hosted-provider access is intentionally unavailable until the builtin Agent model broker is moved outside the candidate Pod. This keeps the current experimental boundary fail-closed instead of weakening candidate networking.
+`worker.fixtureMode=true` runs the deterministic acceptance executor. A non-fixture Worker advertises `builtin` by default. The API owns provider credentials and the durable Agent session, while the Worker relays the six bounded workspace tools to the exact inspected candidate Pod. The Pod remains network-denied and receives neither model credentials nor a Kubernetes token. Claude/Codex CLI targets remain explicit compatibility runtimes and are rejected by the non-fixture enterprise Worker.
+
+The v0.1 broker is currently process-local: until the PostgreSQL broker migration is complete, an enterprise deployment using builtin candidates must route one claim's start/poll/tool-result requests to the same API replica. This limitation is intentionally documented and the release acceptance gate remains open.
 
 ## Development checks
 

@@ -12,4 +12,8 @@ API 与 Worker 使用不同 ServiceAccount。Worker 只拥有候选 Pod 的 crea
 
 生产必须显式设置 `sandbox.runtimeClassName`，并在该 RuntimeClass 对应的运行时配置中落实 PID 限制。Chart 不会回退到默认运行时。共享 PVC 必须支持 API 与 Worker 副本并发挂载；多节点集群通常需要 RWX 存储。
 
+非 fixture Worker 默认只声明 `builtin`。模型 Provider 凭据仅配置在 API 的 secret/vault 中，不得写入 Worker 或候选 Pod。`node` 必须同时存在于 Harness command allowlist 和候选镜像，因为文件工具通过无 shell 的 Node runtime 执行；任意命令仍需命中签名租约的可执行文件白名单。
+
+当前活动工具 broker 仍是 API 进程内状态。完成 PostgreSQL broker 迁移和跨副本审批唤醒前，builtin 企业路径不得作为多副本生产就绪功能；这是已知发布阻断项，不应依赖负载均衡偶然粘滞。
+
 上线前运行 `npm run verify:helm`；具备 Docker/Kind/kubectl/buildx/jq 的环境还应运行 `npm run verify:kind`。后者使用 Calico 验证真实候选 Pod 的源码摘要、命令执行、token 缺失、Kubernetes API 网络隔离与租约清理。

@@ -295,6 +295,11 @@ function queueScopeForRoute(method: string, pathname: string): WorkerScope | und
   if (normalized !== "POST") return undefined;
   if (pathname === "/v1/run-jobs/queue/claim") return "run_jobs:claim";
   if (pathname === "/v1/run-jobs/workers/heartbeat") return "run_jobs:heartbeat";
+  if (
+    /^\/v1\/run-jobs\/queue\/[^/]+\/builtin-executions(?:\/[^/]+\/(?:poll|tool-results|cancel))?$/u.test(pathname)
+  ) {
+    return "run_jobs:checkpoint";
+  }
   const action = /^\/v1\/run-jobs\/queue\/[^/]+\/(heartbeat|release|events|artifacts|measurements|usage-receipts|update|finish|sandbox-runtime-proof|source-snapshot)$/u.exec(
     pathname
   )?.[1];
