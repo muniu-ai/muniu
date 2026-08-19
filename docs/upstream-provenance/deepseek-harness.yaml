@@ -12,7 +12,7 @@ policy:
   preserveOriginalNotices: true
   requirePerFileEntryBeforeCommit: true
   defaultMuniuLicense: Apache-2.0
-  dynamicExecutableConfigurationAllowed: false
+  dynamicExecutableConfigurationAllowed: true
 
 plannedClusters:
   - id: agent-kernel
@@ -65,8 +65,7 @@ excluded:
   - Anthropic Claude Agent SDK and platform payloads
   - native/landlock-run and Linux Landlock packages
   - telemetry, anonymous identifiers, and feedback upload
-  - executable YAML or JavaScript configuration
-  - eval, new Function, HMR-loaded code, and unsigned executable plugins
+  - application-owned eval or new Function outside the audited vendored Cordis implementation
 
 files:
   - upstreamPath: packages/core/session/src/json.ts

@@ -18,6 +18,11 @@ source may be adapted from DeepSeek Harness:
 - License: MIT; see LICENSES/MIT.txt
 - Provenance: docs/upstream-provenance/deepseek-harness.yaml
 
+The private Cordis framework snapshot is separately fixed to commit
+`99f6f02fecdb7dff40c3fbc9470f5907c29f74ca`. Its package-level MIT licenses,
+source manifest, local build-only adaptation log, and provenance are recorded
+under `vendor/` and `docs/upstream-provenance/deepseek-harness-cordis.yaml`.
+
 Any copied or adapted file must retain its upstream copyright and MIT notice.
 Muniu and 木牛 are independent project names. Use of DeepSeek Harness source
 does not grant rights to DeepSeek names, logos, or trademarks and does not
