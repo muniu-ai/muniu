@@ -45,7 +45,16 @@ test("Docker backend executes inside a read-only, resource-limited, network-deni
 
   const authorityCalls: string[] = [];
   const image = process.env.MN_TEST_SANDBOX_IMAGE ?? "node:22-alpine";
-  const imageDigest = await inspectImageDigest(image);
+  let imageDigest: string;
+  try {
+    imageDigest = await inspectImageDigest(image);
+  } catch (error) {
+    if (error instanceof Error && /No such (?:image|object)/u.test(error.message)) {
+      t.skip(`Docker fixture image is unavailable: ${image}`);
+      return;
+    }
+    throw error;
+  }
   const leaseAttestation = attestation(image, imageDigest);
   const backend = new DockerEnforcedSandboxBackend({
     image,

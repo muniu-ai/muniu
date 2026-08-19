@@ -13,9 +13,12 @@ otlp:
   endpoint: http://otel-collector.observability.svc:4318
 
 sandbox:
-  imageDigest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  imageDigest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  runtimeClassName: muniu-sandbox
 
 networkPolicy:
+  kubernetesApiEgress:
+    - ipBlock: { cidr: 10.96.0.1/32 }
   apiEgress:
     - to:
         - namespaceSelector:

@@ -22,9 +22,9 @@ api:
     limits: { cpu: "2", memory: 2Gi }
 
 worker:
-  # The in-tree enterprise worker currently requires an enforced Docker runtime.
-  # Keep it off in Kubernetes until a candidate-Pod provisioner is installed;
-  # enabling this flag is limited to explicit acceptance environments.
+  # Enable after supplying the machine JWT and a shared PVC. Each claim gets a
+  # separate candidate Pod; fixtureMode only swaps the model executor for the
+  # deterministic acceptance implementation.
   enabled: false
   fixtureMode: false
   replicas: 2
@@ -82,6 +82,9 @@ networkPolicy:
   # OTLP destinations. Keep this explicit because policies cannot allow DNS
   # names portably. Production values must narrow these selectors/CIDRs.
   apiEgress: []
+  # Kubernetes API ClusterIP CIDR(s), normally a single /32. Both the API
+  # authority and Worker controller need port 443; candidate Pods never do.
+  kubernetesApiEgress: []
 
 securityContext:
   runAsNonRoot: true
@@ -124,14 +127,23 @@ standardPackTrust:
   key: trust.json
 
 sandbox:
+  driver: kubernetes
   image: ghcr.io/muniu-ai/muniu-sandbox:0.1.0
   imageDigest: ""
   attestationExistingSecret: muniu-sandbox-attestation
   attestationKey: key
   serviceAccountName: ""
   automountServiceAccountToken: false
+  runtimeClassName: ""
   networkPolicy: default-deny
   hostPathAllowed: false
+  sharedWorkspace:
+    create: true
+    existingClaim: ""
+    storageClassName: ""
+    accessModes: [ReadWriteMany]
+    size: 20Gi
+    mountPath: /work/sandboxes
 
 vault:
   address: ""

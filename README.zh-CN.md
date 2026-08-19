@@ -26,8 +26,8 @@ task → run → candidate → gate → evidence
 | Claude/Codex CLI | 兼容能力 | 必须显式选择 |
 | PostgreSQL/S3 企业会话 | 实验性 | 租户 CAS 和篡改检测 |
 | 多副本运行队列 | 已实现 | PostgreSQL 权威存储 |
-| Helm API 部署 | 实验性 | sandbox Pod provisioner 交付前 Worker 仅限 fixture |
-| Kubernetes 候选沙箱 Pod | 计划中 | 已有默认拒绝策略，provisioner 未完成 |
+| Helm API/Worker 部署 | 实验性 | 共享 PVC、最小 RBAC 与独立副本 |
+| Kubernetes 候选沙箱 Pod | 实验性 | CAS 源码、运行时校验、权威 Gate Pod 与 Kind 探针 |
 | macOS Desktop 构建 | 已实现 | 不承诺 v0.1 签名、公证、自动更新 |
 
 v0.1.0 不发布或启用桌面运行时 updater；签名、公证和自动更新制品不属于本次发布。
@@ -122,7 +122,9 @@ helm upgrade --install muniu deploy/helm/muniu \
   -f values.production.yaml
 ```
 
-Chart 禁止自动挂载 ServiceAccount token，以 UID 10001 运行，丢弃全部 Linux capabilities，并使用只读根文件系统。候选 Pod 必须禁用 `hostPath`、Kubernetes API 权限和默认网络。Kubernetes sandbox provisioner 在 v0.1.0 仍是计划中能力。
+每个候选任务从 S3 支撑的内容寻址源码快照物化到独立 Pod。候选 Pod 不获得 ServiceAccount token、`hostPath`、sidecar、Secret、特权或网络访问。API 会独立解析并验证该 Pod，再在第二个由 API 创建的不可变 Pod 中重放 Gate。`RuntimeClass` 为必填项，也是集群管理员落实 PID 等运行时限制的信任边界。
+
+`worker.fixtureMode=true` 使用确定性的验收执行器。非 fixture Worker 只能使用候选镜像中预装的 Claude/Codex 兼容运行时；在 builtin Agent 模型代理移出候选 Pod 前，不开放托管模型网络访问，避免通过放宽候选网络来掩盖架构缺口。
 
 ## 门禁
 

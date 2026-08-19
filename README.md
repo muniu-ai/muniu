@@ -34,8 +34,8 @@ The default runtime is the embedded `builtin` Agent. Claude Code and Codex CLI r
 | Claude/Codex CLI runtimes | Compatibility | Selected explicitly |
 | PostgreSQL/S3 enterprise sessions | Experimental | Tenant CAS and integrity verification |
 | Multi-replica run queue | Implemented | PostgreSQL authoritative |
-| Helm API deployment | Experimental | Worker is fixture-only until the sandbox Pod provisioner ships |
-| Kubernetes candidate sandbox Pods | Planned | Deny policy exists; provisioner incomplete |
+| Helm API/Worker deployment | Experimental | Shared PVC, least-privilege RBAC and independent replicas |
+| Kubernetes candidate sandbox Pods | Experimental | CAS source, runtime verification, authority Gate Pod and Kind probe |
 | macOS Desktop build | Implemented | No v0.1 signing/notarization/updater promise |
 | Release/SBOM/provenance | Release workflow | Produced for published tags |
 
@@ -132,7 +132,7 @@ Installation records an exact version and integrity value. Plugins are executabl
 
 ## Enterprise deployment
 
-The chart at `deploy/helm/muniu` deploys API replicas, a migration Job, Service, optional Ingress, HPA, PDB, ServiceAccount and NetworkPolicies. Its Worker is disabled by default and can only be enabled in explicit mock fixture mode in v0.1.0. Production values reference external PostgreSQL, S3, OIDC/JWKS, OTLP and KMS/Vault services.
+The chart at `deploy/helm/muniu` deploys API/Worker replicas, a migration Job, Service, optional Ingress, HPA, PDB, least-privilege ServiceAccounts/RBAC, a shared workspace PVC and NetworkPolicies. The Worker is disabled by default. Production values reference external PostgreSQL, S3, OIDC/JWKS, OTLP and KMS/Vault services.
 
 ```bash
 helm upgrade --install muniu deploy/helm/muniu \
@@ -140,7 +140,9 @@ helm upgrade --install muniu deploy/helm/muniu \
   -f values.production.yaml
 ```
 
-The chart disables service-account token automount, runs as UID 10001, drops Linux capabilities and uses a read-only root filesystem. Candidate sandbox Pods must have no `hostPath`, Kubernetes API permission or default network access. The Kubernetes sandbox provisioner remains planned in v0.1.0.
+Each claimed candidate is materialized from an S3-backed content-addressed source snapshot into an independent Pod. Candidate Pods receive no ServiceAccount token, `hostPath`, sidecar, secret, privilege or network access. The API resolves and verifies the Pod independently and replays Gates in a second API-created immutable Pod. `RuntimeClass` is mandatory and is the cluster administrator's enforcement boundary for runtime-specific controls such as PID limits.
+
+`worker.fixtureMode=true` runs the deterministic acceptance executor. A non-fixture Worker uses a pre-installed Claude/Codex compatibility runtime inside the network-denied candidate image; hosted-provider access is intentionally unavailable until the builtin Agent model broker is moved outside the candidate Pod. This keeps the current experimental boundary fail-closed instead of weakening candidate networking.
 
 ## Development checks
 
@@ -152,12 +154,14 @@ npm test
 npm run test:coverage:agent
 npm run verify:oss-baseline
 npm run verify:enterprise-fixture
+npm run verify:helm
+npm run verify:kind
 npm audit --omit=dev
 npm run typecheck:desktop
 npm run build:desktop
 ```
 
-Docker, PostgreSQL and Kind checks are opt-in and document their prerequisites.
+`verify:kind` requires Docker, Kind, kubectl, buildx and jq. It installs Calico in an ephemeral cluster and proves source materialization, Pod execution, token absence, Kubernetes-API network denial and lease cleanup.
 
 ## Cordis provenance
 

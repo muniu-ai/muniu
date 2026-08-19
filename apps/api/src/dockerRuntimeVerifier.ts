@@ -27,6 +27,9 @@ export interface SandboxRuntimeVerificationRequest {
   readonly runtimeId: string;
   readonly attestation: SandboxLeaseAttestation;
   readonly projectRoot: string;
+  /** Required on first proof issuance for remote runtimes. Reinspection may
+   * recover it from the already proof-bound runtime document. */
+  readonly sourceSnapshotDigest?: string;
 }
 
 export interface SandboxRuntimeVerificationResult {

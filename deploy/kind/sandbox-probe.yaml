@@ -1,0 +1,139 @@
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: muniu-sandbox
+handler: runc
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: muniu-kind
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: muniu-candidate
+  namespace: muniu-kind
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: muniu-probe-controller
+  namespace: muniu-kind
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: muniu-probe-controller
+  namespace: muniu-kind
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "get", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create", "get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: muniu-probe-controller
+  namespace: muniu-kind
+subjects:
+  - kind: ServiceAccount
+    name: muniu-probe-controller
+    namespace: muniu-kind
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: muniu-probe-controller
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: muniu-kind-sandboxes
+spec:
+  capacity: { storage: 1Gi }
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Delete
+  storageClassName: muniu-kind-local
+  hostPath:
+    path: /var/local/muniu-kind-sandboxes
+    type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: muniu-kind-sandboxes
+  namespace: muniu-kind
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: muniu-kind-local
+  volumeName: muniu-kind-sandboxes
+  resources:
+    requests: { storage: 1Gi }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: muniu-candidate-default-deny
+  namespace: muniu-kind
+spec:
+  podSelector:
+    matchLabels:
+      muniu.ai/component: candidate-sandbox
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: muniu-sandbox-probe
+  namespace: muniu-kind
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: muniu-sandbox-probe
+    spec:
+      serviceAccountName: muniu-probe-controller
+      automountServiceAccountToken: true
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: probe
+          image: muniu-kind:ci
+          imagePullPolicy: Never
+          command: ["node", "scripts/kind-sandbox-probe.mjs"]
+          env:
+            - name: MN_KIND_IMAGE
+              valueFrom:
+                configMapKeyRef:
+                  name: muniu-kind-image
+                  key: reference
+            - name: MN_KIND_IMAGE_DIGEST
+              valueFrom:
+                configMapKeyRef:
+                  name: muniu-kind-image
+                  key: digest
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: workspace, mountPath: /work/sandboxes }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: workspace
+          persistentVolumeClaim: { claimName: muniu-kind-sandboxes }
+        - name: tmp
+          emptyDir: {}
