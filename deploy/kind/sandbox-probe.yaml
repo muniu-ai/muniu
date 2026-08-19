@@ -115,6 +115,11 @@ spec:
           imagePullPolicy: Never
           command: ["node", "scripts/kind-sandbox-probe.mjs"]
           env:
+            - name: MN_KIND_IMAGE
+              valueFrom:
+                configMapKeyRef:
+                  name: muniu-kind-image
+                  key: reference
             - name: MN_KIND_IMAGE_DIGEST
               valueFrom:
                 configMapKeyRef:

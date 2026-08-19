@@ -15,6 +15,11 @@ import {
 
 const imageDigest = requiredDigest(process.env.MN_KIND_IMAGE_DIGEST);
 const image = process.env.MN_KIND_IMAGE ?? "muniu-kind:ci";
+const imagePullPolicy = process.env.MN_KIND_IMAGE_PULL_POLICY ?? "IfNotPresent";
+assert.ok(
+  ["Always", "IfNotPresent", "Never"].includes(imagePullPolicy),
+  "MN_KIND_IMAGE_PULL_POLICY must be Always, IfNotPresent, or Never"
+);
 const namespace = process.env.MN_KIND_NAMESPACE ?? "muniu-kind";
 const sharedWorkspaceRoot = process.env.MN_KIND_SHARED_ROOT ?? "/work/sandboxes";
 const sharedVolumeClaimName = process.env.MN_KIND_SHARED_PVC ?? "muniu-kind-sandboxes";
@@ -35,7 +40,7 @@ try {
     sharedWorkspaceRoot,
     serviceAccountName,
     runtimeClassName,
-    imagePullPolicy: "Never"
+    imagePullPolicy
   };
   const backend = new KubernetesSandboxPodBackend({
     image,
