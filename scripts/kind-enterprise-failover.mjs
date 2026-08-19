@@ -36,7 +36,15 @@ if (mode === "bootstrap") {
 async function bootstrap() {
   const bootstrapOwnerToken = await issueToken("project_owner", "bootstrap", "kind-owner");
   const adminToken = await issueToken("org_admin", "bootstrap", "kind-admin");
-  const capabilities = await api(bootstrapOwnerToken, "GET", "/v1/capabilities");
+  const deniedCapabilities = await api(
+    bootstrapOwnerToken,
+    "GET",
+    "/v1/capabilities",
+    undefined,
+    [403]
+  );
+  assert.equal(deniedCapabilities.error, "role is not authorized for this operation");
+  const capabilities = await api(adminToken, "GET", "/v1/capabilities");
   const workflow = capabilities.workflows.find((item) => item.id === "governed-increment-v1");
   const harness = capabilities.harnessProfiles.find((item) => item.id === "enterprise");
   assert.equal(workflow?.status, "available");
