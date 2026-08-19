@@ -204,6 +204,11 @@ test("Kubernetes Pod verification accepts official client model instances", () =
     pod.spec!.securityContext
   );
   pod.spec!.volumes = pod.spec!.volumes?.map((volume) => Object.assign(new V1Volume(), volume));
+  for (const volume of pod.spec!.volumes ?? []) {
+    if (volume.persistentVolumeClaim?.readOnly === false) {
+      delete volume.persistentVolumeClaim.readOnly;
+    }
+  }
 
   assert.doesNotThrow(() => verifyKubernetesSandboxPod(pod, {
     attestation: lease,

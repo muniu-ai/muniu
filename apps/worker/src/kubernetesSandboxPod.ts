@@ -776,7 +776,7 @@ function securityProjection(spec: V1Pod["spec"]): unknown {
     containers: spec.containers.map(kubernetesContainerProjection),
     initContainers: (spec.initContainers ?? []).map(kubernetesContainerProjection),
     ephemeralContainers: (spec.ephemeralContainers ?? []).map(kubernetesContainerProjection),
-    volumes: spec.volumes
+    volumes: (spec.volumes ?? []).map(kubernetesVolumeProjection)
   });
 }
 
@@ -803,6 +803,22 @@ function kubernetesVolumeMountProjection(value: unknown): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
   const mount = value as Record<string, unknown>;
   return { ...mount, readOnly: mount.readOnly ?? false };
+}
+
+function kubernetesVolumeProjection(value: unknown): unknown {
+  const plain = plainKubernetesValue(value) as Record<string, unknown>;
+  if (
+    !plain.persistentVolumeClaim ||
+    typeof plain.persistentVolumeClaim !== "object" ||
+    Array.isArray(plain.persistentVolumeClaim)
+  ) {
+    return plain;
+  }
+  const claim = plain.persistentVolumeClaim as Record<string, unknown>;
+  return {
+    ...plain,
+    persistentVolumeClaim: { ...claim, readOnly: claim.readOnly ?? false }
+  };
 }
 
 function firstProjectionMismatch(expected: unknown, observed: unknown, path = "$spec"): string {
