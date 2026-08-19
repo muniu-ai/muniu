@@ -13,7 +13,7 @@ cleanup() {
 trap cleanup EXIT
 
 docker buildx build --load --tag "${image}" --metadata-file "${metadata_file}" .
-image_digest="$(jq -r '.\"containerimage.digest\" // empty' "${metadata_file}" | sed 's/^sha256://')"
+image_digest="$(jq -r '.["containerimage.digest"] // empty' "${metadata_file}" | sed 's/^sha256://')"
 if [[ ! "${image_digest}" =~ ^[a-f0-9]{64}$ ]]; then
   echo "Could not resolve the Kind probe image digest" >&2
   exit 1

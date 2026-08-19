@@ -9,7 +9,7 @@ COPY vendor ./vendor
 COPY config ./config
 COPY scripts ./scripts
 COPY tsconfig.base.json ./
-RUN npm ci && npm run build
+RUN npm ci && npm run build && npm prune --omit=dev
 
 FROM node:22.19.0-bookworm-slim AS runtime
 ENV NODE_ENV=production
