@@ -30,6 +30,9 @@ worker:
   replicas: 2
   capacity: 1
   claimTtlMs: 30000
+  # Must describe the executable tool set actually present in the Worker and
+  # compatible with the active governance command allowlist.
+  tools: [node, npm]
   resources:
     requests: { cpu: 250m, memory: 512Mi }
     limits: { cpu: "2", memory: 2Gi }

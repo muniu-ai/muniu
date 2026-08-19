@@ -57,6 +57,7 @@ for (const required of [
   'resources: ["pods/exec"]',
   "name: muniu-sandbox-workspaces",
   "name: MN_KUBERNETES_RUNTIME_CLASS",
+  "name: MN_WORKER_TOOLS",
   "name: muniu-sandbox-default-deny",
   "name: muniu-kubernetes-api-egress",
   "name: muniu-worker-api-egress"

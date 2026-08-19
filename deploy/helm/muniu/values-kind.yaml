@@ -12,6 +12,9 @@ worker:
   replicas: 2
   capacity: 1
   claimTtlMs: 15000
+  # The deterministic fixture exercises node/npm. The broader declaration is
+  # needed to match the built-in multi-language governance policy under test.
+  tools: [npm, pnpm, yarn, node, npx, tsc, vitest, go, cargo, pytest, python, git]
 
 corsAllowlist: [http://127.0.0.1:4173]
 enterpriseProjectRoots: [/work/sandboxes]

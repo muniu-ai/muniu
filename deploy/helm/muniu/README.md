@@ -22,6 +22,9 @@ executor. Non-fixture mode advertises the builtin runtime: the model stream and
 provider credentials remain in the API, while bounded workspace tools execute
 through the active claim in the inspected candidate Pod. Claude/Codex remain
 explicit compatibility runtimes rather than default Worker dependencies.
+Set `worker.tools` to the executable tools actually available in that Worker
+image; queue claims fail closed when the active governance policy requires a
+tool the Worker has not declared.
 
 Candidate and API authority Pods use the
 `muniu.ai/component=candidate-sandbox` label, no `hostPath`, no service-account
