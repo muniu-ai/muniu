@@ -28,7 +28,7 @@ kind load docker-image "${image}" --name "${cluster_name}"
 image_digest="$(
   docker exec "${cluster_name}-control-plane" \
     ctr -n k8s.io images list |
-    awk -v reference="docker.io/library/${image}" '$1 == reference { print $3; exit }' |
+    awk -v reference="docker.io/library/${image}" '$1 == reference { print $3 }' |
     sed 's/^sha256://'
 )"
 if [[ ! "${image_digest}" =~ ^[a-f0-9]{64}$ ]]; then
