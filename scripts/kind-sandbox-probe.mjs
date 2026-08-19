@@ -133,11 +133,38 @@ try {
       timeoutSeconds: 10
     });
     assert.equal(pids.exitCode, 0, pids.stderr);
+    const pidsMax = pids.stdout.trim();
+
+    const pidsStress = await backend.execute(leaseId, {
+      executable: "node",
+      args: [
+        "-e",
+        [
+          "const {spawn}=require('node:child_process');",
+          `const limit=${attestation.policy.resources.pids};`,
+          "const children=[];let errors=0;",
+          "for(let index=0;index<320;index+=1){",
+          "const child=spawn('/bin/sleep',['30'],{stdio:'ignore'});",
+          "child.on('error',()=>{errors+=1});children.push(child);}",
+          "setTimeout(()=>{",
+          "const live=children.filter((child)=>child.pid&&child.exitCode===null&&child.signalCode===null).length;",
+          "for(const child of children){if(child.pid&&child.exitCode===null)child.kill('SIGKILL');}",
+          "process.stdout.write(JSON.stringify({attempted:children.length,live,errors}));",
+          "process.exit(live<limit&&live>=Math.floor(limit/2)?0:9);",
+          "},1500);"
+        ].join("")
+      ],
+      cwd: backend.workspaceRoot(leaseId),
+      timeoutSeconds: 15
+    });
     assert.equal(
-      pids.stdout.trim(),
-      String(attestation.policy.resources.pids),
-      "candidate Pod cgroup PID limit does not match its attestation"
+      pidsStress.exitCode,
+      0,
+      `candidate Pod did not enforce its ancestor PID cgroup: ${pidsStress.stdout} ${pidsStress.stderr}`
     );
+    const pidsStressResult = JSON.parse(pidsStress.stdout);
+    assert.equal(pidsStressResult.attempted, 320);
+    assert.ok(pidsStressResult.live < attestation.policy.resources.pids);
 
     const network = await backend.execute(leaseId, {
       executable: "node",
@@ -162,6 +189,9 @@ try {
       sourceSnapshotDigest: snapshot.digest,
       tokenMounted: false,
       pidsLimit: attestation.policy.resources.pids,
+      pidsMax,
+      pidsEnforced: true,
+      maxSpawned: pidsStressResult.live,
       kubernetesApiReachable: false
     }));
   } finally {

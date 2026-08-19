@@ -84,6 +84,14 @@ docker run \
 registry_created=true
 kind create cluster --name "${cluster_name}" --config deploy/kind/config.yaml
 cluster_created=true
+configured_pids_limit="$(
+  docker exec "${cluster_name}-control-plane" \
+    awk '$1 == "podPidsLimit:" { print $2 }' /var/lib/kubelet/config.yaml
+)"
+if [[ "${configured_pids_limit}" != "256" ]]; then
+  echo "Kind kubelet PID limit is ${configured_pids_limit:-unset}, expected 256" >&2
+  exit 1
+fi
 registry_directory="/etc/containerd/certs.d/localhost:${registry_port}"
 for node in $(kind get nodes --name "${cluster_name}"); do
   docker exec "${node}" mkdir -p "${registry_directory}"
@@ -131,6 +139,7 @@ printf '%s\n' "${logs}"
 grep -F '"kindSandboxProbe":"passed"' <<<"${logs}" >/dev/null
 grep -F '"tokenMounted":false' <<<"${logs}" >/dev/null
 grep -F '"pidsLimit":256' <<<"${logs}" >/dev/null
+grep -F '"pidsEnforced":true' <<<"${logs}" >/dev/null
 grep -F '"kubernetesApiReachable":false' <<<"${logs}" >/dev/null
 kubectl -n muniu-kind wait --for=delete pod -l muniu.ai/component=candidate-sandbox --timeout=30s
 if kubectl -n muniu-kind get pods -l muniu.ai/component=candidate-sandbox -o name | grep -q .; then
