@@ -72,6 +72,11 @@ if (!production.includes("name: MN_API_INSTANCE_ID") ||
     !production.includes("fieldPath: metadata.name")) {
   throw new Error("production API does not bind durable ownership to its Pod identity");
 }
+if (!production.includes("name: HOME") ||
+    !production.includes("value: /opt/muniu") ||
+    !production.includes("mountPath: /opt/muniu/.muniu")) {
+  throw new Error("production API HOME must resolve inside the writable state mount");
+}
 if (!/name: muniu-candidate[\s\S]*?automountServiceAccountToken: false/u.test(production)) {
   throw new Error("candidate ServiceAccount must not mount a Kubernetes token");
 }

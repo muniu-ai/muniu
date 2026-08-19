@@ -24,6 +24,7 @@ spec:
           ports: [{ name: http, containerPort: {{ .Values.api.port }} }]
           envFrom: [{ configMapRef: { name: {{ include "muniu.fullname" . }} } }]
           env:
+            - { name: HOME, value: /opt/muniu }
             - name: MN_API_INSTANCE_ID
               valueFrom: { fieldRef: { fieldPath: metadata.name } }
             - name: MN_POSTGRES_URL
