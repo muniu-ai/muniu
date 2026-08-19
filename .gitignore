@@ -6,6 +6,8 @@ node_modules/
 dist/
 dist-test/
 lib/
+!scripts/lib/
+!scripts/lib/cargo-lock-license.mjs
 target/
 coverage/
 .turbo/

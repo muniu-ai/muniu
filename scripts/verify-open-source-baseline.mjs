@@ -60,6 +60,7 @@ const requiredFiles = [
   ".gitleaks.toml",
   "deny.toml",
   "scripts/lib/open-source-policy.mjs",
+  "scripts/lib/cargo-lock-license.mjs",
   "scripts/test/open-source-policy.test.mjs",
   "scripts/test/fixtures/allowed-fake-secrets.txt",
   "scripts/verify-third-party-licenses.mjs",
@@ -306,6 +307,9 @@ const tracked = execFileSync(
   .filter(Boolean);
 const workflowFiles = [];
 const sourceFiles = [];
+for (const requiredPath of requiredFiles) {
+  if (!tracked.includes(requiredPath)) fail("required file is not tracked: " + requiredPath);
+}
 for (const relativePath of tracked) {
   const absolutePath = path.join(root, relativePath);
   if (!existsSync(absolutePath)) continue;
