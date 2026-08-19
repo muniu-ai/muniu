@@ -83,6 +83,11 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm run typecheck
+      - run: npm run docs:check
+      - run: npm run docs:links
+      - run: npm run docs:build
+      - run: helm version --short
+      - run: npm run verify:helm
       - run: npm run test:coverage:agent
       - run: npm test
       - run: npm run verify:enterprise-fixture

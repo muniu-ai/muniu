@@ -201,7 +201,7 @@ for (const expected of [
   "waitForShutdown",
   "find-generic-password",
   "delete-generic-password",
-  "mniu://import/provider",
+  "muniu://import/provider",
   "x86_64",
   "arm64",
 ] ) {
@@ -242,6 +242,7 @@ for (const expected of [
   "安装",
   "卸载",
   "安全要求",
+  "muniu://",
   "mniu://",
   "brew tap-new",
   "brew install --cask --dry-run",
@@ -290,8 +291,9 @@ for (const [document, label] of [
   ]) {
     assertExcludes(document, obsoleteClaim, label);
   }
-  assertIncludes(document, "v0.1.0 不发布或启用桌面运行时 updater", label);
 }
+assertIncludes(readme, "v0.1.0 does not publish or enable a desktop runtime updater", "README v0.1 release scope");
+assertIncludes(technicalDesign, "v0.1.0 不发布或启用桌面运行时 updater", "technical design v0.1 release scope");
 
 const fakePublicPreflight = spawnSync(
   process.execPath,

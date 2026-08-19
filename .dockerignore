@@ -1,0 +1,7 @@
+.git
+.mn
+.muniu
+node_modules
+**/dist-test
+**/coverage
+apps/desktop-mac/src-tauri/target

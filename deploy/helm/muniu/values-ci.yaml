@@ -1,0 +1,28 @@
+corsAllowlist:
+  - https://muniu.example.test
+
+s3:
+  endpointUrl: http://minio.storage.svc:9000
+  bucket: muniu-ci
+
+oidc:
+  issuer: https://oidc.example.test
+  jwksUrl: https://oidc.example.test/.well-known/jwks.json
+
+otlp:
+  endpoint: http://otel-collector.observability.svc:4318
+
+sandbox:
+  imageDigest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+
+networkPolicy:
+  apiEgress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              muniu.ai/adapter-access: "true"
+      ports:
+        - { protocol: TCP, port: 443 }
+        - { protocol: TCP, port: 5432 }
+        - { protocol: TCP, port: 9000 }
+        - { protocol: TCP, port: 4318 }

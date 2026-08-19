@@ -17,6 +17,7 @@ cask "mniu" do
   uninstall quit: "dev.muniu.desktop"
 
   zap trash: [
+    "~/.muniu",
     "~/.mniu",
     "~/Library/Application Support/dev.muniu.desktop",
     "~/Library/Preferences/dev.muniu.desktop.plist",
