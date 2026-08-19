@@ -16,3 +16,12 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- define "muniu.image" -}}
 {{ printf "%s:%s" .Values.image.repository (.Values.image.tag | default .Chart.AppVersion) }}
 {{- end }}
+{{- define "muniu.workerServiceAccountName" -}}
+{{ printf "%s-worker" (include "muniu.fullname" .) }}
+{{- end }}
+{{- define "muniu.candidateServiceAccountName" -}}
+{{ default (printf "%s-candidate" (include "muniu.fullname" .)) .Values.sandbox.serviceAccountName }}
+{{- end }}
+{{- define "muniu.sharedWorkspaceClaimName" -}}
+{{- if .Values.sandbox.sharedWorkspace.existingClaim }}{{ .Values.sandbox.sharedWorkspace.existingClaim }}{{ else }}{{ printf "%s-sandbox-workspaces" (include "muniu.fullname" .) }}{{ end }}
+{{- end }}

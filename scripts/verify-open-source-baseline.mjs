@@ -163,8 +163,14 @@ if (rootPackage.optionalDependencies?.["ds-store"] !== "^0.1.6") {
 if (rootPackage.scripts?.["test:oss-policy"] !== "node --test scripts/test/open-source-policy.test.mjs") {
   fail("test:oss-policy must run the open-source policy regression suite");
 }
-if (rootPackage.scripts?.["verify:licenses"] !== "node scripts/verify-third-party-licenses.mjs") {
+if (
+  rootPackage.scripts?.["verify:licenses"] !==
+  "node scripts/generate-npm-license-inventory.mjs --check && node scripts/verify-third-party-licenses.mjs"
+) {
   fail("verify:licenses must run the deterministic npm and Cargo license inventory");
+}
+if (!existsSync(path.join(root, "THIRD_PARTY_NPM_LICENSES.json"))) {
+  fail("tracked npm license inventory is missing");
 }
 
 const npmrc = readFileSync(path.join(root, ".npmrc"), "utf8");

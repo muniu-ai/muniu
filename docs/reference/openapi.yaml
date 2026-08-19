@@ -559,6 +559,13 @@ paths:
         "200":
           description: Successful response
       x-muniu-source: apps/api/src/server.ts
+  /v1/run-jobs/queue/{id}/source-snapshot:
+    post:
+      operationId: post__v1_run_jobs_queue_id_source_snapshot
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
   /v1/run-jobs/queue/{id}/update:
     post:
       operationId: post__v1_run_jobs_queue_id_update

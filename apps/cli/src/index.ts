@@ -37,6 +37,7 @@ import {
   DockerEnforcedSandboxBackend,
   DockerSandboxAgentExecutor,
   GovernedRunOrchestrator,
+  KubernetesSandboxPodBackend,
   RunOrchestrator,
   gateResultV2OutputDigest,
   prepareSnapshotCandidateWorkspace
@@ -245,11 +246,20 @@ interface WorkerCapabilities {
   tools: string[];
 }
 
-interface EnterpriseWorkerExecutionContext {
+interface EnterpriseSourceSnapshotRef {
   schemaVersion: 1;
+  objectKey: string;
+  digest: string;
+  byteLength: number;
+  contentType: "application/vnd.muniu.workspace-snapshot.v1+json";
+}
+
+interface EnterpriseWorkerExecutionContext {
+  schemaVersion: 1 | 2;
   project: Project;
   task: AgentTask;
   specRevision: SpecRevision;
+  sourceSnapshot?: EnterpriseSourceSnapshotRef;
   bindings: {
     tenantId: string;
     runId: string;
@@ -264,7 +274,7 @@ interface EnterpriseWorkerExecutionContext {
 }
 
 interface EnterpriseRunJobPayload {
-  version: 1;
+  version: 1 | 2;
   run: RunRecord;
   executionContext?: EnterpriseWorkerExecutionContext;
   governedResumeState?: GovernedRunState;
@@ -1991,12 +2001,20 @@ async function runWorker(args: string[]): Promise<void> {
   const capabilities = enterprise
     ? enterpriseWorkerCapabilities(args)
     : undefined;
+  const sandboxDriver = (
+    readOption(args, "--sandbox-driver") ??
+    process.env.MN_WORKER_SANDBOX_DRIVER?.trim() ??
+    "docker"
+  );
+  if (sandboxDriver !== "docker" && sandboxDriver !== "kubernetes") {
+    throw new Error("--sandbox-driver must be docker or kubernetes.");
+  }
 
   if (enterprise) {
     if (!process.env.MN_API_TOKEN?.trim()) {
       throw new Error("Enterprise worker requires a machine JWT in MN_API_TOKEN.");
     }
-    if (!useMockExecutors) {
+    if (!useMockExecutors && sandboxDriver === "docker") {
       throw new Error(
         "Enterprise managed-provider execution is not available yet: the enforced " +
         "container runtime does not inject Claude/Codex credentials or network access. " +
@@ -2061,6 +2079,22 @@ async function runWorker(args: string[]): Promise<void> {
       dockerBinary:
         readOption(args, "--docker-binary") ??
         process.env.MN_DOCKER_BINARY,
+      sandboxDriver,
+      kubernetesNamespace:
+        readOption(args, "--kubernetes-namespace") ??
+        process.env.MN_KUBERNETES_NAMESPACE,
+      kubernetesSharedVolumeClaim:
+        readOption(args, "--kubernetes-shared-volume-claim") ??
+        process.env.MN_KUBERNETES_SHARED_VOLUME_CLAIM,
+      kubernetesSharedWorkspaceRoot:
+        readOption(args, "--kubernetes-shared-root") ??
+        process.env.MN_KUBERNETES_SHARED_ROOT,
+      kubernetesCandidateServiceAccount:
+        readOption(args, "--kubernetes-candidate-service-account") ??
+        process.env.MN_KUBERNETES_CANDIDATE_SERVICE_ACCOUNT,
+      kubernetesRuntimeClass:
+        readOption(args, "--kubernetes-runtime-class") ??
+        process.env.MN_KUBERNETES_RUNTIME_CLASS,
       workspaceRoot:
         readOption(args, "--workspace-root") ?? join(process.cwd(), ".mn", "worktrees"),
       proxyBaseUrl: readOption(args, "--proxy-base-url") ?? claimed.proxyBaseUrl
@@ -2210,6 +2244,12 @@ interface ClaimedJobOptions {
   sandboxAttestation?: SandboxLeaseAttestation;
   sandboxImage: string;
   dockerBinary?: string;
+  sandboxDriver: "docker" | "kubernetes";
+  kubernetesNamespace?: string;
+  kubernetesSharedVolumeClaim?: string;
+  kubernetesSharedWorkspaceRoot?: string;
+  kubernetesCandidateServiceAccount?: string;
+  kubernetesRuntimeClass?: string;
   workspaceRoot: string;
   proxyBaseUrl?: string;
 }
@@ -2324,7 +2364,15 @@ async function runEnterpriseClaimedJob(
   item: RunJobQueueItem,
   options: ClaimedJobOptions
 ): Promise<void> {
-  const { project, task, run, specRevision, resumeFrom, approvalDecision } =
+  const {
+    project,
+    task,
+    run,
+    specRevision,
+    sourceSnapshot,
+    resumeFrom,
+    approvalDecision
+  } =
     validateEnterpriseClaimPayload(item, options);
   const attestation = options.sandboxAttestation!;
   const abortController = new AbortController();
@@ -2354,37 +2402,84 @@ async function runEnterpriseClaimedJob(
   }, Math.min(5_000, Math.max(1_000, Math.floor(options.ttlMs / 3))));
   heartbeat.unref?.();
 
-  let backend: DockerEnforcedSandboxBackend | undefined;
+  let backend: DockerEnforcedSandboxBackend | KubernetesSandboxPodBackend | undefined;
   let leaseId: string | undefined;
   let updateChain = Promise.resolve();
   try {
-    backend = new DockerEnforcedSandboxBackend({
-      image: options.sandboxImage,
-      attestation,
-      expected: {
-        runId: run.id,
-        tenantId: attestation.tenantId,
-        workerId: options.ownerId,
-        harnessDigest: run.harnessManifest!.digest
-      },
-      ...(options.dockerBinary ? { dockerBinary: options.dockerBinary } : {}),
-      runtimeProofAuthority: async ({ attestation: issued, runtimeId }) => {
-        const response = await postJson<{
-          sandboxExecution: SandboxExecutionEvidence;
-          runtimeProof: SandboxRuntimeProof;
-        }>(
-          `/v1/run-jobs/queue/${encodeURIComponent(item.runId)}/sandbox-runtime-proof`,
-          { ...claimBody, attestation: issued, runtimeId }
-        );
-        if (
-          response.sandboxExecution.runtimeProof.digest !==
-          response.runtimeProof.digest
-        ) {
-          throw new Error("Sandbox authority returned inconsistent runtime proof envelopes.");
-        }
-        return response.runtimeProof;
+    const runtimeProofAuthority = async ({
+      attestation: issued,
+      runtimeId
+    }: {
+      attestation: SandboxLeaseAttestation;
+      runtimeId: string;
+    }): Promise<SandboxRuntimeProof> => {
+      const response = await postJson<{
+        sandboxExecution: SandboxExecutionEvidence;
+        runtimeProof: SandboxRuntimeProof;
+      }>(
+        `/v1/run-jobs/queue/${encodeURIComponent(item.runId)}/sandbox-runtime-proof`,
+        { ...claimBody, attestation: issued, runtimeId }
+      );
+      if (response.sandboxExecution.runtimeProof.digest !== response.runtimeProof.digest) {
+        throw new Error("Sandbox authority returned inconsistent runtime proof envelopes.");
       }
-    });
+      return response.runtimeProof;
+    };
+    if (options.sandboxDriver === "kubernetes") {
+      if (!sourceSnapshot) {
+        throw new Error("Kubernetes enterprise claim has no content-addressed source snapshot.");
+      }
+      const snapshotContent = await postBytes(
+        `/v1/run-jobs/queue/${encodeURIComponent(item.runId)}/source-snapshot`,
+        claimBody,
+        sourceSnapshot
+      );
+      backend = new KubernetesSandboxPodBackend({
+        image: options.sandboxImage,
+        attestation,
+        expected: {
+          runId: run.id,
+          tenantId: attestation.tenantId,
+          workerId: options.ownerId,
+          harnessDigest: run.harnessManifest!.digest
+        },
+        sourceSnapshot: { ...sourceSnapshot, content: snapshotContent },
+        namespace: requireWorkerSetting(
+          options.kubernetesNamespace,
+          "MN_KUBERNETES_NAMESPACE"
+        ),
+        sharedVolumeClaimName: requireWorkerSetting(
+          options.kubernetesSharedVolumeClaim,
+          "MN_KUBERNETES_SHARED_VOLUME_CLAIM"
+        ),
+        sharedWorkspaceRoot: requireWorkerSetting(
+          options.kubernetesSharedWorkspaceRoot,
+          "MN_KUBERNETES_SHARED_ROOT"
+        ),
+        serviceAccountName: requireWorkerSetting(
+          options.kubernetesCandidateServiceAccount,
+          "MN_KUBERNETES_CANDIDATE_SERVICE_ACCOUNT"
+        ),
+        runtimeClassName: requireWorkerSetting(
+          options.kubernetesRuntimeClass,
+          "MN_KUBERNETES_RUNTIME_CLASS"
+        ),
+        runtimeProofAuthority
+      });
+    } else {
+      backend = new DockerEnforcedSandboxBackend({
+        image: options.sandboxImage,
+        attestation,
+        expected: {
+          runId: run.id,
+          tenantId: attestation.tenantId,
+          workerId: options.ownerId,
+          harnessDigest: run.harnessManifest!.digest
+        },
+        ...(options.dockerBinary ? { dockerBinary: options.dockerBinary } : {}),
+        runtimeProofAuthority
+      });
+    }
     const prepared = await backend.prepare({
       projectRoot: project.rootPath,
       taskId: task.id,
@@ -2397,6 +2492,10 @@ async function runEnterpriseClaimedJob(
     leaseId = prepared.leaseId;
     const sandboxExecution = backend.executionEvidence(leaseId);
     const sandboxWorkspaceRoot = backend.workspaceRoot(leaseId);
+    const sandboxProject: Project = {
+      ...project,
+      rootPath: backend.sourceRoot(leaseId)
+    };
     const history: NonNullable<RunRecord["sandboxEvidenceHistory"]> =
       cloneJson(run.sandboxEvidenceHistory ?? []);
     let checkpointState: GovernedRunState | undefined;
@@ -2541,7 +2640,7 @@ async function runEnterpriseClaimedJob(
         }
       }
     });
-    const completed = await orchestrator.run(project, task, baseRun, {
+    const completed = await orchestrator.run(sandboxProject, task, baseRun, {
       ...(resumeFrom ? { resumeFrom } : {}),
       ...(approvalDecision ? { approvalDecision } : {}),
       abortSignal: abortController.signal
@@ -2655,6 +2754,7 @@ function validateEnterpriseClaimPayload(
   task: AgentTask;
   run: RunRecord;
   specRevision: SpecRevision;
+  sourceSnapshot?: EnterpriseSourceSnapshotRef;
   resumeFrom?: GovernedRunState;
   approvalDecision?: ApprovalDecision;
 } {
@@ -2665,7 +2765,13 @@ function validateEnterpriseClaimPayload(
   if (item.version !== 2 || !item.requirements) {
     throw new Error("Enterprise worker requires a capability-bound v2 queue item.");
   }
-  if (!payload || payload.version !== 1 || !context || !run || !attestation) {
+  if (
+    !payload ||
+    (payload.version !== 1 && payload.version !== 2) ||
+    !context ||
+    !run ||
+    !attestation
+  ) {
     throw new Error(
       "Enterprise claim is missing its execution context, Run payload, or sandbox attestation."
     );
@@ -2684,7 +2790,8 @@ function validateEnterpriseClaimPayload(
   const bindings = context.bindings;
   const ref = context.task.specRef;
   if (
-    context.schemaVersion !== 1 ||
+    (context.schemaVersion !== 1 && context.schemaVersion !== 2) ||
+    (payload.version === 2 && context.schemaVersion !== 2) ||
     bindings.runId !== item.runId ||
     bindings.projectId !== item.projectId ||
     bindings.taskId !== item.taskId ||
@@ -2708,11 +2815,18 @@ function validateEnterpriseClaimPayload(
   ) {
     throw new Error("Enterprise claim execution bindings are inconsistent.");
   }
+  if (context.schemaVersion === 2) validateSourceSnapshotRef(context.sourceSnapshot);
+  if (options.sandboxDriver === "kubernetes" && context.schemaVersion !== 2) {
+    throw new Error("Kubernetes enterprise execution requires a v2 source snapshot context.");
+  }
   return {
     project: cloneJson(context.project),
     task: cloneJson(context.task),
     run: cloneJson(run),
     specRevision: cloneJson(context.specRevision),
+    ...(context.sourceSnapshot
+      ? { sourceSnapshot: cloneJson(context.sourceSnapshot) }
+      : {}),
     ...(payload.governedResumeState
       ? { resumeFrom: cloneJson(payload.governedResumeState) }
       : {}),
@@ -2720,6 +2834,30 @@ function validateEnterpriseClaimPayload(
       ? { approvalDecision: cloneJson(payload.approvalDecision) }
       : {})
   };
+}
+
+function validateSourceSnapshotRef(
+  value: EnterpriseSourceSnapshotRef | undefined
+): asserts value is EnterpriseSourceSnapshotRef {
+  if (
+    !value ||
+    value.schemaVersion !== 1 ||
+    typeof value.objectKey !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(value.digest) ||
+    !Number.isSafeInteger(value.byteLength) ||
+    value.byteLength < 0 ||
+    value.byteLength > 256 * 1024 * 1024 ||
+    value.contentType !== "application/vnd.muniu.workspace-snapshot.v1+json"
+  ) {
+    throw new Error("Enterprise execution context source snapshot reference is invalid.");
+  }
+}
+
+function requireWorkerSetting(value: string | undefined, environmentName: string): string {
+  if (!value?.trim() || value !== value.trim() || /[\0\r\n]/u.test(value)) {
+    throw new Error(`Kubernetes sandbox requires ${environmentName}.`);
+  }
+  return value;
 }
 
 function terminalGovernedState(status: GovernedRunState["status"]): boolean {
@@ -3342,6 +3480,35 @@ async function postJson<T = unknown>(path: string, body: unknown): Promise<T> {
     throw new Error(`${response.status} ${await response.text()}`);
   }
   return (await response.json()) as T;
+}
+
+async function postBytes(
+  path: string,
+  body: unknown,
+  expected: EnterpriseSourceSnapshotRef
+): Promise<Buffer> {
+  validateSourceSnapshotRef(expected);
+  const targetApiUrl = await resolveApiUrl();
+  const response = await fetch(`${targetApiUrl}${path}`, {
+    method: "POST",
+    headers: apiRequestHeaders(true),
+    body: JSON.stringify(body)
+  });
+  if (!response.ok) throw new Error(`${response.status} ${await response.text()}`);
+  const announcedLength = Number(response.headers.get("content-length"));
+  if (
+    response.headers.get("x-muniu-content-digest") !== expected.digest ||
+    response.headers.get("content-type")?.split(";", 1)[0] !== expected.contentType ||
+    announcedLength !== expected.byteLength
+  ) {
+    throw new Error("Source snapshot response headers do not match the queue binding.");
+  }
+  const content = Buffer.from(await response.arrayBuffer());
+  const digest = createHash("sha256").update(content).digest("hex");
+  if (content.byteLength !== expected.byteLength || digest !== expected.digest) {
+    throw new Error("Source snapshot response bytes do not match the queue binding.");
+  }
+  return content;
 }
 
 async function deleteJson(path: string): Promise<void> {

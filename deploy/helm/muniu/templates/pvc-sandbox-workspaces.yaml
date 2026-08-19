@@ -1,0 +1,15 @@
+{{- if and (eq .Values.sandbox.driver "kubernetes") .Values.sandbox.sharedWorkspace.create (not .Values.sandbox.sharedWorkspace.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "muniu.sharedWorkspaceClaimName" . }}
+  labels: {{- include "muniu.labels" . | nindent 4 }}
+spec:
+  accessModes: {{- toYaml .Values.sandbox.sharedWorkspace.accessModes | nindent 4 }}
+{{- with .Values.sandbox.sharedWorkspace.storageClassName }}
+  storageClassName: {{ . | quote }}
+{{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.sandbox.sharedWorkspace.size | quote }}
+{{- end }}

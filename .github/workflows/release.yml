@@ -39,8 +39,27 @@ jobs:
       - run: cargo test --locked
         working-directory: apps/desktop-mac/src-tauri
 
+  kubernetes-sandbox:
+    name: Verify Kind candidate Pod boundary
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install pinned Kind
+        env:
+          GOBIN: ${{ runner.temp }}/bin
+        run: |
+          mkdir -p "${GOBIN}"
+          go install sigs.k8s.io/kind@v0.27.0
+          echo "${GOBIN}" >> "${GITHUB_PATH}"
+      - name: Run candidate Pod and network-isolation probe
+        run: scripts/verify-kind-sandbox.sh
+
   release:
-    needs: desktop
+    needs: [desktop, kubernetes-sandbox]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -73,7 +92,7 @@ jobs:
           mkdir -p release
           git archive --format=tar.gz --prefix="muniu-${GITHUB_REF_NAME}/" -o "release/muniu-${GITHUB_REF_NAME}.tar.gz" HEAD
           npm sbom --sbom-format spdx > "release/muniu-${GITHUB_REF_NAME}.spdx.json"
-          cp THIRD_PARTY_LICENSES.md "release/muniu-${GITHUB_REF_NAME}.licenses.md"
+          cp THIRD_PARTY_NPM_LICENSES.json "release/muniu-${GITHUB_REF_NAME}.npm-licenses.json"
           cp THIRD_PARTY_CARGO_LICENSES.json "release/muniu-${GITHUB_REF_NAME}.cargo-licenses.json"
           cp THIRD_PARTY_NOTICES.md "release/muniu-${GITHUB_REF_NAME}.third-party-notices.md"
           cp vendor/SOURCE_MANIFEST.sha256 "release/muniu-${GITHUB_REF_NAME}.vendor-sources.sha256"

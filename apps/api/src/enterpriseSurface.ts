@@ -76,7 +76,7 @@ const ENTERPRISE_ROUTE_RULES: readonly EnterpriseRouteRule[] = Object.freeze([
   {
     methods: post,
     pathname: new RegExp(
-      `^/v1/run-jobs/queue/${resourceId}/(?:heartbeat|release|events|artifacts|measurements|usage-receipts|update|finish|sandbox-runtime-proof)$`,
+      `^/v1/run-jobs/queue/${resourceId}/(?:heartbeat|release|events|artifacts|measurements|usage-receipts|update|finish|sandbox-runtime-proof|source-snapshot)$`,
       "u"
     )
   },

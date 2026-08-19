@@ -20,9 +20,11 @@
     "dev": "npm run build && node dist/index.js"
   },
   "dependencies": {
+    "@kubernetes/client-node": "1.4.0",
     "@mn/core": "0.1.0",
     "@mn/executors": "0.1.0",
     "@mn/harness": "0.1.0",
+    "@mn/governance": "0.1.0",
     "@mn/loop": "0.1.0",
     "@mn/specs": "0.1.0",
     "@mn/verifier": "0.1.0",

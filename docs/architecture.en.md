@@ -6,4 +6,6 @@ Cordis loads configuration in the order base bundle, deployment profile, user pa
 
 Enterprise session sequence/digest indexes live in PostgreSQL. Protected events and exact runtime overlays live in S3 and are verified against byte length, SHA-256, event digest, and chain on load.
 
-Executable plugins have host-process authority. Kubernetes deployment resources exist, while the candidate sandbox Pod provisioner remains planned for v0.1.0.
+Executable plugins have host-process authority.
+
+In Kubernetes, the API stores a content-addressed source snapshot in S3. An actively leased Worker retrieves and verifies it, materializes it on the shared PVC, and creates one tokenless, network-denied candidate Pod. The API resolves that exact Pod independently through its own credentials, verifies its image and security projection, and replays Gates in a second immutable authority Pod. Candidate Pods never access S3 or the Kubernetes API. This boundary is experimental in v0.1.0 and is covered by a Kind + Calico execution probe.

@@ -7,6 +7,7 @@ COPY apps ./apps
 COPY packages ./packages
 COPY vendor ./vendor
 COPY config ./config
+COPY scripts ./scripts
 COPY tsconfig.base.json ./
 RUN npm ci && npm run build
 

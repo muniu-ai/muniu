@@ -65,6 +65,54 @@ spec:
   egress:
 {{ toYaml . | nindent 4 }}
 {{- end }}
+{{- if eq .Values.sandbox.driver "kubernetes" }}
+{{- if not .Values.networkPolicy.kubernetesApiEgress }}{{- fail "networkPolicy.kubernetesApiEgress is required for sandbox.driver=kubernetes" }}{{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "muniu.fullname" . }}-kubernetes-api-egress
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/instance
+        operator: In
+        values: [{{ .Release.Name }}]
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [api, worker]
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+{{ toYaml .Values.networkPolicy.kubernetesApiEgress | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 443
+{{- if .Values.worker.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "muniu.fullname" . }}-worker-api-egress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: worker
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: api
+      ports:
+        - protocol: TCP
+          port: {{ .Values.api.port }}
+{{- end }}
+{{- end }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

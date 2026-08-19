@@ -1,7 +1,6 @@
 {{- if .Values.worker.enabled }}
-{{- if not .Values.worker.fixtureMode }}
-{{- fail "worker.enabled requires worker.fixtureMode=true in v0.1.0; the Kubernetes candidate-Pod provisioner is not delivered" }}
-{{- end }}
+{{- if ne .Values.sandbox.driver "kubernetes" }}{{- fail "worker.enabled requires sandbox.driver=kubernetes" }}{{- end }}
+{{- if not .Values.sandbox.runtimeClassName }}{{- fail "worker.enabled requires sandbox.runtimeClassName" }}{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -15,26 +14,46 @@ spec:
     metadata:
       labels: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: worker }
     spec:
-      serviceAccountName: {{ include "muniu.serviceAccountName" . }}
-      automountServiceAccountToken: false
+      serviceAccountName: {{ include "muniu.workerServiceAccountName" . }}
+      automountServiceAccountToken: true
       securityContext: {{- toYaml .Values.securityContext | nindent 8 }}
       containers:
         - name: worker
           image: {{ include "muniu.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          args: ["apps/cli/dist/index.js", "run", "worker", "--enterprise", "--mock", "--capacity", {{ .Values.worker.capacity | quote }}, "--ttl-ms", {{ .Values.worker.claimTtlMs | quote }}]
+          args:
+            - apps/cli/dist/index.js
+            - run
+            - worker
+            - --enterprise
+            - --sandbox-driver
+            - kubernetes
+{{- if .Values.worker.fixtureMode }}
+            - --mock
+{{- end }}
+            - --capacity
+            - {{ .Values.worker.capacity | quote }}
+            - --ttl-ms
+            - {{ .Values.worker.claimTtlMs | quote }}
           securityContext: {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           env:
             - { name: MN_API_URL, value: "http://{{ include "muniu.fullname" . }}:{{ .Values.service.port }}" }
             - name: MN_API_TOKEN
               valueFrom: { secretKeyRef: { name: {{ .Values.worker.authExistingSecret }}, key: {{ .Values.worker.authTokenKey }} } }
-            - { name: MN_WORKER_PROVIDERS, value: "builtin,claude,codex" }
+            - { name: MN_WORKER_PROVIDERS, value: "claude,codex" }
             - { name: MN_ENTERPRISE_SANDBOX_IMAGE, value: {{ .Values.sandbox.image | quote }} }
+            - { name: MN_WORKER_SANDBOX_DRIVER, value: kubernetes }
+            - { name: MN_KUBERNETES_NAMESPACE, valueFrom: { fieldRef: { fieldPath: metadata.namespace } } }
+            - { name: MN_KUBERNETES_SHARED_VOLUME_CLAIM, value: {{ include "muniu.sharedWorkspaceClaimName" . | quote }} }
+            - { name: MN_KUBERNETES_SHARED_ROOT, value: {{ .Values.sandbox.sharedWorkspace.mountPath | quote }} }
+            - { name: MN_KUBERNETES_CANDIDATE_SERVICE_ACCOUNT, value: {{ include "muniu.candidateServiceAccountName" . | quote }} }
+            - { name: MN_KUBERNETES_RUNTIME_CLASS, value: {{ required "sandbox.runtimeClassName is required" .Values.sandbox.runtimeClassName | quote }} }
           volumeMounts:
             - { name: tmp, mountPath: /tmp }
-            - { name: work, mountPath: /work }
+            - { name: sandbox-workspaces, mountPath: {{ .Values.sandbox.sharedWorkspace.mountPath | quote }} }
           resources: {{- toYaml .Values.worker.resources | nindent 12 }}
       volumes:
         - { name: tmp, emptyDir: {} }
-        - { name: work, emptyDir: {} }
+        - name: sandbox-workspaces
+          persistentVolumeClaim: { claimName: {{ include "muniu.sharedWorkspaceClaimName" . }} }
 {{- end }}

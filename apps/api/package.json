@@ -16,6 +16,7 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "@kubernetes/client-node": "1.4.0",
     "@mn/agent-llm": "0.1.0",
     "@mn/agent-host": "0.1.0",
     "@mn/agent-protocol": "0.1.0",

@@ -76,8 +76,13 @@ flowchart LR
   API1 --> S3[(S3)]
   Worker1 --> API1
   Worker2 --> API2
-  Worker1 -. planned provisioner .-> Pod[Candidate sandbox Pod]
-  Pod --> S3
+  API1 --> PVC[(Shared workspace PVC)]
+  Worker1 --> PVC
+  Worker1 -->|create / inspect / exec / delete| Pod[Candidate sandbox Pod]
+  API1 -->|independent inspect| Pod
+  API1 -->|create / exec / delete| GatePod[Immutable authority Gate Pod]
+  PVC --> Pod
+  PVC --> GatePod
 ```
 
-Helm 基础设施已提供；Kubernetes candidate Pod provisioner 在 v0.1.0 仍标记为计划中。
+源码由 API 写入 S3 内容寻址存储，Worker 凭活跃 claim 下载并校验后物化到共享 PVC。候选 Pod 不读取 S3、不挂载 Kubernetes token，也没有默认网络。Worker 只控制候选 Pod；API 使用独立 RBAC 再次验证实际 Pod，并在第二个只读 Pod 中权威重放 Gate。该路径在 v0.1.0 标记为实验性，并由 Kind + Calico 探针验证核心隔离契约。

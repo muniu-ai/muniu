@@ -970,7 +970,7 @@ async function assertAuthoritySnapshotBinding(input: {
   return measured;
 }
 
-function projectAtSnapshot(project: Project, snapshotRoot: string): Project {
+export function projectAtSnapshot(project: Project, snapshotRoot: string): Project {
   const originalRoot = resolve(project.rootPath);
   return {
     ...project,

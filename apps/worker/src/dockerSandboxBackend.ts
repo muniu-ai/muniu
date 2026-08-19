@@ -304,6 +304,10 @@ export class DockerEnforcedSandboxBackend implements ReleasableSandboxBackend {
     return this.#requireLease(leaseId).scratchRoot;
   }
 
+  sourceRoot(leaseId: string): string {
+    return this.#requireLease(leaseId).projectRoot;
+  }
+
   /** Maps a host path in either immutable project source or writable scratch
    * to its container path without exposing an ungoverned command surface. */
   containerPath(leaseId: string, hostPath: string): string {

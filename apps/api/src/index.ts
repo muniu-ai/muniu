@@ -52,6 +52,19 @@ const sandboxImageDigest = process.env.MN_ENTERPRISE_SANDBOX_IMAGE_DIGEST;
 const enterpriseSandboxImage = sandboxImageReference && sandboxImageDigest
   ? { reference: sandboxImageReference, digest: sandboxImageDigest }
   : undefined;
+const sandboxDriver = process.env.MN_SANDBOX_RUNTIME_DRIVER ?? "docker";
+if (sandboxDriver !== "docker" && sandboxDriver !== "kubernetes") {
+  throw new Error("MN_SANDBOX_RUNTIME_DRIVER must be docker or kubernetes");
+}
+const kubernetesSandbox = sandboxDriver === "kubernetes"
+  ? {
+      namespace: requiredEnvironment("MN_KUBERNETES_NAMESPACE"),
+      sharedVolumeClaimName: requiredEnvironment("MN_KUBERNETES_SHARED_VOLUME_CLAIM"),
+      sharedWorkspaceRoot: requiredEnvironment("MN_KUBERNETES_SHARED_ROOT"),
+      serviceAccountName: requiredEnvironment("MN_KUBERNETES_CANDIDATE_SERVICE_ACCOUNT"),
+      runtimeClassName: requiredEnvironment("MN_KUBERNETES_RUNTIME_CLASS")
+    }
+  : undefined;
 const enterpriseProxyPort = Number(process.env.MN_ENTERPRISE_PROXY_PORT ?? 7319);
 const enterpriseProxyHost = process.env.MN_ENTERPRISE_PROXY_HOST ?? "0.0.0.0";
 const enterpriseProxyPublicBaseUrl = process.env.MN_ENTERPRISE_PROXY_PUBLIC_BASE_URL;
@@ -92,6 +105,9 @@ const app = buildServer({
   ...(runtimeProfile === "enterprise" && enterpriseSandboxImage
     ? { enterpriseSandboxImage }
     : {}),
+  ...(runtimeProfile === "enterprise" && kubernetesSandbox
+    ? { kubernetesSandbox }
+    : {}),
   ...(runtimeProfile === "enterprise" && enterpriseProxyPublicBaseUrl
     ? {
         enterpriseProxy: {
@@ -104,3 +120,11 @@ const app = buildServer({
 });
 
 await app.listen({ port, host });
+
+function requiredEnvironment(name: string): string {
+  const value = process.env[name];
+  if (!value?.trim() || value !== value.trim() || /[\0\r\n]/u.test(value)) {
+    throw new Error(`${name} is required for the Kubernetes sandbox runtime`);
+  }
+  return value;
+}

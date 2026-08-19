@@ -92,6 +92,7 @@ import type {
 } from "@mn/provider-catalog";
 import { FileLocalStore, LocalSecretVault, SqliteLocalStore, defaultMniuRoot } from "@mn/store";
 import {
+  createWorkspaceSnapshot,
   GovernedRunOrchestrator,
   RunOrchestrator,
   parseGateResultV2
@@ -225,6 +226,7 @@ import {
   verifySandboxAttestation
 } from "./sandboxAttestation.js";
 import { RunScopedCas, type RunScopedCasObjectRef } from "./runScopedCas.js";
+import { sourceSnapshotRefFromPayload } from "./sourceSnapshotBinding.js";
 import {
   createGateArtifactHandleRecord,
   findIdempotentGateArtifactRecord,
@@ -236,6 +238,11 @@ import {
   DockerRuntimeVerifier,
   type SandboxRuntimeVerifier
 } from "./dockerRuntimeVerifier.js";
+import {
+  KubernetesRuntimeVerifier,
+  type KubernetesRuntimeVerifierOptions
+} from "./kubernetesRuntimeVerifier.js";
+import { KubernetesAuthoritativeGateAuthority } from "./kubernetesAuthoritativeGateAuthority.js";
 import {
   issueSandboxRuntimeProof,
   verifyIssuedSandboxRuntimeProof,
@@ -381,6 +388,9 @@ export interface BuildServerOptions {
   /** Trusted authority used to inspect enterprise runtimes. The default talks
    * to the server-controlled local Docker daemon; false is test-only. */
   sandboxRuntimeVerifier?: SandboxRuntimeVerifier | false;
+  /** Enables API-authoritative Kubernetes Pod inspection. The same shared PVC
+   * is mounted into API and Worker; candidate Pods receive only lease subPaths. */
+  kubernetesSandbox?: KubernetesRuntimeVerifierOptions;
   /** API-side complete Gate plan authority. The default re-executes command
    * gates through the inspected Docker runtime. Injection is for tests and
    * remote broker implementations; false is isolated-test only. */
@@ -1524,7 +1534,11 @@ export function buildServer(options: BuildServerOptions = {}) {
     throw new Error("Enterprise sandbox attestation requires a trusted runtime verifier");
   }
   const sandboxRuntimeVerifier = sandboxAttestationKey && options.sandboxRuntimeVerifier !== false
-    ? options.sandboxRuntimeVerifier ?? new DockerRuntimeVerifier()
+    ? options.sandboxRuntimeVerifier ?? (
+        options.kubernetesSandbox
+          ? new KubernetesRuntimeVerifier(options.kubernetesSandbox)
+          : new DockerRuntimeVerifier()
+      )
     : undefined;
   if (
     runtimeProfile === "enterprise" &&
@@ -1537,7 +1551,11 @@ export function buildServer(options: BuildServerOptions = {}) {
     runtimeProfile === "enterprise" &&
     sandboxAttestationKey &&
     options.authoritativeGateAuthority !== false
-      ? options.authoritativeGateAuthority ?? new DockerAuthoritativeGateAuthority()
+      ? options.authoritativeGateAuthority ?? (
+          options.kubernetesSandbox
+            ? new KubernetesAuthoritativeGateAuthority(options.kubernetesSandbox)
+            : new DockerAuthoritativeGateAuthority()
+        )
       : undefined;
   const enterpriseProjectRoots =
     runtimeProfile === "enterprise" && options.enterpriseProjectRoots !== false
@@ -5030,6 +5048,67 @@ export function buildServer(options: BuildServerOptions = {}) {
     return { item };
   });
 
+  app.post("/v1/run-jobs/queue/:id/source-snapshot", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = runJobQueueClaimTokenSchema.parse(request.body ?? {});
+    const context = requestContexts.get(request) ?? localRequestContext(request.id);
+    if (runtimeProfile !== "enterprise" || !enterprisePostgres) {
+      return reply.code(503).send({ error: "enterprise source snapshot authority is unavailable" });
+    }
+    const active = await enterprisePostgres.inspectClaim({
+      runId: id,
+      ownerId: body.ownerId,
+      claimToken: body.claimToken
+    });
+    if (!active || active.item.tenantId !== context.tenantId) {
+      return reply.code(409).send({ error: "run job claim is not active" });
+    }
+    let ref: RunScopedCasObjectRef;
+    try {
+      ref = sourceSnapshotRefFromPayload(active.payload, {
+        tenantId: context.tenantId,
+        projectId: active.item.projectId,
+        runId: id
+      });
+    } catch (error) {
+      return reply.code(409).send({
+        error: error instanceof Error ? error.message : "source snapshot binding is invalid"
+      });
+    }
+    let content: Buffer | undefined;
+    try {
+      content = await runScopedCas.readVerified(ref);
+    } catch (error) {
+      return reply.code(409).send({
+        error: error instanceof Error ? error.message : "source snapshot integrity check failed"
+      });
+    }
+    if (!content) {
+      return reply.code(410).send({ error: "content-addressed source snapshot is unavailable" });
+    }
+    const stillActive = await enterprisePostgres.inspectClaim({
+      runId: id,
+      ownerId: body.ownerId,
+      claimToken: body.claimToken
+    });
+    if (
+      !stillActive ||
+      stillActive.item.claimTokenHash !== active.item.claimTokenHash ||
+      sourceSnapshotRefFromPayload(stillActive.payload, {
+        tenantId: context.tenantId,
+        projectId: stillActive.item.projectId,
+        runId: id
+      }).digest !== ref.digest
+    ) {
+      return reply.code(409).send({ error: "run job claim changed during source retrieval" });
+    }
+    return reply
+      .header("content-type", ref.contentType)
+      .header("content-length", String(ref.byteLength))
+      .header("x-muniu-content-digest", ref.digest)
+      .send(content);
+  });
+
   app.post("/v1/run-jobs/queue/claim", async (request) => {
     const body = runJobQueueClaimSchema.parse(request.body ?? {});
     const ownerId = body.ownerId ?? `external-worker-${randomUUID()}`;
@@ -5339,7 +5418,16 @@ export function buildServer(options: BuildServerOptions = {}) {
       inspected = await sandboxRuntimeVerifier.verify({
         runtimeId: body.runtimeId,
         attestation,
-        projectRoot: project.rootPath
+        projectRoot: project.rootPath,
+        ...(active.payload.version === 2
+          ? {
+              sourceSnapshotDigest: sourceSnapshotRefFromPayload(active.payload, {
+                tenantId: context.tenantId,
+                projectId: active.item.projectId,
+                runId: id
+              }).digest
+            }
+          : {})
       });
     } catch (error) {
       return reply.code(400).send({
@@ -7093,13 +7181,31 @@ export function buildServer(options: BuildServerOptions = {}) {
     const requirements = workerRequirementsForRun(project, task, run);
     const tenantId = run.tenantId ?? task.tenantId ??
       project.tenantId ?? LOCAL_TENANT_ID;
+    let sourceSnapshot: RunScopedCasObjectRef | undefined;
+    if (task.specRef) {
+      const snapshot = await createWorkspaceSnapshot(project.rootPath);
+      sourceSnapshot = await runScopedCas.put({
+        tenantId,
+        projectId: project.id,
+        runId: run.id,
+        contentType: snapshot.contentType,
+        content: snapshot.content
+      });
+      if (
+        sourceSnapshot.digest !== snapshot.digest ||
+        sourceSnapshot.byteLength !== snapshot.byteLength
+      ) {
+        throw new Error("source snapshot CAS returned an inconsistent immutable binding");
+      }
+    }
     const executionContext = await enterpriseWorkerExecutionContext({
       tenantId,
       project,
       task,
       run,
       store,
-      specRepository
+      specRepository,
+      ...(sourceSnapshot ? { sourceSnapshot } : {})
     });
     const events = store.events.get(run.id) ?? [];
     const metadataRecords = [
@@ -7132,7 +7238,7 @@ export function buildServer(options: BuildServerOptions = {}) {
         priority: options.priority,
         ...(requirements ? { requirements } : {}),
         payload: {
-          version: 1,
+          version: 2,
           run,
           ...(executionContext ? { executionContext } : {}),
           ...(options.governedResumeState
@@ -10616,12 +10722,16 @@ async function enterpriseWorkerExecutionContext(input: {
   readonly run: RunRecord;
   readonly store: MemoryStore;
   readonly specRepository: FileSpecRepository;
+  readonly sourceSnapshot?: RunScopedCasObjectRef;
 }): Promise<Readonly<Record<string, unknown>> | undefined> {
   if (!input.task.specRef) return undefined;
   if (!input.run.governanceSnapshot || !input.run.harnessManifest) {
     throw new TypeError(
       "Governed enterprise queue payload requires immutable Governance and Harness bindings"
     );
+  }
+  if (!input.sourceSnapshot) {
+    throw new TypeError("Governed enterprise queue payload requires a source snapshot");
   }
   const specRevision = await resolveProjectApprovedSpecRevision(
     {
@@ -10638,10 +10748,11 @@ async function enterpriseWorkerExecutionContext(input: {
     );
   }
   const semantic = {
-    schemaVersion: 1 as const,
+    schemaVersion: 2 as const,
     project: structuredClone(input.project),
     task: structuredClone(input.task),
     specRevision: structuredClone(specRevision),
+    sourceSnapshot: structuredClone(input.sourceSnapshot),
     bindings: {
       tenantId: input.tenantId,
       runId: input.run.id,

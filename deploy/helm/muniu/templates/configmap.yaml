@@ -1,3 +1,6 @@
+{{- if ne .Values.sandbox.driver "kubernetes" }}{{- fail "the Kubernetes chart requires sandbox.driver=kubernetes" }}{{- end }}
+{{- if not (regexMatch "^[a-f0-9]{64}$" .Values.sandbox.imageDigest) }}{{- fail "sandbox.imageDigest must be 64 lowercase hexadecimal characters" }}{{- end }}
+{{- if and (not .Values.sandbox.sharedWorkspace.create) (not .Values.sandbox.sharedWorkspace.existingClaim) }}{{- fail "sandbox.sharedWorkspace.existingClaim is required when create=false" }}{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -24,3 +27,9 @@ data:
   MN_STANDARD_PACK_TRUST_FILE: /etc/muniu/trust/trust.json
   MN_ENTERPRISE_SANDBOX_IMAGE: {{ .Values.sandbox.image | quote }}
   MN_ENTERPRISE_SANDBOX_IMAGE_DIGEST: {{ required "sandbox.imageDigest is required" .Values.sandbox.imageDigest | quote }}
+  MN_SANDBOX_RUNTIME_DRIVER: {{ .Values.sandbox.driver | quote }}
+  MN_KUBERNETES_NAMESPACE: {{ .Release.Namespace | quote }}
+  MN_KUBERNETES_SHARED_VOLUME_CLAIM: {{ include "muniu.sharedWorkspaceClaimName" . | quote }}
+  MN_KUBERNETES_SHARED_ROOT: {{ .Values.sandbox.sharedWorkspace.mountPath | quote }}
+  MN_KUBERNETES_CANDIDATE_SERVICE_ACCOUNT: {{ include "muniu.candidateServiceAccountName" . | quote }}
+  MN_KUBERNETES_RUNTIME_CLASS: {{ required "sandbox.runtimeClassName is required" .Values.sandbox.runtimeClassName | quote }}
