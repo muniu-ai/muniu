@@ -155,15 +155,64 @@ test("Kubernetes Pod verification rejects hostPath, token and sidecar mutation",
   );
 });
 
+test("Kubernetes backend preserves bounded Pod readiness diagnostics before cleanup", async (t) => {
+  const source = await mkdtemp(join(tmpdir(), "mn-kube-diagnostic-source-"));
+  const shared = await mkdtemp(join(tmpdir(), "mn-kube-diagnostic-shared-"));
+  t.after(() => Promise.all([
+    rm(source, { recursive: true, force: true }),
+    rm(shared, { recursive: true, force: true })
+  ]));
+  await writeFile(join(source, "index.mjs"), "export default 1;\n");
+  const snapshot = await createWorkspaceSnapshot(source);
+  const lease = attestation();
+  const control = new FakePodControl(lease.policy.runtimeImage!.digest, {
+    reason: "ContainerCannotRun",
+    message: "runtime handler rejected the candidate\nwith a second line"
+  });
+  const backend = new KubernetesSandboxPodBackend({
+    image: lease.policy.runtimeImage!.reference,
+    attestation: lease,
+    expected: {
+      runId: lease.runId,
+      tenantId: lease.tenantId,
+      workerId: lease.workerId,
+      harnessDigest: lease.harnessDigest
+    },
+    sourceSnapshot: snapshot,
+    namespace: "muniu-system",
+    sharedVolumeClaimName: "muniu-sandbox-workspaces",
+    sharedWorkspaceRoot: shared,
+    serviceAccountName: "muniu-candidate",
+    runtimeClassName: "muniu-sandbox",
+    control,
+    runtimeProofAuthority: async ({ runtimeId }) => runtimeProof(lease, runtimeId)
+  });
+
+  await assert.rejects(
+    backend.prepare({
+      projectRoot: "/not-mounted-on-the-worker",
+      taskId: "task-diagnostic",
+      commandAllowlist: ["node"]
+    }),
+    /terminal phase Failed: .*ContainerCannotRun.*runtime handler rejected the candidate with a second line/u
+  );
+  assert.equal(control.deleted.length, 1, "a failed candidate Pod must still be cleaned up");
+});
+
 class FakePodControl implements KubernetesPodControl {
   created?: V1Pod;
   readonly deleted: Array<{ namespace: string; name: string }> = [];
 
-  constructor(private readonly imageDigest: string) {}
+  constructor(
+    private readonly imageDigest: string,
+    private readonly failure?: { readonly reason: string; readonly message: string }
+  ) {}
 
   async create(namespace: string, pod: V1Pod): Promise<V1Pod> {
     assert.equal(namespace, pod.metadata?.namespace);
-    this.created = readyPod(structuredClone(pod), this.imageDigest);
+    this.created = this.failure
+      ? failedPod(structuredClone(pod), this.failure)
+      : readyPod(structuredClone(pod), this.imageDigest);
     return this.created;
   }
 
@@ -180,6 +229,35 @@ class FakePodControl implements KubernetesPodControl {
   async exec(): Promise<{ exitCode: number; stdout: string; stderr: string }> {
     return { exitCode: 0, stdout: "", stderr: "" };
   }
+}
+
+function failedPod(
+  pod: V1Pod,
+  failure: { readonly reason: string; readonly message: string }
+): V1Pod {
+  pod.metadata = { ...pod.metadata, uid: "00000000-0000-4000-8000-000000000002" };
+  pod.status = {
+    phase: "Failed",
+    containerStatuses: [{
+      name: "candidate",
+      image: pod.spec?.containers[0]?.image ?? "",
+      imageID: "",
+      ready: false,
+      restartCount: 0,
+      started: false,
+      state: {
+        terminated: {
+          containerID: "containerd://" + "9".repeat(64),
+          exitCode: 127,
+          finishedAt: new Date(),
+          reason: failure.reason,
+          message: failure.message,
+          startedAt: new Date()
+        }
+      }
+    }]
+  };
+  return pod;
 }
 
 function readyPod(pod: V1Pod, digest: string): V1Pod {

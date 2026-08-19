@@ -35,6 +35,22 @@ if [[ ! "${image_digest}" =~ ^[a-f0-9]{64}$ ]]; then
   echo "Could not resolve the Kind node's imported manifest digest" >&2
   exit 1
 fi
+# `kind load docker-image` registers the tag, while the candidate Pod uses a
+# tag+digest canonical reference. Register that exact reference against the
+# already imported manifest so imagePullPolicy=Never remains both offline and
+# digest-pinned.
+canonical_image_ref="docker.io/library/${image}@sha256:${image_digest}"
+docker exec "${cluster_name}-control-plane" \
+  ctr -n k8s.io images tag --local "docker.io/library/${image}" "${canonical_image_ref}"
+canonical_digest="$(
+  docker exec "${cluster_name}-control-plane" \
+    ctr -n k8s.io images list |
+    awk -v reference="${canonical_image_ref}" '$1 == reference { print $3 }'
+)"
+if [[ "${canonical_digest}" != "sha256:${image_digest}" ]]; then
+  echo "Kind did not register the candidate's canonical digest reference" >&2
+  exit 1
+fi
 for calico_image in "${calico_images[@]}"; do
   docker pull "${calico_image}"
 done

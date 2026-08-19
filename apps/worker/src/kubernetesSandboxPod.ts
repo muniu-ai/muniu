@@ -780,12 +780,15 @@ async function waitForRunningPod(
   timeoutSeconds: number
 ): Promise<V1Pod> {
   const deadline = Date.now() + timeoutSeconds * 1_000;
-  let lastPhase = "unknown";
+  let lastPod: V1Pod | undefined;
   while (Date.now() < deadline) {
     const pod = await control.read(namespace, podName);
-    lastPhase = pod.status?.phase ?? "unknown";
+    lastPod = pod;
+    const lastPhase = pod.status?.phase ?? "unknown";
     if (lastPhase === "Failed" || lastPhase === "Succeeded") {
-      throw new Error(`Kubernetes sandbox Pod entered terminal phase ${lastPhase}`);
+      throw new Error(
+        `Kubernetes sandbox Pod entered terminal phase ${lastPhase}: ${podReadinessSummary(pod)}`
+      );
     }
     if (
       lastPhase === "Running" &&
@@ -795,7 +798,46 @@ async function waitForRunningPod(
     }
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 250));
   }
-  throw new Error(`Kubernetes sandbox Pod did not become ready (last phase: ${lastPhase})`);
+  throw new Error(
+    `Kubernetes sandbox Pod did not become ready: ${podReadinessSummary(lastPod)}`
+  );
+}
+
+function podReadinessSummary(pod: V1Pod | undefined): string {
+  if (!pod) return JSON.stringify({ phase: "unknown", candidate: "not-observed" });
+  const candidate = pod.status?.containerStatuses?.find((status) => status.name === "candidate");
+  const waiting = candidate?.state?.waiting;
+  const terminated = candidate?.state?.terminated;
+  const conditions = (pod.status?.conditions ?? [])
+    .filter((condition) => condition.status !== "True")
+    .map((condition) => ({
+      type: condition.type,
+      status: condition.status,
+      reason: condition.reason,
+      message: boundedStatusMessage(condition.message)
+    }));
+  return JSON.stringify({
+    phase: pod.status?.phase ?? "unknown",
+    candidate: waiting ? {
+      state: "waiting",
+      reason: waiting.reason,
+      message: boundedStatusMessage(waiting.message)
+    } : terminated ? {
+      state: "terminated",
+      reason: terminated.reason,
+      exitCode: terminated.exitCode,
+      message: boundedStatusMessage(terminated.message)
+    } : candidate ? {
+      state: candidate.state?.running ? "running" : "unknown",
+      ready: candidate.ready
+    } : "not-observed",
+    conditions
+  });
+}
+
+function boundedStatusMessage(message: string | undefined): string | undefined {
+  if (!message) return undefined;
+  return message.replace(/[\r\n\0]/gu, " ").slice(0, 512);
 }
 
 async function makeTreeReadOnly(root: string): Promise<void> {
