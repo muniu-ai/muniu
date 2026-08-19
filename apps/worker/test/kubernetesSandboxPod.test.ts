@@ -190,6 +190,9 @@ test("Kubernetes Pod verification accepts official client model instances", () =
   container.volumeMounts = original.volumeMounts?.map((mount) =>
     Object.assign(new V1VolumeMount(), mount)
   );
+  for (const mount of container.volumeMounts ?? []) {
+    if (mount.readOnly === false) delete mount.readOnly;
+  }
   delete container.env;
   delete container.envFrom;
   delete container.stdin;

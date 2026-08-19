@@ -574,8 +574,15 @@ export function verifyKubernetesSandboxPod(
       throw new Error("Kubernetes sandbox Pod claim annotations drifted");
     }
   }
-  if (sha256Canonical(securityProjection(pod.spec)) !== sha256Canonical(securityProjection(expected.spec))) {
-    throw new Error("Kubernetes sandbox Pod security specification drifted");
+  const observedSecurity = securityProjection(pod.spec);
+  const expectedSecurity = securityProjection(expected.spec);
+  if (sha256Canonical(observedSecurity) !== sha256Canonical(expectedSecurity)) {
+    throw new Error(
+      `Kubernetes sandbox Pod security specification drifted at ${firstProjectionMismatch(
+        expectedSecurity,
+        observedSecurity
+      )}`
+    );
   }
   const uid = pod.metadata.uid;
   const candidate = pod.status?.containerStatuses?.find((status) => status.name === "candidate");
@@ -783,8 +790,63 @@ function kubernetesContainerProjection(
     envFrom: plain.envFrom ?? [],
     stdin: plain.stdin ?? false,
     stdinOnce: plain.stdinOnce ?? false,
-    tty: plain.tty ?? false
+    tty: plain.tty ?? false,
+    ...(plain.volumeMounts === undefined ? {} : {
+      volumeMounts: Array.isArray(plain.volumeMounts)
+        ? plain.volumeMounts.map(kubernetesVolumeMountProjection)
+        : plain.volumeMounts
+    })
   };
+}
+
+function kubernetesVolumeMountProjection(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const mount = value as Record<string, unknown>;
+  return { ...mount, readOnly: mount.readOnly ?? false };
+}
+
+function firstProjectionMismatch(expected: unknown, observed: unknown, path = "$spec"): string {
+  if (Object.is(expected, observed)) return `${path} (digest mismatch)`;
+  if (Array.isArray(expected) && Array.isArray(observed)) {
+    if (expected.length !== observed.length) {
+      return `${path}.length (expected ${expected.length}, observed ${observed.length})`;
+    }
+    for (let index = 0; index < expected.length; index += 1) {
+      if (sha256Canonical(expected[index]) !== sha256Canonical(observed[index])) {
+        return firstProjectionMismatch(expected[index], observed[index], `${path}[${index}]`);
+      }
+    }
+  }
+  if (
+    expected !== null &&
+    observed !== null &&
+    typeof expected === "object" &&
+    typeof observed === "object" &&
+    !Array.isArray(expected) &&
+    !Array.isArray(observed)
+  ) {
+    const expectedRecord = expected as Record<string, unknown>;
+    const observedRecord = observed as Record<string, unknown>;
+    const keys = [...new Set([...Object.keys(expectedRecord), ...Object.keys(observedRecord)])].sort();
+    for (const key of keys) {
+      if (!(key in expectedRecord)) return `${path}.${key} (unexpected field)`;
+      if (!(key in observedRecord)) return `${path}.${key} (missing field)`;
+      if (sha256Canonical(expectedRecord[key]) !== sha256Canonical(observedRecord[key])) {
+        return firstProjectionMismatch(
+          expectedRecord[key],
+          observedRecord[key],
+          `${path}.${key}`
+        );
+      }
+    }
+  }
+  return `${path} (expected ${boundedProjectionValue(expected)}, observed ${boundedProjectionValue(observed)})`;
+}
+
+function boundedProjectionValue(value: unknown): string {
+  const rendered = JSON.stringify(value);
+  if (rendered === undefined) return typeof value;
+  return rendered.length <= 160 ? rendered : `${rendered.slice(0, 157)}...`;
 }
 
 function plainKubernetesValue(
