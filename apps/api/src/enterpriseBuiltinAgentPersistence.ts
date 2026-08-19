@@ -193,7 +193,7 @@ export class EnterpriseBuiltinAgentPersistence {
   async acquire(input: DurableBuiltinExecutionAcquireInput): Promise<DurableBuiltinExecutionAcquireResult> {
     return this.transaction(async (client) => {
       await client.query(
-        "SELECT pg_advisory_xact_lock(hashtextextended($1 || chr(0) || $2, 0))",
+        "SELECT pg_advisory_xact_lock(hashtextextended(jsonb_build_array($1::text,$2::text)::text, 0))",
         [input.tenantId, input.executionId]
       );
       const current = await this.latest(client, input.tenantId, input.executionId, true);
@@ -356,7 +356,7 @@ export class EnterpriseBuiltinAgentPersistence {
     });
     return this.transaction(async (client) => {
       await client.query(
-        "SELECT pg_advisory_xact_lock(hashtextextended($1 || chr(0) || $2 || chr(0) || $3, 0))",
+        "SELECT pg_advisory_xact_lock(hashtextextended(jsonb_build_array($1::text,$2::text,$3::text)::text, 0))",
         [input.tenantId, input.request.sessionId, input.binding.approvalId]
       );
       let currentResult = await client.query<ApprovalRow>(`
