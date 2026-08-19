@@ -118,6 +118,22 @@ try {
     });
     assert.equal(token.exitCode, 0, "candidate Pod unexpectedly received a Kubernetes token");
 
+    const pids = await backend.execute(leaseId, {
+      executable: "node",
+      args: [
+        "-e",
+        "process.stdout.write(require('node:fs').readFileSync('/sys/fs/cgroup/pids.max','utf8'))"
+      ],
+      cwd: backend.workspaceRoot(leaseId),
+      timeoutSeconds: 10
+    });
+    assert.equal(pids.exitCode, 0, pids.stderr);
+    assert.equal(
+      pids.stdout.trim(),
+      String(attestation.policy.resources.pids),
+      "candidate Pod cgroup PID limit does not match its attestation"
+    );
+
     const network = await backend.execute(leaseId, {
       executable: "node",
       args: [
@@ -140,6 +156,7 @@ try {
       runtimeId: backend.executionEvidence(leaseId).runtimeId,
       sourceSnapshotDigest: snapshot.digest,
       tokenMounted: false,
+      pidsLimit: attestation.policy.resources.pids,
       kubernetesApiReachable: false
     }));
   } finally {
@@ -156,7 +173,7 @@ function lease(reference, digest) {
       { source: "scratch", target: "/workspace/scratch", readOnly: false }
     ],
     network: { mode: "deny", allowlist: [] },
-    resources: { cpu: 1, memoryMb: 512, pids: 64, timeoutSeconds: 120 },
+    resources: { cpu: 1, memoryMb: 512, pids: 256, timeoutSeconds: 120 },
     secretNames: [],
     allowedTools: ["node"],
     readOnlyRootFilesystem: true,

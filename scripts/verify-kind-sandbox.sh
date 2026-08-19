@@ -61,6 +61,7 @@ logs="$(kubectl -n muniu-kind logs job/muniu-sandbox-probe)"
 printf '%s\n' "${logs}"
 grep -F '"kindSandboxProbe":"passed"' <<<"${logs}" >/dev/null
 grep -F '"tokenMounted":false' <<<"${logs}" >/dev/null
+grep -F '"pidsLimit":256' <<<"${logs}" >/dev/null
 grep -F '"kubernetesApiReachable":false' <<<"${logs}" >/dev/null
 kubectl -n muniu-kind wait --for=delete pod -l muniu.ai/component=candidate-sandbox --timeout=30s
 if kubectl -n muniu-kind get pods -l muniu.ai/component=candidate-sandbox -o name | grep -q .; then
