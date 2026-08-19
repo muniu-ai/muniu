@@ -89,4 +89,4 @@ flowchart LR
 
 源码由 API 写入 S3 内容寻址存储，Worker 凭活跃 claim 下载并校验后物化到共享 PVC。builtin 模型流在 API 内执行，Provider 凭据不下发；模型请求的读取、搜索、补丁、写入和命令通过活跃 claim 绑定的工具协议交给 Worker，并只在同一已检查 Pod 中执行。未确认的工具调用使用同一 `callId` 重投，Worker 缓存结果，API 仅接受内容一致的幂等提交。候选 Pod 不读取 S3、不挂载 Kubernetes token，也没有默认网络。Worker 只控制候选 Pod；API 使用独立 RBAC 再次验证实际 Pod，并在第二个只读 Pod 中权威重放 Gate。
 
-当前工具 broker 的活动执行状态仍在单个 API 进程内，跨 API 副本的 PostgreSQL broker 与故障接管尚未完成；因此该路径继续标记为实验性，不能宣称已通过多副本发布验收。Kind + Calico 探针验证的是 Pod 隔离契约。
+活动 execution generation、模型 owner lease、工具 mailbox、幂等结果摘要与运行绑定的人工审批决定均由 PostgreSQL 管理，Worker 的 start/poll/result 和运行绑定的 `on-risk` 审批可以落到不同 API 副本；独立 `/v1/agent-sessions` 的审批仍由当前 API 进程处理。owner 失效时旧 generation 被保留并关闭，新 generation 在恢复 PostgreSQL/S3 中的受保护 Agent session 后继续；旧 generation 未确认的工具调用不会重放。PostgreSQL 集成门禁使用两个独立 broker 实例验证跨副本 relay、接管和审批；完整 API/Worker/Pod 组合故障注入完成前，该路径继续标记为实验性。Kind + Calico 探针验证 Pod 隔离契约。

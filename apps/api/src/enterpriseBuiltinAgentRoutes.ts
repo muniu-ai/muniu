@@ -177,6 +177,7 @@ export function registerEnterpriseBuiltinAgentRoutes(
           modelId: provider.modelId,
           timeoutSeconds: input.timeoutSeconds,
           executionBinding,
+          recoverExistingSession: true,
           signal
         })
       });
@@ -211,7 +212,7 @@ export function registerEnterpriseBuiltinAgentRoutes(
           parsed.data
         );
         if (!stillActive || stillActive.item.claimTokenHash !== active.item.claimTokenHash) {
-          options.broker.cancel(params.data.executionId, identity);
+          await options.broker.cancel(params.data.executionId, identity);
           return conflict(reply, "run job claim changed during Agent poll");
         }
         return reply.send(view);
@@ -232,7 +233,7 @@ export function registerEnterpriseBuiltinAgentRoutes(
       const active = await inspectActiveClaim(options, authority.context, params.data.id, parsed.data);
       if (!active?.item.claimTokenHash) return conflict(reply, "run job claim is not active");
       try {
-        return reply.send(options.broker.submitToolResult(
+        return reply.send(await options.broker.submitToolResult(
           params.data.executionId,
           executionIdentity(authority.context, parsed.data.ownerId, active),
           parsed.data.result as EnterpriseBuiltinToolResultV1
@@ -254,7 +255,7 @@ export function registerEnterpriseBuiltinAgentRoutes(
       const active = await inspectActiveClaim(options, authority.context, params.data.id, parsed.data);
       if (!active?.item.claimTokenHash) return conflict(reply, "run job claim is not active");
       try {
-        return reply.send(options.broker.cancel(
+        return reply.send(await options.broker.cancel(
           params.data.executionId,
           executionIdentity(authority.context, parsed.data.ownerId, active)
         ));

@@ -65,10 +65,11 @@ test("enterprise builtin broker binds one session and relays one tool result", a
     ok: true,
     result: { path: "src/index.ts", bytes: 24 }
   };
-  broker.submitToolResult(started.executionId, identity, toolResult);
-  assert.doesNotThrow(() => {
-    broker.submitToolResult(started.executionId, identity, toolResult);
-  }, "same committed tool result must be idempotent");
+  await broker.submitToolResult(started.executionId, identity, toolResult);
+  await assert.doesNotReject(
+    broker.submitToolResult(started.executionId, identity, toolResult),
+    "same committed tool result must be idempotent"
+  );
 
   const completed = await waitForTerminal(broker, started.executionId, identity);
   assert.equal(completed.state, "completed");
@@ -114,7 +115,7 @@ test("enterprise builtin broker rejects claim rebind and cancels pending tools",
     }, delivered.revision, 0),
     /claim binding changed/u
   );
-  const cancelled = broker.cancel(started.executionId, identity);
+  const cancelled = await broker.cancel(started.executionId, identity);
   assert.equal(cancelled.state, "cancelled");
   const terminal = await broker.poll(started.executionId, identity, cancelled.revision, 0);
   assert.equal(terminal.toolCall, undefined);

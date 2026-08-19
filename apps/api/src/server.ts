@@ -127,6 +127,7 @@ import { createProductionAgentRuntimeFactory } from "./agentRuntimeFactory.js";
 import { registerAgentSessionRoutes } from "./agentSessionRoutes.js";
 import { createEnterpriseAgentSessionStore } from "./enterpriseAgentSessionStore.js";
 import { EnterpriseBuiltinAgentBroker } from "./enterpriseBuiltinAgentBroker.js";
+import { EnterpriseBuiltinAgentPersistence } from "./enterpriseBuiltinAgentPersistence.js";
 import { registerEnterpriseBuiltinAgentRoutes } from "./enterpriseBuiltinAgentRoutes.js";
 import {
   registerEvidenceRoutes,
@@ -1763,7 +1764,11 @@ export function buildServer(options: BuildServerOptions = {}) {
     ? options.agentSessionService
     : undefined;
   const enterpriseAgentSessionServices = new Map<string, LocalMockAgentSessionService>();
-  const enterpriseBuiltinAgentBroker = new EnterpriseBuiltinAgentBroker();
+  const enterpriseBuiltinAgentBroker = new EnterpriseBuiltinAgentBroker(
+    enterprisePostgres
+      ? new EnterpriseBuiltinAgentPersistence(enterprisePostgres.pool)
+      : undefined
+  );
   let getAgentSessionService:
     | ((request?: FastifyRequest) => Promise<LocalMockAgentSessionService>)
     | undefined;
@@ -1989,6 +1994,9 @@ export function buildServer(options: BuildServerOptions = {}) {
         },
         resolveStoredSecret: (reference) => resolveStoredSecret(reference)
       });
+      const durableApproval = enterpriseBuiltinAgentBroker.approvalBridgeForTenant(
+        context.tenantId
+      );
       const service = new LocalMockAgentSessionService(
         join(mniuRoot, "agent-service-cache", sha256(context.tenantId)),
         {
@@ -2000,7 +2008,8 @@ export function buildServer(options: BuildServerOptions = {}) {
               context.tenantId,
               approval.context.sessionId,
               approval.risk
-            )
+            ),
+            ...(durableApproval ? { durable: durableApproval } : {})
           }),
           sessionStore: createEnterpriseAgentSessionStore({
             tenantId: context.tenantId,
@@ -2010,7 +2019,9 @@ export function buildServer(options: BuildServerOptions = {}) {
             ...(process.env.MN_AGENT_SESSION_KMS_KEY_ID
               ? { kmsKeyId: process.env.MN_AGENT_SESSION_KMS_KEY_ID }
               : {})
-          })
+          }),
+          shouldRecoverInterruptedSession: (sessionId) =>
+            enterpriseBuiltinAgentBroker.shouldRecoverSession(context.tenantId, sessionId)
         }
       );
       enterpriseAgentSessionServices.set(context.tenantId, service);
@@ -2247,6 +2258,7 @@ export function buildServer(options: BuildServerOptions = {}) {
   if (enterprisePostgres) {
     app.addHook("onReady", async () => {
       await enterprisePostgres.migrate();
+      await enterpriseBuiltinAgentBroker.migrate();
       let snapshot = await enterprisePostgres.readStateSnapshot();
       if (snapshot.metadata.length === 0) {
         // One-time migration path for an existing local snapshot. Once any

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import {
   type ApprovalPolicy,
@@ -21,6 +21,14 @@ import {
   type ToolDefinition,
   type ToolRunContext
 } from "@mn/agent-tools";
+import {
+  EnterpriseBuiltinAgentPersistence,
+  type DurableBuiltinExecutionOwnerKey
+} from "./enterpriseBuiltinAgentPersistence.js";
+import type {
+  DurableAgentApprovalBridge,
+  ToolAuthorizationRequest
+} from "./agentApprovalCoordinator.js";
 
 export interface EnterpriseBuiltinExecutionIdentity {
   readonly tenantId: string;
@@ -63,6 +71,7 @@ interface BrokerExecution {
   readonly controller: AbortController;
   readonly waiters: Set<() => void>;
   readonly completedToolResults: Map<string, string>;
+  durableKey?: DurableBuiltinExecutionOwnerKey;
   done?: Promise<void>;
   state: EnterpriseBuiltinExecutionViewV1["state"];
   revision: number;
@@ -71,6 +80,9 @@ interface BrokerExecution {
   output?: EnterpriseBuiltinExecutionOutputV1;
   error?: string;
   cleanupTimer?: NodeJS.Timeout;
+  heartbeatTimer?: NodeJS.Timeout;
+  heartbeatRunning?: boolean;
+  ownershipLost?: boolean;
 }
 
 const WORKSPACE_TOOL_NAMES = new Set<EnterpriseBuiltinWorkspaceToolName>([
@@ -87,7 +99,66 @@ const TERMINAL_RETENTION_MS = 15 * 60 * 1_000;
 export class EnterpriseBuiltinAgentBroker {
   readonly #executions = new Map<string, BrokerExecution>();
   readonly #sessions = new Map<string, BrokerExecution>();
+  readonly #instanceId: string;
   #disposed = false;
+
+  constructor(private readonly persistence?: EnterpriseBuiltinAgentPersistence) {
+    this.#instanceId = randomUUID();
+  }
+
+  migrate(): Promise<void> {
+    return this.persistence?.migrate() ?? Promise.resolve();
+  }
+
+  async shouldRecoverSession(tenantId: string, sessionId: string): Promise<boolean> {
+    const fixedTenantId = safeIdentity(tenantId, "tenantId");
+    const fixedSessionId = safeIdentity(sessionId, "sessionId");
+    if (this.persistence) {
+      return !(await this.persistence.sessionIsActivelyOwned(fixedTenantId, fixedSessionId));
+    }
+    return !this.#sessions.has(this.#sessionKey(fixedTenantId, fixedSessionId));
+  }
+
+  approvalBridgeForTenant(tenantId: string): DurableAgentApprovalBridge | undefined {
+    const fixedTenantId = safeIdentity(tenantId, "tenantId");
+    const persistence = this.persistence;
+    if (!persistence) return undefined;
+    return Object.freeze({
+      authorize: async (request: ToolAuthorizationRequest) => {
+        const durable = request.approvalRequest;
+        const binding = request.approvalBinding;
+        if (!durable || !binding) throw new Error("durable Agent approval binding is unavailable");
+        const execution = this.#sessions.get(this.#sessionKey(
+          fixedTenantId,
+          request.context.sessionId
+        ));
+        if (!execution?.durableKey || execution.state !== "running") {
+          return undefined;
+        }
+        const decision = await persistence.waitForApproval(
+          execution.durableKey,
+          durable,
+          binding,
+          request.context.signal
+        );
+        return decision === "deny"
+          ? Object.freeze({
+              decision: "deny" as const,
+              approvalDecision: "deny" as const,
+              resolution: "decided" as const
+            })
+          : Object.freeze({
+              decision: "approve" as const,
+              approvalDecision: decision,
+              resolution: "decided" as const
+            });
+      },
+      decide: (input: Parameters<DurableAgentApprovalBridge["decide"]>[0]) => persistence.decideApproval({
+        tenantId: fixedTenantId,
+        ...input
+      })
+    });
+  }
 
   toolsForTenant(tenantId: string): readonly ToolDefinition[] {
     const fixedTenantId = safeIdentity(tenantId, "tenantId");
@@ -138,6 +209,19 @@ export class EnterpriseBuiltinAgentBroker {
       executionBinding,
       humanApproval
     });
+    if (this.persistence) {
+      return this.#startDurable({
+        options,
+        identity,
+        request,
+        providerId,
+        modelId,
+        executionBinding,
+        humanApproval,
+        executionId,
+        requestDigest
+      });
+    }
     const existing = this.#executions.get(executionId);
     if (existing) {
       if (existing.requestDigest === requestDigest) {
@@ -150,7 +234,7 @@ export class EnterpriseBuiltinAgentBroker {
         throw new Error("enterprise builtin execution identifier is already bound to different input");
       }
       if (existing.state === "running") {
-        this.cancel(executionId, {
+        await this.cancel(executionId, {
           tenantId: existing.tenantId,
           workerId: existing.workerId,
           claimDigest: existing.claimDigest
@@ -218,12 +302,142 @@ export class EnterpriseBuiltinAgentBroker {
     return this.#view(execution);
   }
 
+  async #startDurable(input: {
+    readonly options: EnterpriseBuiltinExecutionStartOptions;
+    readonly identity: EnterpriseBuiltinExecutionIdentity;
+    readonly request: EnterpriseBuiltinExecutionStartV1;
+    readonly providerId: string;
+    readonly modelId: string;
+    readonly executionBinding: AgentExecutionBindingV1;
+    readonly humanApproval: ApprovalPolicy;
+    readonly executionId: string;
+    readonly requestDigest: string;
+  }): Promise<EnterpriseBuiltinExecutionViewV1> {
+    const persistence = this.persistence!;
+    const acquired = await persistence.acquire({
+      ...input.identity,
+      executionId: input.executionId,
+      requestDigest: input.requestDigest,
+      runId: input.request.runId,
+      candidateId: input.request.candidateId,
+      sessionId: input.request.sessionId,
+      providerId: input.providerId,
+      modelId: input.modelId,
+      executionBinding: input.executionBinding,
+      humanApproval: input.humanApproval,
+      ownerInstanceId: this.#instanceId
+    });
+    if (!acquired.owned) return acquired.view;
+
+    const current = this.#executions.get(input.executionId);
+    if (
+      current?.durableKey?.generation === acquired.generation &&
+      current.durableKey.ownerInstanceId === this.#instanceId &&
+      current.state === "running"
+    ) {
+      return acquired.view;
+    }
+    if (current) {
+      current.ownershipLost = true;
+      current.controller.abort(new Error("enterprise builtin execution ownership changed"));
+      await current.done?.catch(() => undefined);
+    }
+    const sessionKey = this.#sessionKey(input.identity.tenantId, input.request.sessionId);
+    if (this.#sessions.has(sessionKey)) {
+      throw new Error("enterprise builtin Agent session already has an active execution");
+    }
+    const durableKey: DurableBuiltinExecutionOwnerKey = Object.freeze({
+      ...input.identity,
+      executionId: input.executionId,
+      generation: acquired.generation,
+      ownerInstanceId: this.#instanceId
+    });
+    const execution: BrokerExecution = {
+      executionId: input.executionId,
+      requestDigest: input.requestDigest,
+      ...input.identity,
+      request: input.request,
+      providerId: input.providerId,
+      modelId: input.modelId,
+      executionBinding: input.executionBinding,
+      humanApproval: input.humanApproval,
+      controller: new AbortController(),
+      waiters: new Set(),
+      completedToolResults: new Map(),
+      durableKey,
+      state: "running",
+      revision: acquired.view.revision,
+      toolOrdinal: 0
+    };
+    this.#executions.set(input.executionId, execution);
+    this.#sessions.set(sessionKey, execution);
+    this.#startOwnerHeartbeat(execution);
+    execution.done = (async () => {
+      try {
+        const output = await input.options.execute({
+          ...input.request,
+          providerId: input.providerId,
+          modelId: input.modelId,
+          executionBinding: input.executionBinding
+        }, execution.controller.signal);
+        if (execution.ownershipLost) return;
+        execution.output = Object.freeze({
+          ...snapshotOutput(output),
+          providerId: input.providerId,
+          modelId: input.modelId,
+          executionBinding: input.executionBinding
+        });
+        execution.state = output.reason === "completed"
+          ? "completed"
+          : output.reason === "cancelled"
+            ? "cancelled"
+            : "failed";
+        execution.error = execution.state === "failed"
+          ? "enterprise builtin execution did not complete"
+          : undefined;
+        await persistence.complete(
+          durableKey,
+          execution.state,
+          execution.output,
+          execution.error
+        );
+      } catch {
+        if (execution.ownershipLost) return;
+        execution.state = execution.controller.signal.aborted ? "cancelled" : "failed";
+        execution.error = execution.state === "cancelled"
+          ? "enterprise builtin execution was cancelled"
+          : "enterprise builtin execution failed";
+        try {
+          await persistence.complete(durableKey, execution.state, undefined, execution.error);
+        } catch {
+          execution.ownershipLost = true;
+          await persistence.relinquish(durableKey).catch(() => undefined);
+        }
+      } finally {
+        this.#detachDurable(execution);
+      }
+    })();
+    return acquired.view;
+  }
+
   async poll(
     executionId: string,
     identity: EnterpriseBuiltinExecutionIdentity,
     afterRevision: number,
     waitMs: number
   ): Promise<EnterpriseBuiltinExecutionViewV1> {
+    if (this.persistence) {
+      const snapshot = await this.persistence.waitForChange(
+        safeIdentity(executionId, "executionId"),
+        normalizeIdentity(identity),
+        afterRevision,
+        Math.max(0, Math.min(waitMs, 10_000))
+      );
+      if (snapshot.ownerLeaseExpired) {
+        throw new Error("enterprise builtin execution owner lease expired");
+      }
+      return snapshot.view;
+    }
     const execution = this.#require(executionId, identity);
     const pending = this.#pendingToolView(execution);
     if (pending) return pending;
@@ -235,11 +449,24 @@ export class EnterpriseBuiltinAgentBroker {
     return this.#view(execution);
   }
 
-  submitToolResult(
+  async submitToolResult(
     executionId: string,
     identity: EnterpriseBuiltinExecutionIdentity,
     result: EnterpriseBuiltinToolResultV1
-  ): EnterpriseBuiltinExecutionViewV1 {
+  ): Promise<EnterpriseBuiltinExecutionViewV1> {
+    if (this.persistence) {
+      const fixed = snapshotToolResult(result);
+      const snapshot = await this.persistence.submitToolResult(
+        safeIdentity(executionId, "executionId"),
+        normalizeIdentity(identity),
+        fixed,
+        sha256Canonical(fixed)
+      );
+      if (snapshot.ownerLeaseExpired) {
+        throw new Error("enterprise builtin execution owner lease expired");
+      }
+      return snapshot.view;
+    }
     const execution = this.#require(executionId, identity);
     const fixed = snapshotToolResult(result);
     const resultDigest = sha256Canonical(fixed);
@@ -263,10 +490,17 @@ export class EnterpriseBuiltinAgentBroker {
     return this.#view(execution);
   }
 
-  cancel(
+  async cancel(
     executionId: string,
     identity: EnterpriseBuiltinExecutionIdentity
-  ): EnterpriseBuiltinExecutionViewV1 {
+  ): Promise<EnterpriseBuiltinExecutionViewV1> {
+    if (this.persistence) {
+      const snapshot = await this.persistence.cancel(
+        safeIdentity(executionId, "executionId"),
+        normalizeIdentity(identity)
+      );
+      return snapshot.view;
+    }
     const execution = this.#require(executionId, identity);
     if (execution.state === "running") {
       execution.state = "cancelled";
@@ -280,8 +514,14 @@ export class EnterpriseBuiltinAgentBroker {
   async dispose(): Promise<void> {
     if (this.#disposed) return;
     this.#disposed = true;
+    const relinquishments: Promise<void>[] = [];
     for (const execution of this.#executions.values()) {
       if (execution.cleanupTimer) clearTimeout(execution.cleanupTimer);
+      if (execution.heartbeatTimer) clearInterval(execution.heartbeatTimer);
+      if (execution.durableKey && this.persistence) {
+        execution.ownershipLost = true;
+        relinquishments.push(this.persistence.relinquish(execution.durableKey));
+      }
       if (execution.state === "running") {
         execution.state = "cancelled";
         execution.controller.abort(new Error("enterprise builtin Agent broker disposed"));
@@ -293,6 +533,7 @@ export class EnterpriseBuiltinAgentBroker {
     }
     this.#executions.clear();
     this.#sessions.clear();
+    await Promise.allSettled(relinquishments);
   }
 
   async #dispatch(
@@ -319,7 +560,7 @@ export class EnterpriseBuiltinAgentBroker {
     execution.toolOrdinal += 1;
     const call: EnterpriseBuiltinToolCallV1 = Object.freeze({
       schemaVersion: 1,
-      callId: `${execution.executionId}-tool-${execution.toolOrdinal}`,
+      callId: `${execution.executionId}${execution.durableKey ? `-g${execution.durableKey.generation}` : ""}-tool-${execution.toolOrdinal}`,
       executionId: execution.executionId,
       sessionId: execution.request.sessionId,
       name,
@@ -328,6 +569,20 @@ export class EnterpriseBuiltinAgentBroker {
       workspacePath: execution.request.workspacePath,
       createdAt: new Date().toISOString()
     });
+    if (execution.durableKey && this.persistence) {
+      await this.persistence.publishToolCall(
+        execution.durableKey,
+        call,
+        execution.toolOrdinal
+      );
+      const result = await this.persistence.waitForToolResult(
+        execution.durableKey,
+        call.callId,
+        context.signal
+      );
+      if (!result.ok) throw new Error("sandbox workspace tool execution failed");
+      return result.result as JsonValue;
+    }
     return new Promise<JsonValue>((resolve, reject) => {
       const abort = (): void => {
         const pending = execution.pendingTool;
@@ -351,6 +606,36 @@ export class EnterpriseBuiltinAgentBroker {
       if (context.signal?.aborted) abort();
       else this.#changed(execution);
     });
+  }
+
+  #startOwnerHeartbeat(execution: BrokerExecution): void {
+    const key = execution.durableKey;
+    const persistence = this.persistence;
+    if (!key || !persistence) return;
+    const tick = async (): Promise<void> => {
+      if (execution.heartbeatRunning || execution.ownershipLost || execution.state !== "running") return;
+      execution.heartbeatRunning = true;
+      try {
+        if (await persistence.heartbeat(key)) return;
+      } catch {
+        // A database outage makes ownership unverifiable and therefore unsafe.
+      } finally {
+        execution.heartbeatRunning = false;
+      }
+      execution.ownershipLost = true;
+      execution.controller.abort(new Error("enterprise builtin execution ownership was lost"));
+    };
+    execution.heartbeatTimer = setInterval(() => void tick(), 3_000);
+    execution.heartbeatTimer.unref?.();
+  }
+
+  #detachDurable(execution: BrokerExecution): void {
+    if (execution.heartbeatTimer) clearInterval(execution.heartbeatTimer);
+    execution.heartbeatTimer = undefined;
+    this.#sessions.delete(this.#sessionKey(execution.tenantId, execution.request.sessionId));
+    if (this.#executions.get(execution.executionId) === execution) {
+      this.#executions.delete(execution.executionId);
+    }
   }
 
   #require(

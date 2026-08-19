@@ -69,6 +69,20 @@ jobs:
     name: Node build, typecheck, tests, enterprise fixture
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: mn
+          POSTGRES_PASSWORD: mn-e2e-only
+          POSTGRES_DB: mn_enterprise
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mn -d mn_enterprise"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -90,6 +104,12 @@ jobs:
       - run: npm run verify:helm
       - run: npm run test:coverage:agent
       - run: npm test
+      - name: Run PostgreSQL integration suites serially
+        env:
+          MN_TEST_POSTGRES_URL: postgresql://mn:mn-e2e-only@127.0.0.1:5432/mn_enterprise
+        run: >-
+          node --test --test-concurrency=1
+          apps/api/dist-test/test/*Postgres.test.js
       - run: npm run verify:enterprise-fixture
 
   kubernetes-sandbox:

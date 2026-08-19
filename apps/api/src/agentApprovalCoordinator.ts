@@ -14,11 +14,22 @@ import {
   type JsonValue
 } from "@mn/agent-protocol";
 
-type ToolAuthorizationRequest = Parameters<AgentHostOptions["authorizer"]["authorize"]>[0];
-type ToolAuthorizationResult = Awaited<ReturnType<AgentHostOptions["authorizer"]["authorize"]>>;
+export type ToolAuthorizationRequest = Parameters<AgentHostOptions["authorizer"]["authorize"]>[0];
+export type ToolAuthorizationResult = Awaited<ReturnType<AgentHostOptions["authorizer"]["authorize"]>>;
+
+export interface DurableAgentApprovalBridge {
+  authorize(request: ToolAuthorizationRequest): Promise<ToolAuthorizationResult | undefined>;
+  decide(input: {
+    readonly request: AgentSessionEventV1<"approval/requested">;
+    readonly binding: AgentToolApprovalBindingV1;
+    readonly clientRequestId: string;
+    readonly decision: AgentApprovalDecisionV1;
+  }): Promise<boolean>;
+}
 
 export interface AgentApprovalCoordinatorOptions {
   readonly autoApprove?: (request: ToolAuthorizationRequest) => boolean;
+  readonly durable?: DurableAgentApprovalBridge;
 }
 
 interface PendingApproval {
@@ -95,6 +106,10 @@ export class AgentApprovalCoordinator {
     if (this.options.autoApprove?.(request) === true) {
       return authorizationResult("approve_once", "decided");
     }
+    if (this.options.durable) {
+      const durableResult = await this.options.durable.authorize(request);
+      if (durableResult) return durableResult;
+    }
     const key = approvalKey(durable.sessionId, binding.approvalId);
     if (this.pending.has(key)) throw new TypeError("tool approval request is already registered");
     return new Promise<ToolAuthorizationResult>((resolve) => {
@@ -115,6 +130,16 @@ export class AgentApprovalCoordinator {
       signal?.addEventListener("abort", onAbort, { once: true });
       if (signal?.aborted === true) onAbort();
     });
+  }
+
+  async decideDurable(
+    request: AgentSessionEventV1<"approval/requested">,
+    clientRequestId: string,
+    decision: AgentApprovalDecisionV1
+  ): Promise<boolean> {
+    if (!this.options.durable) return false;
+    const binding = assertAgentToolApprovalBindingV1(request.payload.publicControls.binding);
+    return this.options.durable.decide({ request, binding, clientRequestId, decision });
   }
 
   reserve(
