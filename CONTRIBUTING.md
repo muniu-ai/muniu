@@ -44,7 +44,7 @@ line, function, and branch coverage when the workspace runner supports it.
 New Muniu contributions are accepted under Apache License 2.0. Do not copy
 source from another project unless its license is compatible and provenance is
 recorded. DeepSeek Harness work is limited to commit
-47f943859bef60e4160492346772ded9b24f765a; adapted files retain MIT notices and
+99f6f02fecdb7dff40c3fbc9470f5907c29f74ca; adapted files retain MIT notices and
 must be listed in docs/upstream-provenance/deepseek-harness.yaml.
 
 Do not submit proprietary model payloads, credentials, generated platform

@@ -129,7 +129,7 @@ lipo -archs "$APP/Contents/MacOS/mniu-desktop"
 - `stapler validate` 对 app 和 DMG 通过。
 - `spctl` 显示 accepted。
 - 二进制同时包含 `x86_64 arm64`。
-- 从网络下载到一台干净 Mac 后，Gatekeeper 不拦截，`mniu://` 能唤起应用。
+- 从网络下载到一台干净 Mac 后，Gatekeeper 不拦截，正式 `muniu://` 能唤起应用；`mniu://` 仅作一个版本的兼容别名。
 
 ## 7. 常见问题
 

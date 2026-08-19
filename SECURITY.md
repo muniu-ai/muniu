@@ -34,8 +34,13 @@ response or remediation SLA for the Developer Preview.
   not redacted. Credentials remain a separate security class and are always
   hidden; no raw-output option may expose API keys, tokens, passwords, or
   private keys. See `docs/security/redaction-policy.md`.
-- Arbitrary executable plugins, executable YAML/JS configuration, eval, and
-  new Function are outside the v0.1 threat model and are disabled.
+- Cordis profiles may load arbitrary executable plugins and executable YAML/JS
+  configuration. Installed plugins are process-equivalent trusted code: they
+  can access the host process, credentials available to it, and its network and
+  filesystem permissions. Administrators must pin and audit every plugin; this
+  mechanism is not a sandbox. Direct application use of `eval` and `new
+  Function` remains prohibited outside the audited vendored configuration
+  implementation.
 - Side-effecting tools require centralized policy and approval checks.
 
 AgentHost cancellation is cooperative. Disposal refuses new runs, aborts every
