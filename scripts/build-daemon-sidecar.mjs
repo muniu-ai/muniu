@@ -25,6 +25,11 @@ const arm64Path = path.join(binariesDir, "mn-api-aarch64-apple-darwin");
 const x64Path = path.join(binariesDir, "mn-api-x86_64-apple-darwin");
 const universalPath = path.join(binariesDir, "mn-api-universal-apple-darwin");
 
+execFileSync(process.execPath, [
+  path.join(rootDir, "scripts/build-descriptor-lock-helper.mjs"),
+  "--desktop"
+], { cwd: rootDir, stdio: "inherit" });
+
 rmSync(buildDir, { recursive: true, force: true });
 mkdirSync(outDir, { recursive: true });
 

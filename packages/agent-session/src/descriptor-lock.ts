@@ -3,6 +3,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { constants } from "node:fs";
 import { access } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const LOCK_COMMAND_TIMEOUT_MS = 5_000;
 const INHERITED_LOCK_FD = 3;
@@ -10,6 +12,13 @@ const INHERITED_LOCK_FD = 3;
 export interface DescriptorLockCommand {
   readonly executable: string;
   readonly argumentsFor: (descriptor: number) => readonly string[];
+}
+
+export interface DescriptorLockResolutionOptions {
+  readonly packaged?: boolean;
+  readonly processExecutable?: string;
+  readonly moduleUrl?: string;
+  readonly architecture?: NodeJS.Architecture;
 }
 
 export class DescriptorLockError extends Error {
@@ -28,18 +37,46 @@ async function isExecutable(filePath: string): Promise<boolean> {
   }
 }
 
+function darwinDescriptorLockCandidates(
+  options: DescriptorLockResolutionOptions
+): readonly string[] {
+  const packaged = options.packaged ?? process.env.MN_DESKTOP_PACKAGED === "1";
+  if (!packaged) {
+    const moduleUrl = options.moduleUrl ?? import.meta.url;
+    return [
+      fileURLToPath(new URL("../native/.build/mn-descriptor-lock", moduleUrl)),
+      fileURLToPath(new URL("../../native/.build/mn-descriptor-lock", moduleUrl))
+    ];
+  }
+
+  const architecture = options.architecture ?? process.arch;
+  const target = architecture === "arm64"
+    ? "aarch64-apple-darwin"
+    : architecture === "x64" ? "x86_64-apple-darwin" : undefined;
+  if (target === undefined) return [];
+  const executableDirectory = path.dirname(options.processExecutable ?? process.execPath);
+  const helperName = `mn-descriptor-lock-${target}`;
+  return [
+    path.join(executableDirectory, helperName),
+    path.resolve(executableDirectory, "../Resources", helperName)
+  ];
+}
+
 export async function resolveDescriptorLockCommand(
   platform: NodeJS.Platform = process.platform,
-  executable: (filePath: string) => Promise<boolean> = isExecutable
+  executable: (filePath: string) => Promise<boolean> = isExecutable,
+  options: DescriptorLockResolutionOptions = {}
 ): Promise<DescriptorLockCommand> {
   if (platform === "darwin") {
-    if (!await executable("/usr/bin/lockf")) {
-      throw new DescriptorLockError("descriptor lock command helper is unavailable");
+    for (const candidate of darwinDescriptorLockCandidates(options)) {
+      if (await executable(candidate)) {
+        return {
+          executable: candidate,
+          argumentsFor: (descriptor) => [String(descriptor)]
+        };
+      }
     }
-    return {
-      executable: "/usr/bin/lockf",
-      argumentsFor: (descriptor) => ["-s", "-t", "0", String(descriptor)]
-    };
+    throw new DescriptorLockError("descriptor lock command helper is unavailable");
   }
   if (platform === "linux") {
     for (const candidate of ["/usr/bin/flock", "/bin/flock"] as const) {

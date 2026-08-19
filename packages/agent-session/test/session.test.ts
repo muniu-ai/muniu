@@ -1105,11 +1105,41 @@ test("descriptor lock commands are fixed, fail closed when missing, and release 
     }),
     /helper.*unavailable/i
   );
-  assert.deepEqual(checked, ["/usr/bin/lockf"]);
+  assert.equal(checked.length, 2);
+  for (const candidate of checked) {
+    assert.match(candidate, /native\/\.build\/mn-descriptor-lock$/u);
+  }
 
-  const darwin = await resolveWriterLockHelper("darwin", async () => true);
-  assert.equal(darwin.executable, "/usr/bin/lockf");
-  assert.deepEqual(darwin.argumentsFor(4), ["-s", "-t", "0", "4"]);
+  const darwinChecked: string[] = [];
+  const darwin = await resolveWriterLockHelper("darwin", async (filePath) => {
+    darwinChecked.push(filePath);
+    return true;
+  });
+  assert.deepEqual(darwinChecked, [darwin.executable]);
+  assert.match(darwin.executable, /native\/\.build\/mn-descriptor-lock$/u);
+  assert.deepEqual(darwin.argumentsFor(4), ["4"]);
+  const packagedDarwinChecks: string[] = [];
+  const packagedDarwin = await resolveWriterLockHelper(
+    "darwin",
+    async (filePath) => {
+      packagedDarwinChecks.push(filePath);
+      return filePath.includes("/Resources/");
+    },
+    {
+      packaged: true,
+      processExecutable: "/Applications/Muniu.app/Contents/MacOS/mn-api-aarch64-apple-darwin",
+      architecture: "arm64"
+    }
+  );
+  assert.deepEqual(packagedDarwinChecks, [
+    "/Applications/Muniu.app/Contents/MacOS/mn-descriptor-lock-aarch64-apple-darwin",
+    "/Applications/Muniu.app/Contents/Resources/mn-descriptor-lock-aarch64-apple-darwin"
+  ]);
+  assert.equal(
+    packagedDarwin.executable,
+    "/Applications/Muniu.app/Contents/Resources/mn-descriptor-lock-aarch64-apple-darwin"
+  );
+  assert.deepEqual(packagedDarwin.argumentsFor(4), ["4"]);
   const linux = await resolveWriterLockHelper("linux", async (filePath) => {
     return filePath === "/usr/bin/flock";
   });
@@ -1117,7 +1147,10 @@ test("descriptor lock commands are fixed, fail closed when missing, and release 
   assert.deepEqual(linux.argumentsFor(4), ["-n", "4"]);
 
   const helper = await resolveWriterLockHelper(process.platform);
-  assert.ok(["/usr/bin/lockf", "/usr/bin/flock", "/bin/flock"].includes(helper.executable));
+  assert.ok(
+    helper.executable.endsWith("mn-descriptor-lock")
+      || ["/usr/bin/flock", "/bin/flock"].includes(helper.executable)
+  );
   assert.equal(helper.argumentsFor(3).at(-1), "3");
 
   const identity = `descriptor-release:${await mkdtemp(path.join(os.tmpdir(), "muniu-lock-release-"))}`;

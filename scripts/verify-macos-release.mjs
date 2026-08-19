@@ -167,6 +167,16 @@ assertIncludes(
   "mn-api-x86_64-apple-darwin",
   "Tauri x86_64 daemon resource"
 );
+assertIncludes(
+  JSON.stringify(tauriConfig.bundle?.resources ?? {}),
+  "mn-descriptor-lock-aarch64-apple-darwin",
+  "Tauri arm64 descriptor-lock resource"
+);
+assertIncludes(
+  JSON.stringify(tauriConfig.bundle?.resources ?? {}),
+  "mn-descriptor-lock-x86_64-apple-darwin",
+  "Tauri x86_64 descriptor-lock resource"
+);
 for (const runtimeResource of [
   "runtime/base.yml",
   "runtime/profiles/local.yml",
@@ -204,6 +214,7 @@ for (const expected of [
   "lipo",
   "uname -m",
   "../Resources",
+  "build-descriptor-lock-helper.mjs",
 ]) {
   assertIncludes(daemonSidecarScript, expected, "daemon sidecar build script");
 }

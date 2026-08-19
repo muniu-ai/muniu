@@ -61,6 +61,8 @@ const requiredFiles = [
   "deny.toml",
   "scripts/lib/open-source-policy.mjs",
   "scripts/lib/cargo-lock-license.mjs",
+  "scripts/build-descriptor-lock-helper.mjs",
+  "packages/agent-session/native/descriptor-lock.c",
   "scripts/test/open-source-policy.test.mjs",
   "scripts/test/fixtures/allowed-fake-secrets.txt",
   "scripts/verify-third-party-licenses.mjs",
