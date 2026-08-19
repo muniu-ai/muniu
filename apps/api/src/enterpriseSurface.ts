@@ -80,6 +80,13 @@ const ENTERPRISE_ROUTE_RULES: readonly EnterpriseRouteRule[] = Object.freeze([
       "u"
     )
   },
+  {
+    methods: post,
+    pathname: new RegExp(
+      `^/v1/run-jobs/queue/${resourceId}/builtin-executions(?:/${resourceId}/(?:poll|tool-results|cancel))?$`,
+      "u"
+    )
+  },
 
   { methods: get, pathname: new RegExp(`^/v1/runs/${resourceId}$`, "u") },
   {
@@ -99,6 +106,24 @@ const ENTERPRISE_ROUTE_RULES: readonly EnterpriseRouteRule[] = Object.freeze([
   },
 
   { methods: get, pathname: /^\/v1\/audit-events$/u },
+  // Human operators use the tenant-scoped durable session projection to
+  // observe and approve embedded Agent effects. Machine principals remain
+  // excluded by principalAllows because these are not queue routes.
+  { methods: getPost, pathname: /^\/v1\/agent-sessions$/u },
+  {
+    methods: getPost,
+    pathname: new RegExp(
+      `^/v1/agent-sessions/${resourceId}(?:/(?:messages|events|cancel|close))?$`,
+      "u"
+    )
+  },
+  {
+    methods: post,
+    pathname: new RegExp(
+      `^/v1/agent-sessions/${resourceId}/approvals/${resourceId}$`,
+      "u"
+    )
+  },
   // Provider credentials remain an org-admin operation via roleAllows; the
   // enterprise surface exposes only create/list, not desktop projection or
   // takeover endpoints.

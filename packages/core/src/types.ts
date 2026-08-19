@@ -137,6 +137,81 @@ export interface AgentExecutionBindingV1 {
   readonly sandboxCapabilityId: string;
 }
 
+export type EnterpriseBuiltinJsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | readonly EnterpriseBuiltinJsonValue[]
+  | { readonly [key: string]: EnterpriseBuiltinJsonValue };
+
+export type EnterpriseBuiltinWorkspaceToolName =
+  | "read_file"
+  | "list_files"
+  | "search_text"
+  | "write_file"
+  | "apply_patch"
+  | "run_command";
+
+export interface EnterpriseBuiltinExecutionStartV1 {
+  readonly schemaVersion: 1;
+  readonly sessionId: string;
+  readonly runId: string;
+  readonly candidateId: string;
+  /** Absolute path inside the inspected candidate runtime, never an API-host path. */
+  readonly workspacePath: string;
+  readonly prompt: string;
+  readonly providerId: string;
+  readonly modelId: string;
+  readonly timeoutSeconds: number;
+  readonly executionBinding: AgentExecutionBindingV1;
+  readonly sandboxAttestation: SandboxLeaseAttestation;
+  readonly sandboxExecution: SandboxExecutionEvidence;
+}
+
+export interface EnterpriseBuiltinExecutionOutputV1 {
+  readonly reason: "completed" | "cancelled" | "budget-exceeded" | "error" | string;
+  readonly summary: string;
+  readonly steps: number;
+  readonly toolCalls: number;
+  readonly providerId: string;
+  readonly modelId: string;
+  readonly executionBinding: AgentExecutionBindingV1;
+}
+
+export interface EnterpriseBuiltinToolCallV1 {
+  readonly schemaVersion: 1;
+  readonly callId: string;
+  readonly executionId: string;
+  readonly sessionId: string;
+  readonly name: EnterpriseBuiltinWorkspaceToolName;
+  readonly risk: "read-only" | "side-effecting";
+  readonly args: Readonly<Record<string, EnterpriseBuiltinJsonValue>>;
+  readonly workspacePath: string;
+  readonly createdAt: string;
+}
+
+export interface EnterpriseBuiltinExecutionViewV1 {
+  readonly schemaVersion: 1;
+  readonly executionId: string;
+  readonly state: "running" | "completed" | "failed" | "cancelled";
+  readonly revision: number;
+  readonly providerId: string;
+  readonly modelId: string;
+  readonly executionBinding: AgentExecutionBindingV1;
+  readonly toolCall?: EnterpriseBuiltinToolCallV1;
+  readonly output?: EnterpriseBuiltinExecutionOutputV1;
+  readonly error?: string;
+}
+
+export interface EnterpriseBuiltinToolResultV1 {
+  readonly schemaVersion: 1;
+  readonly callId: string;
+  readonly ok: boolean;
+  readonly result?: EnterpriseBuiltinJsonValue;
+  readonly error?: string;
+}
+
 export interface AgentTask {
   id: string;
   tenantId?: string;

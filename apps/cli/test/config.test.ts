@@ -2393,7 +2393,7 @@ test("enterprise worker registers and claims with machine JWT capabilities", asy
   assert.equal(heartbeat.ownerId, "worker-machine");
   assert.equal(claim.ownerId, "worker-machine");
   assert.deepEqual(heartbeat.capabilities, claim.capabilities);
-  assert.deepEqual(claim.capabilities.providers, ["claude", "codex"]);
+  assert.deepEqual(claim.capabilities.providers, ["builtin"]);
   assert.deepEqual(claim.capabilities.languages, ["javascript"]);
   assert.deepEqual(claim.capabilities.tools, ["node"]);
   assert.equal(claim.capabilities.sandboxBackends[0].enforcement, "enforced");
@@ -2403,7 +2403,7 @@ test("enterprise worker registers and claims with machine JWT capabilities", asy
   );
 });
 
-test("enterprise worker fails closed before heartbeat when managed providers are unavailable", async () => {
+test("enterprise worker fails closed before heartbeat for an external CLI compatibility runtime", async () => {
   await assert.rejects(
     execFileAsync(
       process.execPath,
@@ -2414,7 +2414,9 @@ test("enterprise worker fails closed before heartbeat when managed providers are
         "--enterprise",
         "--once",
         "--owner",
-        "worker-machine"
+        "worker-machine",
+        "--provider",
+        "claude"
       ],
       {
         env: {
@@ -2426,7 +2428,7 @@ test("enterprise worker fails closed before heartbeat when managed providers are
       }
     ),
     (error: any) => {
-      assert.match(error.stderr ?? "", /managed-provider execution is not available/u);
+      assert.match(error.stderr ?? "", /Claude\/Codex compatibility execution is unavailable/u);
       assert.doesNotMatch(error.stderr ?? "", /ECONNREFUSED/u);
       return true;
     }

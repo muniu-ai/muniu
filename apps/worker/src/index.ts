@@ -11,3 +11,4 @@ export * from "./workspaceSnapshot.js";
 export * from "./orchestrator.js";
 export * from "./governedOrchestrator.js";
 export * from "./governedGateExecution.js";
+export * from "./enterpriseBuiltinWorkspaceTools.js";

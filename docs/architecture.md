@@ -76,6 +76,8 @@ flowchart LR
   API1 --> S3[(S3)]
   Worker1 --> API1
   Worker2 --> API2
+  API1 -->|model stream; credentials stay here| Provider[Model Provider]
+  API1 -->|bounded tool call/result| Worker1
   API1 --> PVC[(Shared workspace PVC)]
   Worker1 --> PVC
   Worker1 -->|create / inspect / exec / delete| Pod[Candidate sandbox Pod]
@@ -85,4 +87,6 @@ flowchart LR
   PVC --> GatePod
 ```
 
-源码由 API 写入 S3 内容寻址存储，Worker 凭活跃 claim 下载并校验后物化到共享 PVC。候选 Pod 不读取 S3、不挂载 Kubernetes token，也没有默认网络。Worker 只控制候选 Pod；API 使用独立 RBAC 再次验证实际 Pod，并在第二个只读 Pod 中权威重放 Gate。该路径在 v0.1.0 标记为实验性，并由 Kind + Calico 探针验证核心隔离契约。
+源码由 API 写入 S3 内容寻址存储，Worker 凭活跃 claim 下载并校验后物化到共享 PVC。builtin 模型流在 API 内执行，Provider 凭据不下发；模型请求的读取、搜索、补丁、写入和命令通过活跃 claim 绑定的工具协议交给 Worker，并只在同一已检查 Pod 中执行。未确认的工具调用使用同一 `callId` 重投，Worker 缓存结果，API 仅接受内容一致的幂等提交。候选 Pod 不读取 S3、不挂载 Kubernetes token，也没有默认网络。Worker 只控制候选 Pod；API 使用独立 RBAC 再次验证实际 Pod，并在第二个只读 Pod 中权威重放 Gate。
+
+当前工具 broker 的活动执行状态仍在单个 API 进程内，跨 API 副本的 PostgreSQL broker 与故障接管尚未完成；因此该路径继续标记为实验性，不能宣称已通过多副本发布验收。Kind + Calico 探针验证的是 Pod 隔离契约。

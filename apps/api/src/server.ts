@@ -117,12 +117,17 @@ import {
   registerControlPlaneRoutes
 } from "./controlPlane.js";
 import {
+  AgentApprovalCoordinator
+} from "./agentApprovalCoordinator.js";
+import {
   AgentSessionServiceError,
   LocalMockAgentSessionService
 } from "./agentSessionService.js";
 import { createProductionAgentRuntimeFactory } from "./agentRuntimeFactory.js";
 import { registerAgentSessionRoutes } from "./agentSessionRoutes.js";
 import { createEnterpriseAgentSessionStore } from "./enterpriseAgentSessionStore.js";
+import { EnterpriseBuiltinAgentBroker } from "./enterpriseBuiltinAgentBroker.js";
+import { registerEnterpriseBuiltinAgentRoutes } from "./enterpriseBuiltinAgentRoutes.js";
 import {
   registerEvidenceRoutes,
   type EvidenceRouteOptions
@@ -245,6 +250,7 @@ import {
 import { KubernetesAuthoritativeGateAuthority } from "./kubernetesAuthoritativeGateAuthority.js";
 import {
   issueSandboxRuntimeProof,
+  sandboxExecutionMatchesAttestation,
   verifyIssuedSandboxRuntimeProof,
   verifySandboxRuntimeProof
 } from "./sandboxRuntimeProof.js";
@@ -1757,6 +1763,7 @@ export function buildServer(options: BuildServerOptions = {}) {
     ? options.agentSessionService
     : undefined;
   const enterpriseAgentSessionServices = new Map<string, LocalMockAgentSessionService>();
+  const enterpriseBuiltinAgentBroker = new EnterpriseBuiltinAgentBroker();
   let getAgentSessionService:
     | ((request?: FastifyRequest) => Promise<LocalMockAgentSessionService>)
     | undefined;
@@ -1987,8 +1994,13 @@ export function buildServer(options: BuildServerOptions = {}) {
         {
           mode: "production",
           runtimeFactory,
-          tools: createWorkspaceTools({
-            allowedCommands: DEFAULT_POLICY.commandAllowlist
+          tools: enterpriseBuiltinAgentBroker.toolsForTenant(context.tenantId),
+          approvalCoordinator: new AgentApprovalCoordinator({
+            autoApprove: (approval) => enterpriseBuiltinAgentBroker.shouldAutoApprove(
+              context.tenantId,
+              approval.context.sessionId,
+              approval.risk
+            )
           }),
           sessionStore: createEnterpriseAgentSessionStore({
             tenantId: context.tenantId,
@@ -2556,6 +2568,7 @@ export function buildServer(options: BuildServerOptions = {}) {
     }
     await Promise.allSettled([...activeRunJobs.values()].map((job) => job.done));
     activeRunJobs.clear();
+    await enterpriseBuiltinAgentBroker.dispose();
     await agentSessionService?.dispose();
     await Promise.allSettled(
       [...enterpriseAgentSessionServices.values()].map((service) => service.dispose())
@@ -2705,6 +2718,16 @@ export function buildServer(options: BuildServerOptions = {}) {
   if (getAgentSessionService) {
     registerAgentSessionRoutes(app, { getService: getAgentSessionService });
   }
+  registerEnterpriseBuiltinAgentRoutes(app, {
+    runtimeProfile,
+    ...(enterprisePostgres ? { postgres: enterprisePostgres } : {}),
+    ...(sandboxAttestationKey ? { signingKey: sandboxAttestationKey } : {}),
+    store,
+    providerStore: localStore,
+    broker: enterpriseBuiltinAgentBroker,
+    requestContext: (request) => requestContexts.get(request),
+    ...(getAgentSessionService ? { getAgentSessionService } : {})
+  });
 
   registerControlPlaneRoutes(app, {
     store,
@@ -8284,29 +8307,6 @@ function validateEnterpriseSandboxEvidence(input: {
     }
   }
   return undefined;
-}
-
-function sandboxExecutionMatchesAttestation(
-  execution: RunRecord["sandboxExecution"],
-  attestation: RunRecord["sandboxAttestation"]
-): boolean {
-  return Boolean(
-    execution &&
-    attestation &&
-    execution.backendId === attestation.backend.id &&
-    execution.backendVersion === attestation.backend.version &&
-    execution.leaseId === attestation.leaseId &&
-    execution.attestationDigest === attestation.digest &&
-    /^[a-f0-9]{64}$/u.test(execution.runtimeId) &&
-    /^[a-f0-9]{64}$/u.test(execution.runtimeDigest) &&
-    typeof execution.imageDigest === "string" &&
-    execution.imageDigest === attestation.policy.runtimeImage?.digest &&
-    execution.runtimeProof?.attestationDigest === execution.attestationDigest &&
-    execution.runtimeProof?.runtimeId === execution.runtimeId &&
-    execution.runtimeProof?.runtimeDigest === execution.runtimeDigest &&
-    execution.runtimeProof?.imageDigest === execution.imageDigest &&
-    execution.runtimeProof?.claimDigest === attestation.claimDigest
-  );
 }
 
 function validateExternalGovernedCheckpoint(

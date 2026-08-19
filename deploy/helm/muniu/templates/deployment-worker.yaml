@@ -40,7 +40,7 @@ spec:
             - { name: MN_API_URL, value: "http://{{ include "muniu.fullname" . }}:{{ .Values.service.port }}" }
             - name: MN_API_TOKEN
               valueFrom: { secretKeyRef: { name: {{ .Values.worker.authExistingSecret }}, key: {{ .Values.worker.authTokenKey }} } }
-            - { name: MN_WORKER_PROVIDERS, value: "claude,codex" }
+            - { name: MN_WORKER_PROVIDERS, value: "builtin" }
             - { name: MN_ENTERPRISE_SANDBOX_IMAGE, value: {{ .Values.sandbox.image | quote }} }
             - { name: MN_WORKER_SANDBOX_DRIVER, value: kubernetes }
             - { name: MN_KUBERNETES_NAMESPACE, valueFrom: { fieldRef: { fieldPath: metadata.namespace } } }
