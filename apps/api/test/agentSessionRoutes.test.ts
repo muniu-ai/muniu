@@ -607,6 +607,175 @@ test("one session waiting for approval never blocks an independent session decis
   assert.equal(toolEffects, 1);
 });
 
+test("durable approval bridge wakes a tool run without a process-local waiter", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "mn-agent-api-durable-approval-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let modelTurns = 0;
+  let toolEffects = 0;
+  let settle: ((result: {
+    decision: "approve";
+    approvalDecision: "approve_once";
+    resolution: "decided";
+  }) => void) | undefined;
+  const coordinator = new AgentApprovalCoordinator({
+    durable: {
+      authorize: async () => new Promise((resolve) => { settle = resolve; }),
+      decide: async ({ request, binding, clientRequestId, decision }) => {
+        assert.equal(request.payload.publicControls.binding.approvalId, binding.approvalId);
+        assert.ok([
+          "durable-approval-decision",
+          "durable-approval-replay-after-resolution"
+        ].includes(clientRequestId));
+        assert.equal(decision, "approve_once");
+        if (!settle) throw new Error("durable approval waiter was not registered");
+        settle({
+          decision: "approve",
+          approvalDecision: "approve_once",
+          resolution: "decided"
+        });
+        return true;
+      }
+    }
+  });
+  const service = new LocalMockAgentSessionService(join(root, "agent-service"), {
+    adapters: [{
+      id: "mock",
+      async *stream() {
+        modelTurns += 1;
+        if (modelTurns === 1) {
+          yield {
+            type: "tool-call-delta" as const,
+            index: 0,
+            id: CallId("durable-approval-call"),
+            name: "write",
+            argumentsDelta: "{}"
+          };
+          yield { type: "finish" as const, reason: "tool-calls" as const };
+          return;
+        }
+        yield { type: "finish" as const, reason: "stop" as const };
+      }
+    }],
+    tools: [{
+      name: "write",
+      description: "durable approval test tool",
+      risk: "side-effecting",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
+      execute: async () => {
+        toolEffects += 1;
+        return null;
+      }
+    }],
+    effectPolicyBinding: {
+      governanceDigest: Digest("a".repeat(64)),
+      harnessDigest: Digest("b".repeat(64))
+    },
+    approvalCoordinator: coordinator
+  });
+  t.after(() => service.dispose().catch(() => undefined));
+  const created = await service.create(createRequestV1("durable-approval-create"));
+  const sessionId = (created.body as { sessionId: string }).sessionId;
+  const running = service.message(
+    sessionId,
+    messageRequestV1("durable-approval-message", "run the durable approval tool")
+  );
+  const requested = await waitForRequestedApproval(service, sessionId);
+  const approved = await service.approve(
+    sessionId,
+    requested.payload.publicControls.binding.approvalId,
+    approvalRequestV1("durable-approval-decision", "approve_once")
+  );
+  assert.equal(approved.statusCode, 200);
+  assert.equal((await running).statusCode, 200);
+  assert.equal((await service.approve(
+    sessionId,
+    requested.payload.publicControls.binding.approvalId,
+    approvalRequestV1("durable-approval-replay-after-resolution", "approve_once")
+  )).statusCode, 200);
+  assert.equal(toolEffects, 1);
+  const events = await service.eventsAfter(sessionId, requested.seq - 1);
+  assert.deepEqual(
+    events.slice(0, 3).map((event) => event.type),
+    ["approval/requested", "approval/resolved", "tool/call"]
+  );
+  assert.equal(coordinator.activeApprovalCount, 0);
+});
+
+test("an unhandled durable approval bridge falls back to the process-local waiter", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "mn-agent-api-local-approval-fallback-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let modelTurns = 0;
+  let toolEffects = 0;
+  let durableAuthorizations = 0;
+  let durableDecisions = 0;
+  const coordinator = new AgentApprovalCoordinator({
+    durable: {
+      authorize: async () => {
+        durableAuthorizations += 1;
+        return undefined;
+      },
+      decide: async () => {
+        durableDecisions += 1;
+        return false;
+      }
+    }
+  });
+  const service = new LocalMockAgentSessionService(join(root, "agent-service"), {
+    adapters: [{
+      id: "mock",
+      async *stream() {
+        modelTurns += 1;
+        if (modelTurns === 1) {
+          yield {
+            type: "tool-call-delta" as const,
+            index: 0,
+            id: CallId("local-approval-fallback-call"),
+            name: "write",
+            argumentsDelta: "{}"
+          };
+          yield { type: "finish" as const, reason: "tool-calls" as const };
+          return;
+        }
+        yield { type: "finish" as const, reason: "stop" as const };
+      }
+    }],
+    tools: [{
+      name: "write",
+      description: "process-local approval fallback test tool",
+      risk: "side-effecting",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
+      execute: async () => {
+        toolEffects += 1;
+        return null;
+      }
+    }],
+    effectPolicyBinding: {
+      governanceDigest: Digest("e".repeat(64)),
+      harnessDigest: Digest("f".repeat(64))
+    },
+    approvalCoordinator: coordinator
+  });
+  t.after(() => service.dispose().catch(() => undefined));
+  const created = await service.create(createRequestV1("local-approval-fallback-create"));
+  const sessionId = (created.body as { sessionId: string }).sessionId;
+  const running = service.message(
+    sessionId,
+    messageRequestV1("local-approval-fallback-message", "run the fallback approval tool")
+  );
+  const requested = await waitForRequestedApproval(service, sessionId);
+  assert.equal(coordinator.activeApprovalCount, 1);
+  assert.equal((await service.approve(
+    sessionId,
+    requested.payload.publicControls.binding.approvalId,
+    approvalRequestV1("local-approval-fallback-decision", "approve_once")
+  )).statusCode, 200);
+  assert.equal((await running).statusCode, 200);
+  assert.equal(durableAuthorizations, 1);
+  assert.equal(durableDecisions, 1);
+  assert.equal(toolEffects, 1);
+  assert.equal(coordinator.activeApprovalCount, 0);
+});
+
 test("durable cancel and close resolve waiting approvals without dispatching tools", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "mn-agent-api-cancel-approval-"));
   t.after(() => rm(root, { recursive: true, force: true }));

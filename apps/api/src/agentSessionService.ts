@@ -161,6 +161,7 @@ export interface LocalAgentSessionServiceOptions {
   readonly approvalCoordinator?: AgentApprovalCoordinator;
   readonly effectPolicyBinding?: EffectPolicyBindingV1;
   readonly sessionStore?: AgentSessionStore;
+  readonly shouldRecoverInterruptedSession?: (sessionId: string) => boolean | Promise<boolean>;
 }
 
 export interface EmbeddedCandidateExecutionInput {
@@ -173,6 +174,7 @@ export interface EmbeddedCandidateExecutionInput {
   readonly modelId: string;
   readonly timeoutSeconds: number;
   readonly executionBinding: AgentExecutionBindingV1;
+  readonly recoverExistingSession?: boolean;
   readonly signal?: AbortSignal;
 }
 
@@ -500,6 +502,9 @@ export class LocalMockAgentSessionService {
   private readonly tools: AgentHostOptions["tools"];
   private readonly approvalCoordinator: AgentApprovalCoordinator;
   private readonly effectPolicyBinding: EffectPolicyBindingV1 | undefined;
+  private readonly shouldRecoverInterruptedSession:
+    | ((sessionId: string) => boolean | Promise<boolean>)
+    | undefined;
 
   constructor(
     private readonly root: string,
@@ -530,6 +535,7 @@ export class LocalMockAgentSessionService {
     this.tools = Object.freeze([...(options.tools ?? [])]);
     this.approvalCoordinator = options.approvalCoordinator ?? new AgentApprovalCoordinator();
     this.effectPolicyBinding = options.effectPolicyBinding;
+    this.shouldRecoverInterruptedSession = options.shouldRecoverInterruptedSession;
     this.ready = this.initialize();
     // Initialization starts in the constructor so the service is ready for the
     // first request. Attach a handler immediately: callers still await the
@@ -674,6 +680,10 @@ export class LocalMockAgentSessionService {
       });
     }
     for (const sessionId of sessionIds) {
+      if (this.shouldRecoverInterruptedSession &&
+        !(await this.shouldRecoverInterruptedSession(sessionId))) {
+        continue;
+      }
       const session = await this.store.open(sessionId);
       await recoverInterruptedSession(session);
       const projection = projectSession(session.events);
@@ -1108,8 +1118,11 @@ export class LocalMockAgentSessionService {
     try {
       let existing = false;
       try {
-        await this.store.open(SessionId(input.sessionId));
+        const existingSession = await this.store.open(SessionId(input.sessionId));
         existing = true;
+        if (input.recoverExistingSession) {
+          await recoverInterruptedSession(existingSession);
+        }
       } catch (error: unknown) {
         if (!(error instanceof AgentSessionNotFoundError)) throw error;
       }
@@ -1346,10 +1359,30 @@ export class LocalMockAgentSessionService {
     const approval = projection.pendingApprovals.find(
       (candidate) => candidate.binding.approvalId === approvalId && candidate.state === "requested"
     );
+    const requested = session.events.find((event): event is AgentSessionEventV1<"approval/requested"> =>
+      event.type === "approval/requested"
+      && event.payload.publicControls.binding.approvalId === approvalId
+      && (approval === undefined || (
+        event.eventId === approval.requestEventId
+        && event.digest === approval.requestDigest
+      ))
+    );
     if (approval === undefined) {
-      const known = session.events.some((event) => event.type === "approval/requested"
-        && event.payload.publicControls.binding.approvalId === approvalId);
-      if (known) {
+      if (requested && await this.approvalCoordinator.decideDurable(
+        requested,
+        input.clientRequestId,
+        input.decision
+      )) {
+        return this.inlineResult(200, assertAgentApprovalResponseV1({
+          schemaVersion: 1,
+          kind: "agent-approval-response",
+          sessionId,
+          approvalId,
+          decision: input.decision,
+          status: "resolved"
+        })).response;
+      }
+      if (requested) {
         throw new AgentSessionServiceError(
           409,
           "APPROVAL_DECISION_UNAVAILABLE",
@@ -1358,13 +1391,22 @@ export class LocalMockAgentSessionService {
       }
       throw new AgentSessionServiceError(404, "APPROVAL_NOT_FOUND", "approval request was not found");
     }
-    const requested = session.events.find((event): event is AgentSessionEventV1<"approval/requested"> =>
-      event.type === "approval/requested"
-      && event.eventId === approval.requestEventId
-      && event.digest === approval.requestDigest
-    );
     if (requested === undefined) {
       throw new AgentSessionServiceError(409, "APPROVAL_DECISION_UNAVAILABLE", "approval request is unavailable");
+    }
+    if (await this.approvalCoordinator.decideDurable(
+      requested,
+      input.clientRequestId,
+      input.decision
+    )) {
+      return this.inlineResult(200, assertAgentApprovalResponseV1({
+        schemaVersion: 1,
+        kind: "agent-approval-response",
+        sessionId,
+        approvalId,
+        decision: input.decision,
+        status: "resolved"
+      })).response;
     }
     return this.idempotent(
       input.clientRequestId,

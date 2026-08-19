@@ -36,7 +36,7 @@ The default runtime is the embedded `builtin` Agent. Claude Code and Codex CLI r
 | Multi-replica run queue | Implemented | PostgreSQL authoritative |
 | Helm API/Worker deployment | Experimental | Shared PVC, least-privilege RBAC and independent replicas |
 | Kubernetes candidate sandbox Pods | Experimental | CAS source, runtime verification, authority Gate Pod and Kind probe |
-| Enterprise builtin model/tool relay | Experimental | API owns model credentials; Worker executes tools in the inspected candidate Pod |
+| Enterprise builtin model/tool relay | Experimental | PostgreSQL mailbox/owner lease; API owns credentials; Worker executes tools in the inspected Pod |
 | macOS Desktop build | Implemented | No v0.1 signing/notarization/updater promise |
 | Release/SBOM/provenance | Release workflow | Produced for published tags |
 
@@ -145,7 +145,7 @@ Each claimed candidate is materialized from an S3-backed content-addressed sourc
 
 `worker.fixtureMode=true` runs the deterministic acceptance executor. A non-fixture Worker advertises `builtin` by default. The API owns provider credentials and the durable Agent session, while the Worker relays the six bounded workspace tools to the exact inspected candidate Pod. The Pod remains network-denied and receives neither model credentials nor a Kubernetes token. Claude/Codex CLI targets remain explicit compatibility runtimes and are rejected by the non-fixture enterprise Worker.
 
-The v0.1 broker is currently process-local: until the PostgreSQL broker migration is complete, an enterprise deployment using builtin candidates must route one claim's start/poll/tool-result requests to the same API replica. This limitation is intentionally documented and the release acceptance gate remains open.
+The builtin execution mailbox, owner lease and run-bound manual approval decisions are PostgreSQL-backed. Start, poll, tool-result and run-bound `on-risk` approval requests may reach different API replicas; standalone `/v1/agent-sessions` approvals still use the serving API process. An expired owner is retired as an immutable generation and the same durable Agent session is recovered before a new owner resumes. Unconfirmed tool calls are never replayed across generations. The path stays experimental until the combined multi-replica API/Worker/Pod fault-injection acceptance suite is complete.
 
 ## Development checks
 

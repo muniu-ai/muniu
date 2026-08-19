@@ -14,6 +14,6 @@ API 与 Worker 使用不同 ServiceAccount。Worker 只拥有候选 Pod 的 crea
 
 非 fixture Worker 默认只声明 `builtin`。模型 Provider 凭据仅配置在 API 的 secret/vault 中，不得写入 Worker 或候选 Pod。`node` 必须同时存在于 Harness command allowlist 和候选镜像，因为文件工具通过无 shell 的 Node runtime 执行；任意命令仍需命中签名租约的可执行文件白名单。
 
-当前活动工具 broker 仍是 API 进程内状态。完成 PostgreSQL broker 迁移和跨副本审批唤醒前，builtin 企业路径不得作为多副本生产就绪功能；这是已知发布阻断项，不应依赖负载均衡偶然粘滞。
+活动工具 broker 已使用 PostgreSQL generation、owner lease、mailbox 与运行绑定的审批决定，不依赖负载均衡粘滞。API 优雅退出会 relinquish owner；租约过期或 claim 变更会创建新 generation，并在恢复 durable session 后继续。broker 表中的原始工具载荷只承担活动传输，长期证据仍写入受保护的 Agent session。运行绑定的 `on-risk` 审批由请求事件摘要、binding 摘要和决定共同幂等绑定，任意 API 副本均可提交；独立 `/v1/agent-sessions` 审批仍需命中持有本机会话 waiter 的 API。完整 API/Worker/Pod 组合故障注入完成前，builtin 企业路径仍保持实验性标记。
 
 上线前运行 `npm run verify:helm`；具备 Docker/Kind/kubectl/buildx/jq 的环境还应运行 `npm run verify:kind`。后者使用 Calico 验证真实候选 Pod 的源码摘要、命令执行、token 缺失、Kubernetes API 网络隔离与租约清理。
