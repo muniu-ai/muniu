@@ -4,27 +4,48 @@ set -euo pipefail
 
 cluster_name="${MN_KIND_CLUSTER_NAME:-muniu-sandbox}"
 image="muniu-kind:ci"
-calico_version="v3.29.3"
-metadata_file="${RUNNER_TEMP:-/tmp}/muniu-kind-image-metadata.json"
+calico_version="v3.31.6"
+calico_images=(
+  "quay.io/calico/cni:${calico_version}"
+  "quay.io/calico/kube-controllers:${calico_version}"
+  "quay.io/calico/node:${calico_version}"
+)
 
 cleanup() {
   kind delete cluster --name "${cluster_name}" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
-docker buildx build --load --tag "${image}" --metadata-file "${metadata_file}" .
-image_digest="$(jq -r '.["containerimage.digest"] // empty' "${metadata_file}" | sed 's/^sha256://')"
-if [[ ! "${image_digest}" =~ ^[a-f0-9]{64}$ ]]; then
-  echo "Could not resolve the Kind probe image digest" >&2
-  exit 1
-fi
+diagnose_calico() {
+  kubectl -n kube-system get pods -l k8s-app=calico-node -o wide || true
+  kubectl -n kube-system describe pods -l k8s-app=calico-node || true
+  kubectl -n kube-system get events --sort-by=.lastTimestamp | tail -n 100 || true
+}
 
+docker buildx build --load --tag "${image}" .
 kind create cluster --name "${cluster_name}" --config deploy/kind/config.yaml
 kind load docker-image "${image}" --name "${cluster_name}"
+image_digest="$(
+  docker exec "${cluster_name}-control-plane" \
+    ctr -n k8s.io images info "docker.io/library/${image}" |
+    jq -r '.target.digest // empty' |
+    sed 's/^sha256://'
+)"
+if [[ ! "${image_digest}" =~ ^[a-f0-9]{64}$ ]]; then
+  echo "Could not resolve the Kind node's imported manifest digest" >&2
+  exit 1
+fi
+for calico_image in "${calico_images[@]}"; do
+  docker pull "${calico_image}"
+done
+kind load docker-image "${calico_images[@]}" --name "${cluster_name}"
 docker exec "${cluster_name}-control-plane" mkdir -p /var/local/muniu-kind-sandboxes
 docker exec "${cluster_name}-control-plane" chmod 0777 /var/local/muniu-kind-sandboxes
 kubectl apply -f "https://raw.githubusercontent.com/projectcalico/calico/${calico_version}/manifests/calico.yaml"
-kubectl -n kube-system rollout status daemonset/calico-node --timeout=300s
+kubectl -n kube-system rollout status daemonset/calico-node --timeout=300s || {
+  diagnose_calico
+  exit 1
+}
 kubectl -n kube-system rollout status deployment/calico-kube-controllers --timeout=300s
 kubectl wait --for=condition=Ready node --all --timeout=300s
 kubectl create namespace muniu-kind
