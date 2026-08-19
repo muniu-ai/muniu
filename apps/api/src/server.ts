@@ -1753,9 +1753,9 @@ export function buildServer(options: BuildServerOptions = {}) {
         ? (scope as Record<string, unknown>).tenantIds
         : undefined;
       if (!Array.isArray(tenantIds) || tenantIds.length !== 1 || typeof tenantIds[0] !== "string") {
-        if (runtimeProfile === "enterprise") {
-          throw new TypeError(`Enterprise provider ${provider.id} has no unique tenant scope`);
-        }
+        // Legacy/global providers remain a process-local compatibility read
+        // model. Only uniquely tenant-scoped providers can be represented in
+        // the enterprise PostgreSQL metadata keyspace without scope widening.
         continue;
       }
       add(tenantIds[0], "provider", provider.id, provider);

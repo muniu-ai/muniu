@@ -5,6 +5,10 @@ import { pathToFileURL } from "node:url";
 const port = Number.parseInt(process.env.JWKS_PORT ?? "8080", 10);
 const issuer = process.env.JWKS_ISSUER ?? `http://127.0.0.1:${port}`;
 const audience = process.env.JWKS_AUDIENCE ?? "mn-enterprise";
+const tokenTtlSeconds = Number.parseInt(process.env.JWKS_TOKEN_TTL_SECONDS ?? "300", 10);
+if (!Number.isSafeInteger(tokenTtlSeconds) || tokenTtlSeconds < 60 || tokenTtlSeconds > 3600) {
+  throw new TypeError("JWKS_TOKEN_TTL_SECONDS must be an integer between 60 and 3600");
+}
 const keyId = "mn-local-e2e-rs256";
 const { privateKey, publicKey } = generateKeyPairSync("rsa", {
   modulusLength: 2048
@@ -35,7 +39,7 @@ function token(claims) {
     scopes: claims.scopes ?? [],
     iat: now,
     nbf: now - 1,
-    exp: now + 300,
+    exp: now + tokenTtlSeconds,
     jti: randomUUID()
   });
   const signingInput = `${header}.${payload}`;
@@ -131,7 +135,7 @@ export function createJwksServer() {
       json(response, 200, {
         access_token: token({ sub, tenantId, projectId, role, principalType, scopes }),
         token_type: "Bearer",
-        expires_in: 300
+        expires_in: tokenTtlSeconds
       });
       return;
     }

@@ -63,6 +63,14 @@ test("enterprise snapshot restores tenant-scoped providers for a replacement rep
   const root = await mkdtemp(join(tmpdir(), "mn-enterprise-provider-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const localStore = new FileLocalStore({ rootDir: join(root, "local-store") });
+  const legacyProvider = await localStore.createProvider({
+    app: "agent",
+    name: "Legacy unscoped model",
+    kind: "openai_compatible",
+    apiFormat: "openai_responses",
+    baseUrl: "http://legacy.invalid/v1",
+    defaultModel: "legacy-model"
+  });
   const provider = {
     id: "provider-a",
     app: "agent" as const,
@@ -102,5 +110,7 @@ test("enterprise snapshot restores tenant-scoped providers for a replacement rep
       auditEvents: []
     }
   });
-  assert.deepEqual(await localStore.listProviders("agent"), [provider]);
+  const restored = await localStore.listProviders("agent");
+  assert.deepEqual(restored.find((item) => item.id === provider.id), provider);
+  assert.equal(restored.find((item) => item.id === legacyProvider.id)?.name, "Legacy unscoped model");
 });

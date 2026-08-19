@@ -39,6 +39,16 @@ const defaultProxy: ProxyConfig = {
   takenOverApps: []
 };
 
+function enterpriseProviderTenantId(provider: ProviderRecord): string | undefined {
+  const scope = provider.config.enterpriseScope;
+  if (!scope || typeof scope !== "object" || Array.isArray(scope)) return undefined;
+  const tenantIds = (scope as Record<string, unknown>).tenantIds;
+  return Array.isArray(tenantIds) && tenantIds.length === 1 &&
+      typeof tenantIds[0] === "string"
+    ? tenantIds[0]
+    : undefined;
+}
+
 export class FileLocalStore {
   readonly rootDir: string;
   readonly dataFile: string;
@@ -64,19 +74,22 @@ export class FileLocalStore {
     return data.providers.find((provider) => provider.id === id);
   }
 
-  /** Replaces only the provider catalog while retaining proxy, extension and
-   * health state. Enterprise API replicas use this to rebuild their local
-   * read model from the PostgreSQL metadata snapshot at startup. */
-  async restoreProviders(providers: readonly ProviderRecord[]): Promise<void> {
+  /** Replaces tenant-scoped enterprise providers while retaining legacy
+   * unscoped providers plus proxy, extension and health state. */
+  async restoreEnterpriseProviders(providers: readonly ProviderRecord[]): Promise<void> {
     const data = await this.read();
-    const ids = new Set<string>();
-    data.providers = providers.map((provider) => {
+    const retained = data.providers.filter(
+      (provider) => enterpriseProviderTenantId(provider) === undefined
+    );
+    const ids = new Set(retained.map((provider) => provider.id));
+    const restored = providers.map((provider) => {
       if (ids.has(provider.id)) {
         throw new Error(`Duplicate provider id in authoritative restore: ${provider.id}`);
       }
       ids.add(provider.id);
       return normalizeProviderActivationRecord(provider);
     });
+    data.providers = [...retained, ...restored];
     await this.write(data);
   }
 

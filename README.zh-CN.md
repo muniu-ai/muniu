@@ -128,7 +128,7 @@ helm upgrade --install muniu deploy/helm/muniu \
 
 `worker.fixtureMode=true` 使用确定性的验收执行器。非 fixture Worker 默认使用 `builtin`：模型流和 Provider 凭据留在 API，读取、搜索、补丁、写入、进程和 Git 工具通过 PostgreSQL 活跃 claim 交给 Worker，并只在同一个已检查的候选 Pod 中执行。候选 Pod 不获得模型凭据、对象存储凭据或 Kubernetes token，也不开放托管模型网络。Claude/Codex CLI 仍是显式兼容运行时，企业非 fixture Worker 不会默认依赖它们。
 
-builtin execution generation、owner lease、工具 mailbox 与运行绑定的审批决定由 PostgreSQL 管理，因此 start/poll/result 和运行绑定的 `on-risk` 审批可以落到不同 API 副本；独立 `/v1/agent-sessions` 审批仍属于服务该会话的 API 进程。API 优雅退出会释放 owner。owner 丢失时，旧 generation 保留为不可变历史，未确认工具不会重放：旧审批以 `interrupted/deny` 关闭，恢复同一受保护会话后，模型必须产生新的工具调用和审批。Provider 非敏感目录由 PostgreSQL 恢复到替换副本，密钥仍必须由环境变量或 Vault/KMS 提供。
+builtin execution generation、owner lease、工具 mailbox 与运行绑定的审批决定由 PostgreSQL 管理，因此 start/poll/result 和运行绑定的 `on-risk` 审批可以落到不同 API 副本；独立 `/v1/agent-sessions` 审批仍属于服务该会话的 API 进程。API 优雅退出会释放 owner。owner 丢失时，旧 generation 保留为不可变历史，未确认工具不会重放：旧审批以 `interrupted/deny` 关闭，恢复同一受保护会话后，模型必须产生新的工具调用和审批。唯一租户 scope 的 Provider 非敏感目录由 PostgreSQL 恢复到替换副本；旧的无 scope Provider 保持本地兼容，密钥仍必须由环境变量或 Vault/KMS 提供。
 
 Kind + Calico 发布门禁会启动两个 API、两个 Worker，删除正在等待工具审批的精确 owner Pod，验证 generation/会话恢复与新审批，导出完成证据，再重启 PostgreSQL 并确认结果仍可读取。该路径仍标记为实验性，因为仓库验收环境不等同生产可用性或强隔离认证。
 

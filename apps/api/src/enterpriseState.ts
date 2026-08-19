@@ -154,7 +154,7 @@ function validateCheckpointState(
 export async function restoreEnterpriseSnapshot(input: {
   store: MemoryStore;
   specRepository: FileSpecRepository;
-  localStore?: Pick<FileLocalStore, "restoreProviders">;
+  localStore?: Pick<FileLocalStore, "restoreEnterpriseProviders">;
   snapshot: EnterpriseStateSnapshot;
 }): Promise<void> {
   const projects = new Map<string, Project>();
@@ -352,7 +352,7 @@ export async function restoreEnterpriseSnapshot(input: {
     }
     await input.specRepository.restore(record);
   }
-  await input.localStore?.restoreProviders([...providers.values()]);
+  await input.localStore?.restoreEnterpriseProviders([...providers.values()]);
 
   const runJobs = input.snapshot.runJobs.map(({ item, payload }) => {
     const run = validateCheckpointRun(
