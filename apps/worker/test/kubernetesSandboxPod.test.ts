@@ -3,7 +3,16 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import type { V1Pod } from "@kubernetes/client-node";
+import {
+  V1Capabilities,
+  V1Container,
+  V1PodSecurityContext,
+  V1ResourceRequirements,
+  V1SecurityContext,
+  V1Volume,
+  V1VolumeMount,
+  type V1Pod
+} from "@kubernetes/client-node";
 import type { SandboxLeaseAttestation } from "@mn/harness";
 import { sha256Canonical } from "@mn/governance";
 import {
@@ -153,6 +162,51 @@ test("Kubernetes Pod verification rejects hostPath, token and sidecar mutation",
     }),
     /security specification drifted/u
   );
+});
+
+test("Kubernetes Pod verification accepts official client model instances", () => {
+  const lease = attestation();
+  const configuration = {
+    namespace: "muniu-system",
+    sharedVolumeClaimName: "muniu-sandbox-workspaces",
+    sharedWorkspaceRoot: "/work/sandboxes",
+    serviceAccountName: "muniu-candidate",
+    runtimeClassName: "muniu-sandbox"
+  };
+  const sourceSnapshotDigest = "9".repeat(64);
+  const pod = readyPod(buildKubernetesSandboxPod({
+    attestation: lease,
+    configuration,
+    sourceSnapshotDigest
+  }), lease.policy.runtimeImage!.digest);
+  const original = pod.spec!.containers[0]!;
+  const container = Object.assign(new V1Container(), original);
+  container.securityContext = Object.assign(new V1SecurityContext(), original.securityContext);
+  container.securityContext.capabilities = Object.assign(
+    new V1Capabilities(),
+    original.securityContext?.capabilities
+  );
+  container.resources = Object.assign(new V1ResourceRequirements(), original.resources);
+  container.volumeMounts = original.volumeMounts?.map((mount) =>
+    Object.assign(new V1VolumeMount(), mount)
+  );
+  delete container.env;
+  delete container.envFrom;
+  delete container.stdin;
+  delete container.stdinOnce;
+  delete container.tty;
+  pod.spec!.containers = [container];
+  pod.spec!.securityContext = Object.assign(
+    new V1PodSecurityContext(),
+    pod.spec!.securityContext
+  );
+  pod.spec!.volumes = pod.spec!.volumes?.map((volume) => Object.assign(new V1Volume(), volume));
+
+  assert.doesNotThrow(() => verifyKubernetesSandboxPod(pod, {
+    attestation: lease,
+    configuration,
+    sourceSnapshotDigest
+  }));
 });
 
 test("Kubernetes backend preserves bounded Pod readiness diagnostics before cleanup", async (t) => {

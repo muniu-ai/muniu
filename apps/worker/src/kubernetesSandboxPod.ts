@@ -753,7 +753,7 @@ function normalizeConfiguration(input: KubernetesSandboxConfiguration) {
 
 function securityProjection(spec: V1Pod["spec"]): unknown {
   if (!spec) return null;
-  return {
+  return plainKubernetesValue({
     serviceAccountName: spec.serviceAccountName,
     automountServiceAccountToken: spec.automountServiceAccountToken,
     runtimeClassName: spec.runtimeClassName,
@@ -766,11 +766,71 @@ function securityProjection(spec: V1Pod["spec"]): unknown {
     hostIPC: spec.hostIPC ?? false,
     shareProcessNamespace: spec.shareProcessNamespace ?? false,
     securityContext: spec.securityContext,
-    containers: spec.containers,
-    initContainers: spec.initContainers ?? [],
-    ephemeralContainers: spec.ephemeralContainers ?? [],
+    containers: spec.containers.map(kubernetesContainerProjection),
+    initContainers: (spec.initContainers ?? []).map(kubernetesContainerProjection),
+    ephemeralContainers: (spec.ephemeralContainers ?? []).map(kubernetesContainerProjection),
     volumes: spec.volumes
+  });
+}
+
+function kubernetesContainerProjection(
+  container: NonNullable<V1Pod["spec"]>["containers"][number]
+): unknown {
+  const plain = plainKubernetesValue(container) as Record<string, unknown>;
+  return {
+    ...plain,
+    env: plain.env ?? [],
+    envFrom: plain.envFrom ?? [],
+    stdin: plain.stdin ?? false,
+    stdinOnce: plain.stdinOnce ?? false,
+    tty: plain.tty ?? false
   };
+}
+
+function plainKubernetesValue(
+  value: unknown,
+  path = "$",
+  ancestors = new Set<object>()
+): unknown {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean" ||
+    (typeof value === "number" && Number.isFinite(value))
+  ) {
+    return value;
+  }
+  if (typeof value !== "object") {
+    throw new TypeError(`Kubernetes projection ${path} contains an unsupported value`);
+  }
+  if (ancestors.has(value)) {
+    throw new TypeError(`Kubernetes projection ${path} contains a circular reference`);
+  }
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      return value.map((entry, index) =>
+        plainKubernetesValue(entry, `${path}[${index}]`, ancestors)
+      );
+    }
+    const plain: Record<string, unknown> = {};
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== "string") {
+        throw new TypeError(`Kubernetes projection ${path} contains a symbol key`);
+      }
+      if (key === "__proto__" || key === "constructor" || key === "prototype") {
+        throw new TypeError(`Kubernetes projection ${path}.${key} is unsafe`);
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+        throw new TypeError(`Kubernetes projection ${path}.${key} must be enumerable data`);
+      }
+      plain[key] = plainKubernetesValue(descriptor.value, `${path}.${key}`, ancestors);
+    }
+    return plain;
+  } finally {
+    ancestors.delete(value);
+  }
 }
 
 async function waitForRunningPod(
