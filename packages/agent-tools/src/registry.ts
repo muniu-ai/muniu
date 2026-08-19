@@ -91,14 +91,17 @@ function snapshotToolInvocation(invocation: ToolInvocation): ToolInvocation {
     throw new ToolExecutionError("Invalid tool invocation", "INVALID_ARGUMENTS");
   }
   const sessionId = suppliedContext.sessionId;
+  const cwd = suppliedContext.cwd;
   const signal = suppliedContext.signal;
   if (typeof name !== "string" || typeof argumentsJson !== "string"
     || typeof sessionId !== "string" || sessionId.length === 0
+    || (cwd !== undefined && (typeof cwd !== "string" || cwd.length === 0))
     || (signal !== undefined && !(signal instanceof AbortSignal))) {
     throw new ToolExecutionError("Invalid tool invocation", "INVALID_ARGUMENTS");
   }
   const context = deepFreeze({
     sessionId,
+    ...(cwd === undefined ? {} : { cwd }),
     ...(signal === undefined ? {} : { signal })
   });
   return deepFreeze({ name, arguments: argumentsJson, context });

@@ -62,7 +62,7 @@ export async function projectClaudeProxyConfig(
   if (!options.dryRun && changed) {
     backupPath = await backupFileIfExists(
       targetPath,
-      join(options.mniuRoot ?? join(options.homeDir, ".mniu"), "backups"),
+      join(options.mniuRoot ?? join(options.homeDir, ".muniu"), "backups"),
       "claude-proxy-takeover",
       options.now
     );
@@ -124,7 +124,7 @@ export async function projectCodexProxyConfig(
   if (!options.dryRun && changed) {
     backupPath = await backupFileIfExists(
       targetPath,
-      join(options.mniuRoot ?? join(options.homeDir, ".mniu"), "backups"),
+      join(options.mniuRoot ?? join(options.homeDir, ".muniu"), "backups"),
       "codex-proxy-takeover",
       options.now
     );

@@ -30,6 +30,8 @@ export interface S3PutArtifactOptions extends S3ArtifactRequestOptions {
   /** Create-only write used by immutable evidence journals. S3-compatible
    * stores evaluate this atomically at the object boundary. */
   ifNoneMatch?: "*";
+  serverSideEncryption?: "AES256" | "aws:kms";
+  kmsKeyId?: string;
 }
 
 export interface S3StoredArtifactObject {
@@ -122,6 +124,20 @@ export class S3CompatibleArtifactStore {
         throw new TypeError("S3 putObject ifNoneMatch must be '*'");
       }
       headers.set("if-none-match", options.ifNoneMatch);
+    }
+    if (options.serverSideEncryption) {
+      headers.set("x-amz-server-side-encryption", options.serverSideEncryption);
+      if (options.kmsKeyId) {
+        if (options.serverSideEncryption !== "aws:kms") {
+          throw new TypeError("an S3 KMS key requires aws:kms server-side encryption");
+        }
+        headers.set(
+          "x-amz-server-side-encryption-aws-kms-key-id",
+          normalizeHeaderValue(options.kmsKeyId, "KMS key id")
+        );
+      }
+    } else if (options.kmsKeyId) {
+      throw new TypeError("an S3 KMS key requires server-side encryption");
     }
     for (const [name, value] of Object.entries(options.metadata ?? {}).sort(([left], [right]) =>
       left.localeCompare(right)

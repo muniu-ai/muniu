@@ -1,0 +1,7 @@
+- id: muniu-core
+  name: ../plugins/core.mjs
+  config:
+    scope: desktop
+    profileId: desktop
+    serviceName: muniuRuntimeProfile
+    components: [desktop, sessions, runs, gates, evidence, plugins, settings]

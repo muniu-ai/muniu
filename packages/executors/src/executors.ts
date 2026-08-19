@@ -1,5 +1,7 @@
 import type {
+  AgentExecutionBindingV1,
   AgentProvider,
+  AgentRuntimeId,
   AgentRunInput,
   AgentRunResult
 } from "@mn/core";
@@ -7,8 +9,95 @@ import { buildRunPrompt } from "@mn/core";
 import { runCommand } from "./runner.js";
 
 export interface AgentExecutor {
-  provider: AgentProvider;
+  provider: AgentRuntimeId;
   run(input: AgentRunInput): Promise<AgentRunResult>;
+}
+
+export interface BuiltinAgentExecutionInput {
+  readonly sessionId: string;
+  readonly runId: string;
+  readonly candidateId: string;
+  readonly cwd: string;
+  readonly prompt: string;
+  readonly providerId: string;
+  readonly modelId: string;
+  readonly timeoutSeconds: number;
+  readonly executionBinding: AgentExecutionBindingV1;
+  readonly signal?: AbortSignal;
+}
+
+export interface BuiltinAgentExecutionOutput {
+  readonly reason: "completed" | "cancelled" | "budget-exceeded" | "error" | string;
+  readonly summary: string;
+  readonly steps: number;
+  readonly toolCalls: number;
+  readonly providerId?: string;
+  readonly modelId?: string;
+  readonly executionBinding?: AgentExecutionBindingV1;
+}
+
+export interface BuiltinAgentRunner {
+  run(input: BuiltinAgentExecutionInput): Promise<BuiltinAgentExecutionOutput>;
+}
+
+export class BuiltinAgentExecutor implements AgentExecutor {
+  readonly provider = "builtin" as const;
+
+  constructor(private readonly runner: BuiltinAgentRunner) {}
+
+  async run(input: AgentRunInput): Promise<AgentRunResult> {
+    const startedAt = new Date().toISOString();
+    const providerId = input.providerId;
+    const modelId = input.modelId ?? input.model;
+    const sessionId = input.sessionId;
+    const executionBinding = input.executionBinding;
+    if (!providerId || !modelId || !sessionId || !executionBinding) {
+      throw new TypeError("builtin executor requires provider, model, session, and execution bindings");
+    }
+    const output = await this.runner.run({
+      sessionId,
+      runId: input.runId,
+      candidateId: input.candidateId,
+      cwd: input.cwd,
+      prompt: input.prompt,
+      providerId,
+      modelId,
+      timeoutSeconds: input.timeoutSeconds,
+      executionBinding,
+      ...(input.abortSignal === undefined ? {} : { signal: input.abortSignal })
+    });
+    const resolvedProviderId = output.providerId ?? providerId;
+    const resolvedModelId = output.modelId ?? modelId;
+    const resolvedBinding = output.executionBinding ?? executionBinding;
+    const cancelled = input.abortSignal?.aborted || output.reason === "cancelled";
+    const completed = output.reason === "completed";
+    const summary = output.summary || `Embedded Agent finished after ${output.steps} steps and ${output.toolCalls} tool calls.`;
+    input.onEvent?.({
+      runId: input.runId,
+      candidateId: input.candidateId,
+      type: completed ? "stdout" : "error",
+      message: summary,
+      timestamp: new Date().toISOString(),
+      data: { sessionId, steps: output.steps, toolCalls: output.toolCalls, reason: output.reason }
+    });
+    return {
+      provider: "builtin",
+      runtimeId: "builtin",
+      providerId: resolvedProviderId,
+      modelId: resolvedModelId,
+      sessionId,
+      executionBinding: resolvedBinding,
+      candidateId: input.candidateId,
+      status: cancelled ? "cancelled" : completed ? "completed" : "failed",
+      exitCode: cancelled ? null : completed ? 0 : 1,
+      stdout: completed ? summary : "",
+      stderr: completed ? "" : summary,
+      summary,
+      artifacts: [],
+      startedAt,
+      finishedAt: new Date().toISOString()
+    };
+  }
 }
 
 export interface ClaudeCodeArgsOptions {
@@ -165,7 +254,7 @@ export class CodexExecutor implements AgentExecutor {
 
 export class MockExecutor implements AgentExecutor {
   constructor(
-    public readonly provider: AgentProvider,
+    public readonly provider: AgentRuntimeId,
     private readonly exitCode = 0
   ) {}
 
@@ -209,8 +298,11 @@ export class MockExecutor implements AgentExecutor {
   }
 }
 
-export function createDefaultExecutors(): Record<AgentProvider, AgentExecutor> {
+export function createDefaultExecutors(
+  builtinRunner?: BuiltinAgentRunner
+): Partial<Record<AgentRuntimeId, AgentExecutor>> {
   return {
+    ...(builtinRunner ? { builtin: new BuiltinAgentExecutor(builtinRunner) } : {}),
     claude: new ClaudeCodeExecutor(),
     codex: new CodexExecutor()
   };

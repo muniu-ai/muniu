@@ -248,9 +248,20 @@ fn sanitize_panic_message(message: &str) -> String {
     normalized
 }
 
-fn settings_path() -> Result<PathBuf, String> {
+fn muniu_root_path() -> Result<PathBuf, String> {
     let home = std::env::var("HOME").map_err(|_| "HOME is not set".to_string())?;
-    Ok(PathBuf::from(home).join(".mniu").join("settings.json"))
+    let home = PathBuf::from(home);
+    let current = home.join(".muniu");
+    let legacy = home.join(".mniu");
+    if !current.exists() && legacy.exists() {
+        fs::rename(&legacy, &current)
+            .map_err(|error| format!("failed to migrate ~/.mniu to ~/.muniu: {error}"))?;
+    }
+    Ok(current)
+}
+
+fn settings_path() -> Result<PathBuf, String> {
+    Ok(muniu_root_path()?.join("settings.json"))
 }
 
 fn normalize_settings(mut settings: DesktopSettings) -> DesktopSettings {
@@ -545,8 +556,7 @@ fn spawn_managed_daemon(
         return Ok(None);
     }
     let port = api_url.port_or_known_default().unwrap_or(7318).to_string();
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    let mniu_root = PathBuf::from(&home).join(".mniu");
+    let mniu_root = muniu_root_path().map_err(std::io::Error::other)?;
     fs::create_dir_all(&mniu_root)?;
     let (mut events, child) = app
         .shell()

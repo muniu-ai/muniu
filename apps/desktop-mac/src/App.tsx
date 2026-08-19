@@ -2895,7 +2895,7 @@ function DesktopSettingsPanel({
         <div className="inline-action-row">
           <input
             aria-label="Deep link URL"
-            placeholder="mniu://import/provider|mcp|prompt?payload=..."
+            placeholder="muniu://import/provider|mcp|prompt?payload=..."
             value={deepLinkUrl}
             onChange={(event) => onDeepLinkUrlChange(event.target.value)}
           />

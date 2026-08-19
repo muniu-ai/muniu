@@ -113,7 +113,7 @@ export async function cleanupShellEnvConflicts(
   const dryRun = options.dryRun ?? true;
   const targetNames = new Set(options.envNames ?? managedEnvNames);
   const targetSources = new Set(options.sources ?? ["shell_profile"]);
-  const backupRoot = options.mniuRoot ?? join(homeDir, ".mniu");
+  const backupRoot = options.mniuRoot ?? join(homeDir, ".muniu");
   const scannedFiles: string[] = [];
   const changedFiles: EnvCleanupChangedFile[] = [];
 

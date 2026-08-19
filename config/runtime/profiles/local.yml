@@ -1,0 +1,7 @@
+- id: muniu-core
+  name: ../plugins/core.mjs
+  config:
+    scope: api
+    profileId: local
+    serviceName: muniuRuntimeProfile
+    components: [api, agent-host, tools, gates, evidence]

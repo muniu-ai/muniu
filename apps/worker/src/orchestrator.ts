@@ -1,6 +1,8 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
+  AgentExecutionBindingV1,
   AgentProvider,
+  AgentRuntimeId,
   AgentTask,
   CandidateOutputCheckpoint,
   Project,
@@ -10,6 +12,7 @@ import type {
 import {
   buildArchitectureBrief,
   createRunContext,
+  executionTargets,
   requiresHumanApproval,
   selectWinner,
   transitionRun
@@ -24,7 +27,7 @@ import {
 
 export interface RunOrchestratorOptions {
   workspaceRoot: string;
-  executors: Record<AgentProvider, AgentExecutor>;
+  executors: Partial<Record<AgentRuntimeId, AgentExecutor>>;
   proxyBaseUrl?: string;
   /** API-issued enterprise receipt resolved for the exact candidate before
    * the managed app can contact the provider proxy. */
@@ -42,6 +45,11 @@ export interface RunExecutionOptions {
   runId?: string;
   resumeFrom?: RunRecord;
   abortSignal?: AbortSignal;
+  /** Reuse an Agent session for a bounded repair attempt while issuing a new
+   * execution binding for the current run/candidate record. */
+  sessionIds?: readonly (string | undefined)[];
+  /** Reuse the exact candidate workspace that the failed Gate inspected. */
+  candidateWorkspacePaths?: readonly (string | undefined)[];
 }
 
 export class RunOrchestrator {
@@ -89,14 +97,15 @@ export class RunOrchestrator {
     this.update(record);
     this.emit(runId, "status", "Running candidates");
 
-    const providers = selectProviders(task.strategy.providers, task.strategy.candidates);
+    const targets = selectExecutionTargets(task);
 
-    for (let index = 0; index < providers.length; index += 1) {
+    for (let index = 0; index < targets.length; index += 1) {
       if (execution.abortSignal?.aborted) {
         return this.cancel(record, "Run cancelled before next candidate");
       }
 
-      const provider = providers[index]!;
+      const target = targets[index]!;
+      const provider = target.runtimeId;
       const candidateId = `${provider}-${index + 1}`;
       let candidate = record.candidates.find(
         (candidate) => candidate.id === candidateId
@@ -135,20 +144,26 @@ export class RunOrchestrator {
       if (!executor) throw new Error(`No executor configured for ${provider}`);
 
       if (!candidate) {
-        const workspace = await (
-          this.options.candidateWorkspacePreparer ?? prepareCandidateWorkspace
-        )({
-          projectRoot: project.rootPath,
-          workspaceRoot: this.options.workspaceRoot,
-          runId,
-          candidateId,
-          isolated: task.strategy.sandbox === "isolated-worktree"
-        });
+        const reusedWorkspacePath = execution.candidateWorkspacePaths?.[index];
+        const workspace = reusedWorkspacePath === undefined
+          ? await (
+              this.options.candidateWorkspacePreparer ?? prepareCandidateWorkspace
+            )({
+              projectRoot: project.rootPath,
+              workspaceRoot: this.options.workspaceRoot,
+              runId,
+              candidateId,
+              isolated: task.strategy.sandbox === "isolated-worktree"
+            })
+          : { path: reusedWorkspacePath };
 
         candidate = {
           id: candidateId,
           runId,
           provider,
+          runtimeId: target.runtimeId,
+          ...(target.providerId === undefined ? {} : { providerId: target.providerId }),
+          ...(target.modelId === undefined ? {} : { modelId: target.modelId }),
           worktreePath: workspace.path,
           outputCheckpoint: buildCandidateOutputCheckpoint({
             workspaceRoot: this.options.workspaceRoot,
@@ -169,6 +184,15 @@ export class RunOrchestrator {
         runId,
         candidateId
       });
+      candidate.executionBinding ??= createExecutionBinding({
+        runId,
+        candidateId,
+        target,
+        task,
+        ...(execution.sessionIds?.[index] === undefined
+          ? {}
+          : { sessionId: execution.sessionIds[index] })
+      });
       candidate.status = "running";
       candidate.outputCheckpoint = {
         ...candidate.outputCheckpoint,
@@ -180,7 +204,7 @@ export class RunOrchestrator {
 
       try {
         const proxyAssociationReceipt =
-          this.options.proxyBaseUrl && this.options.resolveProxyAssociationReceipt
+          provider !== "builtin" && this.options.proxyBaseUrl && this.options.resolveProxyAssociationReceipt
             ? await this.options.resolveProxyAssociationReceipt({
                 runId,
                 candidateId,
@@ -191,6 +215,12 @@ export class RunOrchestrator {
           runId,
           candidateId,
           provider,
+          runtimeId: target.runtimeId,
+          ...(target.providerId === undefined ? {} : { providerId: target.providerId }),
+          ...(target.modelId === undefined ? {} : { modelId: target.modelId }),
+          model: target.modelId,
+          sessionId: candidate.executionBinding.sessionId,
+          executionBinding: candidate.executionBinding,
           cwd: candidate.worktreePath,
           prompt: task.prompt,
           context,
@@ -216,6 +246,11 @@ export class RunOrchestrator {
         }
 
         candidate.result = result;
+        if (result.providerId !== undefined) candidate.providerId = result.providerId;
+        if (result.modelId !== undefined) candidate.modelId = result.modelId;
+        if (result.executionBinding !== undefined) {
+          candidate.executionBinding = result.executionBinding;
+        }
         candidate.status = result.status;
         candidate.gates = await runGateEngine({
           cwd: candidate.worktreePath,
@@ -322,15 +357,60 @@ export class RunOrchestrator {
   }
 }
 
-function selectProviders(
-  providers: AgentProvider[],
-  candidates: number
-): AgentProvider[] {
-  const selected: AgentProvider[] = [];
-  for (let index = 0; index < candidates; index += 1) {
-    selected.push(providers[index % providers.length]!);
-  }
-  return selected;
+interface SelectedExecutionTarget {
+  readonly runtimeId: AgentRuntimeId;
+  readonly providerId?: string;
+  readonly modelId?: string;
+}
+
+function selectExecutionTargets(task: AgentTask): SelectedExecutionTarget[] {
+  return executionTargets(task.strategy).flatMap((target) =>
+    Array.from({ length: target.candidates }, () => ({
+      runtimeId: target.runtimeId,
+      ...(target.providerId === undefined ? {} : { providerId: target.providerId }),
+      ...(target.modelId === undefined ? {} : { modelId: target.modelId })
+    }))
+  );
+}
+
+function semanticDigest(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
+}
+
+function createExecutionBinding(input: {
+  readonly runId: string;
+  readonly candidateId: string;
+  readonly target: SelectedExecutionTarget;
+  readonly task: AgentTask;
+  readonly sessionId?: string;
+}): AgentExecutionBindingV1 {
+  const sessionId = input.sessionId ?? `agent-${semanticDigest({
+    runId: input.runId,
+    candidateId: input.candidateId
+  }).slice(0, 40)}`;
+  return Object.freeze({
+    schemaVersion: 1,
+    runId: input.runId,
+    candidateId: input.candidateId,
+    sessionId,
+    runtimeId: input.target.runtimeId,
+    ...(input.target.providerId === undefined ? {} : { providerId: input.target.providerId }),
+    ...(input.target.modelId === undefined ? {} : { modelId: input.target.modelId }),
+    harnessDigest: input.task.harnessProfileRef?.digest ?? semanticDigest({
+      harnessProfileRef: input.task.harnessProfileRef ?? "classic"
+    }),
+    governanceDigest: input.task.workflowRef?.digest ?? semanticDigest({
+      workflowRef: input.task.workflowRef ?? "classic-v1",
+      specRef: input.task.specRef ?? null
+    }),
+    effectPolicyDigest: semanticDigest({
+      sandbox: input.task.strategy.sandbox,
+      requiredGates: input.task.strategy.requiredGates,
+      humanApproval: input.task.strategy.humanApproval,
+      timeoutSeconds: input.task.strategy.timeoutSeconds
+    }),
+    sandboxCapabilityId: input.task.strategy.sandbox
+  });
 }
 
 function buildCandidateOutputCheckpoint(input: {
@@ -355,28 +435,31 @@ function cloneRunForResume(
     id: runId,
     status: "queued",
     gates: [],
-    candidates: run.candidates.map((candidate) => ({
-      ...candidate,
-      runId,
-      gates: candidate.gates.map((gate) => ({
-        ...gate,
-        evidence: gate.evidence.map((artifact) => ({ ...artifact }))
-      })),
-      result: candidate.result
-        ? {
-            ...candidate.result,
-            artifacts: candidate.result.artifacts.map((artifact) => ({
-              ...artifact
-            }))
-          }
-        : undefined
-    })),
+    candidates: run.candidates.map((candidate) => {
+      const { executionBinding: _binding, result, ...base } = candidate;
+      return {
+        ...base,
+        runId,
+        gates: candidate.gates.map((gate) => ({
+          ...gate,
+          evidence: gate.evidence.map((artifact) => ({ ...artifact }))
+        })),
+        ...(result === undefined
+          ? {}
+          : {
+              result: {
+                ...result,
+                artifacts: result.artifacts.map((artifact) => ({ ...artifact }))
+              }
+            })
+      };
+    }),
     updatedAt
   };
 }
 
 function buildCandidateExecutionEnv(input: {
-  provider: AgentProvider;
+  provider: AgentRuntimeId;
   runId: string;
   candidateId: string;
   proxyBaseUrl?: string;
@@ -386,7 +469,7 @@ function buildCandidateExecutionEnv(input: {
     MN_RUN_ID: input.runId,
     MN_CANDIDATE_ID: input.candidateId
   };
-  if (!input.proxyBaseUrl) return env;
+  if (!input.proxyBaseUrl || input.provider === "builtin") return env;
 
   const proxyRoot = input.proxyBaseUrl.replace(/\/+$/, "");
   const associatedRoot = input.proxyAssociationReceipt
@@ -397,7 +480,7 @@ function buildCandidateExecutionEnv(input: {
 
   if (input.provider === "claude") {
     env.ANTHROPIC_BASE_URL = associatedRoot;
-  } else {
+  } else if (input.provider === "codex") {
     const codexBaseUrl = `${associatedRoot}/v1`;
     env.OPENAI_BASE_URL = codexBaseUrl;
     env.OPENAI_API_BASE = codexBaseUrl;

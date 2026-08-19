@@ -1,5 +1,6 @@
 import type {
   AgentRunInput,
+  AgentRuntimeId,
   AgentTask,
   ArtifactRef,
   FailureClassification,
@@ -204,15 +205,30 @@ function wrapExecutorWithBaseline(
   return {
     provider: executor.provider,
     async run(input: AgentRunInput) {
-      const [snapshot, contents] = await Promise.all([
-        snapshotWorkspace(input.cwd),
-        snapshotWorkspaceContents(input.cwd)
-      ]);
-      baselines.set(input.candidateId, snapshot);
-      contentBaselines.set(input.candidateId, contents);
+      if (!baselines.has(input.candidateId)) {
+        const [snapshot, contents] = await Promise.all([
+          snapshotWorkspace(input.cwd),
+          snapshotWorkspaceContents(input.cwd)
+        ]);
+        baselines.set(input.candidateId, snapshot);
+        contentBaselines.set(input.candidateId, contents);
+      }
       return executor.run(input);
     }
   };
+}
+
+function wrapExecutorsWithBaseline(
+  executors: RunOrchestratorOptions["executors"],
+  baselines: Map<string, WorkspaceSnapshot>,
+  contentBaselines: Map<string, WorkspaceContentSnapshot>
+): Partial<Record<AgentRuntimeId, AgentExecutor>> {
+  const wrapped: Partial<Record<AgentRuntimeId, AgentExecutor>> = {};
+  for (const runtimeId of ["builtin", "claude", "codex"] as const) {
+    const executor = executors[runtimeId];
+    if (executor) wrapped[runtimeId] = wrapExecutorWithBaseline(executor, baselines, contentBaselines);
+  }
+  return wrapped;
 }
 
 function encodeDiffManifest(
@@ -304,6 +320,15 @@ export class GovernedRunOrchestrator {
     let latestChangedPaths: readonly string[] = [];
     let latestDiffDigest = sha256Canonical([]);
     let latestDiffManifestBase64 = encodeDiffManifest([], new Map(), new Map());
+    let repairSessionIds: Array<string | undefined> = baseRun.candidates.map(
+      (candidate) => candidate.executionBinding?.sessionId
+    );
+    let repairWorkspacePaths: Array<string | undefined> = baseRun.candidates.map(
+      (candidate) => candidate.worktreePath
+    );
+    let gateRepairFeedback = "";
+    const candidateBaselines = new Map<string, WorkspaceSnapshot>();
+    const candidateContentBaselines = new Map<string, WorkspaceContentSnapshot>();
     const selectedServices = baseRun.harnessManifest.selectedServices;
     const languageByService = projectLanguages(project, selectedServices);
     const handlers: GovernedStageHandlers = {
@@ -334,16 +359,11 @@ export class GovernedRunOrchestrator {
         ]
       }),
       implementation: async (context) => {
-        const candidateBaselines = new Map<string, WorkspaceSnapshot>();
-        const candidateContentBaselines = new Map<
-          string,
-          WorkspaceContentSnapshot
-        >();
         latestDiffManifestBase64 = encodeDiffManifest([], new Map(), new Map());
         const classicTask: AgentTask = {
           ...task,
           prompt: context.isRepair
-            ? `${task.prompt}\n\nRepair the previously verified failure without changing the approved specification.`
+            ? `${task.prompt}\n\nRepair the previously verified failure without changing the approved specification.\n\n${gateRepairFeedback}`
             : task.prompt,
           // governed-increment-v1 owns verification. Running classic gates here
           // would create unbound/skippable v1 evidence and execute every command
@@ -356,18 +376,11 @@ export class GovernedRunOrchestrator {
         };
         const classic = new RunOrchestrator({
           ...this.options,
-          executors: {
-            claude: wrapExecutorWithBaseline(
-              this.options.executors.claude,
-              candidateBaselines,
-              candidateContentBaselines
-            ),
-            codex: wrapExecutorWithBaseline(
-              this.options.executors.codex,
-              candidateBaselines,
-              candidateContentBaselines
-            )
-          },
+          executors: wrapExecutorsWithBaseline(
+            this.options.executors,
+            candidateBaselines,
+            candidateContentBaselines
+          ),
           onUpdate: (record) => {
             candidateRun = record;
           }
@@ -375,7 +388,13 @@ export class GovernedRunOrchestrator {
         const implementationRunId = `${baseRun.id}--implementation-${context.attempt}`;
         const classicResult = await classic.run(project, classicTask, {
           runId: implementationRunId,
-          abortSignal: execution.abortSignal
+          abortSignal: execution.abortSignal,
+          ...(context.isRepair && repairSessionIds.length > 0
+            ? { sessionIds: repairSessionIds }
+            : {}),
+          ...(context.isRepair && repairWorkspacePaths.length > 0
+            ? { candidateWorkspacePaths: repairWorkspacePaths }
+            : {})
         });
         candidateRun = {
           ...classicResult,
@@ -385,6 +404,12 @@ export class GovernedRunOrchestrator {
             runId: baseRun.id
           }))
         };
+        repairSessionIds = candidateRun.candidates.map(
+          (candidate) => candidate.executionBinding?.sessionId
+        );
+        repairWorkspacePaths = candidateRun.candidates.map(
+          (candidate) => candidate.worktreePath
+        );
         if (candidateRun.status === "cancelled") {
           return {
             status: "cancelled",
@@ -546,6 +571,24 @@ export class GovernedRunOrchestrator {
           semantic
         );
         if (successful) return { status: "completed", artifacts: [artifact] };
+        gateRepairFeedback = JSON.stringify({
+          schemaVersion: 1,
+          kind: "gate-repair-feedback",
+          verificationAttempt: context.attempt,
+          failedGates: latestGateResults
+            .filter((gate) => gate.status !== "pass")
+            .map((gate) => ({
+              gateId: gate.gateId,
+              status: gate.status,
+              summary: gate.summary,
+              ...(gate.command === undefined
+                ? {}
+                : {
+                    command: gate.command.display,
+                    exitCode: gate.exitCode
+                  })
+            }))
+        });
         return {
           status: "failed",
           artifacts: [artifact],

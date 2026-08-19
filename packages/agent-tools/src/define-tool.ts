@@ -17,6 +17,7 @@ export type ToolRisk = "read-only" | "side-effecting";
 
 export interface ToolRunContext {
   readonly sessionId: string;
+  readonly cwd?: string;
   readonly signal?: AbortSignal;
 }
 

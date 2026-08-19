@@ -89,7 +89,7 @@ export async function projectCodexProvider(
   if (!options.dryRun && configChanged) {
     backupPath = await backupFileIfExists(
       targetPath,
-      join(options.mniuRoot ?? join(options.homeDir, ".mniu"), "backups"),
+      join(options.mniuRoot ?? join(options.homeDir, ".muniu"), "backups"),
       "codex-config",
       options.now
     );
@@ -97,7 +97,7 @@ export async function projectCodexProvider(
   if (!options.dryRun && authChanged) {
     authBackupPath = await backupFileIfExists(
       authPath,
-      join(options.mniuRoot ?? join(options.homeDir, ".mniu"), "backups"),
+      join(options.mniuRoot ?? join(options.homeDir, ".muniu"), "backups"),
       "codex-auth",
       options.now
     );

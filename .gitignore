@@ -5,6 +5,7 @@ node_modules/
 # Build and test outputs
 dist/
 dist-test/
+lib/
 target/
 coverage/
 .turbo/

@@ -24,7 +24,7 @@ export class InMemoryAgentSessionStore {
     const { sessionId } = options;
     if (this.sessions.has(sessionId)) throw new Error(`session "${sessionId}" already exists`);
     const initial = createInitialAgentSessionState(options);
-    const session = new DurableAgentSession(initial.header, [initial.event], memoryPersistence);
+    const session = new DurableAgentSession(initial.header, [initial.event], memoryPersistence, options.cwd);
     // Publish only a complete in-memory session, so a failed initial snapshot
     // cannot leave a provisional entry that blocks a retry.
     this.sessions.set(sessionId, session);
@@ -35,5 +35,9 @@ export class InMemoryAgentSessionStore {
     const session = this.sessions.get(sessionId);
     if (session === undefined) throw new Error(`session "${sessionId}" not found`);
     return session;
+  }
+
+  async listSessionIds(): Promise<readonly SessionId[]> {
+    return Object.freeze([...this.sessions.keys()].sort());
   }
 }

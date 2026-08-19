@@ -267,7 +267,7 @@ async function backupFileIfExists(
 }
 
 function backupRoot(options: { homeDir: string; mniuRoot?: string }): string {
-  return join(options.mniuRoot ?? join(options.homeDir, ".mniu"), "backups");
+  return join(options.mniuRoot ?? join(options.homeDir, ".muniu"), "backups");
 }
 
 function sha256(content: string): string {

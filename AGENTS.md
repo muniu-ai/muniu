@@ -17,14 +17,15 @@ These rules apply to the whole repository unless a deeper AGENTS.md narrows them
 
 ## Upstream and licensing
 
-- DeepSeek Harness adaptations are based only on commit 47f943859bef60e4160492346772ded9b24f765a.
+- DeepSeek Harness adaptations are based only on commit 99f6f02fecdb7dff40c3fbc9470f5907c29f74ca.
 - Every copied or adapted upstream file must retain its original MIT notice and be added to docs/upstream-provenance/deepseek-harness.yaml before commit.
 - New Muniu code is Apache-2.0. Do not relabel adapted MIT code as solely Apache-2.0 and do not imply DeepSeek trademark endorsement.
 - Do not import the excluded Claude SDK payload, DSH Web/CLI, ACP, Linux Landlock, telemetry, anonymous identifiers, or feedback upload modules.
 
 ## Security and tests
 
-- Runtime plugin composition is static and typed. Never add eval, new Function, executable YAML/JS configuration, HMR-loaded code, or unsigned third-party executable plugins.
+- Cordis profiles may load executable YAML/JavaScript configuration and trusted third-party plugins, including HMR in explicitly configured development or production profiles. Treat such plugins as process-equivalent trusted code, pin their versions and integrity, and record every load, unload, and configuration change. Do not describe this boundary as a sandbox.
+- Do not use `eval` or `new Function` outside the audited vendored Cordis configuration implementation.
 - Side effects must pass the centralized tool policy and approval path. Never silently fall back from a required sandbox to unsandboxed execution.
 - Keep telemetry disabled by default and redact secrets from logs, fixtures, diagnostics, and test output.
 - Baseline verification is npm test, npm run typecheck, npm run typecheck:desktop, npm run build:desktop, Cargo tests with --locked, npm run verify:enterprise-fixture, and npm audit --omit=dev.

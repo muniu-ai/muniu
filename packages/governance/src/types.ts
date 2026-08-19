@@ -9,7 +9,8 @@ export const GOVERNANCE_SCOPE_ORDER = [
 
 export type GovernanceScope = (typeof GOVERNANCE_SCOPE_ORDER)[number];
 
-export type GovernanceProvider = "claude" | "codex";
+/** Governed execution runtime. `builtin` resolves its model provider separately. */
+export type GovernanceProvider = "builtin" | "claude" | "codex";
 
 export const APPROVAL_MODE_ORDER = [
   "never",

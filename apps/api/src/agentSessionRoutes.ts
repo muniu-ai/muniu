@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import type { FastifyInstance, FastifyReply } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 
 import {
@@ -23,9 +23,12 @@ const approvalParamsSchema = z.object({ id: controlId, approvalId: controlId }).
 const eventQuerySchema = z.object({
   after: z.coerce.number().int().min(-1).default(-1)
 }).strict();
+const listQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(500).default(100)
+}).strict();
 
 export interface AgentSessionRouteOptions {
-  readonly getService: () => Promise<LocalMockAgentSessionService>;
+  readonly getService: (request: FastifyRequest) => Promise<LocalMockAgentSessionService>;
 }
 
 function invalid(reply: FastifyReply): FastifyReply {
@@ -80,8 +83,22 @@ function registerRoutes(
     const parsed = inspectAgentSessionCreateRequestV1(request.body);
     if (parsed === undefined) return invalid(reply);
     try {
-      const result = await (await service()).create(parsed);
+      const result = await (await service(request)).create(parsed);
       return reply.code(result.statusCode).send(result.body);
+    } catch (error: unknown) {
+      return failure(reply, error);
+    }
+  });
+
+  app.get("/v1/agent-sessions", async (request, reply) => {
+    const query = listQuerySchema.safeParse(request.query);
+    if (!query.success) return invalid(reply);
+    try {
+      return reply.send({
+        schemaVersion: 1,
+        kind: "agent-session-list",
+        sessions: await (await service(request)).list(query.data.limit)
+      });
     } catch (error: unknown) {
       return failure(reply, error);
     }
@@ -91,7 +108,7 @@ function registerRoutes(
     const parsed = paramsSchema.safeParse(request.params);
     if (!parsed.success) return invalid(reply);
     try {
-      return reply.send(await (await service()).get(parsed.data.id));
+      return reply.send(await (await service(request)).get(parsed.data.id));
     } catch (error: unknown) {
       return failure(reply, error);
     }
@@ -102,7 +119,7 @@ function registerRoutes(
     const body = inspectAgentMessageRequestV1(request.body);
     if (!params.success || body === undefined) return invalid(reply);
     try {
-      const result = await (await service()).message(params.data.id, body);
+      const result = await (await service(request)).message(params.data.id, body);
       return reply.code(result.statusCode).send(result.body);
     } catch (error: unknown) {
       return failure(reply, error);
@@ -142,7 +159,7 @@ function registerRoutes(
     request.raw.once("close", onDisconnect);
     activeEventStreams.add(shutdownPending);
     try {
-      const runtime = await service();
+      const runtime = await service(request);
       if (isDisconnected()) {
         abandonPending();
         return;
@@ -226,7 +243,7 @@ function registerRoutes(
     const body = inspectAgentSessionControlRequestV1(request.body);
     if (!params.success || body === undefined) return invalid(reply);
     try {
-      const result = await (await service()).cancel(params.data.id, body);
+      const result = await (await service(request)).cancel(params.data.id, body);
       return reply.code(result.statusCode).send(result.body);
     } catch (error: unknown) {
       return failure(reply, error);
@@ -238,7 +255,7 @@ function registerRoutes(
     const body = inspectAgentSessionControlRequestV1(request.body);
     if (!params.success || body === undefined) return invalid(reply);
     try {
-      const result = await (await service()).close(params.data.id, body);
+      const result = await (await service(request)).close(params.data.id, body);
       return reply.code(result.statusCode).send(result.body);
     } catch (error: unknown) {
       return failure(reply, error);
@@ -250,7 +267,7 @@ function registerRoutes(
     const body = inspectAgentApprovalDecisionRequestV1(request.body);
     if (!params.success || body === undefined) return invalid(reply);
     try {
-      const result = await (await service()).approve(
+      const result = await (await service(request)).approve(
         params.data.id,
         params.data.approvalId,
         body

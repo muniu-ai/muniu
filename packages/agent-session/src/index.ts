@@ -7,5 +7,6 @@ export * from "./initial-state.js";
 export * from "./jsonl-store.js";
 export * from "./projection.js";
 export * from "./recovery.js";
+export * from "./remote-store.js";
 export * from "./session.js";
 export * from "./types.js";

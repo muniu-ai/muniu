@@ -1,4 +1,5 @@
 export type AgentProvider = "claude" | "codex";
+export type AgentRuntimeId = "builtin" | AgentProvider;
 
 import type {
   GovernanceSnapshot,
@@ -91,13 +92,49 @@ export interface Project {
   policyId: string;
 }
 
-export interface ExecutionStrategy {
-  providers: AgentProvider[];
+export type SandboxPolicy = "read-only" | "workspace-write" | "isolated-worktree";
+export type ApprovalPolicy = "never" | "on-risk" | "before-merge";
+
+export interface ExecutionStrategyV1 {
+  readonly schemaVersion?: 1;
+  providers: Exclude<AgentRuntimeId, "builtin">[];
   candidates: number;
-  sandbox: "read-only" | "workspace-write" | "isolated-worktree";
+  sandbox: SandboxPolicy;
   requiredGates: GateId[];
-  humanApproval: "never" | "on-risk" | "before-merge";
+  humanApproval: ApprovalPolicy;
   timeoutSeconds: number;
+}
+
+export interface ExecutionTargetV2 {
+  runtimeId: AgentRuntimeId;
+  providerId?: string;
+  modelId?: string;
+  candidates: number;
+}
+
+export interface ExecutionStrategyV2 {
+  readonly schemaVersion: 2;
+  targets: ExecutionTargetV2[];
+  sandbox: SandboxPolicy;
+  requiredGates: GateId[];
+  humanApproval: ApprovalPolicy;
+  timeoutSeconds: number;
+}
+
+export type ExecutionStrategy = ExecutionStrategyV1 | ExecutionStrategyV2;
+
+export interface AgentExecutionBindingV1 {
+  readonly schemaVersion: 1;
+  readonly runId: string;
+  readonly candidateId: string;
+  readonly sessionId: string;
+  readonly runtimeId: AgentRuntimeId;
+  readonly providerId?: string;
+  readonly modelId?: string;
+  readonly harnessDigest: string;
+  readonly governanceDigest: string;
+  readonly effectPolicyDigest: string;
+  readonly sandboxCapabilityId: string;
 }
 
 export interface AgentTask {
@@ -122,7 +159,7 @@ export interface AgentTask {
 export interface Policy {
   id: string;
   name: string;
-  allowedProviders: AgentProvider[];
+  allowedProviders: AgentRuntimeId[];
   defaultRequiredGates: GateId[];
   commandAllowlist: string[];
   protectedPaths: string[];
@@ -228,7 +265,12 @@ export interface RunContext {
 export interface AgentRunInput {
   runId: string;
   candidateId: string;
-  provider: AgentProvider;
+  provider: AgentRuntimeId;
+  runtimeId?: AgentRuntimeId;
+  providerId?: string;
+  modelId?: string;
+  sessionId?: string;
+  executionBinding?: AgentExecutionBindingV1;
   cwd: string;
   prompt: string;
   context: RunContext;
@@ -241,7 +283,12 @@ export interface AgentRunInput {
 }
 
 export interface AgentRunResult {
-  provider: AgentProvider;
+  provider: AgentRuntimeId;
+  runtimeId?: AgentRuntimeId;
+  providerId?: string;
+  modelId?: string;
+  sessionId?: string;
+  executionBinding?: AgentExecutionBindingV1;
   candidateId: string;
   status: CandidateStatus;
   exitCode: number | null;
@@ -256,7 +303,11 @@ export interface AgentRunResult {
 export interface CandidateRecord {
   id: string;
   runId: string;
-  provider: AgentProvider;
+  provider: AgentRuntimeId;
+  runtimeId?: AgentRuntimeId;
+  providerId?: string;
+  modelId?: string;
+  executionBinding?: AgentExecutionBindingV1;
   worktreePath: string;
   status: CandidateStatus;
   result?: AgentRunResult;

@@ -17,7 +17,8 @@ export type RunJobQueueStatus =
   | "cancelled";
 
 export type SandboxEnforcementLevel = "none" | "postcheck" | "enforced";
-export type WorkerProviderId = "claude" | "codex";
+/** Runtime capability advertised by a worker, not a model-provider identifier. */
+export type WorkerProviderId = "builtin" | "claude" | "codex";
 
 export interface WorkerSandboxCapability {
   backendId: string;
@@ -696,7 +697,7 @@ function normalizeStringSet(value: unknown, label: string): string[] {
 function normalizeProviderSet(value: unknown, label: string): WorkerProviderId[] {
   const providers = normalizeStringSet(value, label);
   for (const provider of providers) {
-    if (provider !== "claude" && provider !== "codex") throw new TypeError(`${label} contains unsupported managed provider ${provider}`);
+    if (provider !== "builtin" && provider !== "claude" && provider !== "codex") throw new TypeError(`${label} contains unsupported runtime ${provider}`);
   }
   return providers as WorkerProviderId[];
 }

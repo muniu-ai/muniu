@@ -40,7 +40,7 @@ export async function discoverSkillSources(options: {
   mniuRoot?: string;
 }): Promise<SkillSourceCandidate[]> {
   const roots: Array<{ root: string; sourceRoot: SkillSourceCandidate["sourceRoot"] }> = [
-    { root: join(options.mniuRoot ?? join(options.homeDir, ".mniu"), "skills"), sourceRoot: "mniu" },
+    { root: join(options.mniuRoot ?? join(options.homeDir, ".muniu"), "skills"), sourceRoot: "mniu" },
     { root: join(options.homeDir, ".agents", "skills"), sourceRoot: "agents" }
   ];
   const candidates: SkillSourceCandidate[] = [];
@@ -64,7 +64,7 @@ export async function syncSkillRegistry(
   options: SkillRegistrySyncOptions
 ): Promise<SkillRegistrySyncResult> {
   const registry = await readSkillRegistryIndex(options.registryUrl);
-  const mniuRoot = options.mniuRoot ?? join(options.homeDir, ".mniu");
+  const mniuRoot = options.mniuRoot ?? join(options.homeDir, ".muniu");
   const trustPolicy = buildSkillRegistryTrustPolicy(registry, options);
   const releaseMetadata = verifySkillRegistryReleaseMetadata(registry, trustPolicy, options);
   const installedSkills = options.installedSkills ?? [];
@@ -909,7 +909,7 @@ async function backupTargetIfExists(
 }
 
 function backupRoot(options: { homeDir: string; mniuRoot?: string }): string {
-  return join(options.mniuRoot ?? join(options.homeDir, ".mniu"), "backups");
+  return join(options.mniuRoot ?? join(options.homeDir, ".muniu"), "backups");
 }
 
 function skillFolderName(name: string): string {
