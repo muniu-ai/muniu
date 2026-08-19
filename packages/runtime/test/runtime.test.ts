@@ -45,6 +45,41 @@ test("boots a Cordis profile, records lifecycle, and disposes effects", async ()
   delete (globalThis as Record<string, unknown>).__muniuDisposed;
 });
 
+test("boots the first-party runtime descriptor as a static Cordis builtin", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "muniu-runtime-builtin-"));
+  await writeFile(
+    join(directory, "cordis.yml"),
+    [
+      "- id: muniu-core",
+      "  name: cordis:muniu-core",
+      "  config:",
+      "    scope: desktop",
+      "    profileId: desktop",
+      "    serviceName: muniuRuntimeProfile",
+      "    components: [desktop, sessions, runs]"
+    ].join("\n"),
+    "utf8"
+  );
+
+  const runtime = await bootRuntime({
+    scope: "desktop",
+    profileId: "desktop",
+    profilePath: join(directory, "cordis.yml")
+  });
+  assert.deepEqual(runtime.context.get("muniuRuntimeProfile"), {
+    schemaVersion: 1,
+    scope: "desktop",
+    profileId: "desktop",
+    components: ["desktop", "sessions", "runs"]
+  });
+  assert.equal(
+    runtime.snapshot.plugins.find((plugin) => plugin.id.endsWith("muniu-core"))?.name,
+    "cordis:muniu-core"
+  );
+  await runtime.dispose();
+  assert.equal(runtime.context.get("muniuRuntimeProfile"), undefined);
+});
+
 test("profile layers are deterministic and later entries replace by id", () => {
   const resolved = resolveProfileLayers([
     {

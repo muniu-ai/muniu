@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 export * from "./event-snapshot.js";
+export { runInheritedEventWriterHelper } from "./event-writer-helper.js";
 export * from "./create-options.js";
 export * from "./in-memory-store.js";
 export * from "./initial-state.js";

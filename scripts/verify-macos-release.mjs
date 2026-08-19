@@ -148,6 +148,8 @@ assertIncludes(tauriLib, "spawn_managed_daemon", "desktop managed daemon");
 assertIncludes(tauriLib, '.sidecar("mn-api")', "desktop managed daemon");
 assertIncludes(tauriLib, "MN_DESKTOP_PACKAGED", "desktop managed daemon Keychain mode");
 assertIncludes(tauriLib, "MN_DESKTOP_PARENT_PID", "desktop managed daemon parent lifecycle");
+assertIncludes(tauriLib, "MN_RUNTIME_BASE_PATH", "desktop managed daemon runtime bundle");
+assertIncludes(tauriLib, "MN_RUNTIME_PROFILE_PATH", "desktop managed daemon runtime profile");
 assertIncludes(tauriLib, "ExitRequested", "desktop managed daemon early shutdown");
 assertIncludes(tauriLib, "tray-provider-preview", "desktop tray provider preview event");
 assertIncludes(tauriLib, '"dryRun": true', "desktop tray provider preview request");
@@ -165,6 +167,19 @@ assertIncludes(
   "mn-api-x86_64-apple-darwin",
   "Tauri x86_64 daemon resource"
 );
+for (const runtimeResource of [
+  "runtime/base.yml",
+  "runtime/profiles/local.yml",
+  "runtime/profiles/enterprise-api.yml",
+  "runtime/profiles/enterprise-worker.yml",
+  "runtime/profiles/desktop.yml"
+]) {
+  assertIncludes(
+    JSON.stringify(tauriConfig.bundle?.resources ?? {}),
+    runtimeResource,
+    "Tauri runtime profile resource"
+  );
+}
 assertIncludes(rootPackage.devDependencies?.["@yao-pkg/pkg"] ?? "", "^6.", "daemon sidecar packager");
 assertIncludes(rootPackage.devDependencies?.esbuild ?? "", "^0.28", "daemon sidecar bundler");
 assertIncludes(rootPackage.optionalDependencies?.["ds-store"] ?? "", "^0.1", "optional macOS DMG Finder metadata writer");

@@ -1,5 +1,5 @@
 - id: muniu-core
-  name: ../plugins/core.mjs
+  name: cordis:muniu-core
   config:
     scope: api
     profileId: enterprise-api

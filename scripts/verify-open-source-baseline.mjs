@@ -55,6 +55,7 @@ const requiredFiles = [
   "SUPPORT.md",
   "GOVERNANCE.md",
   ".node-version",
+  "rust-toolchain.toml",
   ".npmrc",
   ".gitleaks.toml",
   "deny.toml",
@@ -242,6 +243,9 @@ if (!/^version = "0\.1\.0"$/mu.test(cargoManifest)) {
 }
 if (!/^license = "Apache-2\.0"$/mu.test(cargoManifest)) {
   fail("desktop Cargo package must declare Apache-2.0");
+}
+if (!/^rust-version = "1\.88"$/mu.test(cargoManifest)) {
+  fail("desktop Cargo package must require Rust 1.88");
 }
 if (!/^repository = "https:\/\/github\.com\/muniu-ai\/muniu"$/mu.test(cargoManifest)) {
   fail("desktop Cargo package has the wrong repository");

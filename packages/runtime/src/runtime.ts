@@ -10,6 +10,7 @@ import { dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 import { RuntimeAuditLog } from "./audit.js";
 import { digestRuntimeValue } from "./canonical.js";
+import { coreRuntimePlugin } from "./core-plugin.js";
 import type {
   BootRuntimeOptions,
   RuntimeAuditEvent,
@@ -131,6 +132,7 @@ export async function bootRuntime(options: BootRuntimeOptions): Promise<MuniuRun
   await context.plugin(Loader, { baseUrl: profileBaseUrl });
   context.loader.builtins.include = Include;
   context.loader.builtins.group = Group;
+  context.loader.builtins["muniu-core"] = coreRuntimePlugin;
 
   if (options.enableHmr) {
     await context.plugin(Timer);

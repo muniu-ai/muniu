@@ -1,6 +1,15 @@
 import { execFileSync, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { createServer } from "node:net";
-import { cpSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  cpSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  writeFileSync
+} from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -26,6 +35,12 @@ await build({
   platform: "node",
   format: "cjs",
   target: "node22",
+  define: {
+    "import.meta.url": "__mnBundleImportMetaUrl"
+  },
+  banner: {
+    js: "const __mnBundleImportMetaUrl = require('node:url').pathToFileURL(__filename).href;"
+  },
   sourcemap: false,
   logLevel: "info"
 });
@@ -76,6 +91,7 @@ execFileSync("codesign", ["--verify", "--strict", arm64Path]);
 execFileSync("codesign", ["--verify", "--strict", x64Path]);
 
 await smokeSidecar(universalPath);
+await smokePackagedEventWriter(universalPath);
 rmSync(buildDir, { recursive: true, force: true });
 console.log(`daemon sidecars ready: ${arm64Path}, ${x64Path}, ${universalPath}`);
 
@@ -110,6 +126,125 @@ async function smokeSidecar(binaryPath) {
     }
     rmSync(mniuRoot, { recursive: true, force: true });
   }
+}
+
+async function smokePackagedEventWriter(binaryPath) {
+  const smokeRoot = await mkdtemp(path.join(tmpdir(), "mniu-event-writer-smoke-"));
+  const eventPath = path.join(smokeRoot, "events.jsonl");
+  const lockPath = path.join(smokeRoot, "writer.lock");
+  const eventFd = openSync(eventPath, "w+");
+  const lockFd = openSync(lockPath, "w+");
+  const nonce = randomUUID();
+  const child = spawn(binaryPath, ["--mn-agent-session-event-writer", "3", "4", nonce], {
+    cwd: rootDir,
+    env: { ...process.env, MN_DESKTOP_PACKAGED: "1" },
+    stdio: ["pipe", "pipe", "pipe", eventFd, lockFd]
+  });
+  const messages = createMessageReader(child);
+  let output = "";
+  child.stderr.on("data", (chunk) => (output += chunk.toString()));
+  try {
+    const ready = await messages.next();
+    if (ready.nonce !== nonce || ready.status !== "ready" || ready.pid !== child.pid) {
+      throw new Error(`unexpected event writer handshake: ${JSON.stringify(ready)}`);
+    }
+
+    const line = `${JSON.stringify({ smoke: "packaged-event-writer" })}\n`;
+    await writeWriterRequest(child, messages, nonce, { operation: "append", line });
+    await writeWriterRequest(child, messages, nonce, { operation: "close" });
+    child.stdin.end();
+    const result = await waitForChildExit(child);
+    if (result.code !== 0 || result.signal !== null) {
+      throw new Error(`event writer exited abnormally (code=${String(result.code)}, signal=${String(result.signal)})`);
+    }
+    if (readFileSync(eventPath, "utf8") !== line) {
+      throw new Error("packaged event writer did not persist the expected record");
+    }
+  } catch (error) {
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\n${output}`);
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+      await new Promise((resolve) => child.once("exit", resolve));
+    }
+    closeSync(eventFd);
+    closeSync(lockFd);
+    rmSync(smokeRoot, { recursive: true, force: true });
+  }
+}
+
+async function writeWriterRequest(child, messages, nonce, fields) {
+  const requestId = randomUUID();
+  child.stdin.write(`${JSON.stringify({ nonce, requestId, ...fields })}\n`);
+  const response = await messages.next();
+  if (response.nonce !== nonce || response.requestId !== requestId || response.status !== "ok") {
+    throw new Error(`unexpected event writer acknowledgement: ${JSON.stringify(response)}`);
+  }
+}
+
+function createMessageReader(child) {
+  const queued = [];
+  const pending = [];
+  let buffer = "";
+  let failure;
+
+  const fail = (error) => {
+    if (failure !== undefined) return;
+    failure = error;
+    while (pending.length > 0) pending.shift().reject(error);
+  };
+  child.stdout.on("data", (chunk) => {
+    buffer += chunk.toString();
+    let newline = buffer.indexOf("\n");
+    while (newline >= 0) {
+      const frame = buffer.slice(0, newline);
+      buffer = buffer.slice(newline + 1);
+      try {
+        const message = JSON.parse(frame);
+        const waiter = pending.shift();
+        if (waiter === undefined) queued.push(message);
+        else waiter.resolve(message);
+      } catch {
+        fail(new Error("event writer returned invalid JSON"));
+      }
+      newline = buffer.indexOf("\n");
+    }
+  });
+  child.once("error", fail);
+  child.once("exit", (code, signal) => {
+    if (pending.length > 0) {
+      fail(new Error(`event writer exited before replying (code=${String(code)}, signal=${String(signal)})`));
+    }
+  });
+
+  return {
+    next() {
+      if (queued.length > 0) return Promise.resolve(queued.shift());
+      if (failure !== undefined) return Promise.reject(failure);
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("event writer response timed out")), 5_000);
+        pending.push({
+          resolve(value) {
+            clearTimeout(timer);
+            resolve(value);
+          },
+          reject(error) {
+            clearTimeout(timer);
+            reject(error);
+          }
+        });
+      });
+    }
+  };
+}
+
+function waitForChildExit(child) {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve({ code: child.exitCode, signal: child.signalCode });
+  }
+  return new Promise((resolve) => {
+    child.once("exit", (code, signal) => resolve({ code, signal }));
+  });
 }
 
 async function waitForHealth(port, child) {

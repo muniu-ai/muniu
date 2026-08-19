@@ -1,6 +1,6 @@
 # 贡献 Muniu
 
-使用 Node 22.19.x、npm 11.10.1 和独立 Git worktree。安装必须运行 `npm ci`。生产改动先增加聚焦失败测试，再实现、运行受影响 workspace 测试和仓库门禁。
+使用 Node 22.19.x、npm 11.10.1 和独立 Git worktree；Desktop 开发固定使用 Rust 1.88.0，`rust-toolchain.toml` 会自动选择该版本。安装必须运行 `npm ci`。生产改动先增加聚焦失败测试，再实现、运行受影响 workspace 测试和仓库门禁。
 
 提交前至少运行：
 

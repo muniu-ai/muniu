@@ -22,7 +22,8 @@
 npm run build:desktop
 ```
 
-原生发布构建需要 Rust/Cargo 和 Apple 构建工具链：
+原生发布构建需要 Rust 1.88.0/Cargo 和 Apple 构建工具链；仓库根目录的
+`rust-toolchain.toml` 会由 rustup 自动选择固定版本：
 
 ```bash
 npm run release:mac

@@ -557,6 +557,7 @@ fn spawn_managed_daemon(
     }
     let port = api_url.port_or_known_default().unwrap_or(7318).to_string();
     let mniu_root = muniu_root_path().map_err(std::io::Error::other)?;
+    let runtime_root = app.path().resource_dir()?.join("runtime");
     fs::create_dir_all(&mniu_root)?;
     let (mut events, child) = app
         .shell()
@@ -570,6 +571,14 @@ fn spawn_managed_daemon(
             mniu_root.join("api-state.json").as_os_str(),
         )
         .env("MN_WORKSPACE_ROOT", mniu_root.join("worktrees").as_os_str())
+        .env(
+            "MN_RUNTIME_BASE_PATH",
+            runtime_root.join("base.yml").as_os_str(),
+        )
+        .env(
+            "MN_RUNTIME_PROFILE_PATH",
+            runtime_root.join("profiles").join("local.yml").as_os_str(),
+        )
         .env("MN_DESKTOP_PACKAGED", "1")
         .env("MN_DESKTOP_PARENT_PID", std::process::id().to_string())
         .spawn()?;

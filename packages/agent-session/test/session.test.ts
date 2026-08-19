@@ -55,7 +55,11 @@ import {
 } from "../src/index.js";
 import type { AgentSessionExclusiveView, AgentSessionHeaderV1 } from "../src/index.js";
 import { settleDescriptorLockCommand } from "../src/descriptor-lock.js";
-import { acquireOsWriterLock, resolveWriterLockHelper } from "../src/writer-lock.js";
+import {
+  acquireOsWriterLock,
+  resolveEventWriterHelperCommand,
+  resolveWriterLockHelper
+} from "../src/writer-lock.js";
 
 const CHILD_PROCESS_ENV = { ...process.env };
 delete CHILD_PROCESS_ENV.NODE_V8_COVERAGE;
@@ -1145,6 +1149,38 @@ test("descriptor lock commands are fixed, fail closed when missing, and release 
   } finally {
     await unlink(unsafePath);
   }
+});
+
+test("packaged event writers re-enter the sidecar while source runs use the compiled helper", () => {
+  const packaged = resolveEventWriterHelperCommand(
+    true,
+    "/Applications/Muniu.app/Contents/MacOS/mn-api"
+  );
+  assert.equal(packaged.executable, "/Applications/Muniu.app/Contents/MacOS/mn-api");
+  assert.equal(packaged.staticHelperPath, undefined);
+  assert.deepEqual(packaged.argumentsFor("nonce"), [
+    "--mn-agent-session-event-writer",
+    "3",
+    "4",
+    "nonce"
+  ]);
+
+  const source = resolveEventWriterHelperCommand(
+    false,
+    "/usr/local/bin/node",
+    "file:///workspace/packages/agent-session/dist/writer-lock.js"
+  );
+  assert.equal(source.executable, "/usr/local/bin/node");
+  assert.equal(
+    source.staticHelperPath,
+    "/workspace/packages/agent-session/dist/event-writer-helper.js"
+  );
+  assert.deepEqual(source.argumentsFor("nonce"), [
+    "/workspace/packages/agent-session/dist/event-writer-helper.js",
+    "3",
+    "4",
+    "nonce"
+  ]);
 });
 
 test("JSONL fails closed when the compiled event writer helper is missing and recovers after restore", async () => {

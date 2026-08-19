@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { close, fsync, ftruncate, write } from "node:fs";
+import { basename } from "node:path";
 
 import { acquireInheritedDescriptorLock } from "./descriptor-lock.js";
 
@@ -110,84 +111,94 @@ function send(value: Record<string, unknown>): void {
   process.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
-const [eventFdArgument, lockFdArgument, nonce] = process.argv.slice(2);
-if (eventFdArgument !== String(EVENT_FD)
-  || lockFdArgument !== String(LOCK_FD)
-  || nonce === undefined
-  || !UUID_PATTERN.test(nonce)) {
-  process.exitCode = 64;
-} else {
-  try {
-    await acquireInheritedDescriptorLock(LOCK_FD);
-  } catch {
-    process.exitCode = 75;
-  }
-  if (process.exitCode === undefined) {
-    let input = Buffer.alloc(0);
-    let pendingFrames = 0;
-    let closed = false;
-    let failed = false;
-    let queue = Promise.resolve();
+export async function runInheritedEventWriterHelper(
+  arguments_: readonly string[]
+): Promise<void> {
+  const [eventFdArgument, lockFdArgument, nonce] = arguments_;
+  if (eventFdArgument !== String(EVENT_FD)
+    || lockFdArgument !== String(LOCK_FD)
+    || nonce === undefined
+    || !UUID_PATTERN.test(nonce)) {
+    process.exitCode = 64;
+  } else {
+    try {
+      await acquireInheritedDescriptorLock(LOCK_FD);
+    } catch {
+      process.exitCode = 75;
+    }
+    if (process.exitCode === undefined) {
+      let input = Buffer.alloc(0);
+      let pendingFrames = 0;
+      let closed = false;
+      let failed = false;
+      let queue = Promise.resolve();
 
-    const fail = (): void => {
-      if (failed) return;
-      failed = true;
-      process.exitCode = 70;
-      process.stdin.destroy();
-    };
+      const fail = (): void => {
+        if (failed) return;
+        failed = true;
+        process.exitCode = 70;
+        process.stdin.destroy();
+      };
 
-    const handle = async (frame: Buffer): Promise<void> => {
-      try {
-        const request = parseRequest(frame.toString("utf8"), nonce);
-        if (closed) throw new Error("event writer is closed");
-        if (request.operation === "append") {
-          await writeAll(Buffer.from(request.line as string, "utf8"));
-          await syncFd();
-        } else if (request.operation === "truncate") {
-          await truncateFd(request.length as number);
-          await syncFd();
-        } else if (request.operation === "flush") {
-          await syncFd();
-        } else {
-          await syncFd();
-          await closeFd();
-          closed = true;
+      const handle = async (frame: Buffer): Promise<void> => {
+        try {
+          const request = parseRequest(frame.toString("utf8"), nonce);
+          if (closed) throw new Error("event writer is closed");
+          if (request.operation === "append") {
+            await writeAll(Buffer.from(request.line as string, "utf8"));
+            await syncFd();
+          } else if (request.operation === "truncate") {
+            await truncateFd(request.length as number);
+            await syncFd();
+          } else if (request.operation === "flush") {
+            await syncFd();
+          } else {
+            await syncFd();
+            await closeFd();
+            closed = true;
+          }
+          send({ nonce, requestId: request.requestId, status: "ok" });
+          if (closed) process.stdin.destroy();
+        } catch {
+          fail();
+        } finally {
+          pendingFrames -= 1;
         }
-        send({ nonce, requestId: request.requestId, status: "ok" });
-        if (closed) process.stdin.destroy();
-      } catch {
-        fail();
-      } finally {
-        pendingFrames -= 1;
-      }
-    };
+      };
 
-    process.stdin.on("data", (chunk: Buffer) => {
-      if (failed || closed) return;
-      input = Buffer.concat([input, chunk]);
-      if (input.length > MAX_FRAME_BYTES + 1) {
-        fail();
-        return;
-      }
-      let newline = input.indexOf(0x0a);
-      while (newline >= 0) {
-        const frame = input.subarray(0, newline);
-        input = input.subarray(newline + 1);
-        pendingFrames += 1;
-        if (pendingFrames > MAX_PENDING_FRAMES || frame.length === 0 || frame.length > MAX_FRAME_BYTES) {
+      process.stdin.on("data", (chunk: Buffer) => {
+        if (failed || closed) return;
+        input = Buffer.concat([input, chunk]);
+        if (input.length > MAX_FRAME_BYTES + 1) {
           fail();
           return;
         }
-        queue = queue.then(() => handle(frame));
-        newline = input.indexOf(0x0a);
-      }
-    });
-    process.stdin.on("end", () => {
-      if (!closed || input.length !== 0 || pendingFrames !== 0) fail();
-    });
-    process.stdin.on("error", fail);
-    process.stdout.on("error", fail);
-    send({ nonce, status: "ready", pid: process.pid });
-    process.stdin.resume();
+        let newline = input.indexOf(0x0a);
+        while (newline >= 0) {
+          const frame = input.subarray(0, newline);
+          input = input.subarray(newline + 1);
+          pendingFrames += 1;
+          if (pendingFrames > MAX_PENDING_FRAMES || frame.length === 0 || frame.length > MAX_FRAME_BYTES) {
+            fail();
+            return;
+          }
+          queue = queue.then(() => handle(frame));
+          newline = input.indexOf(0x0a);
+        }
+      });
+      process.stdin.on("end", () => {
+        if (!closed || input.length !== 0 || pendingFrames !== 0) fail();
+      });
+      process.stdin.on("error", fail);
+      process.stdout.on("error", fail);
+      send({ nonce, status: "ready", pid: process.pid });
+      process.stdin.resume();
+    }
   }
+}
+
+if (basename(process.argv[1] ?? "") === "event-writer-helper.js") {
+  void runInheritedEventWriterHelper(process.argv.slice(2)).catch(() => {
+    process.exitCode = 70;
+  });
 }

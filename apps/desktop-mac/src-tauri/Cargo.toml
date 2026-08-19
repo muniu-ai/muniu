@@ -6,6 +6,7 @@ authors = ["Muniu"]
 license = "Apache-2.0"
 repository = "https://github.com/muniu-ai/muniu"
 edition = "2021"
+rust-version = "1.88"
 
 [lib]
 name = "mniu_desktop_lib"

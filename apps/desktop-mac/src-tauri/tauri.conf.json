@@ -32,7 +32,12 @@
     "externalBin": ["binaries/mn-api"],
     "resources": {
       "binaries/mn-api-aarch64-apple-darwin": "mn-api-aarch64-apple-darwin",
-      "binaries/mn-api-x86_64-apple-darwin": "mn-api-x86_64-apple-darwin"
+      "binaries/mn-api-x86_64-apple-darwin": "mn-api-x86_64-apple-darwin",
+      "../../../config/runtime/base.yml": "runtime/base.yml",
+      "../../../config/runtime/profiles/local.yml": "runtime/profiles/local.yml",
+      "../../../config/runtime/profiles/enterprise-api.yml": "runtime/profiles/enterprise-api.yml",
+      "../../../config/runtime/profiles/enterprise-worker.yml": "runtime/profiles/enterprise-worker.yml",
+      "../../../config/runtime/profiles/desktop.yml": "runtime/profiles/desktop.yml"
     },
     "targets": ["dmg", "app"],
     "macOS": {

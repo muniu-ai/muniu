@@ -5,8 +5,8 @@ interfaces may change with an explicit changelog entry.
 
 ## Before contributing
 
-- Use macOS 12+, Node.js 22.19.x, npm 11.10.1, and a Rust toolchain compatible
-  with the checked-in Cargo.lock.
+- Use macOS 12+, Node.js 22.19.x, npm 11.10.1, and Rust 1.88.0 for Desktop
+  work. `rust-toolchain.toml` selects the pinned Rust toolchain automatically.
 - Create a focused branch and isolated Git worktree.
 - Install exactly from the lockfile with npm ci.
 - Open a security report through private vulnerability reporting instead of a

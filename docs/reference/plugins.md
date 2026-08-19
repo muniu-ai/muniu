@@ -4,7 +4,7 @@
 
 | Profile | Entries | Source digest |
 | --- | --- | --- |
-| `local` | `muniu-core` | `949dfd008d87fa6a028f818cf61766cb7dc8438d8e8c88121e6c6e90baf9382c` |
-| `enterprise-api` | `muniu-core` | `3fa3c05c6a04ba55fd6aabdec543c238cfd19ef137f53c34594c5734fa6ce900` |
-| `enterprise-worker` | `muniu-core` | `dfc0bae49675e2d9c529d62ffbe78b7ea2e9403796904a0fef48fcdeed4a63a1` |
-| `desktop` | `muniu-core` | `71bc2eb4d0f05fe8b88ff1d8be751194ecefd6b9773749225b29a973000d9045` |
+| `local` | `muniu-core` | `e57825bd021a517a57b2d04c63943c1b2396f5343e62822cc5c89e4de8005c32` |
+| `enterprise-api` | `muniu-core` | `d52985f0526ef33cafb76cf5d5a56e2a81448a52051914627af75c7b785b3dc0` |
+| `enterprise-worker` | `muniu-core` | `fb099f4ff2aa0de7eb304e53f0970f99b76f9bcd7e837011a2e3840872d34a5e` |
+| `desktop` | `muniu-core` | `e1aca226b7151207016ecb8a4ddc1b3f3079339f69136b6ed8ad34a4e0ab2b9f` |

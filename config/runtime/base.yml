@@ -1,5 +1,5 @@
 - id: muniu-bundle
-  name: ./plugins/core.mjs
+  name: cordis:muniu-core
   config:
     scope: shared
     profileId: base-bundle

@@ -1,6 +1,11 @@
+import { runInheritedEventWriterHelper } from "@mn/agent-session";
 import { buildServer } from "./server.js";
 
 async function main(): Promise<void> {
+  if (process.argv[2] === "--mn-agent-session-event-writer") {
+    await runInheritedEventWriterHelper(process.argv.slice(3));
+    return;
+  }
   const port = Number(process.env.MN_API_PORT ?? 7318);
   const host = process.env.MN_API_HOST ?? "127.0.0.1";
   const useMockExecutors = process.env.MN_USE_MOCK_EXECUTORS === "1";
