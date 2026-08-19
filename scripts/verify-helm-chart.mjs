@@ -48,6 +48,9 @@ if (production.includes("            - --mock\n")) {
   throw new Error("production Worker unexpectedly uses the fixture executor");
 }
 for (const required of [
+  "name: muniu-migrate",
+  'helm.sh/hook-weight: "-10"',
+  "serviceAccountName: muniu-migrate",
   "name: muniu-candidate",
   "name: muniu-worker-sandbox-controller",
   "name: muniu-api-sandbox-authority",
@@ -61,6 +64,9 @@ for (const required of [
   if (!production.includes(required)) {
     throw new Error(`production chart is missing Kubernetes boundary: ${required}`);
   }
+}
+if (!/kind: ServiceAccount[\s\S]*?name: muniu-migrate[\s\S]*?automountServiceAccountToken: false/u.test(production)) {
+  throw new Error("migration hook must own a tokenless pre-install ServiceAccount");
 }
 if (!production.includes("name: MN_API_INSTANCE_ID") ||
     !production.includes("fieldPath: metadata.name")) {
