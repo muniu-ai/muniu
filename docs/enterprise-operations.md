@@ -2,7 +2,7 @@
 
 生产部署需要外部 PostgreSQL、S3、OIDC/JWKS、OTLP、Standard Pack trust secret 和 sandbox attestation secret。先复制 `deploy/helm/muniu/values.yaml`，只在私有 values 中填写地址，凭据使用 existing Secret。
 
-启用默认拒绝 NetworkPolicy 时，必须在私有 values 中为 `networkPolicy.apiEgress` 配置 PostgreSQL、S3、OIDC/JWKS 和 OTLP 的精确 namespace selector 或 CIDR/端口，并在 `networkPolicy.kubernetesApiEgress` 中填写 Kubernetes API ClusterIP（通常为单个 `/32`）。NetworkPolicy 不能可移植地按 DNS 名放行，Chart 不会猜测生产网段。
+启用默认拒绝 NetworkPolicy 时，必须在私有 values 中为 `networkPolicy.apiEgress` 配置 PostgreSQL、S3、OIDC/JWKS 和 OTLP 的精确 namespace selector 或 CIDR/端口，并在 `networkPolicy.kubernetesApiEgress` 中填写 Kubernetes API ClusterIP（通常为单个 `/32`）。若 CNI 在 Service DNAT 后执行出站策略，还必须加入 API Server 实际 endpoint CIDR，并在 `networkPolicy.kubernetesApiPorts` 中加入其目标端口。NetworkPolicy 不能可移植地按 DNS 名放行，Chart 不会猜测生产网段。
 
 升级顺序：备份 PostgreSQL 与 S3 → `helm upgrade` → 等待 migration Job → 检查 `/healthz` → 提交一个只读验证任务 → 检查 OTLP 和审计事件。
 

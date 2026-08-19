@@ -34,6 +34,10 @@ networkPolicy:
       kubernetes.io/metadata.name: muniu-kind
   kubernetesApiEgress:
     - ipBlock: { cidr: 10.96.0.1/32 }
+    # Calico enforces this egress rule after Service DNAT in the one-node Kind
+    # topology, where the API endpoint is the first Kind-network container.
+    - ipBlock: { cidr: 172.18.0.2/32 }
+  kubernetesApiPorts: [443, 6443]
   apiEgress:
     - to:
         - podSelector:

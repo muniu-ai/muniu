@@ -86,8 +86,11 @@ networkPolicy:
   # names portably. Production values must narrow these selectors/CIDRs.
   apiEgress: []
   # Kubernetes API ClusterIP CIDR(s), normally a single /32. Both the API
-  # authority and Worker controller need port 443; candidate Pods never do.
+  # authority and Worker controller need these destinations; candidate Pods
+  # never do. CNIs that enforce after Service DNAT also require the API server
+  # endpoint CIDR and target port.
   kubernetesApiEgress: []
+  kubernetesApiPorts: [443]
 
 securityContext:
   runAsNonRoot: true

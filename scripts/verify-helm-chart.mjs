@@ -73,6 +73,10 @@ if (!production.includes("name: MN_API_INSTANCE_ID") ||
     !production.includes("fieldPath: metadata.name")) {
   throw new Error("production API does not bind durable ownership to its Pod identity");
 }
+if (!production.includes("name: MN_WORKER_ID") ||
+    !production.includes("fieldPath: metadata.name")) {
+  throw new Error("production Workers do not bind queue ownership to their Pod identity");
+}
 if (!production.includes("name: HOME") ||
     !production.includes("value: /opt/muniu") ||
     !production.includes("mountPath: /opt/muniu/.muniu")) {
@@ -134,7 +138,9 @@ for (const required of [
   "name: muniu-postgres",
   "http://muniu-kind-minio:9000",
   "http://muniu-kind-fixture:8080",
-  "claimName: muniu-kind-sandboxes"
+  "claimName: muniu-kind-sandboxes",
+  "cidr: 172.18.0.2/32",
+  "port: 6443"
 ]) {
   if (!kind.includes(required)) {
     throw new Error(`Kind profile is missing the enterprise fixture binding: ${required}`);
