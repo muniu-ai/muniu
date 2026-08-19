@@ -13,7 +13,8 @@ import { buildServer } from "../src/server.js";
 import {
   EnterpriseJwtAuthenticator,
   principalAllows,
-  roleAllows
+  roleAllows,
+  workerOwnerMatchesPrincipal
 } from "../src/enterpriseAuth.js";
 import { MemoryStore } from "../src/store.js";
 
@@ -185,6 +186,11 @@ test("machine principal scopes isolate worker queue operations from human approv
   );
   assert.equal(principalAllows(worker, "GET", "/v1/capabilities"), false);
   assert.equal(principalAllows(worker, "POST", "/v1/runs/run-1/approve"), false);
+  assert.equal(workerOwnerMatchesPrincipal("worker-1", worker.actorId), true);
+  assert.equal(workerOwnerMatchesPrincipal("worker-1@worker-pod-0", worker.actorId), true);
+  assert.equal(workerOwnerMatchesPrincipal("worker-1@", worker.actorId), false);
+  assert.equal(workerOwnerMatchesPrincipal("worker-10@worker-pod-0", worker.actorId), false);
+  assert.equal(workerOwnerMatchesPrincipal("worker-1@../pod", worker.actorId), false);
 
   const human = await authenticator.authenticate(
     `Bearer ${fixture.token({ roles: ["project_owner"] })}`,
@@ -575,6 +581,22 @@ test("enterprise worker registry and governance identities are bound to authenti
   assert.equal(workersA.json().workers[0].lastError, "tenant-a-only");
   assert.equal(workersB.json().workers[0].capacity, 2);
   assert.equal(workersB.json().workers[0].lastError, "tenant-b-only");
+
+  const instanceHeartbeat = await app.inject({
+    method: "POST",
+    url: "/v1/run-jobs/workers/heartbeat",
+    headers: workerA,
+    payload: { ownerId: "shared-worker@worker-pod-0", capacity: 1 }
+  });
+  assert.equal(instanceHeartbeat.statusCode, 200, instanceHeartbeat.body);
+  assert.equal(instanceHeartbeat.json().worker.ownerId, "shared-worker@worker-pod-0");
+  const foreignInstanceHeartbeat = await app.inject({
+    method: "POST",
+    url: "/v1/run-jobs/workers/heartbeat",
+    headers: workerA,
+    payload: { ownerId: "another-worker@worker-pod-0", capacity: 1 }
+  });
+  assert.equal(foreignInstanceHeartbeat.statusCode, 403);
 
   const manifest = {
     schemaVersion: 1,

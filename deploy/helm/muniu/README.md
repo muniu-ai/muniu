@@ -15,7 +15,8 @@ plus the Kubernetes API ClusterIP in `networkPolicy.kubernetesApiEgress`.
 Some CNIs apply egress policy after Service DNAT; for those clusters, add the
 API server endpoint CIDR too and include its target port in
 `networkPolicy.kubernetesApiPorts`. Each Worker Pod supplies its own
-`metadata.name` as `MN_WORKER_ID`, so replicas never share a lease identity.
+`metadata.name` as `MN_WORKER_INSTANCE_ID`; the CLI combines it with the JWT
+subject as `principal@instance`, so replicas never share a lease identity.
 Kubernetes NetworkPolicy cannot portably allow DNS names, so the chart does not
 guess external CIDRs.
 

@@ -183,6 +183,7 @@ import {
   localRequestContext,
   principalAllows,
   roleAllows,
+  workerOwnerMatchesPrincipal,
   type EnterpriseAuthOptions
 } from "./enterpriseAuth.js";
 import {
@@ -2419,9 +2420,9 @@ export function buildServer(options: BuildServerOptions = {}) {
       const body = request.body && typeof request.body === "object" && !Array.isArray(request.body)
         ? request.body as Record<string, unknown>
         : undefined;
-      if (body?.ownerId !== context.actorId) {
+      if (!workerOwnerMatchesPrincipal(body?.ownerId, context.actorId)) {
         return reply.code(403).send({
-          error: "worker ownerId must match the authenticated machine principal"
+          error: "worker ownerId must match the authenticated machine principal or one of its instances"
         });
       }
     }

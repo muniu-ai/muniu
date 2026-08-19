@@ -2365,8 +2365,6 @@ test("enterprise worker registers and claims with machine JWT capabilities", asy
       "--enterprise",
       "--once",
       "--mock",
-      "--owner",
-      "worker-machine",
       "--language",
       "javascript",
       "--tool",
@@ -2377,7 +2375,8 @@ test("enterprise worker registers and claims with machine JWT capabilities", asy
       env: {
         ...process.env,
         MN_API_URL: `http://127.0.0.1:${address.port}`,
-        MN_API_TOKEN: "machine-token"
+        MN_API_TOKEN: `e30.${Buffer.from(JSON.stringify({ sub: "worker-machine" })).toString("base64url")}.signature`,
+        MN_WORKER_INSTANCE_ID: "worker-pod-1"
       },
       timeout: 10_000
     }
@@ -2387,11 +2386,11 @@ test("enterprise worker registers and claims with machine JWT capabilities", asy
     requests.map((request) => request.url),
     ["/v1/run-jobs/workers/heartbeat", "/v1/run-jobs/queue/claim"]
   );
-  assert.equal(requests.every((request) => request.authorization === "Bearer machine-token"), true);
+  assert.equal(requests.every((request) => request.authorization?.startsWith("Bearer e30.")), true);
   const heartbeat = requests[0]!.body;
   const claim = requests[1]!.body;
-  assert.equal(heartbeat.ownerId, "worker-machine");
-  assert.equal(claim.ownerId, "worker-machine");
+  assert.equal(heartbeat.ownerId, "worker-machine@worker-pod-1");
+  assert.equal(claim.ownerId, "worker-machine@worker-pod-1");
   assert.deepEqual(heartbeat.capabilities, claim.capabilities);
   assert.deepEqual(claim.capabilities.providers, ["builtin"]);
   assert.deepEqual(claim.capabilities.languages, ["javascript"]);

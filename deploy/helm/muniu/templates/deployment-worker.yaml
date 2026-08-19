@@ -38,7 +38,7 @@ spec:
           securityContext: {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           env:
             - { name: MN_API_URL, value: "http://{{ include "muniu.fullname" . }}:{{ .Values.service.port }}" }
-            - name: MN_WORKER_ID
+            - name: MN_WORKER_INSTANCE_ID
               valueFrom: { fieldRef: { fieldPath: metadata.name } }
             - name: MN_API_TOKEN
               valueFrom: { secretKeyRef: { name: {{ .Values.worker.authExistingSecret }}, key: {{ .Values.worker.authTokenKey }} } }

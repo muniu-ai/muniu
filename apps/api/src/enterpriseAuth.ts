@@ -284,6 +284,30 @@ export function principalAllows(
   return roleAllows(context.roles, method, pathname);
 }
 
+/**
+ * A worker credential identifies a machine principal. Replicas that share the
+ * same credential may append a bounded instance name so queue leases remain
+ * independently recoverable. The credential already grants equal authority
+ * to every replica, so the suffix is an ownership discriminator, not a new
+ * security boundary.
+ */
+export function workerOwnerMatchesPrincipal(
+  ownerId: unknown,
+  actorId: string
+): ownerId is string {
+  if (ownerId === actorId) return true;
+  if (typeof ownerId !== "string" || !ownerId.startsWith(`${actorId}@`)) {
+    return false;
+  }
+  const instanceId = ownerId.slice(actorId.length + 1);
+  return (
+    ownerId.length <= 256 &&
+    instanceId.length >= 1 &&
+    instanceId.length <= 253 &&
+    /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/u.test(instanceId)
+  );
+}
+
 function queueScopeForRoute(method: string, pathname: string): WorkerScope | undefined {
   const normalized = method.toUpperCase();
   if (normalized === "GET" || normalized === "HEAD") {

@@ -73,7 +73,7 @@ if (!production.includes("name: MN_API_INSTANCE_ID") ||
     !production.includes("fieldPath: metadata.name")) {
   throw new Error("production API does not bind durable ownership to its Pod identity");
 }
-if (!production.includes("name: MN_WORKER_ID") ||
+if (!production.includes("name: MN_WORKER_INSTANCE_ID") ||
     !production.includes("fieldPath: metadata.name")) {
   throw new Error("production Workers do not bind queue ownership to their Pod identity");
 }
