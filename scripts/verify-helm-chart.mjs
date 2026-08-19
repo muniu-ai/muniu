@@ -77,6 +77,10 @@ if (!production.includes("name: HOME") ||
     !production.includes("mountPath: /opt/muniu/.muniu")) {
   throw new Error("production API HOME must resolve inside the writable state mount");
 }
+if (!production.includes("MN_WORKSPACE_ROOT: /tmp/muniu-worktrees") ||
+    !production.includes("mountPath: /tmp")) {
+  throw new Error("production API workspace must resolve inside the writable tmp mount");
+}
 if (!/name: muniu-candidate[\s\S]*?automountServiceAccountToken: false/u.test(production)) {
   throw new Error("candidate ServiceAccount must not mount a Kubernetes token");
 }
