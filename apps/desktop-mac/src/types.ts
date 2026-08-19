@@ -229,7 +229,7 @@ export interface DeepLinkImportSummary {
 }
 
 export interface DeepLinkImportResult {
-  scheme: "mniu";
+  scheme: "muniu" | "mniu";
   action: "import";
   kind: "providers" | "mcp_servers" | "prompts";
   trusted: boolean;

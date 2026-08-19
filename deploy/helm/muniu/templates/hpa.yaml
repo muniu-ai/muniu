@@ -1,0 +1,18 @@
+{{- range $component, $config := dict "api" .Values.autoscaling.api "worker" .Values.autoscaling.worker }}
+{{- if and $config.enabled (or (ne $component "worker") $.Values.worker.enabled) }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "muniu.fullname" $ }}-{{ $component }}
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: {{ include "muniu.fullname" $ }}-{{ $component }} }
+  minReplicas: {{ $config.minReplicas }}
+  maxReplicas: {{ $config.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: {{ $config.targetCPUUtilizationPercentage }} }
+{{- end }}
+{{- end }}

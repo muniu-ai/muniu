@@ -1,0 +1,7 @@
+- id: muniu-bundle
+  name: cordis:muniu-core
+  config:
+    scope: shared
+    profileId: base-bundle
+    serviceName: muniuRuntimeBundle
+    components: [runtime, lifecycle, events, audit]

@@ -15,8 +15,10 @@ import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import { createAgentHost, type AgentHost, type AgentHostOptions } from "@mn/agent-host";
+import type { AgentExecutionBindingV1 } from "@mn/core";
 import {
   CandidateId,
+  Digest,
   RunId,
   SessionId,
   assertAgentApprovalResponseV1,
@@ -52,8 +54,10 @@ import {
   AgentSessionNotFoundError,
   RuntimeOverlayRequiredError,
   projectSession,
+  projectRuntimeMessages,
   recoverInterruptedSession,
-  type AgentSession
+  type AgentSession,
+  type AgentSessionStore
 } from "@mn/agent-session";
 
 import { AgentApprovalCoordinator } from "./agentApprovalCoordinator.js";
@@ -156,6 +160,27 @@ export interface LocalAgentSessionServiceOptions {
   readonly tools?: AgentHostOptions["tools"];
   readonly approvalCoordinator?: AgentApprovalCoordinator;
   readonly effectPolicyBinding?: EffectPolicyBindingV1;
+  readonly sessionStore?: AgentSessionStore;
+}
+
+export interface EmbeddedCandidateExecutionInput {
+  readonly sessionId: string;
+  readonly runId: string;
+  readonly candidateId: string;
+  readonly cwd: string;
+  readonly prompt: string;
+  readonly providerId: string;
+  readonly modelId: string;
+  readonly timeoutSeconds: number;
+  readonly executionBinding: AgentExecutionBindingV1;
+  readonly signal?: AbortSignal;
+}
+
+export interface EmbeddedCandidateExecutionOutput {
+  readonly reason: "completed" | "cancelled" | "budget-exceeded" | "error";
+  readonly summary: string;
+  readonly steps: number;
+  readonly toolCalls: number;
 }
 
 interface JournalReservation {
@@ -370,6 +395,18 @@ function mockText(request: LlmRequest): string {
   return `Mock response: ${text}`;
 }
 
+function embeddedRunSummary(session: AgentSession, fallback: string): string {
+  const message = [...projectRuntimeMessages(session)]
+    .reverse()
+    .find((candidate) => candidate.role === "assistant");
+  const text = message?.content
+    .filter((block): block is Extract<(typeof message.content)[number], { type: "text" }> => block.type === "text")
+    .map((block) => block.text)
+    .join("\n")
+    .trim();
+  return text || fallback;
+}
+
 function sameIdentity(left: Stats, right: Stats): boolean {
   return left.dev === right.dev && left.ino === right.ino;
 }
@@ -430,7 +467,7 @@ async function openBoundDirectory(directoryPath: string): Promise<{ handle: File
 }
 
 export class LocalMockAgentSessionService {
-  private readonly store: JsonlAgentSessionStore;
+  private readonly store: AgentSessionStore;
   private readonly journalPath: string;
   private projectionDatabase: DatabaseSync | undefined;
   private projectionIdentity: Stats | undefined;
@@ -468,7 +505,7 @@ export class LocalMockAgentSessionService {
     private readonly root: string,
     options: LocalAgentSessionServiceOptions = {}
   ) {
-    this.store = new JsonlAgentSessionStore(root);
+    this.store = options.sessionStore ?? new JsonlAgentSessionStore(root);
     this.journalPath = join(root, "mutations.jsonl");
     this.mode = options.mode ?? "mock";
     this.runtimeFactory = options.runtimeFactory;
@@ -494,6 +531,11 @@ export class LocalMockAgentSessionService {
     this.approvalCoordinator = options.approvalCoordinator ?? new AgentApprovalCoordinator();
     this.effectPolicyBinding = options.effectPolicyBinding;
     this.ready = this.initialize();
+    // Initialization starts in the constructor so the service is ready for the
+    // first request. Attach a handler immediately: callers still await the
+    // original rejecting promise, while Node never observes the short window
+    // between construction and route dispatch as an unhandled rejection.
+    void this.ready.catch(() => undefined);
   }
 
   protected beforeJournalDirectorySync(): void | Promise<void> {}
@@ -612,18 +654,27 @@ export class LocalMockAgentSessionService {
   }
 
   private async recoverPersistedSessions(): Promise<void> {
-    let entries: Dirent<string>[];
-    try {
-      entries = await readdir(join(this.root, "sessions"), { withFileTypes: true, encoding: "utf8" });
-    } catch (error: unknown) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-      throw error;
+    let sessionIds: readonly SessionId[];
+    if (this.store.listSessionIds) {
+      sessionIds = await this.store.listSessionIds();
+    } else {
+      let entries: Dirent<string>[];
+      try {
+        entries = await readdir(join(this.root, "sessions"), { withFileTypes: true, encoding: "utf8" });
+      } catch (error: unknown) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+        throw error;
+      }
+      sessionIds = entries.map((entry) => {
+        if (entry.name.startsWith(".") || !entry.isDirectory()) {
+          throw new Error("durable session storage contains an invalid entry");
+        }
+        safeControlId(entry.name, "session identifier");
+        return SessionId(entry.name);
+      });
     }
-    for (const entry of entries) {
-      if (entry.name.startsWith(".")) continue;
-      if (!entry.isDirectory()) throw new Error("durable session storage contains an invalid entry");
-      safeControlId(entry.name, "session identifier");
-      const session = await this.store.open(SessionId(entry.name));
+    for (const sessionId of sessionIds) {
+      const session = await this.store.open(sessionId);
       await recoverInterruptedSession(session);
       const projection = projectSession(session.events);
       this.persistProjection(
@@ -1002,6 +1053,107 @@ export class LocalMockAgentSessionService {
     return this.view(await this.open(sessionId), false);
   }
 
+  async list(limit = 100): Promise<readonly AgentSessionViewV1[]> {
+    await this.ready;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
+      throw new AgentSessionServiceError(400, "INVALID_LIMIT", "session list limit must be between 1 and 500");
+    }
+    const database = this.projectionDatabase;
+    if (!database) {
+      throw new AgentSessionServiceError(503, "SESSION_UNAVAILABLE", "agent session projection is unavailable");
+    }
+    const rows = database.prepare(`
+      select session_id as sessionId
+      from agent_session_projection
+      order by rowid desc
+      limit ?
+    `).all(limit) as unknown as Array<{ sessionId: string }>;
+    const views: AgentSessionViewV1[] = [];
+    for (const row of rows) {
+      try {
+        views.push(await this.get(row.sessionId));
+      } catch (error: unknown) {
+        if (!(error instanceof AgentSessionServiceError)) throw error;
+      }
+    }
+    return Object.freeze(views);
+  }
+
+  async executeCandidate(
+    input: EmbeddedCandidateExecutionInput
+  ): Promise<EmbeddedCandidateExecutionOutput> {
+    await this.ready;
+    if (this.mode !== "production") {
+      throw new AgentSessionServiceError(409, "RUNTIME_UNAVAILABLE", "embedded candidate execution requires production mode");
+    }
+    safeControlId(input.sessionId, "session identifier");
+    safeControlId(input.runId, "run identifier");
+    safeControlId(input.candidateId, "candidate identifier");
+    if (input.executionBinding.sessionId !== input.sessionId
+      || input.executionBinding.runId !== input.runId
+      || input.executionBinding.candidateId !== input.candidateId
+      || input.executionBinding.runtimeId !== "builtin"
+      || input.executionBinding.providerId !== input.providerId
+      || input.executionBinding.modelId !== input.modelId) {
+      throw new AgentSessionServiceError(400, "EXECUTION_BINDING_MISMATCH", "embedded candidate binding does not match the request");
+    }
+    const host = this.host;
+    if (!host) throw new Error("agent host is unavailable");
+    const controller = new AbortController();
+    const abort = () => controller.abort(input.signal?.reason);
+    if (input.signal?.aborted) abort();
+    else input.signal?.addEventListener("abort", abort, { once: true });
+    const timeout = setTimeout(() => controller.abort(new Error("embedded candidate timed out")), input.timeoutSeconds * 1000);
+    this.active.set(input.sessionId, controller);
+    try {
+      let existing = false;
+      try {
+        await this.store.open(SessionId(input.sessionId));
+        existing = true;
+      } catch (error: unknown) {
+        if (!(error instanceof AgentSessionNotFoundError)) throw error;
+      }
+      const shared = {
+        prompt: input.prompt,
+        provider: input.providerId,
+        model: input.modelId,
+        signal: controller.signal,
+        runId: RunId(input.runId),
+        candidateId: CandidateId(input.candidateId),
+        effectPolicyBinding: {
+          governanceDigest: input.executionBinding.governanceDigest as Digest,
+          harnessDigest: input.executionBinding.harnessDigest as Digest
+        }
+      };
+      const result = existing
+        ? await host.resume({ sessionId: SessionId(input.sessionId), ...shared })
+        : await host.run({
+            sessionId: SessionId(input.sessionId),
+            cwd: input.cwd,
+            labels: {
+              runId: input.runId,
+              candidateId: input.candidateId,
+              runtimeId: "builtin",
+              effectPolicyDigest: input.executionBinding.effectPolicyDigest
+            },
+            ...shared
+          });
+      return Object.freeze({
+        reason: result.reason,
+        summary: embeddedRunSummary(
+          result.session,
+          `Embedded Agent ${result.reason} after ${result.steps} steps and ${result.toolCalls} tool calls.`
+        ),
+        steps: result.steps,
+        toolCalls: result.toolCalls
+      });
+    } finally {
+      clearTimeout(timeout);
+      input.signal?.removeEventListener("abort", abort);
+      if (this.active.get(input.sessionId) === controller) this.active.delete(input.sessionId);
+    }
+  }
+
   eventsAfter(sessionId: string, after: number): Promise<readonly AgentSessionEventV1[]> {
     return this.open(sessionId).then((session) => session.events.filter((event) => event.seq > after));
   }
@@ -1278,7 +1430,7 @@ export class LocalMockAgentSessionService {
       }
     } else {
       try {
-        await this.store.dispose();
+        await this.store.dispose?.();
       } catch (error: unknown) {
         failures.push(error);
       }

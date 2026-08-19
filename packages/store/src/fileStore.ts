@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { existsSync, renameSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type {
@@ -847,7 +848,12 @@ function normalizePublicKeyIds(ids: string[] = []): string[] {
 }
 
 export function defaultMniuRoot(homeDir = process.env.HOME ?? process.cwd()): string {
-  return join(homeDir, ".mniu");
+  const currentRoot = join(homeDir, ".muniu");
+  const legacyRoot = join(homeDir, ".mniu");
+  if (!existsSync(currentRoot) && existsSync(legacyRoot)) {
+    renameSync(legacyRoot, currentRoot);
+  }
+  return currentRoot;
 }
 
 function nextProviderHealth(

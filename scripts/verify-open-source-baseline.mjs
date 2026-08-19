@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   readFileSync,
@@ -20,6 +21,7 @@ import {
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repository = "https://github.com/muniu-ai/muniu";
 const upstreamCommit = "47f943859bef60e4160492346772ded9b24f765a";
+const cordisUpstreamCommit = "99f6f02fecdb7dff40c3fbc9470f5907c29f74ca";
 const localAbsolutePath = ["", "Users", "wangxiaoming"].join("/");
 const obsoleteRepositoryPath = ["muniu-dev", "mn"].join("/");
 const obsoleteRegistryHost = ["registry", "npmmirror", "com"].join(".");
@@ -42,6 +44,7 @@ const requiredFiles = [
   "NOTICE",
   "DCO-1.1.txt",
   "THIRD_PARTY_NOTICES.md",
+  "THIRD_PARTY_CARGO_LICENSES.json",
   "LICENSES/Apache-2.0.txt",
   "LICENSES/MIT.txt",
   "LICENSES/BSD-3-Clause.txt",
@@ -52,16 +55,21 @@ const requiredFiles = [
   "SUPPORT.md",
   "GOVERNANCE.md",
   ".node-version",
+  "rust-toolchain.toml",
   ".npmrc",
   ".gitleaks.toml",
   "deny.toml",
   "scripts/lib/open-source-policy.mjs",
+  "scripts/lib/cargo-lock-license.mjs",
+  "scripts/build-descriptor-lock-helper.mjs",
+  "packages/agent-session/native/descriptor-lock.c",
   "scripts/test/open-source-policy.test.mjs",
   "scripts/test/fixtures/allowed-fake-secrets.txt",
   "scripts/verify-third-party-licenses.mjs",
   "docs/security/redaction-policy.md",
   "docs/security/secret-scanning.md",
-  "docs/upstream-provenance/deepseek-harness.yaml"
+  "docs/upstream-provenance/deepseek-harness.yaml",
+  "docs/upstream-provenance/deepseek-harness-cordis.yaml"
 ];
 requiredFiles.forEach(requireFile);
 
@@ -77,6 +85,36 @@ if (
 const provenancePath = path.join(root, "docs/upstream-provenance/deepseek-harness.yaml");
 if (existsSync(provenancePath) && !readFileSync(provenancePath, "utf8").includes(upstreamCommit)) {
   fail("DeepSeek Harness provenance does not pin the approved commit");
+}
+
+const cordisProvenancePath = path.join(
+  root,
+  "docs/upstream-provenance/deepseek-harness-cordis.yaml"
+);
+const cordisManifestPath = path.join(root, "vendor/SOURCE_MANIFEST.sha256");
+if (!existsSync(cordisProvenancePath)
+  || !readFileSync(cordisProvenancePath, "utf8").includes(cordisUpstreamCommit)) {
+  fail("vendored Cordis provenance does not pin the approved commit");
+}
+if (!existsSync(cordisManifestPath)) {
+  fail("vendored Cordis source manifest is missing");
+} else {
+  const manifest = readFileSync(cordisManifestPath, "utf8");
+  if (!manifest.includes(cordisUpstreamCommit)) {
+    fail("vendored Cordis source manifest has the wrong commit");
+  }
+  for (const line of manifest.split("\n")) {
+    const match = /^([0-9a-f]{64})  (vendor\/[A-Za-z0-9._/-]+)$/u.exec(line);
+    if (!match) continue;
+    const [, expected, relativePath] = match;
+    const absolutePath = path.join(root, relativePath);
+    if (!existsSync(absolutePath)) {
+      fail(`vendored Cordis manifest path is missing: ${relativePath}`);
+      continue;
+    }
+    const actual = createHash("sha256").update(readFileSync(absolutePath)).digest("hex");
+    if (actual !== expected) fail(`vendored Cordis source hash differs: ${relativePath}`);
+  }
 }
 try {
   validateAttributionPolicy({
@@ -116,6 +154,12 @@ if (rootPackage.devDependencies?.typescript !== "5.7.2") fail("TypeScript must b
 if (rootPackage.devDependencies?.yaml !== "2.9.0") {
   fail("the workflow policy parser must declare yaml 2.9.0 directly");
 }
+if (rootPackage.devDependencies?.["ds-store"] !== undefined) {
+  fail("ds-store must not be a required cross-platform development dependency");
+}
+if (rootPackage.optionalDependencies?.["ds-store"] !== "^0.1.6") {
+  fail("ds-store must be an optional macOS packaging dependency");
+}
 if (rootPackage.scripts?.["test:oss-policy"] !== "node --test scripts/test/open-source-policy.test.mjs") {
   fail("test:oss-policy must run the open-source policy regression suite");
 }
@@ -138,6 +182,23 @@ if (npmrc.includes(obsoleteRegistryHost)) fail(".npmrc uses an obsolete registry
 const gitleaksConfig = readFileSync(path.join(root, ".gitleaks.toml"), "utf8");
 for (const expected of ["useDefault = true", "AKIA0000000000000000", "sk-test-not-a-real-secret"]) {
   if (!gitleaksConfig.includes(expected)) fail(".gitleaks.toml is missing " + expected);
+}
+const gitleaksCommitDeclarations = [...gitleaksConfig.matchAll(/^commits\s*=/gmu)].length;
+const gitleaksAllowlistCommits = [
+  ...gitleaksConfig.matchAll(/^commits\s*=\s*\[\s*"([0-9a-f]{40})"\s*\]/gmu)
+].map((match) => match[1]);
+if (gitleaksCommitDeclarations !== gitleaksAllowlistCommits.length) {
+  fail("every gitleaks commit allowlist must contain one exact full commit id");
+}
+for (const commit of new Set(gitleaksAllowlistCommits)) {
+  try {
+    execFileSync("git", ["cat-file", "-e", commit + "^{commit}"], {
+      cwd: root,
+      stdio: "ignore"
+    });
+  } catch {
+    fail("gitleaks allowlist references an unreachable commit: " + commit);
+  }
 }
 const denyConfig = readFileSync(path.join(root, "deny.toml"), "utf8");
 for (const expected of ['version = 2', '"Apache-2.0"', '"MIT"', "confidence-threshold"]) {
@@ -185,6 +246,9 @@ if (!/^version = "0\.1\.0"$/mu.test(cargoManifest)) {
 }
 if (!/^license = "Apache-2\.0"$/mu.test(cargoManifest)) {
   fail("desktop Cargo package must declare Apache-2.0");
+}
+if (!/^rust-version = "1\.88"$/mu.test(cargoManifest)) {
+  fail("desktop Cargo package must require Rust 1.88");
 }
 if (!/^repository = "https:\/\/github\.com\/muniu-ai\/muniu"$/mu.test(cargoManifest)) {
   fail("desktop Cargo package has the wrong repository");
@@ -245,6 +309,9 @@ const tracked = execFileSync(
   .filter(Boolean);
 const workflowFiles = [];
 const sourceFiles = [];
+for (const requiredPath of requiredFiles) {
+  if (!tracked.includes(requiredPath)) fail("required file is not tracked: " + requiredPath);
+}
 for (const relativePath of tracked) {
   const absolutePath = path.join(root, relativePath);
   if (!existsSync(absolutePath)) continue;

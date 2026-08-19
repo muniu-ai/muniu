@@ -58,7 +58,7 @@ export async function projectClaudeProvider(
   if (!options.dryRun && changed) {
     backupPath = await backupFileIfExists(
       targetPath,
-      join(options.mniuRoot ?? join(options.homeDir, ".mniu"), "backups"),
+      join(options.mniuRoot ?? join(options.homeDir, ".muniu"), "backups"),
       "claude-settings",
       options.now
     );

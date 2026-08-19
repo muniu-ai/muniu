@@ -22,8 +22,34 @@ const fixedTemporaryRoot = process.platform === "darwin"
 const lockRoot = fixedTemporaryRoot === undefined
   ? undefined
   : path.join(fixedTemporaryRoot, `muniu-agent-session-writer-locks-${String(uid ?? "unsupported")}`);
-const eventWriterHelperPath = fileURLToPath(new URL("./event-writer-helper.js", import.meta.url));
-const nodeExecutable = process.execPath;
+const PACKAGED_EVENT_WRITER_ARGUMENT = "--mn-agent-session-event-writer";
+
+export interface EventWriterHelperCommand {
+  readonly executable: string;
+  readonly staticHelperPath?: string;
+  readonly argumentsFor: (nonce: string) => readonly string[];
+}
+
+export function resolveEventWriterHelperCommand(
+  packaged = process.env.MN_DESKTOP_PACKAGED === "1",
+  executable = process.execPath,
+  moduleUrl?: string
+): EventWriterHelperCommand {
+  if (packaged) {
+    return {
+      executable,
+      argumentsFor: (nonce) => [PACKAGED_EVENT_WRITER_ARGUMENT, "3", "4", nonce]
+    };
+  }
+  const staticHelperPath = fileURLToPath(
+    new URL("./event-writer-helper.js", moduleUrl ?? import.meta.url)
+  );
+  return {
+    executable,
+    staticHelperPath,
+    argumentsFor: (nonce) => [staticHelperPath, "3", "4", nonce]
+  };
+}
 
 interface EventWriterState {
   expectedExit: boolean;
@@ -225,14 +251,15 @@ async function forceStopEventWriter(
   await waitBounded(state.closed, LOCK_EXIT_TIMEOUT_MS, "event writer helper did not terminate after SIGKILL");
 }
 
-async function assertStaticEventWriterHelper(): Promise<void> {
-  if (!path.isAbsolute(nodeExecutable) || !await isExecutable(nodeExecutable)) {
+async function assertStaticEventWriterHelper(command: EventWriterHelperCommand): Promise<void> {
+  if (!path.isAbsolute(command.executable) || !await isExecutable(command.executable)) {
     throw new WriterLockError("event writer Node executable is unavailable");
   }
+  if (command.staticHelperPath === undefined) return;
   let handle: FileHandle;
   try {
     handle = await open(
-      eventWriterHelperPath,
+      command.staticHelperPath,
       constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK
     );
   } catch (error: unknown) {
@@ -531,7 +558,8 @@ export async function acquireEventWriterLock(
 ): Promise<EventWriterLock> {
   await ensureLockRoot();
   if (lockRoot === undefined) throw new WriterLockError("writer lock directory is unavailable");
-  await assertStaticEventWriterHelper();
+  const helperCommand = resolveEventWriterHelperCommand();
+  await assertStaticEventWriterHelper(helperCommand);
   const filePath = path.join(lockRoot, `${identityDigest(identity)}.lock`);
   const root = await openLockDirectory(lockRoot);
   let lockFile: Awaited<ReturnType<typeof openSafeLockFile>> | undefined;
@@ -553,7 +581,7 @@ export async function acquireEventWriterLock(
   try {
     lockFile = await openSafeLockFile(filePath);
     const nonce = randomUUID();
-    child = spawn(nodeExecutable, [eventWriterHelperPath, "3", "4", nonce], {
+    child = spawn(helperCommand.executable, [...helperCommand.argumentsFor(nonce)], {
       shell: false,
       stdio: ["pipe", "pipe", "pipe", eventHandle.fd, lockFile.handle.fd]
     }) as unknown as ChildProcessWithoutNullStreams;

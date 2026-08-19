@@ -164,7 +164,11 @@ export async function runToolStep(options: ToolStepOptions): Promise<ToolStepRes
     prepared = tools.prepare({
       name: call.name,
       arguments: call.arguments,
-      context: { sessionId: session.header.sessionId, ...(signal === undefined ? {} : { signal }) }
+      context: {
+        sessionId: session.header.sessionId,
+        ...(session.runtimeCwd?.() === undefined ? {} : { cwd: session.runtimeCwd?.() }),
+        ...(signal === undefined ? {} : { signal })
+      }
     });
   } catch (cause: unknown) {
     commitmentBinder.release(handle);

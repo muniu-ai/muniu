@@ -7,3 +7,7 @@ Selected source files are copied or adapted from DeepSeek Harness
 (https://github.com/deepseek-ai/deepseek-harness) at commit
 47f943859bef60e4160492346772ded9b24f765a.
 Copyright (c) 2026 DeepSeek. Licensed under the MIT License.
+
+The private Cordis framework workspaces under vendor/ are copied from
+DeepSeek Harness commit 99f6f02fecdb7dff40c3fbc9470f5907c29f74ca.
+Their upstream MIT license files are preserved in each package directory.

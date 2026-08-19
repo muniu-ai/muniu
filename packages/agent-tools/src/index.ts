@@ -3,3 +3,4 @@
 export * from "./define-tool.js";
 export * from "./json-schema.js";
 export * from "./registry.js";
+export * from "./workspace-tools.js";

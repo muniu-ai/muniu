@@ -1,0 +1,7 @@
+- id: muniu-core
+  name: cordis:muniu-core
+  config:
+    scope: api
+    profileId: enterprise-api
+    serviceName: muniuRuntimeProfile
+    components: [api, postgresql, s3, oidc, otlp, audit]

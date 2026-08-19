@@ -1,4 +1,4 @@
-import { CLASSIC_WORKFLOW_REF } from "@mn/core";
+import { CLASSIC_WORKFLOW_REF, normalizeStrategy } from "@mn/core";
 import type {
   AgentTask,
   GateArtifactV2,
@@ -23,7 +23,14 @@ import type {
 import type { MaturitySourceBinding } from "./evidenceTruth.js";
 import type { RunScopedCasObjectRef } from "./runScopedCas.js";
 import type { AuthoritativeGateReceipt } from "./authoritativeGateVerification.js";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync
+} from "node:fs";
 import { dirname } from "node:path";
 
 interface ApiStateSnapshotV1 {
@@ -59,7 +66,11 @@ interface ApiStateSnapshotV2 {
   authoritativeGateReceipts?: AuthoritativeGateReceiptRecord[];
 }
 
-type ApiStateSnapshot = ApiStateSnapshotV1 | ApiStateSnapshotV2;
+interface ApiStateSnapshotV3 extends Omit<ApiStateSnapshotV2, "version"> {
+  version: 3;
+}
+
+type ApiStateSnapshot = ApiStateSnapshotV1 | ApiStateSnapshotV2 | ApiStateSnapshotV3;
 
 export const LOCAL_TENANT_ID = "local";
 export const BUILTIN_DEFAULT_STANDARD_PACK = "builtin/default@1";
@@ -660,13 +671,19 @@ export class MemoryStore {
 
   private load(): void {
     if (!this.statePath || !existsSync(this.statePath)) return;
+    let shouldMigrate = false;
     this.hydrating = true;
     try {
       const snapshot = JSON.parse(readFileSync(this.statePath, "utf8")) as ApiStateSnapshot;
-      if (snapshot.version !== 1 && snapshot.version !== 2) {
+      if (snapshot.version !== 1 && snapshot.version !== 2 && snapshot.version !== 3) {
         throw new Error(`Unsupported API state snapshot version: ${String((snapshot as { version?: unknown }).version)}`);
       }
-      const tenantId = snapshot.version === 2 ? snapshot.tenantId : LOCAL_TENANT_ID;
+      shouldMigrate = snapshot.version !== 3;
+      if (shouldMigrate) {
+        const backupPath = `${this.statePath}.v${snapshot.version}.bak`;
+        if (!existsSync(backupPath)) copyFileSync(this.statePath, backupPath);
+      }
+      const tenantId = snapshot.version !== 1 ? snapshot.tenantId : LOCAL_TENANT_ID;
       this.projects.replace(
         snapshot.projects.map((project) => [
           project.id,
@@ -686,7 +703,8 @@ export class MemoryStore {
           {
             ...task,
             tenantId: task.tenantId ?? tenantId,
-            workflowRef: task.workflowRef ?? CLASSIC_WORKFLOW_REF
+            workflowRef: task.workflowRef ?? CLASSIC_WORKFLOW_REF,
+            strategy: normalizeStrategy(task.strategy)
           }
         ])
       );
@@ -714,19 +732,19 @@ export class MemoryStore {
         snapshot.events.map((entry) => [entry.runId, entry.events])
       );
       this.standardPacks.replace(
-        (snapshot.version === 2 ? snapshot.standardPacks ?? [] : []).map((record) => [
+        (snapshot.version !== 1 ? snapshot.standardPacks ?? [] : []).map((record) => [
           scopedTenantRecordKey(record.tenantId ?? LOCAL_TENANT_ID, record.key),
           record
         ])
       );
       this.governanceLayers.replace(
-        (snapshot.version === 2 ? snapshot.governanceLayers ?? [] : []).map((record) => [
+        (snapshot.version !== 1 ? snapshot.governanceLayers ?? [] : []).map((record) => [
           scopedTenantRecordKey(record.tenantId ?? LOCAL_TENANT_ID, record.key),
           record
         ])
       );
       this.waivers.replace(
-        snapshot.version === 2 && snapshot.scopedWaivers
+        snapshot.version !== 1 && snapshot.scopedWaivers
           ? snapshot.scopedWaivers.map((record) => [
               scopedTenantRecordKey(
                 // Older writers left local waiver ids unscoped and then tried
@@ -741,13 +759,13 @@ export class MemoryStore {
               ),
               record.waiver
             ])
-          : (snapshot.version === 2 ? snapshot.waivers ?? [] : []).map((waiver) => [
+          : (snapshot.version !== 1 ? snapshot.waivers ?? [] : []).map((waiver) => [
               scopedTenantRecordKey(LOCAL_TENANT_ID, waiver.id),
               waiver
             ])
       );
       this.projectPackLocks.replace(
-        (snapshot.version === 2 ? snapshot.projectPackLocks ?? [] : []).map((record) => [
+        (snapshot.version !== 1 ? snapshot.projectPackLocks ?? [] : []).map((record) => [
           scopedTenantRecordKey(
             record.tenantId ?? LOCAL_TENANT_ID,
             record.projectId
@@ -756,23 +774,23 @@ export class MemoryStore {
         ])
       );
       this.specSetTenants.replace(
-        (snapshot.version === 2 ? snapshot.specSetTenants ?? [] : []).map((record) => [
+        (snapshot.version !== 1 ? snapshot.specSetTenants ?? [] : []).map((record) => [
           record.specSetId,
           record.tenantId
         ])
       );
       this.governedLoopStates.replace(
-        (snapshot.version === 2 ? snapshot.governedLoopStates ?? [] : []).map(
+        (snapshot.version !== 1 ? snapshot.governedLoopStates ?? [] : []).map(
           (state) => [state.runId, state]
         )
       );
       this.auditEvents.replace(
-        (snapshot.version === 2 ? snapshot.auditEvents ?? [] : []).map(
+        (snapshot.version !== 1 ? snapshot.auditEvents ?? [] : []).map(
           (event) => [event.id, event]
         )
       );
       this.evalAssets.replace(
-        (snapshot.version === 2 ? snapshot.evalAssets ?? [] : []).map((record) => [
+        (snapshot.version !== 1 ? snapshot.evalAssets ?? [] : []).map((record) => [
           scopedEvidenceRecordKey(
             record.tenantId,
             record.projectId,
@@ -783,13 +801,13 @@ export class MemoryStore {
         ])
       );
       this.traceGraphs.replace(
-        (snapshot.version === 2 ? snapshot.traceGraphs ?? [] : []).map((record) => [
+        (snapshot.version !== 1 ? snapshot.traceGraphs ?? [] : []).map((record) => [
           scopedEvidenceRecordKey(record.tenantId, record.projectId, record.id),
           record
         ])
       );
       this.learningProposals.replace(
-        (snapshot.version === 2 ? snapshot.learningProposals ?? [] : []).map((record) => [
+        (snapshot.version !== 1 ? snapshot.learningProposals ?? [] : []).map((record) => [
           scopedEvidenceRecordKey(
             record.tenantId,
             record.projectId,
@@ -800,30 +818,31 @@ export class MemoryStore {
         ])
       );
       this.maturityReports.replace(
-        (snapshot.version === 2 ? snapshot.maturityReports ?? [] : []).map((record) => [
+        (snapshot.version !== 1 ? snapshot.maturityReports ?? [] : []).map((record) => [
           scopedEvidenceRecordKey(record.tenantId, record.projectId, record.id),
           record
         ])
       );
       this.gateArtifactHandles.replace(
-        (snapshot.version === 2 ? snapshot.gateArtifactHandles ?? [] : []).map(
+        (snapshot.version !== 1 ? snapshot.gateArtifactHandles ?? [] : []).map(
           (record) => [record.handle, record]
         )
       );
       this.authoritativeGateReceipts.replace(
-        (snapshot.version === 2 ? snapshot.authoritativeGateReceipts ?? [] : []).map(
+        (snapshot.version !== 1 ? snapshot.authoritativeGateReceipts ?? [] : []).map(
           (record) => [record.id, record]
         )
       );
     } finally {
       this.hydrating = false;
     }
+    if (shouldMigrate) this.persist();
   }
 
   private persist(): void {
     if (!this.statePath || this.hydrating) return;
-    const snapshot: ApiStateSnapshotV2 = {
-      version: 2,
+    const snapshot: ApiStateSnapshotV3 = {
+      version: 3,
       tenantId: LOCAL_TENANT_ID,
       projects: [...this.projects.values()],
       tasks: [...this.tasks.values()],

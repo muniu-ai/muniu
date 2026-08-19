@@ -1,0 +1,144 @@
+image:
+  repository: ghcr.io/muniu-ai/muniu
+  tag: 0.1.0
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+  automountServiceAccountToken: false
+
+api:
+  replicas: 2
+  host: 0.0.0.0
+  port: 7318
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { cpu: "2", memory: 2Gi }
+
+worker:
+  # The in-tree enterprise worker currently requires an enforced Docker runtime.
+  # Keep it off in Kubernetes until a candidate-Pod provisioner is installed;
+  # enabling this flag is limited to explicit acceptance environments.
+  enabled: false
+  fixtureMode: false
+  replicas: 2
+  capacity: 1
+  claimTtlMs: 30000
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { cpu: "2", memory: 2Gi }
+  authExistingSecret: muniu-worker-auth
+  authTokenKey: token
+
+corsAllowlist: []
+enterpriseProjectRoots: ["/workspaces"]
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: muniu.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+autoscaling:
+  api:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+  worker:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 20
+    targetCPUUtilizationPercentage: 70
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+networkPolicy:
+  enabled: true
+  ingressNamespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: ingress-nginx
+  dnsNamespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: kube-system
+  # Standard NetworkPolicy egress rules for PostgreSQL, S3, OIDC/JWKS and
+  # OTLP destinations. Keep this explicit because policies cannot allow DNS
+  # names portably. Production values must narrow these selectors/CIDRs.
+  apiEgress: []
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile: { type: RuntimeDefault }
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities: { drop: ["ALL"] }
+
+postgres:
+  existingSecret: muniu-postgres
+  urlKey: url
+
+s3:
+  endpointUrl: ""
+  bucket: ""
+  region: us-east-1
+  prefix: muniu
+  existingSecret: muniu-s3
+  accessKeyIdKey: access-key-id
+  secretAccessKeyKey: secret-access-key
+  sessionTokenKey: session-token
+  kmsKeyId: ""
+
+oidc:
+  issuer: ""
+  audience: muniu
+  jwksUrl: ""
+
+otlp:
+  endpoint: ""
+  serviceName: mn-api
+
+standardPackTrust:
+  existingSecret: muniu-standard-pack-trust
+  key: trust.json
+
+sandbox:
+  image: ghcr.io/muniu-ai/muniu-sandbox:0.1.0
+  imageDigest: ""
+  attestationExistingSecret: muniu-sandbox-attestation
+  attestationKey: key
+  serviceAccountName: ""
+  automountServiceAccountToken: false
+  networkPolicy: default-deny
+  hostPathAllowed: false
+
+vault:
+  address: ""
+  role: ""
+  annotations: {}
+
+extraEnv: []
+nodeSelector: {}
+tolerations: []
+affinity: {}

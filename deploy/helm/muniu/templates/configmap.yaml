@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "muniu.fullname" . }}
+  labels: {{- include "muniu.labels" . | nindent 4 }}
+data:
+  MN_RUNTIME_PROFILE: enterprise
+  MN_API_HOST: {{ .Values.api.host | quote }}
+  MN_API_PORT: {{ .Values.api.port | quote }}
+  MN_CORS_ALLOWLIST: {{ required "corsAllowlist is required" (join "," .Values.corsAllowlist) | quote }}
+  MN_ENTERPRISE_PROJECT_ROOTS: {{ join "," .Values.enterpriseProjectRoots | quote }}
+  MN_OIDC_ISSUER: {{ required "oidc.issuer is required" .Values.oidc.issuer | quote }}
+  MN_OIDC_AUDIENCE: {{ required "oidc.audience is required" .Values.oidc.audience | quote }}
+  MN_OIDC_JWKS_URL: {{ required "oidc.jwksUrl is required" .Values.oidc.jwksUrl | quote }}
+  MN_OTEL_EXPORTER_OTLP_ENDPOINT: {{ required "otlp.endpoint is required" .Values.otlp.endpoint | quote }}
+  MN_OTEL_SERVICE_NAME: {{ .Values.otlp.serviceName | quote }}
+  MN_ARTIFACT_REMOTE_STORE_TYPE: s3
+  MN_ARTIFACT_REMOTE_STORE_ENDPOINT_URL: {{ required "s3.endpointUrl is required" .Values.s3.endpointUrl | quote }}
+  MN_ARTIFACT_REMOTE_STORE_BUCKET: {{ required "s3.bucket is required" .Values.s3.bucket | quote }}
+  MN_ARTIFACT_OBJECT_STORE_LOCAL_BACKEND_PATH: /tmp/muniu-artifact-mirror
+  MN_ARTIFACT_S3_REGION: {{ .Values.s3.region | quote }}
+  MN_ARTIFACT_REMOTE_STORE_PREFIX: {{ .Values.s3.prefix | quote }}
+  MN_AGENT_SESSION_KMS_KEY_ID: {{ .Values.s3.kmsKeyId | quote }}
+  MN_STANDARD_PACK_TRUST_FILE: /etc/muniu/trust/trust.json
+  MN_ENTERPRISE_SANDBOX_IMAGE: {{ .Values.sandbox.image | quote }}
+  MN_ENTERPRISE_SANDBOX_IMAGE_DIGEST: {{ required "sandbox.imageDigest is required" .Values.sandbox.imageDigest | quote }}

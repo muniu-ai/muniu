@@ -1,0 +1,1000 @@
+openapi: 3.1.0
+info:
+  title: Muniu API
+  version: 0.1.0
+servers:
+  - url: http://127.0.0.1:7318
+paths:
+  /healthz:
+    get:
+      operationId: get__healthz
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/agent-sessions:
+    get:
+      operationId: get__v1_agent_sessions
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/agentSessionRoutes.ts
+    post:
+      operationId: post__v1_agent_sessions
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/agentSessionRoutes.ts
+  /v1/agent-sessions/{id}:
+    get:
+      operationId: get__v1_agent_sessions_id_
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/agentSessionRoutes.ts
+  /v1/agent-sessions/{id}/approvals/{approvalId}:
+    post:
+      operationId: post__v1_agent_sessions_id_approvals_approvalId_
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/agentSessionRoutes.ts
+  /v1/agent-sessions/{id}/cancel:
+    post:
+      operationId: post__v1_agent_sessions_id_cancel
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/agentSessionRoutes.ts
+  /v1/agent-sessions/{id}/close:
+    post:
+      operationId: post__v1_agent_sessions_id_close
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/agentSessionRoutes.ts
+  /v1/agent-sessions/{id}/events:
+    get:
+      operationId: get__v1_agent_sessions_id_events
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/agentSessionRoutes.ts
+  /v1/agent-sessions/{id}/messages:
+    post:
+      operationId: post__v1_agent_sessions_id_messages
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/agentSessionRoutes.ts
+  /v1/apps:
+    get:
+      operationId: get__v1_apps
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/artifacts/store:
+    get:
+      operationId: get__v1_artifacts_store
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/artifacts/store/cleanup:
+    post:
+      operationId: post__v1_artifacts_store_cleanup
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/audit-events:
+    get:
+      operationId: get__v1_audit_events
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/capabilities:
+    get:
+      operationId: get__v1_capabilities
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/deep-links/import:
+    post:
+      operationId: post__v1_deep_links_import
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/deep-links/preview:
+    post:
+      operationId: post__v1_deep_links_preview
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/eval-assets:
+    get:
+      operationId: get__v1_eval_assets
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/evidenceRoutes.ts
+    post:
+      operationId: post__v1_eval_assets
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/evidenceRoutes.ts
+  /v1/eval-assets/{id}:
+    get:
+      operationId: get__v1_eval_assets_id_
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/evidenceRoutes.ts
+  /v1/harness-profiles:
+    get:
+      operationId: get__v1_harness_profiles
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/learning-proposals:
+    get:
+      operationId: get__v1_learning_proposals
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/evidenceRoutes.ts
+    post:
+      operationId: post__v1_learning_proposals
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/evidenceRoutes.ts
+  /v1/learning-proposals/{id}:
+    get:
+      operationId: get__v1_learning_proposals_id_
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/evidenceRoutes.ts
+  /v1/learning-proposals/{id}/canary:
+    post:
+      operationId: post__v1_learning_proposals_id_canary
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/evidenceRoutes.ts
+  /v1/learning-proposals/{id}/promote:
+    post:
+      operationId: post__v1_learning_proposals_id_promote
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/evidenceRoutes.ts
+  /v1/learning-proposals/{id}/review:
+    post:
+      operationId: post__v1_learning_proposals_id_review
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/evidenceRoutes.ts
+  /v1/learning-proposals/{id}/rollback:
+    post:
+      operationId: post__v1_learning_proposals_id_rollback
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/evidenceRoutes.ts
+  /v1/learning-proposals/{id}/submit:
+    post:
+      operationId: post__v1_learning_proposals_id_submit
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/evidenceRoutes.ts
+  /v1/maturity-report:
+    get:
+      operationId: get__v1_maturity_report
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/evidenceRoutes.ts
+    post:
+      operationId: post__v1_maturity_report
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/evidenceRoutes.ts
+  /v1/mcp/servers:
+    get:
+      operationId: get__v1_mcp_servers
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+    post:
+      operationId: post__v1_mcp_servers
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/mcp/servers/{id}:
+    delete:
+      operationId: delete__v1_mcp_servers_id_
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+    get:
+      operationId: get__v1_mcp_servers_id_
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+    patch:
+      operationId: patch__v1_mcp_servers_id_
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/mcp/servers/{id}/project:
+    post:
+      operationId: post__v1_mcp_servers_id_project
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/projects:
+    post:
+      operationId: post__v1_projects
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/projects/{id}:
+    get:
+      operationId: get__v1_projects_id_
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/projects/{id}/effective-governance:
+    get:
+      operationId: get__v1_projects_id_effective_governance
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/controlPlane.ts
+  /v1/projects/{id}/index:
+    post:
+      operationId: post__v1_projects_id_index
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/projects/{id}/policy/explain:
+    get:
+      operationId: get__v1_projects_id_policy_explain
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/controlPlane.ts
+  /v1/projects/{id}/standards-lock:
+    get:
+      operationId: get__v1_projects_id_standards_lock
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/controlPlane.ts
+  /v1/prompts/presets:
+    get:
+      operationId: get__v1_prompts_presets
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+    post:
+      operationId: post__v1_prompts_presets
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/prompts/presets/{id}:
+    delete:
+      operationId: delete__v1_prompts_presets_id_
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+    get:
+      operationId: get__v1_prompts_presets_id_
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+    patch:
+      operationId: patch__v1_prompts_presets_id_
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/prompts/presets/{id}/activate:
+    post:
+      operationId: post__v1_prompts_presets_id_activate
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/provider-usage/requests/{id}:
+    get:
+      operationId: get__v1_provider_usage_requests_id_
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/provider-usage/requests/{id}/reconcile:
+    post:
+      operationId: post__v1_provider_usage_requests_id_reconcile
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/providers:
+    get:
+      operationId: get__v1_providers
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+    post:
+      operationId: post__v1_providers
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/providers/{id}:
+    delete:
+      operationId: delete__v1_providers_id_
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+    get:
+      operationId: get__v1_providers_id_
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+    patch:
+      operationId: patch__v1_providers_id_
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/providers/{id}/duplicate:
+    post:
+      operationId: post__v1_providers_id_duplicate
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/providers/{id}/enable:
+    post:
+      operationId: post__v1_providers_id_enable
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/providers/{id}/model-catalog/audit:
+    get:
+      operationId: get__v1_providers_id_model_catalog_audit
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/providers/{id}/model-catalog/sync:
+    post:
+      operationId: post__v1_providers_id_model_catalog_sync
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/providers/{id}/restore:
+    post:
+      operationId: post__v1_providers_id_restore
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/providers/{id}/test-endpoint:
+    post:
+      operationId: post__v1_providers_id_test_endpoint
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/providers/export:
+    get:
+      operationId: get__v1_providers_export
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/providers/import:
+    post:
+      operationId: post__v1_providers_import
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/providers/model-catalog/sync-due:
+    post:
+      operationId: post__v1_providers_model_catalog_sync_due
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/proxy/apps/{app}/restore:
+    post:
+      operationId: post__v1_proxy_apps_app_restore
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/proxy/apps/{app}/takeover:
+    post:
+      operationId: post__v1_proxy_apps_app_takeover
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/proxy/health:
+    get:
+      operationId: get__v1_proxy_health
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/proxy/health/reset:
+    post:
+      operationId: post__v1_proxy_health_reset
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/proxy/logs:
+    get:
+      operationId: get__v1_proxy_logs
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/proxy/start:
+    post:
+      operationId: post__v1_proxy_start
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/proxy/status:
+    get:
+      operationId: get__v1_proxy_status
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/proxy/stop:
+    post:
+      operationId: post__v1_proxy_stop
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/run-jobs/queue:
+    get:
+      operationId: get__v1_run_jobs_queue
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/run-jobs/queue/{id}:
+    get:
+      operationId: get__v1_run_jobs_queue_id_
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/run-jobs/queue/{id}/artifacts:
+    post:
+      operationId: post__v1_run_jobs_queue_id_artifacts
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/run-jobs/queue/{id}/events:
+    post:
+      operationId: post__v1_run_jobs_queue_id_events
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/run-jobs/queue/{id}/finish:
+    post:
+      operationId: post__v1_run_jobs_queue_id_finish
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/run-jobs/queue/{id}/heartbeat:
+    post:
+      operationId: post__v1_run_jobs_queue_id_heartbeat
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/run-jobs/queue/{id}/measurements:
+    post:
+      operationId: post__v1_run_jobs_queue_id_measurements
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/run-jobs/queue/{id}/release:
+    post:
+      operationId: post__v1_run_jobs_queue_id_release
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/run-jobs/queue/{id}/sandbox-runtime-proof:
+    post:
+      operationId: post__v1_run_jobs_queue_id_sandbox_runtime_proof
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/run-jobs/queue/{id}/update:
+    post:
+      operationId: post__v1_run_jobs_queue_id_update
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/run-jobs/queue/{id}/usage-receipts:
+    post:
+      operationId: post__v1_run_jobs_queue_id_usage_receipts
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/run-jobs/queue/claim:
+    post:
+      operationId: post__v1_run_jobs_queue_claim
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/run-jobs/workers:
+    get:
+      operationId: get__v1_run_jobs_workers
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/run-jobs/workers/heartbeat:
+    post:
+      operationId: post__v1_run_jobs_workers_heartbeat
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/runs/{id}:
+    get:
+      operationId: get__v1_runs_id_
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/runs/{id}/approve:
+    post:
+      operationId: post__v1_runs_id_approve
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/runs/{id}/artifacts:
+    get:
+      operationId: get__v1_runs_id_artifacts
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/runs/{id}/artifacts/{artifactId}:
+    get:
+      operationId: get__v1_runs_id_artifacts_artifactId_
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/runs/{id}/artifacts/archive:
+    get:
+      operationId: get__v1_runs_id_artifacts_archive
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/runs/{id}/cancel:
+    post:
+      operationId: post__v1_runs_id_cancel
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/runs/{id}/events:
+    get:
+      operationId: get__v1_runs_id_events
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/runs/{id}/events/stream:
+    get:
+      operationId: get__v1_runs_id_events_stream
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/runs/{id}/resume:
+    post:
+      operationId: post__v1_runs_id_resume
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/runs/{id}/workspaces/cleanup:
+    post:
+      operationId: post__v1_runs_id_workspaces_cleanup
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/runtime:
+    get:
+      operationId: get__v1_runtime
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/runtime/plugins:
+    get:
+      operationId: get__v1_runtime_plugins
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/runtime/plugins/reload:
+    post:
+      operationId: post__v1_runtime_plugins_reload
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/runtime/profiles:
+    get:
+      operationId: get__v1_runtime_profiles
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/sessions:
+    get:
+      operationId: get__v1_sessions
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/sessions/{id}:
+    get:
+      operationId: get__v1_sessions_id_
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/sessions/{id}/export:
+    get:
+      operationId: get__v1_sessions_id_export
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/skills:
+    get:
+      operationId: get__v1_skills
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+    post:
+      operationId: post__v1_skills
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/skills/{id}:
+    delete:
+      operationId: delete__v1_skills_id_
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+    get:
+      operationId: get__v1_skills_id_
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+    patch:
+      operationId: patch__v1_skills_id_
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/skills/{id}/install:
+    post:
+      operationId: post__v1_skills_id_install
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/skills/{id}/uninstall:
+    post:
+      operationId: post__v1_skills_id_uninstall
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/skills/discover:
+    get:
+      operationId: get__v1_skills_discover
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/skills/registry/profiles:
+    get:
+      operationId: get__v1_skills_registry_profiles
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+    post:
+      operationId: post__v1_skills_registry_profiles
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/skills/registry/profiles/{id}:
+    delete:
+      operationId: delete__v1_skills_registry_profiles_id_
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+    get:
+      operationId: get__v1_skills_registry_profiles_id_
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+    patch:
+      operationId: patch__v1_skills_registry_profiles_id_
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/skills/registry/profiles/{id}/sync:
+    post:
+      operationId: post__v1_skills_registry_profiles_id_sync
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/skills/registry/sync:
+    post:
+      operationId: post__v1_skills_registry_sync
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/spec-sets:
+    get:
+      operationId: get__v1_spec_sets
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/controlPlane.ts
+    post:
+      operationId: post__v1_spec_sets
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/controlPlane.ts
+  /v1/spec-sets/{id}:
+    get:
+      operationId: get__v1_spec_sets_id_
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/controlPlane.ts
+  /v1/spec-sets/{id}/revisions:
+    post:
+      operationId: post__v1_spec_sets_id_revisions
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/controlPlane.ts
+  /v1/spec-sets/{id}/revisions/{revision}:
+    get:
+      operationId: get__v1_spec_sets_id_revisions_revision_
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/controlPlane.ts
+  /v1/spec-sets/{id}/revisions/{revision}/approve:
+    post:
+      operationId: post__v1_spec_sets_id_revisions_revision_approve
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/controlPlane.ts
+  /v1/standard-packs:
+    get:
+      operationId: get__v1_standard_packs
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/controlPlane.ts
+  /v1/standard-packs/activate:
+    post:
+      operationId: post__v1_standard_packs_activate
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/controlPlane.ts
+  /v1/standard-packs/diff:
+    post:
+      operationId: post__v1_standard_packs_diff
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/controlPlane.ts
+  /v1/standard-packs/import:
+    post:
+      operationId: post__v1_standard_packs_import
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/controlPlane.ts
+  /v1/standard-packs/validate:
+    post:
+      operationId: post__v1_standard_packs_validate
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/controlPlane.ts
+  /v1/system/desktop:
+    get:
+      operationId: get__v1_system_desktop
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/system/diagnostics:
+    get:
+      operationId: get__v1_system_diagnostics
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/system/doctor:
+    get:
+      operationId: get__v1_system_doctor
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/system/env-cleanup:
+    post:
+      operationId: post__v1_system_env_cleanup
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/tasks:
+    post:
+      operationId: post__v1_tasks
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/tasks/{id}:
+    get:
+      operationId: get__v1_tasks_id_
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/tasks/{id}/runs:
+    post:
+      operationId: post__v1_tasks_id_runs
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/trace-graphs:
+    get:
+      operationId: get__v1_trace_graphs
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/evidenceRoutes.ts
+    post:
+      operationId: post__v1_trace_graphs
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/evidenceRoutes.ts
+  /v1/trace-graphs/{id}:
+    get:
+      operationId: get__v1_trace_graphs_id_
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/evidenceRoutes.ts
+  /v1/usage/models:
+    get:
+      operationId: get__v1_usage_models
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/usage/requests:
+    get:
+      operationId: get__v1_usage_requests
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/usage/summary:
+    get:
+      operationId: get__v1_usage_summary
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
+  /v1/waivers:
+    get:
+      operationId: get__v1_waivers
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/controlPlane.ts
+    post:
+      operationId: post__v1_waivers
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/controlPlane.ts
+  /v1/workflows:
+    get:
+      operationId: get__v1_workflows
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts

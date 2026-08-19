@@ -58,7 +58,7 @@ try {
   if (health.service !== "mn-api" || health.secretVaultBackend !== "keychain") {
     throw new Error(`unexpected packaged daemon health: ${JSON.stringify(health)}`);
   }
-  if (health.mniuRoot !== path.join(home, ".mniu")) {
+  if (health.mniuRoot !== path.join(home, ".muniu")) {
     throw new Error(`packaged daemon escaped isolated HOME: ${health.mniuRoot}`);
   }
 
@@ -107,9 +107,9 @@ try {
     }),
     "utf8"
   ).toString("base64url");
-  execFileSync("open", ["-a", appPath, `mniu://import/provider?payload=${deepLinkPayload}`]);
+  execFileSync("open", ["-a", appPath, `muniu://import/provider?payload=${deepLinkPayload}`]);
   const deepLinkAudit = await waitForDeepLinkPreview(
-    path.join(home, ".mniu", "deeplink-imports", "last-preview.json")
+    path.join(home, ".muniu", "deeplink-imports", "last-preview.json")
   );
   if (deepLinkAudit.kind !== "providers" || deepLinkAudit.wouldImportCount !== 1) {
     throw new Error(
@@ -117,7 +117,7 @@ try {
     );
   }
   if (app.exitCode !== null || app.signalCode !== null) {
-    throw new Error("packaged desktop exited while handling mniu:// deep link");
+    throw new Error("packaged desktop exited while handling muniu:// deep link");
   }
 
   const deleteResponse = await fetch(`http://127.0.0.1:7318/v1/providers/${provider.id}`, {

@@ -1021,7 +1021,7 @@ function validateGovernanceSemantics(
       policy.allowedProviders,
       "governance.policy.allowedProviders",
       issues,
-      { nonEmpty: true, allowed: new Set(["claude", "codex"]) }
+      { nonEmpty: true, allowed: new Set(["builtin", "claude", "codex"]) }
     );
   }
   if (policy.commandAllowlist !== undefined) {

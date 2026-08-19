@@ -1,0 +1,7 @@
+- id: muniu-core
+  name: cordis:muniu-core
+  config:
+    scope: api
+    profileId: local
+    serviceName: muniuRuntimeProfile
+    components: [api, agent-host, tools, gates, evidence]

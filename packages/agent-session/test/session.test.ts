@@ -55,7 +55,11 @@ import {
 } from "../src/index.js";
 import type { AgentSessionExclusiveView, AgentSessionHeaderV1 } from "../src/index.js";
 import { settleDescriptorLockCommand } from "../src/descriptor-lock.js";
-import { acquireOsWriterLock, resolveWriterLockHelper } from "../src/writer-lock.js";
+import {
+  acquireOsWriterLock,
+  resolveEventWriterHelperCommand,
+  resolveWriterLockHelper
+} from "../src/writer-lock.js";
 
 const CHILD_PROCESS_ENV = { ...process.env };
 delete CHILD_PROCESS_ENV.NODE_V8_COVERAGE;
@@ -391,7 +395,7 @@ async function waitForChildDecision(
       stderr += chunk.toString("utf8");
       if (/BLOCKED/u.test(stderr)) finish(() => resolve("blocked"));
     };
-    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+    const onClose = (code: number | null, signal: NodeJS.Signals | null) => {
       finish(() => reject(new Error(
         `child exited without a lock decision (code=${String(code)}, signal=${String(signal)}, stdout=${stdout}, stderr=${stderr})`
       )));
@@ -404,12 +408,12 @@ async function waitForChildDecision(
       clearTimeout(timer);
       child.stdout.off("data", onStdout);
       child.stderr.off("data", onStderr);
-      child.off("exit", onExit);
+      child.off("close", onClose);
       complete();
     };
     child.stdout.on("data", onStdout);
     child.stderr.on("data", onStderr);
-    child.on("exit", onExit);
+    child.on("close", onClose);
   });
 }
 
@@ -1101,11 +1105,41 @@ test("descriptor lock commands are fixed, fail closed when missing, and release 
     }),
     /helper.*unavailable/i
   );
-  assert.deepEqual(checked, ["/usr/bin/lockf"]);
+  assert.equal(checked.length, 2);
+  for (const candidate of checked) {
+    assert.match(candidate, /native\/\.build\/mn-descriptor-lock$/u);
+  }
 
-  const darwin = await resolveWriterLockHelper("darwin", async () => true);
-  assert.equal(darwin.executable, "/usr/bin/lockf");
-  assert.deepEqual(darwin.argumentsFor(4), ["-s", "-t", "0", "4"]);
+  const darwinChecked: string[] = [];
+  const darwin = await resolveWriterLockHelper("darwin", async (filePath) => {
+    darwinChecked.push(filePath);
+    return true;
+  });
+  assert.deepEqual(darwinChecked, [darwin.executable]);
+  assert.match(darwin.executable, /native\/\.build\/mn-descriptor-lock$/u);
+  assert.deepEqual(darwin.argumentsFor(4), ["4"]);
+  const packagedDarwinChecks: string[] = [];
+  const packagedDarwin = await resolveWriterLockHelper(
+    "darwin",
+    async (filePath) => {
+      packagedDarwinChecks.push(filePath);
+      return filePath.includes("/Resources/");
+    },
+    {
+      packaged: true,
+      processExecutable: "/Applications/Muniu.app/Contents/MacOS/mn-api-aarch64-apple-darwin",
+      architecture: "arm64"
+    }
+  );
+  assert.deepEqual(packagedDarwinChecks, [
+    "/Applications/Muniu.app/Contents/MacOS/mn-descriptor-lock-aarch64-apple-darwin",
+    "/Applications/Muniu.app/Contents/Resources/mn-descriptor-lock-aarch64-apple-darwin"
+  ]);
+  assert.equal(
+    packagedDarwin.executable,
+    "/Applications/Muniu.app/Contents/Resources/mn-descriptor-lock-aarch64-apple-darwin"
+  );
+  assert.deepEqual(packagedDarwin.argumentsFor(4), ["4"]);
   const linux = await resolveWriterLockHelper("linux", async (filePath) => {
     return filePath === "/usr/bin/flock";
   });
@@ -1113,7 +1147,10 @@ test("descriptor lock commands are fixed, fail closed when missing, and release 
   assert.deepEqual(linux.argumentsFor(4), ["-n", "4"]);
 
   const helper = await resolveWriterLockHelper(process.platform);
-  assert.ok(["/usr/bin/lockf", "/usr/bin/flock", "/bin/flock"].includes(helper.executable));
+  assert.ok(
+    helper.executable.endsWith("mn-descriptor-lock")
+      || ["/usr/bin/flock", "/bin/flock"].includes(helper.executable)
+  );
   assert.equal(helper.argumentsFor(3).at(-1), "3");
 
   const identity = `descriptor-release:${await mkdtemp(path.join(os.tmpdir(), "muniu-lock-release-"))}`;
@@ -1145,6 +1182,38 @@ test("descriptor lock commands are fixed, fail closed when missing, and release 
   } finally {
     await unlink(unsafePath);
   }
+});
+
+test("packaged event writers re-enter the sidecar while source runs use the compiled helper", () => {
+  const packaged = resolveEventWriterHelperCommand(
+    true,
+    "/Applications/Muniu.app/Contents/MacOS/mn-api"
+  );
+  assert.equal(packaged.executable, "/Applications/Muniu.app/Contents/MacOS/mn-api");
+  assert.equal(packaged.staticHelperPath, undefined);
+  assert.deepEqual(packaged.argumentsFor("nonce"), [
+    "--mn-agent-session-event-writer",
+    "3",
+    "4",
+    "nonce"
+  ]);
+
+  const source = resolveEventWriterHelperCommand(
+    false,
+    "/usr/local/bin/node",
+    "file:///workspace/packages/agent-session/dist/writer-lock.js"
+  );
+  assert.equal(source.executable, "/usr/local/bin/node");
+  assert.equal(
+    source.staticHelperPath,
+    "/workspace/packages/agent-session/dist/event-writer-helper.js"
+  );
+  assert.deepEqual(source.argumentsFor("nonce"), [
+    "/workspace/packages/agent-session/dist/event-writer-helper.js",
+    "3",
+    "4",
+    "nonce"
+  ]);
 });
 
 test("JSONL fails closed when the compiled event writer helper is missing and recovers after restore", async () => {

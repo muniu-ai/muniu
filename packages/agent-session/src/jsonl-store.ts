@@ -676,7 +676,12 @@ export class JsonlAgentSessionStore {
       }
     }
     this.assertLease(lease);
-    const session = new DurableAgentSession(header, loadedEvents, this.persistence(lease));
+    const session = new DurableAgentSession(
+      header,
+      loadedEvents,
+      this.persistence(lease),
+      expectedCreation?.cwd
+    );
     this.sessions.set(sessionId, session);
     return session;
   }

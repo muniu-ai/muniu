@@ -22,7 +22,8 @@
 npm run build:desktop
 ```
 
-原生发布构建需要 Rust/Cargo 和 Apple 构建工具链：
+原生发布构建需要 Rust 1.88.0/Cargo 和 Apple 构建工具链；仓库根目录的
+`rust-toolchain.toml` 会由 rustup 自动选择固定版本：
 
 ```bash
 npm run release:mac
@@ -117,10 +118,10 @@ brew install --cask mniu
 安装后验证深链接：
 
 ```bash
-open "mniu://import/provider?payload=eyJwcm92aWRlcnMiOltdfQ"
+open "muniu://import/provider?payload=eyJwcm92aWRlcnMiOltdfQ"
 ```
 
-只有 macOS 确实唤起已安装应用并展示导入确认流，`mniu://` 验收才算通过。
+只有 macOS 确实唤起已安装应用并展示导入确认流，`muniu://` 验收才算通过。旧 `mniu://` 仅作为一个版本的兼容别名。
 
 ## 卸载
 
@@ -141,7 +142,8 @@ brew uninstall --cask --zap mniu
 ```bash
 rm -rf "$HOME/Library/Application Support/dev.muniu.desktop"
 rm -f "$HOME/Library/Preferences/dev.muniu.desktop.plist"
-rm -rf "$HOME/.mniu"
+rm -rf "$HOME/.muniu"
+rm -rf "$HOME/.mniu" # 清理一个版本内保留的旧目录
 ```
 
 ## 安全要求
@@ -149,7 +151,7 @@ rm -rf "$HOME/.mniu"
 - API key 与 MCP env secret 只能进入环境变量、本地加密 secret vault 或 macOS Keychain，发布产物不得包含真实 secret。
 - Provider、MCP、Prompt 深链接写配置前必须先预览并确认。
 - 配置写入必须保留 dry-run、diff 与 backup。
-- `mniu://` 不得自动导入未受信任 payload。
+- `muniu://`（以及兼容别名 `mniu://`）不得自动导入未受信任 payload。
 - `mniu.diagnostics` 可以包含受限的本地日志、专属 app 日志、Tauri panic 日志和木牛相关 DiagnosticReports 尾部样本；采集器必须限制文件数和字节数、排除其他应用，并在导出前脱敏 Bearer/API key/token/secret/password。
 - Gatekeeper 通过必须有 Developer ID 签名与 Apple 公证证据。
 - 已发布 cask 必须固定真实 SHA-256。
@@ -170,4 +172,4 @@ npm run verify:mac-release
 - `xcrun stapler staple` 与 `xcrun stapler validate`
 - `spctl --assess`
 - `brew install --cask --dry-run`
-- 已安装应用的 `mniu://` 唤起验证
+- 已安装应用的 `muniu://` 唤起验证，以及 `mniu://` 兼容注册检查

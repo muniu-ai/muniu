@@ -5,6 +5,9 @@ node_modules/
 # Build and test outputs
 dist/
 dist-test/
+lib/
+!scripts/lib/
+!scripts/lib/cargo-lock-license.mjs
 target/
 coverage/
 .turbo/
@@ -36,6 +39,9 @@ secrets/
 # Generated desktop sidecars (keep the dispatcher script)
 apps/desktop-mac/src-tauri/binaries/mn-api-aarch64-apple-darwin
 apps/desktop-mac/src-tauri/binaries/mn-api-x86_64-apple-darwin
+apps/desktop-mac/src-tauri/binaries/mn-descriptor-lock-aarch64-apple-darwin
+apps/desktop-mac/src-tauri/binaries/mn-descriptor-lock-x86_64-apple-darwin
+packages/agent-session/native/.build/
 
 # Developer-local state
 .DS_Store

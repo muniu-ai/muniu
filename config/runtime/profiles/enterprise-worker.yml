@@ -1,0 +1,7 @@
+- id: muniu-core
+  name: cordis:muniu-core
+  config:
+    scope: worker
+    profileId: enterprise-worker
+    serviceName: muniuRuntimeProfile
+    components: [worker, agent-host, sandbox-pod, gates, evidence]

@@ -49,17 +49,22 @@ export interface AgentSessionExclusiveView {
 
 export interface AgentSessionLike extends AgentSessionExclusiveView {
   runtimeMessages(): readonly Message[];
+  runtimeCwd?(): string | undefined;
   withExclusive<T>(operation: (session: AgentSessionExclusiveView) => Promise<T>): Promise<T>;
 }
 
 export interface AgentSessionStore {
   create(options?: CreateAgentSessionOptions): Promise<AgentSession>;
   open(sessionId: SessionId): Promise<AgentSession>;
+  listSessionIds?(): Promise<readonly SessionId[]>;
   dispose?(): void | Promise<void>;
 }
 
 export interface EventPersistence {
-  commitDurable(event: AgentSessionEventV1): Promise<void>;
+  commitDurable(
+    event: AgentSessionEventV1,
+    runtimePayload?: AgentSessionEventPayloadMapV1[AgentSessionEventTypeV1]
+  ): Promise<void>;
   flush(): Promise<void>;
 }
 

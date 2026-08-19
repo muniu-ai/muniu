@@ -1,0 +1,7 @@
+- id: muniu-core
+  name: cordis:muniu-core
+  config:
+    scope: desktop
+    profileId: desktop
+    serviceName: muniuRuntimeProfile
+    components: [desktop, sessions, runs, gates, evidence, plugins, settings]

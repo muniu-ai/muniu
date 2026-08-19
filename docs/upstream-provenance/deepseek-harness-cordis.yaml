@@ -1,0 +1,29 @@
+schemaVersion: 1
+upstream:
+  name: DeepSeek Harness
+  repository: https://github.com/deepseek-ai/deepseek-harness
+  commit: 99f6f02fecdb7dff40c3fbc9470f5907c29f74ca
+  license: MIT
+  copyright: Copyright (c) 2026 DeepSeek
+
+scope:
+  mode: copied-with-build-metadata-adaptations
+  packages:
+    - cordis
+    - cosmokit
+    - schemastery
+    - loader
+    - include
+    - group
+    - hmr
+    - timer
+    - logger-console
+  sourceManifest: vendor/SOURCE_MANIFEST.sha256
+  modificationLog: vendor/README.md
+  publication: private-workspaces-only
+
+assurances:
+  preservePackageNames: true
+  preserveMitLicenses: true
+  verifyEverySourceFileBySha256: true
+  trustedExecutablePlugins: true

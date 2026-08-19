@@ -1,0 +1,15 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+{{- range $component := list "api" "worker" }}
+{{- if or (ne $component "worker") $.Values.worker.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "muniu.fullname" $ }}-{{ $component }}
+spec:
+  minAvailable: {{ $.Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels: { app.kubernetes.io/instance: {{ $.Release.Name }}, app.kubernetes.io/component: {{ $component }} }
+{{- end }}
+{{- end }}
+{{- end }}

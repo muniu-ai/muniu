@@ -17,6 +17,7 @@ import type { GovernanceSnapshot } from "@mn/governance";
 import type { HarnessManifest } from "@mn/harness";
 import { sha256Canonical } from "@mn/loop";
 import { digestSpecRevision, type SpecRevision } from "@mn/specs";
+import { BuiltinAgentExecutor, type BuiltinAgentExecutionInput } from "@mn/executors";
 import {
   GateRegistryV2,
   GovernedRunOrchestrator,
@@ -246,11 +247,17 @@ function baseRun(
 class RepairingExecutor {
   readonly provider = "codex" as const;
   calls = 0;
+  readonly sessionIds: Array<string | undefined> = [];
+  readonly workspaces: string[] = [];
+  readonly prompts: string[] = [];
 
   constructor(private readonly repair = true) {}
 
   async run(input: AgentRunInput): Promise<AgentRunResult> {
     this.calls += 1;
+    this.sessionIds.push(input.sessionId);
+    this.workspaces.push(input.cwd);
+    this.prompts.push(input.prompt);
     if (this.repair && this.calls > 1) {
       await writeFile(
         join(input.cwd, "package.json"),
@@ -296,6 +303,10 @@ test("governed verification runs real Gate V2 evidence and repairs until it pass
   assert.equal(result.state.status, "waiting_approval");
   assert.equal(result.state.budgetUsage.repairAttempts, 1);
   assert.equal(executor.calls, 2);
+  assert.equal(executor.sessionIds[0], executor.sessionIds[1]);
+  assert.equal(executor.workspaces[0], executor.workspaces[1]);
+  assert.match(executor.prompts[1] ?? "", /gate-repair-feedback/u);
+  assert.match(executor.prompts[1] ?? "", /unit_test/u);
   assert.deepEqual(
     result.run.gateResultsV2?.map((gate) => gate.status),
     ["fail", "pass"]
@@ -324,6 +335,73 @@ test("governed verification runs real Gate V2 evidence and repairs until it pass
       .map((attempt) => attempt.status),
     ["failed", "completed"]
   );
+});
+
+test("builtin governed execution repairs in one durable embedded session without external CLIs", async (t) => {
+  const { root, workspaces } = await fixture(t);
+  const spec = approvedSpec();
+  const { governance, harness } = bindings(spec, ["unit_test"]);
+  const calls: BuiltinAgentExecutionInput[] = [];
+  const executor = new BuiltinAgentExecutor({
+    async run(input) {
+      calls.push(input);
+      if (calls.length > 1) {
+        await writeFile(
+          join(input.cwd, "package.json"),
+          JSON.stringify({
+            name: "governed-fixture",
+            scripts: { test: "node -e \"console.log('builtin-repaired')\"" }
+          }),
+          "utf8"
+        );
+      }
+      return {
+        reason: "completed",
+        summary: calls.length > 1 ? "builtin repair complete" : "builtin implementation complete",
+        steps: 1,
+        toolCalls: calls.length > 1 ? 1 : 0
+      };
+    }
+  });
+  const builtinTask: AgentTask = {
+    ...task(spec),
+    strategy: normalizeStrategy({
+      schemaVersion: 2,
+      targets: [{
+        runtimeId: "builtin",
+        providerId: "default",
+        modelId: "default",
+        candidates: 1
+      }],
+      sandbox: "isolated-worktree",
+      requiredGates: ["unit_test"],
+      humanApproval: "before-merge",
+      timeoutSeconds: 60
+    })
+  };
+  const orchestrator = new GovernedRunOrchestrator({
+    workspaceRoot: workspaces,
+    executors: { builtin: executor },
+    resolveSpecRevision: () => spec
+  });
+
+  const result = await orchestrator.run(
+    project(root),
+    builtinTask,
+    baseRun(spec, governance, harness)
+  );
+
+  assert.equal(result.state.status, "waiting_approval");
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0]?.sessionId, calls[1]?.sessionId);
+  assert.equal(calls[0]?.cwd, calls[1]?.cwd);
+  assert.match(calls[1]?.prompt ?? "", /gate-repair-feedback/u);
+  assert.deepEqual(
+    result.run.gateResultsV2?.map((gate) => gate.status),
+    ["fail", "pass"]
+  );
+  assert.equal(result.run.candidates.at(-1)?.runtimeId, "builtin");
+  assert.equal(result.run.candidates.at(-1)?.executionBinding?.runtimeId, "builtin");
 });
 
 test("governed materialization preserves an API-issued Run clock floor", async (t) => {

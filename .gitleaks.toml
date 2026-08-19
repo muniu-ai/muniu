@@ -34,10 +34,18 @@ regexes = ['''^sk-test-not-a-real-secret$''']
 # docs/security/secret-scanning.md for the review record.
 
 [[allowlists]]
+description = "Synthetic keychain references used by data-policy preservation tests"
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["cc24a870c529a6c9d2ce3d77ba5246f241a5186d"]
+paths = ['''^packages/data-policy/test/data-policy\.test\.ts$''']
+regexes = ['''^bW5pdS1zeW50aGV0aWM$''']
+
+[[allowlists]]
 description = "Deterministic loop-budget HMAC test key"
 targetRules = ["generic-api-key"]
 condition = "AND"
-commits = ["4f00f46e3d80ca3e4af51e0ede467b97827e9822"]
+commits = ["5f97c6e0816b373494668d78018b50d85c155ff7"]
 paths = ['''^apps/api/test/loopBudgetMeasurement\.test\.ts$''']
 regexes = ['''^loop-measurement-key-0123456789abcdef0123456789abcdef$''']
 
@@ -45,7 +53,7 @@ regexes = ['''^loop-measurement-key-0123456789abcdef0123456789abcdef$''']
 description = "Deterministic loop-validation HMAC test key"
 targetRules = ["generic-api-key"]
 condition = "AND"
-commits = ["4f00f46e3d80ca3e4af51e0ede467b97827e9822"]
+commits = ["5f97c6e0816b373494668d78018b50d85c155ff7"]
 paths = ['''^apps/api/test/loopMeasurementValidation\.test\.ts$''']
 regexes = ['''^loop-validation-key-0123456789abcdef0123456789abcdef$''']
 
@@ -53,7 +61,7 @@ regexes = ['''^loop-validation-key-0123456789abcdef0123456789abcdef$''']
 description = "Deterministic sandbox-attestation HMAC test key"
 targetRules = ["generic-api-key"]
 condition = "AND"
-commits = ["4f00f46e3d80ca3e4af51e0ede467b97827e9822"]
+commits = ["5f97c6e0816b373494668d78018b50d85c155ff7"]
 paths = ['''^apps/api/test/sandboxAttestation\.test\.ts$''']
 regexes = ['''^0123456789abcdef0123456789abcdef$''']
 
@@ -61,7 +69,7 @@ regexes = ['''^0123456789abcdef0123456789abcdef$''']
 description = "S3 helper identifier misclassified as a generic API key"
 targetRules = ["generic-api-key"]
 condition = "AND"
-commits = ["4f00f46e3d80ca3e4af51e0ede467b97827e9822"]
+commits = ["5f97c6e0816b373494668d78018b50d85c155ff7"]
 paths = ['''^apps/api/test/artifactRemoteStore\.test\.ts$''']
 regexes = ['''^s3RegionFromEnvironment$''']
 
@@ -69,7 +77,7 @@ regexes = ['''^s3RegionFromEnvironment$''']
 description = "Synthetic key intentionally detected by the security-gate test"
 targetRules = ["generic-api-key"]
 condition = "AND"
-commits = ["4f00f46e3d80ca3e4af51e0ede467b97827e9822"]
+commits = ["5f97c6e0816b373494668d78018b50d85c155ff7"]
 paths = ['''^apps/worker/test/policyGates\.test\.ts$''']
 regexes = ['''^sk-1234567890abcdefghijklmnop$''']
 
@@ -77,7 +85,7 @@ regexes = ['''^sk-1234567890abcdefghijklmnop$''']
 description = "Synthetic key intentionally exercised by usage redaction tests"
 targetRules = ["generic-api-key"]
 condition = "AND"
-commits = ["4f00f46e3d80ca3e4af51e0ede467b97827e9822"]
+commits = ["5f97c6e0816b373494668d78018b50d85c155ff7"]
 paths = ['''^packages/usage/test/usage\.test\.ts$''']
 regexes = ['''^sk-1234567890abcdef$''']
 
@@ -85,6 +93,6 @@ regexes = ['''^sk-1234567890abcdef$''']
 description = "Structurally valid but synthetic JWT used by Harness hardening tests"
 targetRules = ["jwt"]
 condition = "AND"
-commits = ["4f00f46e3d80ca3e4af51e0ede467b97827e9822"]
+commits = ["5f97c6e0816b373494668d78018b50d85c155ff7"]
 paths = ['''^packages/harness/test/hardening\.test\.ts$''']
 regexes = ['''^eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiIxMjM0NTY3ODkwIn0\.signature-secret$''']

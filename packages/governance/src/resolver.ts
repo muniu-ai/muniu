@@ -764,7 +764,7 @@ function prepareLayer(
     "allowedProviders",
     sourceId,
     issues,
-    ["claude", "codex"]
+    ["builtin", "claude", "codex"]
   ) as readonly GovernanceProvider[] | undefined;
   const commandAllowlist = normalizeStringList(
     rawPolicy.commandAllowlist,

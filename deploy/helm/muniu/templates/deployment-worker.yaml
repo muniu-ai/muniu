@@ -1,0 +1,40 @@
+{{- if .Values.worker.enabled }}
+{{- if not .Values.worker.fixtureMode }}
+{{- fail "worker.enabled requires worker.fixtureMode=true in v0.1.0; the Kubernetes candidate-Pod provisioner is not delivered" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "muniu.fullname" . }}-worker
+  labels: {{- include "muniu.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.worker.replicas }}
+  selector:
+    matchLabels: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: worker }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: worker }
+    spec:
+      serviceAccountName: {{ include "muniu.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      securityContext: {{- toYaml .Values.securityContext | nindent 8 }}
+      containers:
+        - name: worker
+          image: {{ include "muniu.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["apps/cli/dist/index.js", "run", "worker", "--enterprise", "--mock", "--capacity", {{ .Values.worker.capacity | quote }}, "--ttl-ms", {{ .Values.worker.claimTtlMs | quote }}]
+          securityContext: {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          env:
+            - { name: MN_API_URL, value: "http://{{ include "muniu.fullname" . }}:{{ .Values.service.port }}" }
+            - name: MN_API_TOKEN
+              valueFrom: { secretKeyRef: { name: {{ .Values.worker.authExistingSecret }}, key: {{ .Values.worker.authTokenKey }} } }
+            - { name: MN_WORKER_PROVIDERS, value: "builtin,claude,codex" }
+            - { name: MN_ENTERPRISE_SANDBOX_IMAGE, value: {{ .Values.sandbox.image | quote }} }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+            - { name: work, mountPath: /work }
+          resources: {{- toYaml .Values.worker.resources | nindent 12 }}
+      volumes:
+        - { name: tmp, emptyDir: {} }
+        - { name: work, emptyDir: {} }
+{{- end }}

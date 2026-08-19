@@ -42,6 +42,8 @@ import {
   prepareSnapshotCandidateWorkspace
 } from "@mn/worker";
 import { parse as parseYaml } from "yaml";
+import { agentCommand } from "./agent-commands.js";
+import { pluginCommand, profileCommand } from "./runtime-commands.js";
 
 const defaultApiUrl = "http://127.0.0.1:7318";
 const execFileAsync = promisify(execFile);
@@ -307,6 +309,21 @@ async function main(): Promise<void> {
 
   if (command === "init") {
     await init();
+    return;
+  }
+
+  if (command === "agent") {
+    await agentCommand(subcommand, args);
+    return;
+  }
+
+  if (command === "plugin") {
+    await pluginCommand(subcommand, args);
+    return;
+  }
+
+  if (command === "profile") {
+    await profileCommand(subcommand, args);
     return;
   }
 
@@ -3553,6 +3570,16 @@ function printHelp(): void {
 
 Commands:
   mn init
+  mn agent run --provider <id> --model <id> --prompt "..." [--cwd .]
+  mn agent chat --provider <id> --model <id> [--prompt "..."] [--cwd .]
+  mn agent resume <session-id> --prompt "..."
+  mn agent sessions [--limit 100]
+  mn plugin list
+  mn plugin install <local-path|name@x.y.z>
+  mn plugin remove <id|specifier>
+  mn plugin reload
+  mn profile validate [--file profile.yml]
+  mn profile inspect
   mn doctor
   mn doctor env-cleanup [--name OPENAI_API_KEY] [--source shell|launchd|ide|all] [--dry-run] [--yes]
   mn diagnostics export [--out mniu-diagnostics.json]

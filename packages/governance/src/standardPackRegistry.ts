@@ -398,7 +398,7 @@ function validatePolicy(value: unknown, issues: RegistryIssue[]): void {
   }
   if (value.allowedProviders !== undefined) {
     validateStringList(value.allowedProviders, "$.rules.allowedProviders", issues, {
-      allowed: ["claude", "codex"]
+      allowed: ["builtin", "claude", "codex"]
     });
   }
   for (const field of ["commandAllowlist", "networkAllowlist"] as const) {

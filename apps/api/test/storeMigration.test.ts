@@ -9,7 +9,7 @@ import {
   MemoryStore
 } from "../src/store.js";
 
-test("hydrates v1 snapshots into the implicit local tenant and persists v2", async (t) => {
+test("hydrates v1 snapshots into the implicit local tenant and persists v3", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "mn-state-v1-migration-"));
   const statePath = join(root, "api-state.json");
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -84,6 +84,7 @@ test("hydrates v1 snapshots into the implicit local tenant and persists v2", asy
     BUILTIN_DEFAULT_STANDARD_PACK
   );
   assert.equal(store.tasks.get("task-1")?.workflowRef?.id, "classic-v1");
+  assert.equal(store.tasks.get("task-1")?.strategy.schemaVersion, 2);
   assert.equal(store.runs.get("run-1")?.tenantId, LOCAL_TENANT_ID);
   assert.equal(store.runs.get("run-1")?.workflowRef?.id, "classic-v1");
   assert.equal(store.runJobs.get("run-1")?.tenantId, LOCAL_TENANT_ID);
@@ -93,8 +94,18 @@ test("hydrates v1 snapshots into the implicit local tenant and persists v2", asy
     version: number;
     tenantId: string;
   };
-  assert.equal(persisted.version, 2);
+  assert.equal(persisted.version, 3);
   assert.equal(persisted.tenantId, LOCAL_TENANT_ID);
+  const backup = JSON.parse(await readFile(`${statePath}.v1.bak`, "utf8")) as {
+    version: number;
+  };
+  assert.equal(backup.version, 1);
+
+  new MemoryStore({ statePath });
+  const persistedAgain = JSON.parse(await readFile(statePath, "utf8")) as {
+    version: number;
+  };
+  assert.equal(persistedAgain.version, 3);
 });
 
 test("rejects unknown state snapshot versions", async (t) => {

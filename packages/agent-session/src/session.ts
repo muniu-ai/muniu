@@ -20,6 +20,7 @@ import { protectJsonValue } from "@mn/data-policy";
 
 import { snapshotAgentSessionEvent } from "./event-snapshot.js";
 import { createSafeRandomEventId } from "./event-id.js";
+import { inspectInternalRuntimeOverlaySeed } from "./runtime-overlay-internal.js";
 import type { AgentEventMetadata, AgentSessionExclusiveView, AgentSessionHeaderV1, EventPersistence } from "./types.js";
 
 export class RuntimeOverlayRequiredError extends Error {
@@ -70,7 +71,9 @@ export class DurableAgentSession {
   constructor(
     readonly header: AgentSessionHeaderV1,
     seed: readonly AgentSessionEventV1[],
-    private readonly persistence: EventPersistence
+    private readonly persistence: EventPersistence,
+    private readonly cwd?: string,
+    runtimeOverlaySeed?: unknown
   ) {
     this.log = seed.map((event) => snapshotAgentSessionEvent(event));
     verifyAgentSessionEventChain(this.log);
@@ -90,6 +93,14 @@ export class DurableAgentSession {
       }
     }
     deepFreeze(this.header);
+    const runtimePayloads = inspectInternalRuntimeOverlaySeed(runtimeOverlaySeed)?.payloads ?? new Map();
+    for (const [seq, payload] of runtimePayloads) {
+      const event = this.log[seq];
+      if (!event || protectAgentSessionPayloadV1(event.type, payload).digest !== event.payload.digest) {
+        throw new Error("runtime session overlay does not match its protected event");
+      }
+      this.runtimePayloads.set(seq, deepFreeze(payload));
+    }
   }
 
   get events(): readonly AgentSessionEventV1[] {
@@ -116,6 +127,10 @@ export class DurableAgentSession {
       messages.push(deepFreeze(protectedMessage as unknown as Message));
     }
     return Object.freeze(messages);
+  }
+
+  runtimeCwd(): string | undefined {
+    return this.cwd;
   }
 
   append<T extends AgentSessionEventTypeV1>(
@@ -229,7 +244,7 @@ export class DurableAgentSession {
       ...(previous === undefined ? {} : { previousDigest: previous.digest })
     });
     try {
-      await this.persistence.commitDurable(event);
+      await this.persistence.commitDurable(event, prepared.payload);
     } catch (error: unknown) {
       this.poisonPersistence(error);
       throw error;

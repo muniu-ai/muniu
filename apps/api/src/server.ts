@@ -1,7 +1,7 @@
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { Buffer } from "node:buffer";
-import type { Dirent } from "node:fs";
+import { existsSync, type Dirent } from "node:fs";
 import {
   appendFile,
   mkdir,
@@ -15,7 +15,7 @@ import {
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import Fastify, { type FastifyReply } from "fastify";
+import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import { z } from "zod";
 import {
   cleanupShellEnvConflicts,
@@ -31,6 +31,10 @@ import {
 import { indexRepository } from "@mn/connectors";
 import {
   CLASSIC_WORKFLOW_REF,
+  DEFAULT_POLICY,
+  executionCandidateCount,
+  executionRuntimeIds,
+  executionTargets,
   isTerminalRunStatus,
   normalizeStrategy,
   resolveTaskWorkflowRef,
@@ -39,6 +43,7 @@ import {
 } from "@mn/core";
 import type {
   AgentProvider,
+  AgentRuntimeId,
   AgentTask,
   ArtifactRef,
   GateArtifactV2,
@@ -47,7 +52,17 @@ import type {
   RunEvent,
   RunRecord
 } from "@mn/core";
-import { MockExecutor, createDefaultExecutors } from "@mn/executors";
+import {
+  MockExecutor,
+  createDefaultExecutors,
+  type BuiltinAgentRunner
+} from "@mn/executors";
+import { createWorkspaceTools } from "@mn/agent-tools";
+import {
+  bootRuntime,
+  type MuniuRuntime,
+  type RuntimeProfileId
+} from "@mn/runtime";
 import {
   activatePromptPreset,
   discoverSkillSources,
@@ -100,9 +115,13 @@ import {
   defaultControlPlaneSpecRepository,
   registerControlPlaneRoutes
 } from "./controlPlane.js";
-import { LocalMockAgentSessionService } from "./agentSessionService.js";
+import {
+  AgentSessionServiceError,
+  LocalMockAgentSessionService
+} from "./agentSessionService.js";
 import { createProductionAgentRuntimeFactory } from "./agentRuntimeFactory.js";
 import { registerAgentSessionRoutes } from "./agentSessionRoutes.js";
+import { createEnterpriseAgentSessionStore } from "./enterpriseAgentSessionStore.js";
 import {
   registerEvidenceRoutes,
   type EvidenceRouteOptions
@@ -330,6 +349,9 @@ export interface BuildServerOptions {
   capabilityCatalog?: RuntimeCapabilityCatalog;
   specRepository?: FileSpecRepository;
   runtimeProfile?: "local" | "enterprise";
+  runtimeProfilePath?: string;
+  runtimeCliPatchPath?: string;
+  runtimeHmr?: boolean;
   /** Internal governed provider proxy started with the enterprise API. */
   enterpriseProxy?: {
     readonly host: string;
@@ -403,6 +425,36 @@ const versionedGovernanceRefSchema = z.object({
   digest: z.string().regex(/^[a-f0-9]{64}$/u).optional()
 }).strict();
 
+const executionStrategyCommonSchema = {
+  sandbox: z
+    .enum(["read-only", "workspace-write", "isolated-worktree"])
+    .optional(),
+  requiredGates: z
+    .array(z.string().min(1).regex(/^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/u))
+    .optional(),
+  humanApproval: z.enum(["never", "on-risk", "before-merge"]).optional(),
+  timeoutSeconds: z.number().int().positive().optional()
+};
+
+const executionStrategySchema = z.union([
+  z.object({
+    schemaVersion: z.literal(2),
+    targets: z.array(z.object({
+      runtimeId: z.enum(["builtin", "claude", "codex"]),
+      providerId: z.string().min(1).optional(),
+      modelId: z.string().min(1).optional(),
+      candidates: z.number().int().positive()
+    }).strict()).min(1),
+    ...executionStrategyCommonSchema
+  }).strict(),
+  z.object({
+    schemaVersion: z.literal(1).optional(),
+    providers: z.array(z.enum(["claude", "codex"])).optional(),
+    candidates: z.number().int().positive().optional(),
+    ...executionStrategyCommonSchema
+  }).strict()
+]);
+
 const taskSchema = z.object({
   projectId: z.string().min(1),
   title: z.string().min(1),
@@ -415,20 +467,7 @@ const taskSchema = z.object({
   specRef: specRefSchema.optional(),
   workflowRef: versionedGovernanceRefSchema.optional(),
   harnessProfileRef: versionedGovernanceRefSchema.optional(),
-  strategy: z
-    .object({
-      providers: z.array(z.enum(["claude", "codex"])).optional(),
-      candidates: z.number().int().positive().optional(),
-      sandbox: z
-        .enum(["read-only", "workspace-write", "isolated-worktree"])
-        .optional(),
-      requiredGates: z
-        .array(z.string().min(1).regex(/^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/u))
-        .optional(),
-      humanApproval: z.enum(["never", "on-risk", "before-merge"]).optional(),
-      timeoutSeconds: z.number().int().positive().optional()
-    })
-    .optional()
+  strategy: executionStrategySchema.optional()
 });
 
 const providerConsumerSchema = z.enum(["claude", "codex", "agent"]);
@@ -735,7 +774,7 @@ const workerCapabilityNameSchema = z
   .refine((value) => value === value.trim() && !/[\u0000-\u001f\u007f]/u.test(value));
 const workerCapabilitiesSchema = z
   .object({
-    providers: z.array(z.enum(["claude", "codex"])).default([]),
+    providers: z.array(z.enum(["builtin", "claude", "codex"])).default([]),
     languages: z.array(workerCapabilityNameSchema).default([]),
     gateRunnerIds: z.array(workerCapabilityNameSchema).default([]),
     sandboxBackends: z
@@ -926,7 +965,7 @@ function workerRequirementsForRun(
       ? "enforced"
       : "postcheck";
   return {
-    requiredProviders: [...task.strategy.providers],
+    requiredProviders: executionRuntimeIds(task.strategy),
     requiredLanguages: [...new Set(requiredLanguages)],
     requiredGateRunnerIds: [...new Set(requiredGateRunnerIds)],
     sandbox: {
@@ -1390,7 +1429,44 @@ function redactDiagnosticText(input: string): string {
 
 export function buildServer(options: BuildServerOptions = {}) {
   const app = Fastify({ logger: true });
+  const activeRunEventStreams = new Set<() => void>();
   const runtimeProfile = options.runtimeProfile ?? "local";
+  const homeDir = options.homeDir ?? process.env.HOME ?? process.cwd();
+  const mniuRoot =
+    options.mniuRoot ?? process.env.MN_MNIU_ROOT ?? defaultMniuRoot(homeDir);
+  const cordisProfileId: RuntimeProfileId = runtimeProfile === "enterprise"
+    ? "enterprise-api"
+    : "local";
+  const configuredCordisProfilePath = options.runtimeProfilePath ??
+    process.env.MN_RUNTIME_PROFILE_PATH ??
+    resolve(process.cwd(), "config", "runtime", "profiles", `${cordisProfileId}.yml`);
+  const runtimeProfileLayers = () => {
+    const candidates = [
+      {
+        id: "base-bundle",
+        path: process.env.MN_RUNTIME_BASE_PATH ??
+          resolve(process.cwd(), "config", "runtime", "base.yml")
+      },
+      { id: "deployment-profile", path: configuredCordisProfilePath },
+      { id: "user-directory-patch", path: join(mniuRoot, "runtime", "plugins.yml") },
+      {
+        id: "cli-patch",
+        path: options.runtimeCliPatchPath ?? process.env.MN_RUNTIME_CLI_PATCH ?? ""
+      }
+    ];
+    return candidates.filter((layer) => layer.path && existsSync(layer.path));
+  };
+  let cordisRuntime: MuniuRuntime | undefined;
+  const startCordisRuntime = async (): Promise<MuniuRuntime> => {
+    const next = await bootRuntime({
+      scope: "api",
+      profileId: cordisProfileId,
+      profileLayers: runtimeProfileLayers(),
+      enableHmr: options.runtimeHmr ?? process.env.MN_RUNTIME_HMR === "1"
+    });
+    cordisRuntime = next;
+    return next;
+  };
   const providerUsageEvidenceVerifier = createProviderUsageEvidenceVerifier(
     options.providerUsageEvidenceTrustProfile
   );
@@ -1656,16 +1732,16 @@ export function buildServer(options: BuildServerOptions = {}) {
       managedKinds: ENTERPRISE_METADATA_KINDS
     });
   };
-  const homeDir = options.homeDir ?? process.env.HOME ?? process.cwd();
-  const mniuRoot =
-    options.mniuRoot ?? process.env.MN_MNIU_ROOT ?? defaultMniuRoot(homeDir);
   if (runtimeProfile === "enterprise" && options.agentSessionService) {
-    throw new Error("Enterprise Agent sessions require the planned PostgreSQL/object-store backend");
+    throw new Error("Enterprise Agent sessions cannot replace the enforced PostgreSQL/S3 backend");
   }
   let agentSessionService = runtimeProfile === "local"
     ? options.agentSessionService
     : undefined;
-  let getAgentSessionService: (() => Promise<LocalMockAgentSessionService>) | undefined;
+  const enterpriseAgentSessionServices = new Map<string, LocalMockAgentSessionService>();
+  let getAgentSessionService:
+    | ((request?: FastifyRequest) => Promise<LocalMockAgentSessionService>)
+    | undefined;
   const specRepository =
     options.specRepository ??
     defaultControlPlaneSpecRepository(join(mniuRoot, "control-plane"));
@@ -1852,9 +1928,63 @@ export function buildServer(options: BuildServerOptions = {}) {
       });
       agentSessionService = new LocalMockAgentSessionService(
         join(mniuRoot, "agent-service"),
-        { mode: "production", runtimeFactory }
+        {
+          mode: "production",
+          runtimeFactory,
+          tools: createWorkspaceTools({
+            allowedCommands: DEFAULT_POLICY.commandAllowlist
+          })
+        }
       );
       return agentSessionService;
+    };
+  } else if (enterprisePostgres && artifactRemoteStore?.type === "s3" && artifactRemoteStore.s3Client) {
+    const enterpriseSessionObjectStore = artifactRemoteStore.s3Client;
+    getAgentSessionService = async (request): Promise<LocalMockAgentSessionService> => {
+      if (!request) {
+        throw new AgentSessionServiceError(
+          409,
+          "TENANT_CONTEXT_REQUIRED",
+          "enterprise Agent session execution requires an authenticated tenant context"
+        );
+      }
+      const context = requestContexts.get(request);
+      if (!context) {
+        throw new AgentSessionServiceError(
+          401,
+          "TENANT_CONTEXT_REQUIRED",
+          "enterprise Agent session execution requires an authenticated tenant context"
+        );
+      }
+      const existing = enterpriseAgentSessionServices.get(context.tenantId);
+      if (existing) return existing;
+      const runtimeFactory = createProductionAgentRuntimeFactory({
+        providerSource: {
+          getProvider: (providerId) => localStore.getProvider(providerId)
+        },
+        resolveStoredSecret: (reference) => resolveStoredSecret(reference)
+      });
+      const service = new LocalMockAgentSessionService(
+        join(mniuRoot, "agent-service-cache", sha256(context.tenantId)),
+        {
+          mode: "production",
+          runtimeFactory,
+          tools: createWorkspaceTools({
+            allowedCommands: DEFAULT_POLICY.commandAllowlist
+          }),
+          sessionStore: createEnterpriseAgentSessionStore({
+            tenantId: context.tenantId,
+            pool: enterprisePostgres.pool,
+            objectStore: enterpriseSessionObjectStore,
+            objectPrefix: artifactRemoteStore.prefix,
+            ...(process.env.MN_AGENT_SESSION_KMS_KEY_ID
+              ? { kmsKeyId: process.env.MN_AGENT_SESSION_KMS_KEY_ID }
+              : {})
+          })
+        }
+      );
+      enterpriseAgentSessionServices.set(context.tenantId, service);
+      return service;
     };
   }
   const useMockExecutors = options.useMockExecutors ?? false;
@@ -1946,12 +2076,44 @@ export function buildServer(options: BuildServerOptions = {}) {
   };
   const workspaceRoot =
     options.workspaceRoot ?? join(process.cwd(), ".mn", "worktrees");
+  const builtinRunner: BuiltinAgentRunner = {
+    async run(input) {
+      if (!getAgentSessionService) {
+        throw new Error("embedded Agent runtime is unavailable in this API profile");
+      }
+      const available = (await localStore.listProviders("agent"))
+        .filter((provider) => provider.enabled);
+      const provider = input.providerId === "default"
+        ? available[0]
+        : available.find((candidate) => candidate.id === input.providerId);
+      if (!provider) {
+        throw new Error("No enabled Agent model provider is configured");
+      }
+      const providerId = provider.id;
+      const modelId = input.modelId === "default" ? provider.defaultModel : input.modelId;
+      if (!modelId.trim()) throw new Error("Embedded Agent model binding is unavailable");
+      const executionBinding = Object.freeze({
+        ...input.executionBinding,
+        providerId,
+        modelId
+      });
+      const service = await getAgentSessionService();
+      const output = await service.executeCandidate({
+        ...input,
+        providerId,
+        modelId,
+        executionBinding
+      });
+      return { ...output, providerId, modelId, executionBinding };
+    }
+  };
   const executors = useMockExecutors
     ? {
+        builtin: new MockExecutor("builtin"),
         claude: new MockExecutor("claude"),
         codex: new MockExecutor("codex")
       }
-    : createDefaultExecutors();
+    : createDefaultExecutors(builtinRunner);
   const restartablePendingRunIds = autoResumeRuns
     ? store
         .findRestartablePendingRuns()
@@ -2360,6 +2522,12 @@ export function buildServer(options: BuildServerOptions = {}) {
   });
 
   app.options("/*", async (_request, reply) => reply.code(204).send());
+  app.addHook("onReady", async () => {
+    await startCordisRuntime();
+  });
+  app.addHook("preClose", async () => {
+    for (const close of [...activeRunEventStreams]) close();
+  });
   app.addHook("onClose", async () => {
     if (providerModelCatalogSyncSchedulerTimer) {
       clearInterval(providerModelCatalogSyncSchedulerTimer);
@@ -2371,6 +2539,12 @@ export function buildServer(options: BuildServerOptions = {}) {
     await Promise.allSettled([...activeRunJobs.values()].map((job) => job.done));
     activeRunJobs.clear();
     await agentSessionService?.dispose();
+    await Promise.allSettled(
+      [...enterpriseAgentSessionServices.values()].map((service) => service.dispose())
+    );
+    enterpriseAgentSessionServices.clear();
+    await cordisRuntime?.dispose();
+    cordisRuntime = undefined;
     await proxyServer?.stop();
     proxyServer = undefined;
     await enterprisePostgres?.close();
@@ -2410,6 +2584,13 @@ export function buildServer(options: BuildServerOptions = {}) {
       ok: postgresHealthy,
       service: "mn-api",
       runtimeProfile,
+      cordis: cordisRuntime
+        ? {
+            profileId: cordisRuntime.snapshot.profileId,
+            profileDigest: cordisRuntime.snapshot.profileDigest,
+            plugins: cordisRuntime.snapshot.plugins.length
+          }
+        : { profileId: cordisProfileId, status: "starting" },
       metadataBackend: enterprisePostgres
         ? postgresHealthy ? "postgresql" : "unavailable"
         : "local",
@@ -2446,6 +2627,48 @@ export function buildServer(options: BuildServerOptions = {}) {
           ? artifactRemoteStorePublicDescriptor(artifactRemoteStore)
           : artifactRemoteStoreDescriptor(artifactRemoteStore)
         : null
+    };
+  });
+
+  app.get("/v1/runtime", async () => ({
+    runtime: cordisRuntime?.snapshot,
+    audit: cordisRuntime?.audit.list() ?? []
+  }));
+
+  app.get("/v1/runtime/profiles", async () => ({
+    selected: cordisProfileId,
+    available: ["local", "enterprise-api", "enterprise-worker", "desktop"],
+    resolutionOrder: ["base-bundle", "deployment-profile", "user-directory-patch", "cli-patch"],
+    path: configuredCordisProfilePath,
+    digest: cordisRuntime?.snapshot.profileDigest
+  }));
+
+  app.get("/v1/runtime/plugins", async () => ({
+    profileId: cordisProfileId,
+    plugins: cordisRuntime?.snapshot.plugins ?? []
+  }));
+
+  app.post("/v1/runtime/plugins/reload", async (request, reply) => {
+    const context = requestContexts.get(request);
+    if (
+      runtimeProfile === "enterprise" &&
+      (!context || !context.roles.includes("org_admin"))
+    ) {
+      return reply.code(403).send({ error: "org_admin role is required to reload plugins" });
+    }
+    const previous = cordisRuntime;
+    const next = await bootRuntime({
+      scope: "api",
+      profileId: cordisProfileId,
+      profileLayers: runtimeProfileLayers(),
+      enableHmr: options.runtimeHmr ?? process.env.MN_RUNTIME_HMR === "1"
+    });
+    cordisRuntime = next;
+    await previous?.dispose();
+    return {
+      reloaded: true,
+      previousDigest: previous?.snapshot.profileDigest,
+      runtime: next.snapshot
     };
   });
 
@@ -4978,7 +5201,8 @@ export function buildServer(options: BuildServerOptions = {}) {
     if (
       !project ||
       project.tenantId !== context.tenantId ||
-      !task?.strategy.providers.includes(body.app) ||
+      !task ||
+      !executionRuntimeIds(task.strategy).includes(body.app) ||
       !run.harnessManifest.executionPolicy.allowedProviders?.includes(body.app) ||
       (candidate !== undefined && candidate.provider !== body.app)
     ) {
@@ -5564,10 +5788,7 @@ export function buildServer(options: BuildServerOptions = {}) {
           });
         }
         const expectedCandidateIds = new Set(
-          Array.from({ length: task.strategy.candidates }, (_, index) => {
-            const provider = task.strategy.providers[index % task.strategy.providers.length];
-            return provider ? `${provider}-${index + 1}` : "";
-          })
+          selectRunRuntimes(task).map((runtimeId, index) => `${runtimeId}-${index + 1}`)
         );
         if (!expectedCandidateIds.has(body.candidateId)) {
           return reply.code(400).send({
@@ -6266,6 +6487,7 @@ export function buildServer(options: BuildServerOptions = {}) {
       closed = true;
       unsubscribe();
       clearInterval(keepAlive);
+      activeRunEventStreams.delete(close);
       reply.raw.end();
     };
     const write = (event: RunEvent) => {
@@ -6281,6 +6503,7 @@ export function buildServer(options: BuildServerOptions = {}) {
     }, 15_000);
 
     unsubscribe = store.subscribeEvents(id, write);
+    activeRunEventStreams.add(close);
     request.raw.on("close", close);
 
     for (const event of store.events.get(id) ?? []) {
@@ -8371,10 +8594,7 @@ function isCheckpointRunAutoResumable(run: RunRecord, task: AgentTask): boolean 
   }
   if (run.candidates.length === 0) return false;
 
-  const expectedProviders = selectRunProviders(
-    task.strategy.providers,
-    task.strategy.candidates
-  );
+  const expectedProviders = selectRunRuntimes(task);
   if (run.candidates.length > expectedProviders.length) return false;
 
   return run.candidates.every((candidate, index) => {
@@ -8392,15 +8612,10 @@ function isCheckpointRunAutoResumable(run: RunRecord, task: AgentTask): boolean 
   });
 }
 
-function selectRunProviders(
-  providers: AgentProvider[],
-  candidates: number
-): AgentProvider[] {
-  const selected: AgentProvider[] = [];
-  for (let index = 0; index < candidates; index += 1) {
-    selected.push(providers[index % providers.length]!);
-  }
-  return selected;
+function selectRunRuntimes(task: AgentTask) {
+  return executionTargets(task.strategy).flatMap((target) =>
+    Array.from({ length: target.candidates }, () => target.runtimeId)
+  );
 }
 
 function isMcpLocalSecretRef(value: string): boolean {
@@ -8444,7 +8659,7 @@ interface DeepLinkImportRow {
 }
 
 interface ParsedMniuImportDeepLink {
-  scheme: "mniu";
+  scheme: "muniu" | "mniu";
   action: "import";
   kind: DeepLinkKind;
   payload: unknown;
@@ -9175,14 +9390,14 @@ async function importPromptPresets(
 
 function parseMniuImportDeepLink(rawUrl: string): ParsedMniuImportDeepLink {
   const url = new URL(rawUrl);
-  if (url.protocol !== "mniu:") {
-    throw new Error("Only mniu:// deep links are supported.");
+  if (url.protocol !== "muniu:" && url.protocol !== "mniu:") {
+    throw new Error("Only muniu:// deep links (or the legacy mniu:// alias) are supported.");
   }
 
   const segments = [url.hostname, ...url.pathname.split("/").filter(Boolean)];
   const action = segments[0];
   if (action !== "import") {
-    throw new Error("Only mniu://import deep links are supported.");
+    throw new Error("Only muniu://import deep links are supported.");
   }
 
   const kind = normalizeDeepLinkKind(
@@ -9193,7 +9408,7 @@ function parseMniuImportDeepLink(rawUrl: string): ParsedMniuImportDeepLink {
   }
 
   return {
-    scheme: "mniu",
+    scheme: url.protocol === "muniu:" ? "muniu" : "mniu",
     action: "import",
     kind,
     payload: decodeDeepLinkPayload(url)
@@ -9617,7 +9832,7 @@ const inlineArtifactTextLimit = 8_000;
 
 type RunArtifactSummary = ArtifactRef & {
   candidateId?: string;
-  provider?: AgentProvider;
+  provider?: AgentRuntimeId;
   gate?: string;
   source?: string;
   label?: string;
@@ -9631,7 +9846,7 @@ type RunArtifactSummary = ArtifactRef & {
 
 interface RunArtifactFilters {
   candidateId?: string;
-  provider?: AgentProvider;
+  provider?: AgentRuntimeId;
   kind?: string;
   gate?: string;
   source?: string;
@@ -11220,7 +11435,7 @@ function inlineRunArtifact(options: {
   inlineText: string;
   contentType: string;
   candidateId: string;
-  provider: AgentProvider;
+  provider: AgentRuntimeId;
   gate?: string;
   source: string;
   summary: string;
