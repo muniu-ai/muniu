@@ -50,10 +50,43 @@ diagnose_probe() {
 
 diagnose_enterprise() {
   kubectl -n muniu-kind get pods,deployments,jobs,services -o wide || true
+  kubectl -n default get service kubernetes -o wide || true
+  kubectl -n default get endpoints kubernetes -o wide || true
+  kubectl -n muniu-kind get networkpolicy -o yaml || true
   kubectl -n muniu-kind get events --sort-by=.lastTimestamp | tail -n 150 || true
   kubectl -n muniu-kind logs deployment/muniu-api --all-pods=true --all-containers=true --tail=300 || true
-  kubectl -n muniu-kind logs deployment/muniu-worker --all-pods=true --all-containers=true --tail=300 || true
+  local worker_pod
+  while IFS= read -r worker_pod; do
+    [[ -z "${worker_pod}" ]] && continue
+    kubectl -n muniu-kind describe "${worker_pod}" || true
+    kubectl -n muniu-kind logs "${worker_pod}" --all-containers=true --tail=300 || true
+    kubectl -n muniu-kind logs "${worker_pod}" --all-containers=true --previous --tail=300 || true
+  done < <(kubectl -n muniu-kind get pods \
+    -l app.kubernetes.io/instance=muniu,app.kubernetes.io/component=worker \
+    -o name 2>/dev/null || true)
   kubectl -n muniu-kind logs deployment/muniu-kind-fixture --all-pods=true --tail=200 || true
+}
+
+verify_worker_kubernetes_api_network() {
+  local worker_pod
+  worker_pod="$(kubectl -n muniu-kind get pods \
+    -l app.kubernetes.io/instance=muniu,app.kubernetes.io/component=worker \
+    -o jsonpath='{.items[0].metadata.name}')"
+  kubectl -n muniu-kind exec "pod/${worker_pod}" -- node --input-type=module --eval '
+    import net from "node:net";
+    const host = process.env.KUBERNETES_SERVICE_HOST;
+    const port = Number(process.env.KUBERNETES_SERVICE_PORT_HTTPS ?? 443);
+    if (!host) throw new Error("KUBERNETES_SERVICE_HOST is unavailable");
+    const socket = net.createConnection({ host, port });
+    const timer = setTimeout(() => socket.destroy(new Error("connection timeout")), 10_000);
+    await new Promise((resolve, reject) => {
+      socket.once("connect", resolve);
+      socket.once("error", reject);
+    });
+    clearTimeout(timer);
+    socket.destroy();
+    console.log(JSON.stringify({ kindWorkerKubernetesApiNetwork: "passed", host, port }));
+  '
 }
 
 start_port_forward() {
@@ -285,6 +318,10 @@ helm upgrade muniu deploy/helm/muniu \
   }
 kubectl -n muniu-kind rollout status deployment/muniu-api --timeout=180s
 kubectl -n muniu-kind rollout status deployment/muniu-worker --timeout=180s
+verify_worker_kubernetes_api_network || {
+  diagnose_enterprise
+  exit 1
+}
 
 owner_capture="$(run_failover_controller capture)" || {
   diagnose_enterprise
