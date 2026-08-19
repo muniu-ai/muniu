@@ -56,11 +56,13 @@
   "devDependencies": {
     "@types/node": "^22.10.5",
     "@yao-pkg/pkg": "^6.21.0",
-    "ds-store": "^0.1.6",
     "esbuild": "^0.28.1",
     "spdx-expression-parse": "3.0.1",
     "typescript": "5.7.2",
     "vitepress": "1.6.4",
     "yaml": "2.9.0"
+  },
+  "optionalDependencies": {
+    "ds-store": "^0.1.6"
   }
 }

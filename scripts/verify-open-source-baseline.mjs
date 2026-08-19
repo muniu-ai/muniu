@@ -150,6 +150,12 @@ if (rootPackage.devDependencies?.typescript !== "5.7.2") fail("TypeScript must b
 if (rootPackage.devDependencies?.yaml !== "2.9.0") {
   fail("the workflow policy parser must declare yaml 2.9.0 directly");
 }
+if (rootPackage.devDependencies?.["ds-store"] !== undefined) {
+  fail("ds-store must not be a required cross-platform development dependency");
+}
+if (rootPackage.optionalDependencies?.["ds-store"] !== "^0.1.6") {
+  fail("ds-store must be an optional macOS packaging dependency");
+}
 if (rootPackage.scripts?.["test:oss-policy"] !== "node --test scripts/test/open-source-policy.test.mjs") {
   fail("test:oss-policy must run the open-source policy regression suite");
 }
@@ -172,6 +178,23 @@ if (npmrc.includes(obsoleteRegistryHost)) fail(".npmrc uses an obsolete registry
 const gitleaksConfig = readFileSync(path.join(root, ".gitleaks.toml"), "utf8");
 for (const expected of ["useDefault = true", "AKIA0000000000000000", "sk-test-not-a-real-secret"]) {
   if (!gitleaksConfig.includes(expected)) fail(".gitleaks.toml is missing " + expected);
+}
+const gitleaksCommitDeclarations = [...gitleaksConfig.matchAll(/^commits\s*=/gmu)].length;
+const gitleaksAllowlistCommits = [
+  ...gitleaksConfig.matchAll(/^commits\s*=\s*\[\s*"([0-9a-f]{40})"\s*\]/gmu)
+].map((match) => match[1]);
+if (gitleaksCommitDeclarations !== gitleaksAllowlistCommits.length) {
+  fail("every gitleaks commit allowlist must contain one exact full commit id");
+}
+for (const commit of new Set(gitleaksAllowlistCommits)) {
+  try {
+    execFileSync("git", ["cat-file", "-e", commit + "^{commit}"], {
+      cwd: root,
+      stdio: "ignore"
+    });
+  } catch {
+    fail("gitleaks allowlist references an unreachable commit: " + commit);
+  }
 }
 const denyConfig = readFileSync(path.join(root, "deny.toml"), "utf8");
 for (const expected of ['version = 2', '"Apache-2.0"', '"MIT"', "confidence-threshold"]) {

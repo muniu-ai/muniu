@@ -6,10 +6,11 @@ Allowlist entries must combine a rule ID, an anchored path, and an exact value e
 
 ## Reviewed baseline findings
 
-The initial local snapshot at commit `4f00f46e3d80ca3e4af51e0ede467b97827e9822` produced nine findings: eight `generic-api-key` findings and one `jwt` finding. No value was accepted merely because it lived under a test directory.
+The imported source snapshot at commit `5f97c6e0816b373494668d78018b50d85c155ff7` and the data-policy fixture introduced at commit `cc24a870c529a6c9d2ce3d77ba5246f241a5186d` produce eleven findings: ten `generic-api-key` findings and one `jwt` finding. No value was accepted merely because it lived under a test directory.
 
 | Scope | Findings | Review evidence |
 | --- | ---: | --- |
+| Data-policy keychain reference tests | 2 | Both findings are the same fixed base64 text inside synthetic keychain URI fixtures. The test verifies that references survive business-data redaction and never contacts a keychain or remote service. |
 | Loop measurement and sandbox-attestation tests | 3 | Fixed literals are passed only to deterministic signing/verification helpers inside isolated unit tests. They contain patterned hexadecimal test material and have no provider prefix or external account. |
 | Artifact remote-store test | 1 | The extracted value is a TypeScript helper identifier imported from the module under test, not credential data. |
 | Worker security-gate test | 1 | The test deliberately writes a synthetic key-shaped literal, asserts that the security gate fails, and asserts that evidence does not contain the literal. |

@@ -167,7 +167,7 @@ assertIncludes(
 );
 assertIncludes(rootPackage.devDependencies?.["@yao-pkg/pkg"] ?? "", "^6.", "daemon sidecar packager");
 assertIncludes(rootPackage.devDependencies?.esbuild ?? "", "^0.28", "daemon sidecar bundler");
-assertIncludes(rootPackage.devDependencies?.["ds-store"] ?? "", "^0.1", "headless DMG Finder metadata writer");
+assertIncludes(rootPackage.optionalDependencies?.["ds-store"] ?? "", "^0.1", "optional macOS DMG Finder metadata writer");
 for (const expected of [
   "DSStore",
   "setBackgroundPath",
