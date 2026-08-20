@@ -115,6 +115,67 @@ test("checkpoint authority rejects workspace mutation during Gate execution", as
   assert.match(decision.error ?? "", /changed during authoritative Gate execution/u);
 });
 
+test("checkpoint authority discards an interrupted verification without replaying Gates", async (t) => {
+  const fixture = await checkpointFixture(t);
+  const interrupted = {
+    ...fixture.state.attempts[1]!,
+    status: "failed" as const,
+    failure: {
+      kind: "interrupted" as const,
+      retryable: true,
+      reason: "previous verification outcome was indeterminate"
+    }
+  };
+  const state = loopState([fixture.state.attempts[0]!, interrupted]);
+  let executions = 0;
+  const decision = await authorizeEnterpriseGateCheckpoint({
+    ...fixture.input,
+    state,
+    previousState: fixture.input.previousState,
+    incoming: {
+      ...fixture.input.incoming,
+      gateResultsV2: [],
+      verificationEvidence: [{
+        stageAttemptId: interrupted.id,
+        gateResultIds: []
+      }],
+      sandboxEvidenceHistory: []
+    },
+    authority: {
+      execute: async () => {
+        executions += 1;
+        return authorityResult(fixture.authorityGate);
+      }
+    }
+  });
+
+  assert.equal(decision.error, undefined);
+  assert.equal(decision.newReceipts.length, 0);
+  assert.equal(executions, 0);
+});
+
+test("checkpoint authority rejects evidence attached to an interrupted verification", async (t) => {
+  const fixture = await checkpointFixture(t);
+  const interrupted = {
+    ...fixture.state.attempts[1]!,
+    status: "failed" as const,
+    failure: {
+      kind: "interrupted" as const,
+      retryable: true,
+      reason: "previous verification outcome was indeterminate"
+    }
+  };
+  const decision = await authorizeEnterpriseGateCheckpoint({
+    ...fixture.input,
+    state: loopState([fixture.state.attempts[0]!, interrupted]),
+    authority: {
+      execute: async () => authorityResult(fixture.authorityGate)
+    }
+  });
+
+  assert.match(decision.error ?? "", /must have an empty evidence binding/u);
+});
+
 async function checkpointFixture(t: test.TestContext) {
   const root = await mkdtemp(join(tmpdir(), "mn-authoritative-gate-checkpoint-"));
   t.after(() => rm(root, { recursive: true, force: true }));

@@ -637,6 +637,21 @@ export class GovernedRunOrchestrator {
       harnessManifest: baseRun.harnessManifest,
       handlers,
       onCheckpoint: async (checkpoint) => {
+        // A resumed trailing verification handler has an indeterminate
+        // outcome. The Loop engine closes it as failed/interrupted before it
+        // starts the replacement attempt, so there can be no GateResultV2 to
+        // attach. Persist an explicit empty binding: absence would make the
+        // checkpoint structurally incomplete, while attaching later Gate
+        // results would misattribute evidence to work that was discarded.
+        for (const attempt of checkpoint.attempts) {
+          if (
+            attempt.stage === "verification" &&
+            attempt.status === "failed" &&
+            attempt.failure?.kind === "interrupted"
+          ) {
+            bindVerificationEvidence(verificationEvidence, attempt.id, []);
+          }
+        }
         materialized = {
           ...baseRun,
           candidates: candidateRun.candidates,

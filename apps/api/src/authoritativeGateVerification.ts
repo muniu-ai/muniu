@@ -544,6 +544,27 @@ export async function authorizeEnterpriseGateCheckpoint(
     const pending: AuthoritativeGateReceiptRecord[] = [];
     for (const { attempt, index } of verificationAttempts) {
       const reported = evidenceByAttempt.get(attempt.id);
+      // The Loop recovery contract closes a trailing indeterminate handler as
+      // failed/interrupted. It was never known to have produced Gate output,
+      // so it must carry an explicit empty evidence binding and must never be
+      // re-executed by a later claim. All ordinary failed/completed
+      // verification attempts remain subject to authoritative replay.
+      if (
+        attempt.status === "failed" &&
+        attempt.failure?.kind === "interrupted"
+      ) {
+        if (!reported || reported.length !== 0) {
+          return decisionError(
+            `interrupted verification attempt ${attempt.id} must have an empty evidence binding`
+          );
+        }
+        if (receiptByAttempt.has(attempt.id)) {
+          return decisionError(
+            `interrupted verification attempt ${attempt.id} must not have an authoritative Gate receipt`
+          );
+        }
+        continue;
+      }
       if (!reported || reported.length === 0) {
         return decisionError(
           `verification attempt ${attempt.id} has no results for authoritative execution`
