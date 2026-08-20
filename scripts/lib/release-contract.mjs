@@ -92,6 +92,9 @@ export function validateReleaseContract(input, options = {}) {
     failures.push("release workflow must run only for version tags");
   }
   const workflowRequirements = [
+    ["workflow_dispatch:", "manual recovery entrypoint"],
+    ['RELEASE_TAG: ${{ inputs.tag || github.ref_name }}', "release tag binding"],
+    ['ref: refs/tags/${{ inputs.tag || github.ref_name }}', "immutable tag checkout"],
     [`NODE_VERSION: ${NODE_VERSION}`, "pinned Node version"],
     [`NPM_VERSION: ${NPM_VERSION}`, "pinned npm version"],
     ["IMAGE: ghcr.io/muniu-ai/muniu", "canonical GHCR image"],
@@ -99,9 +102,9 @@ export function validateReleaseContract(input, options = {}) {
     ["postgres:", "PostgreSQL service"],
     ["MN_TEST_POSTGRES_URL:", "PostgreSQL integration environment"],
     ["apps/api/dist-test/test/*Postgres.test.js", "PostgreSQL integration suites"],
-    ['npm run verify:release -- --tag "${GITHUB_REF_NAME}"', "tag/version contract gate"],
+    ['npm run verify:release -- --tag "${RELEASE_TAG}"', "tag/version contract gate"],
     ["git archive --format=tar.gz", "source archive"],
-    ["npm sbom --sbom-format spdx", "SPDX SBOM"],
+    ["npm sbom --sbom-format spdx --omit=dev", "production dependency SBOM"],
     ["THIRD_PARTY_NPM_LICENSES.json", "npm license inventory"],
     ["THIRD_PARTY_CARGO_LICENSES.json", "Cargo license inventory"],
     ["THIRD_PARTY_NOTICES.md", "third-party notices"],

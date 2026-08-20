@@ -40,6 +40,9 @@ function validInput() {
     ciWorkflow: "- run: npm run verify:release",
     releaseWorkflow: [
       'tags: ["v*"]',
+      "workflow_dispatch:",
+      'RELEASE_TAG: ${{ inputs.tag || github.ref_name }}',
+      'ref: refs/tags/${{ inputs.tag || github.ref_name }}',
       "NODE_VERSION: 22.19.0",
       "NPM_VERSION: 11.10.1",
       "IMAGE: ghcr.io/muniu-ai/muniu",
@@ -47,19 +50,19 @@ function validInput() {
       "postgres:",
       "MN_TEST_POSTGRES_URL:",
       "apps/api/dist-test/test/*Postgres.test.js",
-      'npm run verify:release -- --tag "${GITHUB_REF_NAME}"',
-      'git archive --format=tar.gz --prefix="muniu-${GITHUB_REF_NAME}/" -o "release/muniu-${GITHUB_REF_NAME}.tar.gz" HEAD',
-      'npm sbom --sbom-format spdx > "release/muniu-${GITHUB_REF_NAME}.spdx.json"',
-      'cp THIRD_PARTY_NPM_LICENSES.json "release/muniu-${GITHUB_REF_NAME}.npm-licenses.json"',
-      'cp THIRD_PARTY_CARGO_LICENSES.json "release/muniu-${GITHUB_REF_NAME}.cargo-licenses.json"',
-      'cp THIRD_PARTY_NOTICES.md "release/muniu-${GITHUB_REF_NAME}.third-party-notices.md"',
-      'cp vendor/SOURCE_MANIFEST.sha256 "release/muniu-${GITHUB_REF_NAME}.vendor-sources.sha256"',
+      'npm run verify:release -- --tag "${RELEASE_TAG}"',
+      'git archive --format=tar.gz --prefix="muniu-${RELEASE_TAG}/" -o "release/muniu-${RELEASE_TAG}.tar.gz" HEAD',
+      'npm sbom --sbom-format spdx --omit=dev > "release/muniu-${RELEASE_TAG}.spdx.json"',
+      'cp THIRD_PARTY_NPM_LICENSES.json "release/muniu-${RELEASE_TAG}.npm-licenses.json"',
+      'cp THIRD_PARTY_CARGO_LICENSES.json "release/muniu-${RELEASE_TAG}.cargo-licenses.json"',
+      'cp THIRD_PARTY_NOTICES.md "release/muniu-${RELEASE_TAG}.third-party-notices.md"',
+      'cp vendor/SOURCE_MANIFEST.sha256 "release/muniu-${RELEASE_TAG}.vendor-sources.sha256"',
       "sha256sum release/* > release/SHA256SUMS",
       "--platform linux/amd64,linux/arm64",
       "--provenance=mode=max",
       "--sbom=true",
       "uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26",
-      'gh release create "${GITHUB_REF_NAME}" release/* --verify-tag --generate-notes'
+      'gh release create "${RELEASE_TAG}" release/* --verify-tag --generate-notes'
     ].join("\n"),
     technicalDesign: [
       "v0.1.0 开源发布制品包括 `muniu-v0.1.0.tar.gz`、`muniu-v0.1.0.spdx.json`、许可证与来源清单、校验和与构建证明，以及 `ghcr.io/muniu-ai/muniu:v0.1.0` 双架构镜像。",
@@ -105,4 +108,17 @@ test("release contract rejects public macOS portable claims for v0.1.0", () => {
 
   const failures = validateReleaseContract(input);
   assert.equal(failures.some((failure) => failure.includes("portable")), true);
+});
+
+test("release contract requires a production-only SBOM and immutable-tag recovery", () => {
+  const input = validInput();
+  input.releaseWorkflow = input.releaseWorkflow
+    .replace("workflow_dispatch:", "")
+    .replace('ref: refs/tags/${{ inputs.tag || github.ref_name }}', "")
+    .replace(" --omit=dev", "");
+
+  const failures = validateReleaseContract(input);
+  assert.equal(failures.some((failure) => failure.includes("manual recovery")), true);
+  assert.equal(failures.some((failure) => failure.includes("immutable tag checkout")), true);
+  assert.equal(failures.some((failure) => failure.includes("production dependency SBOM")), true);
 });
