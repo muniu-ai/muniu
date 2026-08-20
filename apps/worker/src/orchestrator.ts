@@ -49,6 +49,13 @@ export interface RunExecutionOptions {
    * attempts use this field to keep their workspace snapshots distinct.
    */
   workspaceRunId?: string;
+  /**
+   * Optional authority-bound task used only to derive the immutable execution
+   * binding. Governed workflows may narrow the task they hand to the classic
+   * executor (for example, to avoid running Gates twice), while the binding
+   * must continue to attest the original API-authorized policy.
+   */
+  executionBindingTask?: AgentTask;
   resumeFrom?: RunRecord;
   abortSignal?: AbortSignal;
   /** Reuse an Agent session for a bounded repair attempt while issuing a new
@@ -195,7 +202,7 @@ export class RunOrchestrator {
         runId,
         candidateId,
         target,
-        task,
+        task: execution.executionBindingTask ?? task,
         ...(execution.sessionIds?.[index] === undefined
           ? {}
           : { sessionId: execution.sessionIds[index] })

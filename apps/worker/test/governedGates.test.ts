@@ -395,6 +395,15 @@ test("builtin governed execution repairs in one durable embedded session without
   assert.equal(calls.length, 2);
   assert.ok(calls.every((call) => call.runId === "run-1"));
   assert.ok(calls.every((call) => call.executionBinding.runId === "run-1"));
+  const expectedEffectPolicyDigest = createHash("sha256").update(JSON.stringify({
+    sandbox: builtinTask.strategy.sandbox,
+    requiredGates: builtinTask.strategy.requiredGates,
+    humanApproval: builtinTask.strategy.humanApproval,
+    timeoutSeconds: builtinTask.strategy.timeoutSeconds
+  })).digest("hex");
+  assert.ok(calls.every(
+    (call) => call.executionBinding.effectPolicyDigest === expectedEffectPolicyDigest
+  ));
   assert.match(calls[0]?.cwd ?? "", /run-1--implementation-1-builtin-1$/u);
   assert.equal(calls[0]?.sessionId, calls[1]?.sessionId);
   assert.equal(calls[0]?.cwd, calls[1]?.cwd);

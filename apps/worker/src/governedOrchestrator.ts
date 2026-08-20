@@ -390,6 +390,7 @@ export class GovernedRunOrchestrator {
         const classicResult = await classic.run(project, classicTask, {
           runId: baseRun.id,
           workspaceRunId: implementationWorkspaceRunId,
+          executionBindingTask: task,
           abortSignal: execution.abortSignal,
           ...(context.isRepair && repairSessionIds.length > 0
             ? { sessionIds: repairSessionIds }
