@@ -242,6 +242,68 @@ test("enterprise Loop measurement rejects token zero-reporting and old claim rep
   );
 });
 
+test("an interrupted implementation accounts usage without accepting discarded workspace bytes", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "mn-loop-measurement-interrupted-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const cas = new RunScopedCas({ localRoot: root });
+  const usage = authoritativeProxyUsage([], new Map());
+  const proof = issueLoopBudgetMeasurement({
+    tenantId,
+    runId,
+    workerId,
+    claimDigest,
+    stageAttemptId: `${runId}:implementation:1`,
+    stage: "implementation",
+    attempt: 1,
+    intervalStartedAt: claimedAt,
+    measuredAt,
+    usageRequestIds: usage.requestIds,
+    usageDigest: usage.digest,
+    delta: {
+      durationSeconds: 1,
+      tokens: 0,
+      costUsd: 0,
+      changedFiles: 0,
+      changedLines: 0
+    },
+    signingKey: key
+  });
+  const completed = governedState(proof);
+  const interruptedAttempt = {
+    ...completed.attempts[0]!,
+    status: "failed" as const,
+    failure: {
+      kind: "interrupted" as const,
+      retryable: true,
+      reason: "resumed from the last durable checkpoint"
+    }
+  };
+  const interrupted: GovernedRunState = {
+    ...completed,
+    status: "running",
+    currentStage: "implementation",
+    attempts: [interruptedAttempt],
+    budgetUsage: interruptedAttempt.budgetUsage
+  };
+
+  assert.equal(
+    await validateEnterpriseLoopBudgetMeasurements(
+      validationInput({
+        state: interrupted,
+        run: { ...run(), status: "running", candidates: [] },
+        cas
+      })
+    ),
+    undefined
+  );
+  assert.match(
+    (await validateEnterpriseLoopBudgetMeasurements(
+      validationInput({ state: completed, cas })
+    )) ?? "",
+    /no authoritative diff artifact/u
+  );
+});
+
 test("a repair checkpoint keeps the first implementation proof while binding only the new winner", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "mn-loop-measurement-repair-"));
   t.after(() => rm(root, { recursive: true, force: true }));

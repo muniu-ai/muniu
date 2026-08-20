@@ -916,6 +916,14 @@ const runJobLoopMeasurementSchema = runJobQueueClaimTokenSchema.extend({
     "learning"
   ]),
   attempt: z.number().int().positive().max(1_000_000),
+  resultStatus: z.enum([
+    "completed",
+    "failed",
+    "waiting_approval",
+    "cancelled",
+    "handler_error",
+    "invalid_handler_result"
+  ]),
   workspaceUri: z.string().min(1).max(4_096).optional(),
   candidateId: z.string().min(1).max(512).optional()
 }).strict();
@@ -5840,6 +5848,7 @@ export function buildServer(options: BuildServerOptions = {}) {
       const durable = executionStateFromEnterpriseClaim(active);
       const run = durable.run;
       const project = durable.project ?? store.projects.get(run.projectId);
+      const task = durable.task ?? store.tasks.get(run.taskId);
       const state = durable.governedLoopState ?? store.governedLoopStates.get(id);
       if (
         !run?.harnessManifest ||
@@ -5942,146 +5951,163 @@ export function buildServer(options: BuildServerOptions = {}) {
         candidateSnapshotDigest: string;
       } | undefined;
       if (body.stage === "implementation") {
-        if (!body.workspaceUri || !body.candidateId) {
+        const discardedAttempt = [
+          "handler_error",
+          "invalid_handler_result",
+          "cancelled"
+        ].includes(body.resultStatus);
+        if (Boolean(body.workspaceUri) !== Boolean(body.candidateId)) {
+          return reply.code(400).send({
+            error: "implementation measurement requires both workspaceUri and candidateId"
+          });
+        }
+        if (!body.workspaceUri && !discardedAttempt) {
           return reply.code(400).send({
             error: "implementation measurement requires a winner workspaceUri and candidateId"
           });
         }
-        const task = store.tasks.get(run.taskId);
-        const attestation = run.sandboxAttestation;
-        const execution = run.sandboxExecution;
-        if (
-          !task ||
-          !attestation ||
-          !execution ||
-          !sandboxRuntimeVerifier ||
-          !active.item.requirementsDigest ||
-          !active.item.workerCapabilityDigest
-        ) {
-          return reply.code(409).send({
-            error: "authoritative implementation runtime bindings are unavailable"
-          });
-        }
-        const expectedCandidateIds = new Set(
-          selectRunRuntimes(task).map((runtimeId, index) => `${runtimeId}-${index + 1}`)
-        );
-        if (!expectedCandidateIds.has(body.candidateId)) {
-          return reply.code(400).send({
-            error: "candidateId is not declared by the immutable task strategy"
-          });
-        }
-        const attestationVerification = verifySandboxAttestation(attestation, {
-          run,
-          tenantId: context.tenantId,
-          workerId: body.ownerId,
-          requirementsDigest: active.item.requirementsDigest,
-          workerCapabilityDigest: active.item.workerCapabilityDigest,
-          claimDigest: active.item.claimTokenHash,
-          signingKey: sandboxAttestationKey
-        });
-        if (!attestationVerification.valid || !sandboxExecutionMatchesAttestation(
-          execution,
-          attestation
-        )) {
-          return reply.code(409).send({
-            error: `implementation sandbox binding is invalid: ${
-              attestationVerification.reason ?? "execution does not match attestation"
-            }`
-          });
-        }
-        const runtimeProofVerification = verifySandboxRuntimeProof(
-          execution.runtimeProof,
-          {
-            attestation,
+        // An indeterminate/invalid/cancelled handler outcome is discarded and
+        // rerun from the last durable checkpoint. Its provider usage and
+        // wall-clock duration remain authoritative, but its uncommitted
+        // workspace cannot become evidence or contribute source-change usage.
+        if (!body.workspaceUri || !body.candidateId) {
+          diffMeasurement = undefined;
+        } else {
+          const attestation = run.sandboxAttestation;
+          const execution = run.sandboxExecution;
+          if (
+            !task ||
+            !attestation ||
+            !execution ||
+            !sandboxRuntimeVerifier ||
+            !active.item.requirementsDigest ||
+            !active.item.workerCapabilityDigest
+          ) {
+            return reply.code(409).send({
+              error: "authoritative implementation runtime bindings are unavailable"
+            });
+          }
+          const expectedCandidateIds = new Set(
+            selectRunRuntimes(task).map((runtimeId, index) => `${runtimeId}-${index + 1}`)
+          );
+          if (!expectedCandidateIds.has(body.candidateId)) {
+            return reply.code(400).send({
+              error: "candidateId is not declared by the immutable task strategy"
+            });
+          }
+          const attestationVerification = verifySandboxAttestation(attestation, {
+            run,
             tenantId: context.tenantId,
-            runId: id,
             workerId: body.ownerId,
+            requirementsDigest: active.item.requirementsDigest,
+            workerCapabilityDigest: active.item.workerCapabilityDigest,
             claimDigest: active.item.claimTokenHash,
-            runtimeId: execution.runtimeId,
-            runtimeDigest: execution.runtimeDigest,
-            imageDigest: execution.imageDigest,
             signingKey: sandboxAttestationKey
-          }
-        );
-        if (!runtimeProofVerification.valid) {
-          return reply.code(409).send({
-            error: `implementation runtime proof is invalid: ${
-              runtimeProofVerification.reason ?? "verification failed"
-            }`
           });
-        }
-        try {
-          const inspected = await sandboxRuntimeVerifier.verify({
-            runtimeId: execution.runtimeId,
-            attestation,
-            projectRoot: project.rootPath
-          });
-          if (
-            inspected.runtimeId !== execution.runtimeId ||
-            inspected.runtimeDigest !== execution.runtimeDigest
-          ) {
-            throw new Error("runtime inspection no longer matches the API-issued proof");
+          if (!attestationVerification.valid || !sandboxExecutionMatchesAttestation(
+            execution,
+            attestation
+          )) {
+            return reply.code(409).send({
+              error: `implementation sandbox binding is invalid: ${
+                attestationVerification.reason ?? "execution does not match attestation"
+              }`
+            });
           }
-          const candidateRoot = await resolveAuthoritativeCandidateWorkspace({
-            workspaceUri: body.workspaceUri,
-            leaseId: attestation.leaseId,
-            scratchRoot: inspected.scratchRoot,
+          const runtimeProofVerification = verifySandboxRuntimeProof(
+            execution.runtimeProof,
+            {
+              attestation,
+              tenantId: context.tenantId,
+              runId: id,
+              workerId: body.ownerId,
+              claimDigest: active.item.claimTokenHash,
+              runtimeId: execution.runtimeId,
+              runtimeDigest: execution.runtimeDigest,
+              imageDigest: execution.imageDigest,
+              signingKey: sandboxAttestationKey
+            }
+          );
+          if (!runtimeProofVerification.valid) {
+            return reply.code(409).send({
+              error: `implementation runtime proof is invalid: ${
+                runtimeProofVerification.reason ?? "verification failed"
+              }`
+            });
+          }
+          try {
+            const inspected = await sandboxRuntimeVerifier.verify({
+              runtimeId: execution.runtimeId,
+              attestation,
+              projectRoot: project.rootPath
+            });
+            if (
+              inspected.runtimeId !== execution.runtimeId ||
+              inspected.runtimeDigest !== execution.runtimeDigest
+            ) {
+              throw new Error("runtime inspection no longer matches the API-issued proof");
+            }
+            const candidateRoot = await resolveAuthoritativeCandidateWorkspace({
+              workspaceUri: body.workspaceUri,
+              leaseId: attestation.leaseId,
+              scratchRoot: inspected.scratchRoot,
+              runId: id,
+              implementationAttempt: body.attempt,
+              candidateId: body.candidateId
+            });
+            diffMeasurement = await measureAuthoritativeLoopWorkspaceDiff({
+              projectRoot: inspected.projectRoot,
+              candidateRoot
+            });
+            const reinspection = await sandboxRuntimeVerifier.verify({
+              runtimeId: execution.runtimeId,
+              attestation,
+              projectRoot: project.rootPath
+            });
+            if (
+              reinspection.runtimeDigest !== inspected.runtimeDigest ||
+              reinspection.projectRoot !== inspected.projectRoot ||
+              reinspection.scratchRoot !== inspected.scratchRoot
+            ) {
+              throw new Error("runtime mount binding changed during diff measurement");
+            }
+            diffDomain = {
+              candidateId: body.candidateId,
+              workspaceUri: body.workspaceUri,
+              leaseId: attestation.leaseId,
+              runtimeId: execution.runtimeId,
+              runtimeProofDigest: execution.runtimeProof.digest,
+              projectSnapshotDigest: diffMeasurement.projectSnapshotDigest,
+              candidateSnapshotDigest: diffMeasurement.candidateSnapshotDigest
+            };
+          } catch (error) {
+            return reply.code(400).send({
+              error: error instanceof Error ? error.message : "authoritative Loop diff failed"
+            });
+          }
+          const stillActive = await enterprisePostgres.inspectClaim({
             runId: id,
-            implementationAttempt: body.attempt,
-            candidateId: body.candidateId
-          });
-          diffMeasurement = await measureAuthoritativeLoopWorkspaceDiff({
-            projectRoot: inspected.projectRoot,
-            candidateRoot
-          });
-          const reinspection = await sandboxRuntimeVerifier.verify({
-            runtimeId: execution.runtimeId,
-            attestation,
-            projectRoot: project.rootPath
+            ownerId: body.ownerId,
+            claimToken: body.claimToken
           });
           if (
-            reinspection.runtimeDigest !== inspected.runtimeDigest ||
-            reinspection.projectRoot !== inspected.projectRoot ||
-            reinspection.scratchRoot !== inspected.scratchRoot
+            !stillActive ||
+            stillActive.item.tenantId !== context.tenantId ||
+            stillActive.item.claimTokenHash !== active.item.claimTokenHash ||
+            stillActive.item.workerCapabilityDigest !== active.item.workerCapabilityDigest
           ) {
-            throw new Error("runtime mount binding changed during diff measurement");
+            return reply.code(409).send({
+              error: "run job claim changed during authoritative diff measurement"
+            });
           }
-          diffDomain = {
-            candidateId: body.candidateId,
-            workspaceUri: body.workspaceUri,
-            leaseId: attestation.leaseId,
-            runtimeId: execution.runtimeId,
-            runtimeProofDigest: execution.runtimeProof.digest,
-            projectSnapshotDigest: diffMeasurement.projectSnapshotDigest,
-            candidateSnapshotDigest: diffMeasurement.candidateSnapshotDigest
-          };
-        } catch (error) {
-          return reply.code(400).send({
-            error: error instanceof Error ? error.message : "authoritative Loop diff failed"
+          diffCas = await runScopedCas.put({
+            tenantId: context.tenantId,
+            projectId: run.projectId,
+            runId: id,
+            contentType: LOOP_DIFF_MANIFEST_CONTENT_TYPE,
+            content: diffMeasurement.content
           });
         }
-        const stillActive = await enterprisePostgres.inspectClaim({
-          runId: id,
-          ownerId: body.ownerId,
-          claimToken: body.claimToken
-        });
-        if (
-          !stillActive ||
-          stillActive.item.tenantId !== context.tenantId ||
-          stillActive.item.claimTokenHash !== active.item.claimTokenHash ||
-          stillActive.item.workerCapabilityDigest !== active.item.workerCapabilityDigest
-        ) {
-          return reply.code(409).send({
-            error: "run job claim changed during authoritative diff measurement"
-          });
-        }
-        diffCas = await runScopedCas.put({
-          tenantId: context.tenantId,
-          projectId: run.projectId,
-          runId: id,
-          contentType: LOOP_DIFF_MANIFEST_CONTENT_TYPE,
-          content: diffMeasurement.content
-        });
       } else if (body.workspaceUri !== undefined || body.candidateId !== undefined) {
         return reply.code(400).send({
           error: "only implementation attempts may submit a workspace reference"
@@ -8113,9 +8139,19 @@ export async function validateEnterpriseLoopBudgetMeasurements(input: {
     }
     if (attempt.stage === "implementation") {
       if (!proof.diffArtifact) {
-        return `implementation attempt ${attempt.id} has no authoritative diff artifact`;
-      }
-      if (newlyMeasured) {
+        const discardedAttempt =
+          [
+            "interrupted",
+            "handler_error",
+            "invalid_handler_result",
+            "cancelled"
+          ].includes(attempt.failure?.kind ?? "") &&
+          proof.delta.changedFiles === 0 &&
+          proof.delta.changedLines === 0;
+        if (!discardedAttempt) {
+          return `implementation attempt ${attempt.id} has no authoritative diff artifact`;
+        }
+      } else if (newlyMeasured) {
         const candidate = input.run.candidates.find(
           (entry) => entry.id === proof.diffArtifact?.candidateId
         );
@@ -8128,59 +8164,61 @@ export async function validateEnterpriseLoopBudgetMeasurements(input: {
           return `implementation attempt ${attempt.id} diff source is not bound to the reported winner workspace`;
         }
       }
-      const runtimeBindings = [
-        ...(input.run.sandboxEvidenceHistory ?? []).map((binding) => binding.execution),
-        ...(input.run.sandboxExecution ? [input.run.sandboxExecution] : [])
-      ];
-      const runtime = runtimeBindings.find(
-        (execution) =>
-          execution.leaseId === proof.diffArtifact?.leaseId &&
-          execution.runtimeId === proof.diffArtifact.runtimeId &&
-          execution.runtimeProof.digest === proof.diffArtifact.runtimeProofDigest
-      );
-      if (
-        !runtime ||
-        runtime.runtimeProof.claimDigest !== proof.claimDigest ||
-        runtime.runtimeProof.runId !== input.run.id ||
-        runtime.runtimeProof.tenantId !== input.tenantId
-      ) {
-        return `implementation attempt ${attempt.id} diff source runtime domain is invalid`;
-      }
-      const expectedUri = `mn://cas/loop-diffs/${encodeURIComponent(proof.diffArtifact.id)}`;
-      if (proof.diffArtifact.uri !== expectedUri) {
-        return `implementation attempt ${attempt.id} diff artifact URI is invalid`;
-      }
-      const ref: RunScopedCasObjectRef = {
-        schemaVersion: 1,
-        objectKey: proof.diffArtifact.id,
-        digest: proof.diffArtifact.digest,
-        byteLength: proof.diffArtifact.byteLength,
-        contentType: LOOP_DIFF_MANIFEST_CONTENT_TYPE
-      };
-      let content: Buffer | undefined;
-      try {
-        content = await input.cas.readVerified(ref);
-      } catch (error) {
-        return `implementation attempt ${attempt.id} diff CAS verification failed: ${
-          error instanceof Error ? error.message : "invalid CAS object"
-        }`;
-      }
-      if (!content) {
-        return `implementation attempt ${attempt.id} diff CAS object is missing`;
-      }
-      let measured;
-      try {
-        measured = measureLoopDiffManifest(content);
-      } catch (error) {
-        return `implementation attempt ${attempt.id} diff manifest is invalid: ${
-          error instanceof Error ? error.message : "invalid diff manifest"
-        }`;
-      }
-      if (
-        proof.delta.changedFiles !== measured.changedFiles ||
-        proof.delta.changedLines !== measured.changedLines
-      ) {
-        return `implementation attempt ${attempt.id} change usage does not match CAS bytes`;
+      if (proof.diffArtifact) {
+        const runtimeBindings = [
+          ...(input.run.sandboxEvidenceHistory ?? []).map((binding) => binding.execution),
+          ...(input.run.sandboxExecution ? [input.run.sandboxExecution] : [])
+        ];
+        const runtime = runtimeBindings.find(
+          (execution) =>
+            execution.leaseId === proof.diffArtifact?.leaseId &&
+            execution.runtimeId === proof.diffArtifact.runtimeId &&
+            execution.runtimeProof.digest === proof.diffArtifact.runtimeProofDigest
+        );
+        if (
+          !runtime ||
+          runtime.runtimeProof.claimDigest !== proof.claimDigest ||
+          runtime.runtimeProof.runId !== input.run.id ||
+          runtime.runtimeProof.tenantId !== input.tenantId
+        ) {
+          return `implementation attempt ${attempt.id} diff source runtime domain is invalid`;
+        }
+        const expectedUri = `mn://cas/loop-diffs/${encodeURIComponent(proof.diffArtifact.id)}`;
+        if (proof.diffArtifact.uri !== expectedUri) {
+          return `implementation attempt ${attempt.id} diff artifact URI is invalid`;
+        }
+        const ref: RunScopedCasObjectRef = {
+          schemaVersion: 1,
+          objectKey: proof.diffArtifact.id,
+          digest: proof.diffArtifact.digest,
+          byteLength: proof.diffArtifact.byteLength,
+          contentType: LOOP_DIFF_MANIFEST_CONTENT_TYPE
+        };
+        let content: Buffer | undefined;
+        try {
+          content = await input.cas.readVerified(ref);
+        } catch (error) {
+          return `implementation attempt ${attempt.id} diff CAS verification failed: ${
+            error instanceof Error ? error.message : "invalid CAS object"
+          }`;
+        }
+        if (!content) {
+          return `implementation attempt ${attempt.id} diff CAS object is missing`;
+        }
+        let measured;
+        try {
+          measured = measureLoopDiffManifest(content);
+        } catch (error) {
+          return `implementation attempt ${attempt.id} diff manifest is invalid: ${
+            error instanceof Error ? error.message : "invalid diff manifest"
+          }`;
+        }
+        if (
+          proof.delta.changedFiles !== measured.changedFiles ||
+          proof.delta.changedLines !== measured.changedLines
+        ) {
+          return `implementation attempt ${attempt.id} change usage does not match CAS bytes`;
+        }
       }
     } else if (
       proof.diffArtifact !== undefined ||

@@ -2576,6 +2576,7 @@ async function runEnterpriseClaimedJob(
         stageAttemptId: request.stageAttemptId,
         stage: request.stage,
         attempt: request.attempt,
+        resultStatus: request.resultStatus,
         ...(request.workspaceUri && request.candidateId
           ? {
               workspaceUri: request.workspaceUri,
