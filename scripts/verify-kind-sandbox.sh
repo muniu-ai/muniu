@@ -360,6 +360,16 @@ run_failover_controller verify || {
 postgres_pod="$(kubectl -n muniu-kind get pod -l app=muniu-kind-postgres -o jsonpath='{.items[0].metadata.name}')"
 kubectl -n muniu-kind delete pod "${postgres_pod}" --wait=false
 kubectl -n muniu-kind rollout status deployment/muniu-kind-postgres --timeout=180s
+# The API and Worker deliberately fail closed while PostgreSQL is unavailable,
+# so Kubernetes can restart their processes during this probe. A kubectl
+# service port-forward is pinned to the Pod selected when it starts and exits
+# with that Pod; recreate it only after both replicated tiers are healthy.
+wait_for_ready_replicas muniu-api 2
+wait_for_ready_replicas muniu-worker 2
+stop_port_forward "${api_port_forward_pid}"
+start_port_forward service/muniu 57318:80 "${fixture_state_dir}/api-port-forward-after-postgres-restart.log"
+api_port_forward_pid="${last_port_forward_pid}"
+wait_for_http http://127.0.0.1:57318/healthz
 run_failover_controller post-restart || {
   diagnose_enterprise
   exit 1

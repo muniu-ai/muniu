@@ -5,6 +5,7 @@ import type { AddressInfo } from "node:net";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import { sha256Canonical } from "@mn/governance";
 import {
@@ -135,17 +136,11 @@ test(
         reservationId
       );
     }
-    const pendingAudit = await runtime.pool.query<{
-      policy_decision: string;
-      result: string;
-      status_code: number;
-    }>(`
-      SELECT policy_decision,result,status_code
-      FROM mn_audit_events
-      WHERE tenant_id=$1 AND action=$2
-      ORDER BY occurred_at DESC LIMIT 1
-    `, ["tenant-a", "GET /v1/usage/summary"]);
-    assert.deepEqual(pendingAudit.rows[0], {
+    const pendingAudit = await waitForHttpAudit(runtime.pool, {
+      tenantId: "tenant-a",
+      action: "GET /v1/usage/summary"
+    });
+    assert.deepEqual(pendingAudit, {
       policy_decision: "deny",
       result: "failure",
       status_code: 409
@@ -424,6 +419,33 @@ test(
     })).pendingReservations.length, 0);
   }
 );
+
+async function waitForHttpAudit(
+  pool: Pool,
+  input: { tenantId: string; action: string },
+  timeoutMs = 2_000
+): Promise<{
+  policy_decision: string;
+  result: string;
+  status_code: number;
+}> {
+  const deadline = Date.now() + timeoutMs;
+  do {
+    const audit = await pool.query<{
+      policy_decision: string;
+      result: string;
+      status_code: number;
+    }>(`
+      SELECT policy_decision,result,status_code
+      FROM mn_audit_events
+      WHERE tenant_id=$1 AND action=$2
+      ORDER BY occurred_at DESC LIMIT 1
+    `, [input.tenantId, input.action]);
+    if (audit.rows[0]) return audit.rows[0];
+    await delay(10);
+  } while (Date.now() < deadline);
+  throw new Error(`Timed out waiting for audit event ${input.action}`);
+}
 
 test(
   "PostgreSQL keeps failover pending until terminal success and usage routes fail 503",
