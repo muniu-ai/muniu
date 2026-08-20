@@ -14,7 +14,7 @@ API 与 Worker 使用不同 ServiceAccount。Worker 只拥有候选 Pod 的 crea
 
 非 fixture Worker 默认只声明 `builtin`。模型 Provider 凭据仅配置在 API 的 secret/vault 中，不得写入 Worker 或候选 Pod。`node` 必须同时存在于 Harness command allowlist 和候选镜像，因为文件工具通过无 shell 的 Node runtime 执行；任意命令仍需命中签名租约的可执行文件白名单。
 
-活动工具 broker 已使用 PostgreSQL generation、owner lease、mailbox 与运行绑定的审批决定，不依赖负载均衡粘滞。API Pod 名通过 Downward API 绑定为稳定 owner identity，优雅退出会 relinquish owner；租约过期或 claim 变更会创建新 generation，并在恢复 durable session 后继续。未确认工具不得自动重放：旧审批必须以 `interrupted/deny` 结束，恢复后的模型重新发起工具调用和审批。broker 表中的原始工具载荷只承担活动传输，长期证据仍写入受保护的 Agent session。运行绑定的 `on-risk` 审批由请求事件摘要、binding 摘要和决定共同幂等绑定，任意 API 副本均可提交；Gate CAS 句柄与权威回执在消费前从 PostgreSQL 合并到副本缓存，不要求注册请求与 checkpoint 命中同一 API。独立 `/v1/agent-sessions` 审批仍需命中持有本机会话 waiter 的 API。
+活动工具 broker 已使用 PostgreSQL generation、owner lease、mailbox 与运行绑定的审批决定，不依赖负载均衡粘滞。API Pod 名通过 Downward API 绑定为稳定 owner identity，优雅退出会 relinquish owner；租约过期或 claim 变更会创建新 generation，并在恢复 durable session 后继续。未确认工具不得自动重放：旧审批必须以 `interrupted/deny` 结束，恢复后的模型重新发起工具调用和审批。broker 表中的原始工具载荷只承担活动传输，长期证据仍写入受保护的 Agent session。运行绑定的 `on-risk` 审批由请求事件摘要、binding 摘要和决定共同幂等绑定，任意 API 副本均可提交；Run 查询和 Approval/Demo 批准读取 PostgreSQL 当前队列载荷，重复的同 actor/decision 请求返回既有决定。Gate CAS 句柄与权威回执是显式写入、不可由副本缓存对账裁剪的追加型元数据；消费前仍从 PostgreSQL 合并到当前副本，因此注册与 checkpoint 不需要命中同一 API。独立 `/v1/agent-sessions` 审批仍需命中持有本机会话 waiter 的 API。
 
 唯一租户 scope 的 Provider 非敏感目录元数据由 PostgreSQL 保存并在替换副本启动时恢复；旧的无 scope 或多租户目录保持进程本地兼容，不会被权威 restore 删除，也不具备跨副本保证。首次从旧企业快照升级时只追加迁移 provider kind，不用尚未 hydrate 的内存镜像覆盖权威数据。API key 等密钥不进入 provider 元数据，必须由每个 API 副本通过环境变量或 Vault/KMS 获取。
 

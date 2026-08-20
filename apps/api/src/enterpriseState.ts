@@ -49,6 +49,22 @@ export const ENTERPRISE_METADATA_KINDS = Object.freeze([
   "provider"
 ] as const);
 
+/** Immutable execution evidence is written by the claim/artifact transaction
+ * that creates it. A stale API replica must never prune it while reconciling
+ * its mutable control-plane cache. */
+export const ENTERPRISE_APPEND_ONLY_METADATA_KINDS = Object.freeze([
+  "gate_artifact_handle",
+  "authoritative_gate_receipt"
+] as const);
+
+export const ENTERPRISE_RECONCILED_METADATA_KINDS = Object.freeze(
+  ENTERPRISE_METADATA_KINDS.filter((kind) =>
+    !ENTERPRISE_APPEND_ONLY_METADATA_KINDS.includes(
+      kind as (typeof ENTERPRISE_APPEND_ONLY_METADATA_KINDS)[number]
+    )
+  )
+);
+
 function objectPayload(record: EnterpriseMetadataRecord): Record<string, unknown> {
   const payload = record.payload;
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {

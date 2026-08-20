@@ -10,6 +10,11 @@ import {
 import type { EnterpriseMetadataRecord } from "../src/enterprisePostgres.js";
 import type { GateArtifactHandleRecord } from "../src/store.js";
 import { MemoryStore } from "../src/store.js";
+import {
+  ENTERPRISE_APPEND_ONLY_METADATA_KINDS,
+  ENTERPRISE_METADATA_KINDS,
+  ENTERPRISE_RECONCILED_METADATA_KINDS
+} from "../src/enterpriseState.js";
 
 test("a second API replica imports PostgreSQL-authoritative Gate artifact handles", () => {
   const record: GateArtifactHandleRecord = {
@@ -66,6 +71,29 @@ test("Gate evidence metadata merge fails closed on tenant and digest drift", () 
       digest: "f".repeat(64)
     }]),
     /digest changed/u
+  );
+});
+
+test("immutable Gate evidence is never pruned by mutable replica reconciliation", () => {
+  assert.deepEqual(ENTERPRISE_APPEND_ONLY_METADATA_KINDS, [
+    "gate_artifact_handle",
+    "authoritative_gate_receipt"
+  ]);
+  assert.deepEqual(
+    [...ENTERPRISE_RECONCILED_METADATA_KINDS].sort(),
+    ENTERPRISE_METADATA_KINDS.filter(
+      (kind) => !ENTERPRISE_APPEND_ONLY_METADATA_KINDS.includes(
+        kind as (typeof ENTERPRISE_APPEND_ONLY_METADATA_KINDS)[number]
+      )
+    ).sort()
+  );
+  assert.equal(
+    ENTERPRISE_RECONCILED_METADATA_KINDS.some((kind) =>
+      ENTERPRISE_APPEND_ONLY_METADATA_KINDS.includes(
+        kind as (typeof ENTERPRISE_APPEND_ONLY_METADATA_KINDS)[number]
+      )
+    ),
+    false
   );
 });
 

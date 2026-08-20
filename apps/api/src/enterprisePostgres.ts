@@ -1431,6 +1431,23 @@ export class EnterprisePostgresRuntime {
     return row ? itemFromRow(row) : undefined;
   }
 
+  /** Authoritative control-plane view used by any API replica. Unlike a
+   * worker claim inspection this read intentionally requires no claim token. */
+  async readRunJobSnapshot(runId: string): Promise<EnterpriseClaimSnapshot | undefined> {
+    const result = await this.pool.query<RunJobRow>(
+      "SELECT * FROM mn_run_jobs WHERE run_id=$1",
+      [identifier(runId, "runId")]
+    );
+    const row = result.rows[0];
+    if (!row) return undefined;
+    assertCheckpointIntegrity(row);
+    return Object.freeze({
+      item: itemFromRow(row),
+      payload: row.payload,
+      checkpointDigest: row.checkpoint_digest
+    });
+  }
+
   async listRunJobs(input: {
     status?: EnterpriseRunJobListStatus;
     tenantId?: string;

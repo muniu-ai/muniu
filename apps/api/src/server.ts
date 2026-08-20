@@ -209,7 +209,7 @@ import {
   mergeEnterpriseGateEvidenceMetadata
 } from "./enterpriseEvidenceMetadata.js";
 import {
-  ENTERPRISE_METADATA_KINDS,
+  ENTERPRISE_RECONCILED_METADATA_KINDS,
   restoreEnterpriseSnapshot
 } from "./enterpriseState.js";
 import {
@@ -1787,10 +1787,14 @@ export function buildServer(options: BuildServerOptions = {}) {
   };
   const syncEnterpriseMetadata = async (): Promise<void> => {
     if (!enterprisePostgres) return;
-    const durableRecords = await collectEnterpriseMetadata();
+    const durableRecords = (await collectEnterpriseMetadata()).filter((record) =>
+      ENTERPRISE_RECONCILED_METADATA_KINDS.includes(
+        record.kind as (typeof ENTERPRISE_RECONCILED_METADATA_KINDS)[number]
+      )
+    );
     await enterprisePostgres.reconcileMetadata({
       records: durableRecords,
-      managedKinds: ENTERPRISE_METADATA_KINDS
+      managedKinds: ENTERPRISE_RECONCILED_METADATA_KINDS
     });
   };
   const refreshEnterpriseGateEvidenceMetadata = async (
@@ -2541,11 +2545,15 @@ export function buildServer(options: BuildServerOptions = {}) {
         succeeded &&
         domainPlans.some((plan) => plan.mutates)
       ) {
-        const records = await collectEnterpriseMetadata();
+        const records = (await collectEnterpriseMetadata()).filter((record) =>
+          ENTERPRISE_RECONCILED_METADATA_KINDS.includes(
+            record.kind as (typeof ENTERPRISE_RECONCILED_METADATA_KINDS)[number]
+          )
+        );
         try {
           await enterprisePostgres.reconcileMetadata({
             records,
-            managedKinds: ENTERPRISE_METADATA_KINDS,
+            managedKinds: ENTERPRISE_RECONCILED_METADATA_KINDS,
             auditEvents: domainEvents,
             now: timestamp
           });
@@ -5897,8 +5905,18 @@ export function buildServer(options: BuildServerOptions = {}) {
           cas,
           registeredAt: new Date().toISOString()
         });
-        store.gateArtifactHandles.set(record.handle, record);
       }
+      if (enterprisePostgres) {
+        await enterprisePostgres.upsertMetadata(
+          enterpriseMetadataWrite(
+            context.tenantId,
+            "gate_artifact_handle",
+            record.handle,
+            record
+          )
+        );
+      }
+      store.gateArtifactHandles.set(record.handle, record);
       return reply.code(created ? 201 : 200).send({
         id: record.handle,
         artifact: gateArtifactFromRecord(record)
@@ -6710,6 +6728,19 @@ export function buildServer(options: BuildServerOptions = {}) {
 
   app.get("/v1/runs/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
+    if (enterprisePostgres) {
+      const context = requestContexts.get(request) ?? localRequestContext(request.id);
+      const snapshot = await enterprisePostgres.readRunJobSnapshot(id);
+      if (!snapshot || snapshot.item.tenantId !== context.tenantId) {
+        return reply.code(404).send({ error: "run not found" });
+      }
+      const durable = executionStateFromEnterpriseClaim(snapshot);
+      store.runs.set(id, durable.run);
+      if (durable.governedLoopState) {
+        store.governedLoopStates.set(id, durable.governedLoopState);
+      }
+      return durable.run;
+    }
     const run = store.runs.get(id);
     if (!run) return reply.code(404).send({ error: "run not found" });
     return run;
@@ -6817,9 +6848,45 @@ export function buildServer(options: BuildServerOptions = {}) {
 
   app.post("/v1/runs/:id/approve", async (request, reply) => {
     const { id } = request.params as { id: string };
-    const run = store.runs.get(id);
+    const context = requestContexts.get(request) ?? localRequestContext(request.id);
+    const enterpriseSnapshot = enterprisePostgres
+      ? await enterprisePostgres.readRunJobSnapshot(id)
+      : undefined;
+    if (enterprisePostgres && !enterpriseSnapshot) {
+      return reply.code(404).send({ error: "run not found" });
+    }
+    if (
+      enterpriseSnapshot &&
+      enterpriseSnapshot.item.tenantId !== context.tenantId
+    ) {
+      return reply.code(404).send({ error: "run not found" });
+    }
+    const durable = enterpriseSnapshot
+      ? executionStateFromEnterpriseClaim(enterpriseSnapshot)
+      : undefined;
+    if (durable) {
+      store.runs.set(id, durable.run);
+      if (durable.project) store.projects.set(durable.project.id, durable.project);
+      if (durable.task) store.tasks.set(durable.task.id, durable.task);
+      if (durable.governedLoopState) {
+        store.governedLoopStates.set(id, durable.governedLoopState);
+      }
+    }
+    const run = durable?.run ?? store.runs.get(id);
     if (!run) return reply.code(404).send({ error: "run not found" });
     if (run.status !== "waiting_approval") {
+      if (enterpriseSnapshot) {
+        const body = runApprovalSchema.parse(request.body ?? {});
+        const actorId = context.authentication === "local" ? body.actorId : context.actorId;
+        if (matchesEnterpriseApprovalReplay(
+          enterpriseSnapshot.payload,
+          id,
+          body.decision,
+          actorId
+        )) {
+          return reply.code(isTerminalRunStatus(run.status) ? 200 : 202).send(run);
+        }
+      }
       return reply.code(409).send({ error: "run is not waiting for approval" });
     }
     const task = store.tasks.get(run.taskId);
@@ -6827,7 +6894,6 @@ export function buildServer(options: BuildServerOptions = {}) {
     const loopState = store.governedLoopStates.get(id);
     if (task?.specRef && project && loopState) {
       const body = runApprovalSchema.parse(request.body ?? {});
-      const context = requestContexts.get(request) ?? localRequestContext(request.id);
       const actorId = context.authentication === "local"
         ? body.actorId
         : context.actorId;
@@ -6859,11 +6925,35 @@ export function buildServer(options: BuildServerOptions = {}) {
           statusCode: 202,
           timestamp: decision.decidedAt
         });
-        await enqueueEnterpriseRunJob(project, task, queued, {
-          governedResumeState: loopState,
-          approvalDecision: decision,
-          auditEvent
-        });
+        try {
+          await enqueueEnterpriseRunJob(project, task, queued, {
+            governedResumeState: loopState,
+            approvalDecision: decision,
+            auditEvent
+          });
+        } catch (error) {
+          if (
+            error instanceof Error &&
+            error.message === "cannot enqueue over an active enterprise claim"
+          ) {
+            const latest = await enterprisePostgres.readRunJobSnapshot(id);
+            if (
+              latest?.item.tenantId === context.tenantId &&
+              matchesEnterpriseApprovalReplay(
+                latest.payload,
+                id,
+                body.decision,
+                actorId
+              )
+            ) {
+              const latestRun = executionStateFromEnterpriseClaim(latest).run;
+              store.runs.set(id, latestRun);
+              return reply.code(isTerminalRunStatus(latestRun.status) ? 200 : 202)
+                .send(latestRun);
+            }
+          }
+          throw error;
+        }
         precommittedDomainAuditEvents.set(request, [auditEvent]);
         return reply.code(202).send(queued);
       }
@@ -8767,6 +8857,19 @@ function approvalDecisionFromClaimPayload(
   } catch {
     return "enterprise approvalDecision payload is malformed";
   }
+}
+
+function matchesEnterpriseApprovalReplay(
+  payload: Readonly<Record<string, unknown>>,
+  runId: string,
+  decision: "approve" | "reject",
+  actorId: string
+): boolean {
+  const prior = approvalDecisionFromClaimPayload(payload);
+  return typeof prior === "object" && prior !== null &&
+    prior.runId === runId &&
+    prior.decision === decision &&
+    prior.actorId === actorId;
 }
 
 function normalizeExternalGateEvidence(

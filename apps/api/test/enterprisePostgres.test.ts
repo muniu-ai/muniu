@@ -133,6 +133,10 @@ test(
       now: "2026-07-11T00:00:01.000Z"
     });
     assert.equal(queued.version, 2);
+    const queuedSnapshot = await runtime.readRunJobSnapshot(runId);
+    assert.equal(queuedSnapshot?.item.status, "queued");
+    assert.deepEqual(queuedSnapshot?.payload, { workflow: "governed-increment-v1" });
+    assert.equal(queuedSnapshot?.checkpointDigest, null);
 
     const incompatible = await runtime.claimRunJob({
       ownerId: "worker-weak",
@@ -162,6 +166,10 @@ test(
     assert.equal(claim?.item.runId, runId);
     assert.equal(claim?.item.claimToken, undefined);
     assert.equal(claim?.payload.workflow, "governed-increment-v1");
+    const runningSnapshot = await runtime.readRunJobSnapshot(runId);
+    assert.equal(runningSnapshot?.item.status, "running");
+    assert.equal(runningSnapshot?.item.claimToken, undefined);
+    assert.deepEqual(runningSnapshot?.payload, claim?.payload);
     await assert.rejects(
       runtime.enqueueRunJob({
         runId,
