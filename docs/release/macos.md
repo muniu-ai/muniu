@@ -32,10 +32,10 @@ npm run release:mac
 发布脚本使用 Tauri 构建 universal `.app`，再通过 `hdiutil` 无头生成 DMG，不依赖 Finder 或 AppleScript。DMG 包含背景图、固定 Finder 图标布局、`Applications` 快捷链接和 `安装说明.txt`；构建完成后会以只读方式挂载最终镜像并逐项验证。
 
 ```text
-apps/desktop-mac/src-tauri/target/universal-apple-darwin/release/bundle/dmg/Muniu_0.1.0_universal.dmg
+apps/desktop-mac/src-tauri/target/universal-apple-darwin/release/bundle/dmg/Muniu_0.1.1_universal.dmg
 ```
 
-v0.1.0 Developer Preview 不包含运行时自动更新器。`apps/desktop-mac/src-tauri/tauri.conf.json` 必须保持 `bundle.createUpdaterArtifacts: false`，发布脚本只生成 ZIP 和 DMG，不生成 updater archive、签名或 manifest。
+v0.1.1 Developer Preview 不包含运行时自动更新器。`apps/desktop-mac/src-tauri/tauri.conf.json` 必须保持 `bundle.createUpdaterArtifacts: false`，发布脚本只生成 ZIP 和 DMG，不生成 updater archive、签名或 manifest。
 
 本地验证默认生成 unsigned 产物。未来签名发布需提供 Developer ID identity 和 notary profile：
 
@@ -81,7 +81,7 @@ npm run release:mac
 cask 草案故意保留 `REPLACE_WITH_RELEASE_SHA256`。发布前必须替换为真实 DMG 校验值：
 
 ```bash
-shasum -a 256 Muniu_0.1.0_universal.dmg
+shasum -a 256 Muniu_0.1.1_universal.dmg
 ```
 
 本地 tap dry-run：
@@ -95,9 +95,9 @@ brew install --cask --dry-run local/mniu/mniu
 
 仍含 `REPLACE_WITH_RELEASE_SHA256` 时不得发布 cask。
 
-## v0.1.0 更新策略
+## v0.1.1 更新策略
 
-v0.1.0 安装包不会在应用内检查、下载或安装更新。用户需要从不可变 GitHub Release 手动下载新版本，并核对发布页面提供的 SHA-256。发布问题通过新的补丁版本（例如 `v0.1.1`）修复，不覆盖 `v0.1.0` 产物。
+v0.1.1 安装包不会在应用内检查、下载或安装更新。用户需要从不可变 GitHub Release 手动下载新版本，并核对发布页面提供的 SHA-256。发布问题通过新的补丁版本修复，不覆盖既有标签或产物。
 
 未来启用自动更新必须单独进行威胁建模、密钥管理和签名发布审查，不得通过未签名配置启用。
 
@@ -106,7 +106,7 @@ v0.1.0 安装包不会在应用内检查、下载或安装更新。用户需要�
 通过 DMG 安装：
 
 ```bash
-open Muniu_0.1.0_universal.dmg
+open Muniu_0.1.1_universal.dmg
 ```
 
 发布真实 tap 后通过 Homebrew 安装：

@@ -1,6 +1,6 @@
 {
   "name": "@mn/agent-host",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "license": "Apache-2.0",
   "repository": "https://github.com/muniu-ai/muniu",
@@ -17,10 +17,10 @@
     "test:coverage": "tsc -p tsconfig.test.json && node --test --experimental-test-coverage --test-coverage-include=dist-test/src/**/*.js --test-coverage-lines=70 --test-coverage-functions=70 --test-coverage-branches=70 dist-test/test/**/*.test.js"
   },
   "dependencies": {
-    "@mn/agent-kernel": "0.1.0",
-    "@mn/agent-llm": "0.1.0",
-    "@mn/agent-protocol": "0.1.0",
-    "@mn/agent-session": "0.1.0",
-    "@mn/agent-tools": "0.1.0"
+    "@mn/agent-kernel": "0.1.1",
+    "@mn/agent-llm": "0.1.1",
+    "@mn/agent-protocol": "0.1.1",
+    "@mn/agent-session": "0.1.1",
+    "@mn/agent-tools": "0.1.1"
   }
 }

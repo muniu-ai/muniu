@@ -35,7 +35,7 @@ adaptation summary; no unlisted upstream directory or Git history is shipped.
 
 ## Explicitly excluded upstream payloads
 
-Muniu v0.1.0 does not redistribute the Anthropic Claude Agent SDK or platform
+Muniu v0.1.1 does not redistribute the Anthropic Claude Agent SDK or platform
 payloads referenced by the upstream notice, DSH CLI/Web, ACP, Linux Landlock
 binaries, telemetry, anonymous identifier, or feedback upload modules. The
 upstream repository's authorization for a component does not automatically

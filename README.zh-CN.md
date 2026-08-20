@@ -10,7 +10,7 @@ task → run → candidate → gate → evidence
 
 默认运行时是内嵌 `builtin` Agent。Claude Code 与 Codex CLI 仅作为显式兼容运行时，默认工程运行不依赖它们。
 
-> v0.1.0 是开发者预览版。生产可用性以状态矩阵和测试事实为准，不能仅根据 API 或配置项推断。
+> v0.1.1 是开发者预览版。生产可用性以状态矩阵和测试事实为准，不能仅根据 API 或配置项推断。
 
 ## 完成度
 
@@ -32,7 +32,7 @@ task → run → candidate → gate → evidence
 | macOS Desktop 构建 | 已实现 | 不承诺 v0.1 签名、公证、自动更新 |
 | 发布/SBOM/provenance | 发布工作流 | 正式 tag 时生成 |
 
-v0.1.0 不发布或启用桌面运行时 updater；签名、公证和自动更新制品不属于本次发布。
+v0.1.1 不发布或启用桌面运行时 updater；签名、公证和自动更新制品不属于本次发布。
 
 ## 五分钟开始
 

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { isSafePublicControlIdV1 } from "@mn/agent-protocol";
 import { normalizeStrategy } from "@mn/core";
 import type {
   AgentRunInput,
@@ -66,6 +67,41 @@ test("run orchestrator runs mock candidates and selects a winner", async () => {
   assert.equal(run.status, "completed");
   assert.equal(run.candidates.length, 2);
   assert.ok(run.winnerCandidateId);
+
+  await rm(root, { recursive: true, force: true });
+  await rm(workspaceRoot, { recursive: true, force: true });
+});
+
+test("run orchestrator derives a protected-material-safe deterministic session ID", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mn-project-safe-session-"));
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "mn-worktrees-safe-session-"));
+  const project = buildProject(root);
+  const task = buildTask({
+    schemaVersion: 2,
+    targets: [{
+      runtimeId: "builtin",
+      providerId: "default",
+      modelId: "default",
+      candidates: 1
+    }],
+    requiredGates: [],
+    sandbox: "workspace-write",
+    humanApproval: "never",
+    timeoutSeconds: 60
+  });
+  const executor = new RecordingExecutor("builtin");
+  const orchestrator = new RunOrchestrator({
+    workspaceRoot,
+    executors: { builtin: executor }
+  });
+
+  await orchestrator.run(project, task, {
+    runId: "ec3d06f8-a91c-46f0-a215-859330415eb2"
+  });
+
+  const sessionId = executor.lastInput?.executionBinding?.sessionId;
+  assert.match(sessionId ?? "", /^agent-[wxyz]{64}$/u);
+  assert.equal(isSafePublicControlIdV1(sessionId), true);
 
   await rm(root, { recursive: true, force: true });
   await rm(workspaceRoot, { recursive: true, force: true });

@@ -9,7 +9,7 @@ function validInput() {
   return {
     rootPackage: {
       name: "muniu",
-      version: "0.1.0",
+      version: "0.1.1",
       repository: "https://github.com/muniu-ai/muniu",
       packageManager: "npm@11.10.1",
       engines: {
@@ -18,22 +18,22 @@ function validInput() {
       }
     },
     workspacePackages: [
-      { path: "apps/api/package.json", manifest: { name: "@mn/api", version: "0.1.0", private: true } },
-      { path: "packages/runtime/package.json", manifest: { name: "@mn/runtime", version: "0.1.0", private: true } }
+      { path: "apps/api/package.json", manifest: { name: "@mn/api", version: "0.1.1", private: true } },
+      { path: "packages/runtime/package.json", manifest: { name: "@mn/runtime", version: "0.1.1", private: true } }
     ],
     cargoManifest: [
       "[package]",
       'name = "mniu-desktop"',
-      'version = "0.1.0"',
+      'version = "0.1.1"',
       'repository = "https://github.com/muniu-ai/muniu"'
     ].join("\n"),
     tauriConfig: {
-      version: "0.1.0",
+      version: "0.1.1",
       bundle: { createUpdaterArtifacts: false }
     },
     chart: {
-      version: "0.1.0",
-      appVersion: "0.1.0",
+      version: "0.1.1",
+      appVersion: "0.1.1",
       home: "https://github.com/muniu-ai/muniu",
       sources: ["https://github.com/muniu-ai/muniu"]
     },
@@ -65,26 +65,26 @@ function validInput() {
       'gh release create "${RELEASE_TAG}" release/* --verify-tag --generate-notes'
     ].join("\n"),
     technicalDesign: [
-      "v0.1.0 开源发布制品包括 `muniu-v0.1.0.tar.gz`、`muniu-v0.1.0.spdx.json`、许可证与来源清单、校验和与构建证明，以及 `ghcr.io/muniu-ai/muniu:v0.1.0` 双架构镜像。",
-      "macOS Desktop 只完成构建验证，不作为 v0.1.0 公开制品发布。",
-      "v0.1.0 不发布或启用桌面运行时 updater。"
+      "v0.1.1 开源发布制品包括 `muniu-v0.1.1.tar.gz`、`muniu-v0.1.1.spdx.json`、许可证与来源清单、校验和与构建证明，以及 `ghcr.io/muniu-ai/muniu:v0.1.1` 双架构镜像。",
+      "macOS Desktop 只完成构建验证，不作为 v0.1.1 公开制品发布。",
+      "v0.1.1 不发布或启用桌面运行时 updater。"
     ].join("\n")
   };
 }
 
-test("release contract accepts the complete v0.1.0 boundary", () => {
-  assert.deepEqual(validateReleaseContract(validInput(), { tag: "v0.1.0" }), []);
+test("release contract accepts the complete v0.1.1 boundary", () => {
+  assert.deepEqual(validateReleaseContract(validInput(), { tag: "v0.1.1" }), []);
 });
 
 test("release contract rejects mismatched versions and tags", () => {
   const input = validInput();
-  input.workspacePackages[0].manifest.version = "0.1.1";
+  input.workspacePackages[0].manifest.version = "0.1.0";
   input.tauriConfig.version = "0.2.0";
 
-  const failures = validateReleaseContract(input, { tag: "v0.1.1" });
+  const failures = validateReleaseContract(input, { tag: "v0.1.0" });
   assert.equal(failures.some((failure) => failure.includes("apps/api/package.json")), true);
   assert.equal(failures.some((failure) => failure.includes("Tauri")), true);
-  assert.equal(failures.some((failure) => failure.includes("tag v0.1.1")), true);
+  assert.equal(failures.some((failure) => failure.includes("tag v0.1.0")), true);
 });
 
 test("release contract rejects incomplete gates and supply-chain artifacts", () => {
@@ -102,9 +102,9 @@ test("release contract rejects incomplete gates and supply-chain artifacts", () 
   assert.equal(failures.some((failure) => failure.includes("image SBOM")), true);
 });
 
-test("release contract rejects public macOS portable claims for v0.1.0", () => {
+test("release contract rejects public macOS portable claims for v0.1.1", () => {
   const input = validInput();
-  input.technicalDesign += "\n`muniu-v0.1.0-node22-macos-arm64.tar.gz`";
+  input.technicalDesign += "\n`muniu-v0.1.1-node22-macos-arm64.tar.gz`";
 
   const failures = validateReleaseContract(input);
   assert.equal(failures.some((failure) => failure.includes("portable")), true);

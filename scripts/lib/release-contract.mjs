@@ -67,7 +67,7 @@ export function validateReleaseContract(input, options = {}) {
     failures.push(`Tauri config version ${String(input.tauriConfig?.version)} does not match ${version}`);
   }
   if (input.tauriConfig?.bundle?.createUpdaterArtifacts !== false) {
-    failures.push("Tauri updater artifacts must remain disabled for v0.1.0");
+    failures.push(`Tauri updater artifacts must remain disabled for v${String(version)}`);
   }
 
   if (input.chart?.version !== version || input.chart?.appVersion !== version) {
@@ -127,12 +127,12 @@ export function validateReleaseContract(input, options = {}) {
     `muniu-v${version}.spdx.json`,
     `ghcr.io/muniu-ai/muniu:v${version}`,
     "macOS Desktop 只完成构建验证",
-    "v0.1.0 不发布或启用桌面运行时 updater"
+    `v${version} 不发布或启用桌面运行时 updater`
   ]) {
     requireText(failures, technicalDesign, expected, "technical design release boundary");
   }
   if (/node22-macos-(?:arm64|x64)\.tar\.gz/u.test(technicalDesign)) {
-    failures.push("technical design must not claim macOS portable archives are public v0.1.0 artifacts");
+    failures.push(`technical design must not claim macOS portable archives are public v${String(version)} artifacts`);
   }
 
   return failures;

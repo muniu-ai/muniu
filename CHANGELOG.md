@@ -6,9 +6,7 @@ during the Developer Preview.
 
 ## Unreleased
 
-### Planned
-
-- Built-in, policy-controlled tools and macOS fail-closed sandboxing.
+## 0.1.1 - 2026-08-20
 
 ### Added
 
@@ -18,8 +16,23 @@ during the Developer Preview.
   Anthropic Messages adapters.
 - Versioned Agent session REST/SSE API, resumable sessions, durable approvals,
   protected event history, and bounded model audit receipts.
+- Built-in policy-controlled workspace tools, Kubernetes candidate Pod
+  isolation, PostgreSQL/S3 enterprise persistence, Helm deployment, and
+  Cordis-based profiles and plugin lifecycle management.
 
-## 0.1.0 - Unreleased
+### Fixed
+
+- Deterministic built-in Agent session identifiers now use a non-numeric safe
+  alphabet, so a hash can never be mistaken for protected phone or identity
+  material.
+- Release recovery remains bound to immutable tags and emits a production-only
+  SPDX dependency SBOM while retaining complete npm/Cargo license inventories.
+
+## 0.1.0 - Withdrawn before release
+
+The immutable `v0.1.0` qualification tag did not produce a GitHub Release,
+release asset, or GHCR image. A release-gate defect was corrected in v0.1.1;
+the original tag remains unchanged for auditability.
 
 ### Added
 

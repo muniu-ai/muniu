@@ -15,7 +15,7 @@ const arm64Path = path.join(appPath, "Contents/Resources/mn-api-aarch64-apple-da
 const x64Path = path.join(appPath, "Contents/Resources/mn-api-x86_64-apple-darwin");
 const dmgPath = path.join(
   rootDir,
-  "apps/desktop-mac/src-tauri/target/universal-apple-darwin/release/bundle/dmg/Muniu_0.1.0_universal.dmg"
+  "apps/desktop-mac/src-tauri/target/universal-apple-darwin/release/bundle/dmg/Muniu_0.1.1_universal.dmg"
 );
 const home = mkdtempSync(path.join(tmpdir(), "mniu-packaged-home-"));
 const keychainPath = path.join(home, "mniu-verification.keychain-db");

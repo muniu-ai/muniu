@@ -1,6 +1,6 @@
 # Muniu 文档
 
-Muniu v0.1.0 的文档以代码和测试事实为准。根 README 只负责定位、状态与导航；CLI、API、配置和事件参考由脚本生成到 `docs/reference/`。
+Muniu v0.1.1 的文档以代码和测试事实为准。根 README 只负责定位、状态与导航；CLI、API、配置和事件参考由脚本生成到 `docs/reference/`。
 
 ## 入门
 

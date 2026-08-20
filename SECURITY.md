@@ -133,7 +133,7 @@ the same event inode, or turn a path replacement into an out-of-workspace
 append. This is a Developer Preview boundary, not protection against a
 malicious process already running as the same operating-system user.
 
-Signed and notarized desktop binaries are not published in v0.1.0. The desktop
+Signed and notarized desktop binaries are not published in v0.1.1. The desktop
 updater remains disabled until a separately reviewed signed release channel
 exists.
 
