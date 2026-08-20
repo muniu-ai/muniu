@@ -5,6 +5,7 @@ import type { RunStageName } from "@mn/core";
 import {
   GOVERNED_INCREMENT_DEFINITION,
   GOVERNED_INCREMENT_WORKFLOW_REF,
+  GovernedLoopInterruptionError,
   GovernedLoopInputError,
   LoopPersistenceError,
   canonicalJson,
@@ -634,6 +635,24 @@ test("handler throws are classified without persisting exception or secret text"
   assert.equal(result.status, "failed");
   assert.equal(result.failure?.kind, "handler_error");
   assert.doesNotMatch(JSON.stringify(result), /do-not-persist/);
+});
+
+test("infrastructure interruption leaves the durable running checkpoint for takeover", async () => {
+  const input = baseInput({
+    handlers: defaultHandlers({
+      discovery: async () => {
+        throw new GovernedLoopInterruptionError("owner lease expired");
+      }
+    })
+  });
+  await assert.rejects(
+    executeGovernedIncrement(withoutCheckpoints(input)),
+    GovernedLoopInterruptionError
+  );
+  assert.equal(input.checkpoints.length, 1);
+  assert.equal(input.checkpoints[0]?.status, "running");
+  assert.equal(input.checkpoints[0]?.attempts.at(-1)?.status, "running");
+  assert.equal(input.checkpoints[0]?.attempts.at(-1)?.stage, "discovery");
 });
 
 test("Learning cannot auto-activate or emit non-proposal artifacts", async () => {

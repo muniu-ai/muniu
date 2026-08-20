@@ -7,6 +7,7 @@ import type {
 } from "@mn/core";
 import type { BuiltinAgentExecutionInput, BuiltinAgentExecutionOutput } from "@mn/executors";
 import type { SandboxExecutionEvidence, SandboxLeaseAttestation } from "@mn/harness";
+import { GovernedLoopInterruptionError } from "@mn/loop";
 import {
   executeEnterpriseBuiltinWorkspaceTool,
   type DockerAgentSandbox
@@ -99,8 +100,18 @@ export async function runEnterpriseBuiltinAgentCandidate(
       ));
     }
   } catch (error) {
-    await options.transport.post(`${path}/${executionId}/cancel`, claim).catch(() => undefined);
-    throw error;
+    // A non-user transport/authority loss has an indeterminate outcome. Do
+    // not cancel the durable execution: its owner lease and generation are
+    // the takeover authority. Bubble a Loop interruption so the worker
+    // releases its queue claim without terminalizing the running checkpoint.
+    if (options.input.signal?.aborted) {
+      await options.transport.post(`${path}/${executionId}/cancel`, claim).catch(() => undefined);
+      throw error;
+    }
+    throw new GovernedLoopInterruptionError(
+      "Enterprise builtin Agent authority was interrupted before a durable outcome",
+      { cause: error }
+    );
   }
 }
 

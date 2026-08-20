@@ -8,6 +8,7 @@ import { join, relative } from "node:path";
 import test from "node:test";
 
 import type { AgentExecutionBindingV1, EnterpriseBuiltinExecutionViewV1 } from "@mn/core";
+import { GovernedLoopInterruptionError } from "@mn/loop";
 import type {
   DockerAgentSandbox,
   DockerSandboxCommandResult,
@@ -97,6 +98,53 @@ test("enterprise builtin runner relays a Pod tool call and retries the exact res
   assert.deepEqual(submitted[0], submitted[1]);
   assert.deepEqual(submitted[1], submitted[2]);
   assert.equal(await readFile(join(workspace, "result.txt"), "utf8"), "written in sandbox\n");
+});
+
+test("enterprise builtin runner preserves an indeterminate generation for takeover", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "mn-cli-builtin-interruption-"));
+  const workspace = join(root, "candidate");
+  await mkdir(workspace);
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const binding = executionBinding();
+  let cancelRequests = 0;
+
+  await assert.rejects(
+    runEnterpriseBuiltinAgentCandidate({
+      runId: "run-1",
+      ownerId: "worker-1",
+      claimToken: "claim-token-1",
+      backend: new LocalSandbox(root),
+      leaseId: "lease-1",
+      attestation: {} as never,
+      sandboxExecution: {} as never,
+      input: {
+        sessionId: binding.sessionId,
+        runId: binding.runId,
+        candidateId: binding.candidateId,
+        cwd: workspace,
+        prompt: "write result",
+        providerId: "default",
+        modelId: "default",
+        timeoutSeconds: 30,
+        executionBinding: binding
+      },
+      transport: {
+        async post(path) {
+          if (path.endsWith("/builtin-executions")) {
+            return view({ state: "running", revision: 0, binding });
+          }
+          if (path.endsWith("/poll")) throw new Error("owner lease expired");
+          if (path.endsWith("/cancel")) {
+            cancelRequests += 1;
+            return view({ state: "cancelled", revision: 1, binding });
+          }
+          throw new Error(`unexpected transport path ${path}`);
+        }
+      }
+    }),
+    GovernedLoopInterruptionError
+  );
+  assert.equal(cancelRequests, 0);
 });
 
 function executionBinding(): AgentExecutionBindingV1 {

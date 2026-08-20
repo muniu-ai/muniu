@@ -2077,40 +2077,50 @@ async function runWorker(args: string[]): Promise<void> {
       );
     }
 
-    await runClaimedJob(claimed.item, {
-      ownerId,
-      claimToken: claimed.claimToken,
-      ttlMs,
-      capacity,
-      useMockExecutors,
-      mockRepair: readFlag(args, "--mock-repair"),
-      enterprise,
-      claimPayload: claimed.payload,
-      sandboxAttestation: claimed.sandboxAttestation,
-      sandboxImage: approvedSandboxImage ?? requestedSandboxImage ?? "node:22-alpine",
-      dockerBinary:
-        readOption(args, "--docker-binary") ??
-        process.env.MN_DOCKER_BINARY,
-      sandboxDriver,
-      kubernetesNamespace:
-        readOption(args, "--kubernetes-namespace") ??
-        process.env.MN_KUBERNETES_NAMESPACE,
-      kubernetesSharedVolumeClaim:
-        readOption(args, "--kubernetes-shared-volume-claim") ??
-        process.env.MN_KUBERNETES_SHARED_VOLUME_CLAIM,
-      kubernetesSharedWorkspaceRoot:
-        readOption(args, "--kubernetes-shared-root") ??
-        process.env.MN_KUBERNETES_SHARED_ROOT,
-      kubernetesCandidateServiceAccount:
-        readOption(args, "--kubernetes-candidate-service-account") ??
-        process.env.MN_KUBERNETES_CANDIDATE_SERVICE_ACCOUNT,
-      kubernetesRuntimeClass:
-        readOption(args, "--kubernetes-runtime-class") ??
-        process.env.MN_KUBERNETES_RUNTIME_CLASS,
-      workspaceRoot:
-        readOption(args, "--workspace-root") ?? join(process.cwd(), ".mn", "worktrees"),
-      proxyBaseUrl: readOption(args, "--proxy-base-url") ?? claimed.proxyBaseUrl
-    });
+    try {
+      await runClaimedJob(claimed.item, {
+        ownerId,
+        claimToken: claimed.claimToken,
+        ttlMs,
+        capacity,
+        useMockExecutors,
+        mockRepair: readFlag(args, "--mock-repair"),
+        enterprise,
+        claimPayload: claimed.payload,
+        sandboxAttestation: claimed.sandboxAttestation,
+        sandboxImage: approvedSandboxImage ?? requestedSandboxImage ?? "node:22-alpine",
+        dockerBinary:
+          readOption(args, "--docker-binary") ??
+          process.env.MN_DOCKER_BINARY,
+        sandboxDriver,
+        kubernetesNamespace:
+          readOption(args, "--kubernetes-namespace") ??
+          process.env.MN_KUBERNETES_NAMESPACE,
+        kubernetesSharedVolumeClaim:
+          readOption(args, "--kubernetes-shared-volume-claim") ??
+          process.env.MN_KUBERNETES_SHARED_VOLUME_CLAIM,
+        kubernetesSharedWorkspaceRoot:
+          readOption(args, "--kubernetes-shared-root") ??
+          process.env.MN_KUBERNETES_SHARED_ROOT,
+        kubernetesCandidateServiceAccount:
+          readOption(args, "--kubernetes-candidate-service-account") ??
+          process.env.MN_KUBERNETES_CANDIDATE_SERVICE_ACCOUNT,
+        kubernetesRuntimeClass:
+          readOption(args, "--kubernetes-runtime-class") ??
+          process.env.MN_KUBERNETES_RUNTIME_CLASS,
+        workspaceRoot:
+          readOption(args, "--workspace-root") ?? join(process.cwd(), ".mn", "worktrees"),
+        proxyBaseUrl: readOption(args, "--proxy-base-url") ?? claimed.proxyBaseUrl
+      });
+    } catch (error) {
+      if (once) throw error;
+      const cause = nestedErrorCauseSummary(error);
+      console.error(
+        `[mn worker retry] ${errorDetail(error)}${cause ? ` <- ${cause}` : ""}`
+      );
+      await sleep(pollMs);
+      continue;
+    }
 
     if (once) return;
   } while (true);

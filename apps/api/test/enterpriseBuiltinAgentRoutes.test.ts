@@ -238,7 +238,25 @@ function createFixture() {
     postgres: {
       inspectClaim: async (input: { runId: string; ownerId: string; claimToken: string }) =>
         input.runId === run.id && input.ownerId === "worker-1" && input.claimToken === "claim-token-1"
-          ? { item, payload: {}, checkpointDigest: null }
+          ? {
+              item,
+              payload: {
+                version: 2,
+                run,
+                executionContext: {
+                  schemaVersion: 2,
+                  project,
+                  task,
+                  bindings: {
+                    tenantId: "tenant-1",
+                    runId: run.id,
+                    projectId: project.id,
+                    taskId: task.id
+                  }
+                }
+              },
+              checkpointDigest: null
+            }
           : undefined
     }
   };

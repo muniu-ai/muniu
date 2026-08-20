@@ -202,6 +202,7 @@ import {
   type ProviderUsageRequestSnapshot,
   type ProviderUsageReconciliationEvidence
 } from "./enterprisePostgres.js";
+import { executionStateFromEnterpriseClaim } from "./enterpriseClaimState.js";
 import {
   ENTERPRISE_METADATA_KINDS,
   restoreEnterpriseSnapshot
@@ -5234,7 +5235,9 @@ export function buildServer(options: BuildServerOptions = {}) {
       runtimeProfile === "enterprise" &&
       sandboxAttestationKey
     ) {
-      const claimedRun = store.runs.get(claimed.item.runId);
+      const claimedRun = enterpriseClaim
+        ? executionStateFromEnterpriseClaim(enterpriseClaim).run
+        : store.runs.get(claimed.item.runId);
       if (claimedRun?.harnessManifest) {
         if (
           !claimed.item.requirementsDigest ||
@@ -5325,16 +5328,21 @@ export function buildServer(options: BuildServerOptions = {}) {
       ownerId: body.ownerId,
       claimToken: body.claimToken
     });
-    const run = store.runs.get(id);
     if (
       !active ||
       active.item.tenantId !== context.tenantId ||
-      !run?.harnessManifest ||
       !active.item.requirementsDigest ||
       !active.item.workerCapabilityDigest ||
       !active.item.claimTokenHash ||
       !active.item.claimedAt
     ) {
+      return reply.code(409).send({
+        error: "active governed claim bindings are unavailable"
+      });
+    }
+    const durable = executionStateFromEnterpriseClaim(active);
+    const run = durable.run;
+    if (!run.harnessManifest) {
       return reply.code(409).send({
         error: "active governed claim bindings are unavailable"
       });
@@ -5349,8 +5357,8 @@ export function buildServer(options: BuildServerOptions = {}) {
       signingKey: sandboxAttestationKey
     }, active.item.claimedAt);
     const candidate = run.candidates.find((value) => value.id === body.candidateId);
-    const task = store.tasks.get(run.taskId);
-    const project = store.projects.get(run.projectId);
+    const task = durable?.task ?? store.tasks.get(run.taskId);
+    const project = durable?.project ?? store.projects.get(run.projectId);
     if (
       !project ||
       project.tenantId !== context.tenantId ||
@@ -5457,8 +5465,9 @@ export function buildServer(options: BuildServerOptions = {}) {
     if (!active || active.item.tenantId !== context.tenantId) {
       return reply.code(409).send({ error: "run job claim is not active" });
     }
-    const run = store.runs.get(id);
-    const project = run ? store.projects.get(run.projectId) : undefined;
+    const durable = executionStateFromEnterpriseClaim(active);
+    const run = durable.run;
+    const project = durable.project ?? store.projects.get(run.projectId);
     if (!run?.harnessManifest || !project) {
       return reply.code(400).send({ error: "governed run bindings are unavailable" });
     }
@@ -5694,7 +5703,10 @@ export function buildServer(options: BuildServerOptions = {}) {
       if ((item.tenantId ?? LOCAL_TENANT_ID) !== context.tenantId) {
         return reply.code(404).send({ error: "run job queue item not found" });
       }
-      const run = store.runs.get(id);
+      const durable = enterpriseClaim
+        ? executionStateFromEnterpriseClaim(enterpriseClaim)
+        : undefined;
+      const run = durable?.run ?? store.runs.get(id);
       if (
         !run ||
         run.projectId !== item.projectId ||
@@ -5825,9 +5837,10 @@ export function buildServer(options: BuildServerOptions = {}) {
       if (!active || active.item.tenantId !== context.tenantId) {
         return reply.code(409).send({ error: "run job claim is not active" });
       }
-      const run = store.runs.get(id);
-      const project = run ? store.projects.get(run.projectId) : undefined;
-      const state = store.governedLoopStates.get(id);
+      const durable = executionStateFromEnterpriseClaim(active);
+      const run = durable.run;
+      const project = durable.project ?? store.projects.get(run.projectId);
+      const state = durable.governedLoopState ?? store.governedLoopStates.get(id);
       if (
         !run?.harnessManifest ||
         !project ||
@@ -6160,7 +6173,12 @@ export function buildServer(options: BuildServerOptions = {}) {
     if (body.run.id !== id) {
       return reply.code(400).send({ error: "run id does not match queue item" });
     }
-    const existing = store.runs.get(id);
+    const durable = enterpriseClaim
+      ? executionStateFromEnterpriseClaim(enterpriseClaim)
+      : undefined;
+    const existing = durable?.run ?? store.runs.get(id);
+    const previousCheckpoint =
+      durable?.governedLoopState ?? store.governedLoopStates.get(id);
     const normalizedEvidence = normalizeExternalGateEvidence(
       body.run as RunRecord,
       (body.run as RunRecord).status === "waiting_approval"
@@ -6181,7 +6199,7 @@ export function buildServer(options: BuildServerOptions = {}) {
         signingKey: sandboxAttestationKey
       });
       if (sandboxError) return reply.code(400).send({ error: sandboxError });
-      const project = store.projects.get(incoming.projectId);
+      const project = durable?.project ?? store.projects.get(incoming.projectId);
       const filesystemError = project
         ? validateEnterpriseExternalRunFilesystem(incoming, project.rootPath)
         : "external run project does not exist";
@@ -6203,7 +6221,7 @@ export function buildServer(options: BuildServerOptions = {}) {
       existing,
       incoming,
       body.governedLoopState,
-      store.governedLoopStates.get(id),
+      previousCheckpoint,
       false,
       enterpriseClaim
         ? approvalDecisionFromClaimPayload(enterpriseClaim.payload)
@@ -6222,7 +6240,7 @@ export function buildServer(options: BuildServerOptions = {}) {
     if (runtimeProfile === "enterprise") {
       const measurementError = await validateEnterpriseLoopBudgetMeasurements({
         state: checkpoint,
-        previous: store.governedLoopStates.get(id),
+        previous: previousCheckpoint,
         run: incoming,
         item,
         tenantId: context.tenantId,
@@ -6248,7 +6266,7 @@ export function buildServer(options: BuildServerOptions = {}) {
         existing,
         incoming,
         state: checkpoint,
-        previousState: store.governedLoopStates.get(id),
+        previousState: previousCheckpoint,
         item,
         tenantId: context.tenantId,
         ownerId: body.ownerId,
@@ -6283,7 +6301,6 @@ export function buildServer(options: BuildServerOptions = {}) {
     if (enterprisePostgres && enterpriseClaim) {
       const durablePayload: Readonly<Record<string, unknown>> = {
         ...enterpriseClaim.payload,
-        version: 1,
         run: incoming,
         ...(checkpoint ? { governedResumeState: checkpoint } : {})
       };
@@ -6365,7 +6382,6 @@ export function buildServer(options: BuildServerOptions = {}) {
     const { id } = request.params as { id: string };
     const body = runJobQueueUpdateSchema.parse(request.body ?? {});
     const context = requestContexts.get(request) ?? localRequestContext(request.id);
-    const existingRun = store.runs.get(id);
     const enterpriseClaim = enterprisePostgres
       ? await enterprisePostgres.inspectClaim({
           runId: id,
@@ -6373,6 +6389,12 @@ export function buildServer(options: BuildServerOptions = {}) {
           claimToken: body.claimToken
         })
       : undefined;
+    const durable = enterpriseClaim
+      ? executionStateFromEnterpriseClaim(enterpriseClaim)
+      : undefined;
+    const existingRun = durable?.run ?? store.runs.get(id);
+    const previousCheckpoint =
+      durable?.governedLoopState ?? store.governedLoopStates.get(id);
     const item = enterprisePostgres
       ? enterpriseClaim?.item
       : runJobQueue.heartbeat(id, {
@@ -6404,7 +6426,7 @@ export function buildServer(options: BuildServerOptions = {}) {
         signingKey: sandboxAttestationKey
       });
       if (sandboxError) return reply.code(400).send({ error: sandboxError });
-      const project = store.projects.get(run.projectId);
+      const project = durable?.project ?? store.projects.get(run.projectId);
       const filesystemError = project
         ? validateEnterpriseExternalRunFilesystem(run, project.rootPath)
         : "external run project does not exist";
@@ -6426,7 +6448,7 @@ export function buildServer(options: BuildServerOptions = {}) {
       existingRun,
       run,
       body.governedLoopState,
-      store.governedLoopStates.get(id),
+      previousCheckpoint,
       true,
       enterpriseClaim
         ? approvalDecisionFromClaimPayload(enterpriseClaim.payload)
@@ -6445,7 +6467,7 @@ export function buildServer(options: BuildServerOptions = {}) {
     if (runtimeProfile === "enterprise") {
       const measurementError = await validateEnterpriseLoopBudgetMeasurements({
         state: checkpoint,
-        previous: store.governedLoopStates.get(id),
+        previous: previousCheckpoint,
         run,
         item,
         tenantId: context.tenantId,
@@ -6471,7 +6493,7 @@ export function buildServer(options: BuildServerOptions = {}) {
         existing: existingRun,
         incoming: run,
         state: checkpoint,
-        previousState: store.governedLoopStates.get(id),
+        previousState: previousCheckpoint,
         item,
         tenantId: context.tenantId,
         ownerId: body.ownerId,
@@ -6495,7 +6517,6 @@ export function buildServer(options: BuildServerOptions = {}) {
       enterpriseClaim
         ? {
             ...enterpriseClaim.payload,
-            version: 1,
             run,
             ...(checkpoint ? { governedResumeState: checkpoint } : {})
           }

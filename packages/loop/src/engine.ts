@@ -32,6 +32,7 @@ import type {
   StageHandlerResult
 } from "./types.js";
 import {
+  GovernedLoopInterruptionError,
   GovernedLoopInputError,
   LoopMeasurementError,
   LoopPersistenceError
@@ -1836,7 +1837,8 @@ export async function executeGovernedIncrement(
     let rawResult: unknown;
     try {
       rawResult = await runtime.handlers[stage](context);
-    } catch {
+    } catch (error) {
+      if (error instanceof GovernedLoopInterruptionError) throw error;
       return checkpointHandlerFailure(
         runtime,
         state,
