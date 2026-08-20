@@ -181,10 +181,11 @@ export class EnterpriseAgentSessionBackend implements RemoteAgentSessionBackend 
       object_sha256: string;
       object_bytes: string;
     }>(`
-      SELECT seq::text,event_digest,object_key,object_sha256,object_bytes::text
-      FROM mn_agent_session_events
-      WHERE tenant_id=$1 AND session_id=$2
-      ORDER BY seq
+      SELECT events.seq::text,events.event_digest,events.object_key,
+             events.object_sha256,events.object_bytes::text
+      FROM mn_agent_session_events AS events
+      WHERE events.tenant_id=$1 AND events.session_id=$2
+      ORDER BY events.seq
     `, [this.options.tenantId, sessionId]);
     if (refs.rows.length !== Number(session.rows[0].last_seq) + 1 || refs.rows.length > 100_000) {
       throw new Error("enterprise Agent session event index is incomplete or exceeds its bound");

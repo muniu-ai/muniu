@@ -99,10 +99,17 @@ class MemoryPg {
         rowCount: row ? 1 : 0
       } as unknown as QueryResult;
     }
-    if (sql.includes("SELECT seq::text,event_digest,object_key,object_sha256,object_bytes::text")) {
+    if (sql.includes("SELECT events.seq::text,events.event_digest")
+      && sql.includes("FROM mn_agent_session_events AS events")) {
       const rows = (this.events.get(this.key(values[0], values[1])) ?? [])
         .slice()
-        .sort((left, right) => left.seq - right.seq)
+        // PostgreSQL resolves an unqualified ORDER BY name to the output
+        // alias. `SELECT seq::text ... ORDER BY seq` therefore sorts text as
+        // 0,1,10,...,2. Preserve that behavior in the fake so the test guards
+        // the qualified bigint ordering used by the production query.
+        .sort(sql.includes("ORDER BY events.seq")
+          ? (left, right) => left.seq - right.seq
+          : (left, right) => String(left.seq).localeCompare(String(right.seq)))
         .map((row) => ({
           seq: String(row.seq),
           event_digest: row.eventDigest,
@@ -183,6 +190,38 @@ test("enterprise Agent sessions restore from PostgreSQL/S3 with CAS and KMS bind
     && put.serverSideEncryption === "aws:kms"
     && put.kmsKeyId === "kms-ci"
   ));
+});
+
+test("enterprise Agent session restart orders multi-digit event sequences numerically", async () => {
+  const database = new MemoryPg();
+  const objects = new MemoryObjects();
+  const options = {
+    tenantId: "tenant-sequence",
+    pool: database.pool,
+    objectStore: objects.store
+  };
+  const sessionId = SessionId("enterprise-session-sequence");
+  const session = await createEnterpriseAgentSessionStore(options).create({
+    sessionId,
+    cwd: "/workspace/sequence"
+  });
+  for (let index = 1; index <= 12; index += 1) {
+    await session.append("user/message", {
+      turn: 1,
+      message: createUserMessage({
+        id: MessageId(`enterprise-sequence-${index}`),
+        source: { kind: "user" },
+        content: [{ type: "text", text: `event ${index}` }]
+      })
+    });
+  }
+
+  const reopened = await createEnterpriseAgentSessionStore(options).open(sessionId);
+  assert.deepEqual(
+    reopened.events.map((event) => event.seq),
+    Array.from({ length: 13 }, (_, index) => index)
+  );
+  assert.ok(database.statements.some((statement) => statement.includes("ORDER BY events.seq")));
 });
 
 test("enterprise Agent sessions fail closed when an indexed S3 object is tampered", async () => {
