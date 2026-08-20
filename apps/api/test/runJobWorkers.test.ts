@@ -205,3 +205,32 @@ test("worker registry isolates the same owner id across tenant namespaces", asyn
   );
   assert.deepEqual(registry.list("2026-07-06T00:00:02.000Z"), []);
 });
+
+test("enterprise fleet views reconcile terminal claims first observed by another API replica", async (t) => {
+  const rootDir = await mkdtemp(join(tmpdir(), "mn-run-job-workers-replica-"));
+  t.after(async () => rm(rootDir, { recursive: true, force: true }));
+  const registry = new RunJobWorkerRegistry({ rootDir });
+
+  assert.throws(() => registry.markReleased({
+    ownerId: "worker-enterprise@pod-a",
+    runId: "run-untracked",
+    now: "2026-07-06T00:00:00.000Z"
+  }, "tenant-a"), /cannot release a run that is not active/u);
+
+  const released = registry.markReleased({
+    ownerId: "worker-enterprise@pod-a",
+    runId: "run-untracked",
+    now: "2026-07-06T00:00:00.000Z"
+  }, "tenant-a", { allowUntrackedRun: true });
+  assert.equal(released.status, "idle");
+  assert.equal(released.releasedRunCount, 1);
+
+  const finished = registry.markFinished({
+    ownerId: "worker-enterprise@pod-b",
+    runId: "run-untracked",
+    status: "completed",
+    now: "2026-07-06T00:00:01.000Z"
+  }, "tenant-a", { allowUntrackedRun: true });
+  assert.equal(finished.status, "idle");
+  assert.equal(finished.completedRunCount, 1);
+});

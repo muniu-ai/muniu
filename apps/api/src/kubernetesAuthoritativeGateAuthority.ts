@@ -5,6 +5,7 @@ import { sha256Canonical } from "@mn/governance";
 import {
   DefaultKubernetesPodControl,
   captureContractBaseline,
+  projectAtSnapshot,
   runGovernedGatePlan,
   type GateCommandExecutionRequest,
   type GateCommandExecutor,
@@ -16,7 +17,6 @@ import type {
   AuthoritativeGateAuthority,
   AuthoritativeGateExecutionInput
 } from "./authoritativeGateVerification.js";
-import { projectAtSnapshot } from "./authoritativeGateVerification.js";
 import { measureAuthoritativeLoopWorkspaceDiff } from "./loopDiffMeasurement.js";
 
 export interface KubernetesAuthoritativeGateAuthorityOptions

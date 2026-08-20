@@ -44,7 +44,8 @@ import {
   KubernetesSandboxPodBackend,
   RunOrchestrator,
   gateResultV2OutputDigest,
-  prepareSnapshotCandidateWorkspace
+  prepareSnapshotCandidateWorkspace,
+  projectAtSnapshot
 } from "@mn/worker";
 import { parse as parseYaml } from "yaml";
 import { agentCommand } from "./agent-commands.js";
@@ -2520,10 +2521,7 @@ async function runEnterpriseClaimedJob(
     const builtinLeaseId = leaseId;
     const sandboxExecution = backend.executionEvidence(leaseId);
     const sandboxWorkspaceRoot = backend.workspaceRoot(leaseId);
-    const sandboxProject: Project = {
-      ...project,
-      rootPath: backend.sourceRoot(leaseId)
-    };
+    const sandboxProject = projectAtSnapshot(project, backend.sourceRoot(leaseId));
     const history: NonNullable<RunRecord["sandboxEvidenceHistory"]> =
       cloneJson(run.sandboxEvidenceHistory ?? []);
     let checkpointState: GovernedRunState | undefined;

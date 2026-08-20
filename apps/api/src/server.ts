@@ -5630,7 +5630,7 @@ export function buildServer(options: BuildServerOptions = {}) {
       runId: id,
       capacity: body.capacity,
       ttlMs: body.ttlMs
-    }, context.tenantId);
+    }, context.tenantId, { allowUntrackedRun: Boolean(enterprisePostgres) });
     store.markRunJobQueued(id, item.updatedAt);
     return { item };
   });
@@ -6566,7 +6566,7 @@ export function buildServer(options: BuildServerOptions = {}) {
       capacity: body.capacity,
       ttlMs: body.ttlMs,
       now: finishedAt
-    }, context.tenantId);
+    }, context.tenantId, { allowUntrackedRun: Boolean(enterprisePostgres) });
     return { run: store.runs.get(id), item: finishedItem };
   });
 
