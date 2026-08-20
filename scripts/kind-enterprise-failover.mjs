@@ -160,6 +160,7 @@ async function bootstrap() {
     taskId: task.id,
     runId: run.id,
     ownerToken,
+    reviewerToken,
     providerId: provider.id
   };
   await writePrivateJson(statePath, state);
@@ -200,7 +201,7 @@ async function verify() {
     }, 180_000, "takeover approval generation");
     assert.notEqual(takeover.owner_instance_id, first.owner_instance_id);
     await api(
-      state.ownerToken,
+      state.reviewerToken,
       "POST",
       `/v1/agent-sessions/${encodeURIComponent(takeover.session_id)}` +
         `/approvals/${encodeURIComponent(takeover.approval_id)}`,

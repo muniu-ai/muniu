@@ -363,6 +363,9 @@ export function roleAllows(
     method === "POST" &&
     (/^\/v1\/(?:eval-assets|trace-graphs|maturity-report)$/u.test(pathname) ||
       /^\/v1\/learning-proposals(?:$|\/[^/]+\/submit$)/u.test(pathname));
+  const agentApprovalDecision =
+    method === "POST" &&
+    /^\/v1\/agent-sessions\/[^/]+\/approvals\/[^/]+$/u.test(pathname);
   if (roles.includes("auditor")) return readOnly;
   if (
     roles.includes("governance_admin") &&
@@ -374,7 +377,7 @@ export function roleAllows(
   }
   if (
     roles.includes("reviewer") &&
-    (readOnly || /\/approve$|\/review$|\/canary$/u.test(pathname))
+    (readOnly || agentApprovalDecision || /\/approve$|\/review$|\/canary$/u.test(pathname))
   ) {
     return true;
   }

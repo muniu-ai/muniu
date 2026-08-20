@@ -130,6 +130,29 @@ test("evidence contribution RBAC keeps Learning approval and promotion privilege
   );
 });
 
+test("reviewer RBAC grants only the exact Agent approval decision mutation", () => {
+  assert.equal(
+    roleAllows(
+      ["reviewer"],
+      "POST",
+      "/v1/agent-sessions/session-1/approvals/approval-1"
+    ),
+    true
+  );
+  assert.equal(
+    roleAllows(["project_owner"], "POST", "/v1/agent-sessions/session-1/approvals/approval-1"),
+    false
+  );
+  assert.equal(
+    roleAllows(["reviewer"], "POST", "/v1/agent-sessions/session-1/messages"),
+    false
+  );
+  assert.equal(
+    roleAllows(["reviewer"], "DELETE", "/v1/agent-sessions/session-1/approvals/approval-1"),
+    false
+  );
+});
+
 test("machine principal scopes isolate worker queue operations from human approvals", async () => {
   const fixture = authFixture();
   const authenticator = new EnterpriseJwtAuthenticator({
