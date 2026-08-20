@@ -385,9 +385,11 @@ export class GovernedRunOrchestrator {
             candidateRun = record;
           }
         });
-        const implementationRunId = `${baseRun.id}--implementation-${context.attempt}`;
+        const implementationWorkspaceRunId =
+          `${baseRun.id}--implementation-${context.attempt}`;
         const classicResult = await classic.run(project, classicTask, {
-          runId: implementationRunId,
+          runId: baseRun.id,
+          workspaceRunId: implementationWorkspaceRunId,
           abortSignal: execution.abortSignal,
           ...(context.isRepair && repairSessionIds.length > 0
             ? { sessionIds: repairSessionIds }

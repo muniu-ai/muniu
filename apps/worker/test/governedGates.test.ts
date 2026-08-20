@@ -393,6 +393,9 @@ test("builtin governed execution repairs in one durable embedded session without
 
   assert.equal(result.state.status, "waiting_approval");
   assert.equal(calls.length, 2);
+  assert.ok(calls.every((call) => call.runId === "run-1"));
+  assert.ok(calls.every((call) => call.executionBinding.runId === "run-1"));
+  assert.match(calls[0]?.cwd ?? "", /run-1--implementation-1-builtin-1$/u);
   assert.equal(calls[0]?.sessionId, calls[1]?.sessionId);
   assert.equal(calls[0]?.cwd, calls[1]?.cwd);
   assert.match(calls[1]?.prompt ?? "", /gate-repair-feedback/u);

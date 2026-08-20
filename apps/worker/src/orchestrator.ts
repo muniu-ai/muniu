@@ -43,6 +43,12 @@ export interface RunOrchestratorOptions {
 
 export interface RunExecutionOptions {
   runId?: string;
+  /**
+   * Optional filesystem namespace for candidate workspaces and checkpoints.
+   * The externally authorized Run identity remains runId; governed repair
+   * attempts use this field to keep their workspace snapshots distinct.
+   */
+  workspaceRunId?: string;
   resumeFrom?: RunRecord;
   abortSignal?: AbortSignal;
   /** Reuse an Agent session for a bounded repair attempt while issuing a new
@@ -61,6 +67,7 @@ export class RunOrchestrator {
     execution: RunExecutionOptions = {}
   ): Promise<RunRecord> {
     const runId = execution.runId ?? randomUUID();
+    const workspaceRunId = execution.workspaceRunId ?? runId;
     const now = new Date().toISOString();
     const record: RunRecord = execution.resumeFrom
       ? cloneRunForResume(execution.resumeFrom, runId, now)
@@ -151,7 +158,7 @@ export class RunOrchestrator {
             )({
               projectRoot: project.rootPath,
               workspaceRoot: this.options.workspaceRoot,
-              runId,
+              runId: workspaceRunId,
               candidateId,
               isolated: task.strategy.sandbox === "isolated-worktree"
             })
@@ -167,7 +174,7 @@ export class RunOrchestrator {
           worktreePath: workspace.path,
           outputCheckpoint: buildCandidateOutputCheckpoint({
             workspaceRoot: this.options.workspaceRoot,
-            runId,
+            runId: workspaceRunId,
             candidateId
           }),
           status: "queued",
@@ -181,7 +188,7 @@ export class RunOrchestrator {
 
       candidate.outputCheckpoint ??= buildCandidateOutputCheckpoint({
         workspaceRoot: this.options.workspaceRoot,
-        runId,
+        runId: workspaceRunId,
         candidateId
       });
       candidate.executionBinding ??= createExecutionBinding({

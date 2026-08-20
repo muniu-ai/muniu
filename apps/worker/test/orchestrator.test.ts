@@ -150,6 +150,48 @@ test("run orchestrator injects associated proxy env into real candidate executio
   await rm(workspaceRoot, { recursive: true, force: true });
 });
 
+test("run orchestrator separates an authorized Run identity from its workspace namespace", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mn-project-workspace-identity-"));
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "mn-workspace-identity-"));
+  const project = buildProject(root);
+  const task = buildTask({
+    providers: ["codex"],
+    candidates: 1,
+    requiredGates: [],
+    sandbox: "workspace-write",
+    humanApproval: "never",
+    timeoutSeconds: 60
+  });
+  const executor = new RecordingExecutor("codex");
+  const workspaceRunIds: string[] = [];
+  const orchestrator = new RunOrchestrator({
+    workspaceRoot,
+    candidateWorkspacePreparer: async (request) => {
+      workspaceRunIds.push(request.runId);
+      return { path: root, cleanup: async () => undefined };
+    },
+    executors: { codex: executor }
+  });
+
+  const run = await orchestrator.run(project, task, {
+    runId: "run-authority",
+    workspaceRunId: "run-authority--implementation-2"
+  });
+
+  assert.equal(run.id, "run-authority");
+  assert.equal(run.candidates[0]?.runId, "run-authority");
+  assert.equal(executor.lastInput?.runId, "run-authority");
+  assert.equal(executor.lastInput?.executionBinding?.runId, "run-authority");
+  assert.deepEqual(workspaceRunIds, ["run-authority--implementation-2"]);
+  assert.match(
+    executor.lastInput?.outputCheckpoint?.stdoutPath ?? "",
+    /checkpoints\/run-authority--implementation-2\/codex-1\/stdout\.txt$/u
+  );
+
+  await rm(root, { recursive: true, force: true });
+  await rm(workspaceRoot, { recursive: true, force: true });
+});
+
 test("run orchestrator uses an API receipt instead of forgeable run headers", async () => {
   const root = await mkdtemp(join(tmpdir(), "mn-project-proxy-receipt-"));
   const workspaceRoot = await mkdtemp(join(tmpdir(), "mn-worktrees-proxy-receipt-"));
