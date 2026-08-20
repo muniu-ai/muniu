@@ -548,6 +548,40 @@ test("resume abandons an indeterminate handler and reruns from last definite sta
   assert.equal(result.attempts[0]?.failure?.kind, "interrupted");
 });
 
+test("an interrupted implementation retry does not consume the Gate repair budget", async () => {
+  let captured: GovernedRunState | undefined;
+  const first = baseInput({
+    onCheckpoint: (state) => {
+      const attempt = state.attempts.at(-1);
+      if (attempt?.stage === "implementation" && attempt.status === "running") {
+        captured = state;
+        throw new Error("simulated owner loss during implementation");
+      }
+    }
+  });
+  await assert.rejects(
+    executeGovernedIncrement(withoutCheckpoints(first)),
+    LoopPersistenceError
+  );
+  assert.equal(captured?.attempts.at(-1)?.stage, "implementation");
+
+  const resumed = baseInput({
+    resumeFrom: captured,
+    now: tickingClock(30)
+  });
+  const result = await executeGovernedIncrement(withoutCheckpoints(resumed));
+
+  assert.deepEqual(
+    result.attempts
+      .filter((attempt) => attempt.stage === "implementation")
+      .map((attempt) => [attempt.attempt, attempt.status]),
+    [[1, "failed"], [2, "completed"]]
+  );
+  assert.equal(result.attempts[3]?.failure?.kind, "interrupted");
+  assert.equal(result.budgetUsage.repairAttempts, 0);
+  assert.equal(validateGovernedRunState(result).digest, result.digest);
+});
+
 test("cancellation during a handler is checkpointed and terminal", async () => {
   const controller = new AbortController();
   const input = baseInput({

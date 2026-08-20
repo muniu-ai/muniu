@@ -420,7 +420,9 @@ function resolveCapabilityFields(
   const capabilities = normalizeWorkerCapabilities(input);
   const capabilityDigest = workerCapabilityDigest(capabilities);
   if (
-    current && current.activeRunIds.length > 0 &&
+    current?.version === 2 &&
+    current.capabilityDigest !== undefined &&
+    current.activeRunIds.length > 0 &&
     current.capabilityDigest !== capabilityDigest
   ) {
     throw new Error("worker capabilities cannot change while runs are active");

@@ -154,6 +154,40 @@ test("worker registry persists capability digest and blocks active capability mu
   assert.match(workerFile, /"capabilityDigest": "[a-f0-9]{64}"/);
 });
 
+test("worker registry may enrich an active unknown-capability replica view exactly once", async (t) => {
+  const rootDir = await mkdtemp(join(tmpdir(), "mn-run-job-workers-capability-enrichment-"));
+  t.after(async () => rm(rootDir, { recursive: true, force: true }));
+  const registry = new RunJobWorkerRegistry({ rootDir });
+  const untrackedReplicaView = registry.markClaimed({
+    ownerId: "worker-enterprise@pod-b",
+    activeRunId: "run-1",
+    now: "2026-07-06T00:00:00.000Z",
+    ttlMs: 5_000
+  });
+  assert.equal(untrackedReplicaView.version, 1);
+  assert.equal(untrackedReplicaView.capabilityDigest, undefined);
+
+  const enriched = registry.heartbeat({
+    ownerId: "worker-enterprise@pod-b",
+    status: "running",
+    activeRunId: "run-1",
+    now: "2026-07-06T00:00:01.000Z",
+    ttlMs: 5_000,
+    capabilities
+  });
+  assert.equal(enriched.version, 2);
+  assert.equal(enriched.capabilityDigest, workerCapabilityDigest(capabilities));
+
+  assert.throws(() => registry.heartbeat({
+    ownerId: "worker-enterprise@pod-b",
+    status: "running",
+    activeRunId: "run-1",
+    now: "2026-07-06T00:00:02.000Z",
+    ttlMs: 5_000,
+    capabilities: { ...capabilities, providers: ["claude"] }
+  }), /cannot change while runs are active/);
+});
+
 test("worker registry rejects invalid time, ttl, and capacity boundaries", async (t) => {
   const rootDir = await mkdtemp(join(tmpdir(), "mn-run-job-workers-boundaries-"));
   t.after(async () => rm(rootDir, { recursive: true, force: true }));
