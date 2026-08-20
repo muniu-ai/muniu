@@ -9,6 +9,7 @@ import type {
   RunEvent,
   RunRecord
 } from "@mn/core";
+import { GovernedLoopInterruptionError } from "@mn/loop";
 import {
   buildArchitectureBrief,
   createRunContext,
@@ -294,6 +295,12 @@ export class RunOrchestrator {
           );
         }
       } catch (error) {
+        // The governed adapter uses this explicit error to signal that the
+        // active infrastructure owner disappeared before the candidate
+        // outcome became durable. Converting it into a normal candidate
+        // failure would let verification run without a winner and fabricate
+        // an unverifiable zero-result Gate attempt.
+        if (error instanceof GovernedLoopInterruptionError) throw error;
         candidate.status = "failed";
         candidate.gates.push({
           gate: "llm_verifier",
