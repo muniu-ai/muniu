@@ -296,12 +296,12 @@ export class EnterpriseBuiltinAgentBroker {
         }
         this.#terminal(execution);
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (execution.state !== "running") return;
         execution.state = execution.controller.signal.aborted ? "cancelled" : "failed";
         execution.error = execution.state === "cancelled"
           ? "enterprise builtin execution was cancelled"
-          : "enterprise builtin execution failed";
+          : executionFailureSummary(error);
         this.#terminal(execution);
       });
     return this.#view(execution);
@@ -406,12 +406,12 @@ export class EnterpriseBuiltinAgentBroker {
           execution.output,
           execution.error
         );
-      } catch {
+      } catch (error: unknown) {
         if (execution.ownershipLost) return;
         execution.state = execution.controller.signal.aborted ? "cancelled" : "failed";
         execution.error = execution.state === "cancelled"
           ? "enterprise builtin execution was cancelled"
-          : "enterprise builtin execution failed";
+          : executionFailureSummary(error);
         try {
           await persistence.complete(durableKey, execution.state, undefined, execution.error);
         } catch {
@@ -737,6 +737,21 @@ export class EnterpriseBuiltinAgentBroker {
   #sessionKey(tenantId: string, sessionId: string): string {
     return `${tenantId}\0${sessionId}`;
   }
+}
+
+function executionFailureSummary(error: unknown): string {
+  const detail = (error instanceof Error
+    ? error.message
+    : typeof error === "string"
+      ? error
+      : "unknown error")
+    .replace(/[\r\n\t]+/gu, " ")
+    .replace(/\s{2,}/gu, " ")
+    .trim()
+    .slice(0, 512);
+  return detail.length === 0
+    ? "enterprise builtin execution failed"
+    : `enterprise builtin execution failed: ${detail}`;
 }
 
 export function enterpriseBuiltinExecutionId(

@@ -429,14 +429,28 @@ export class GovernedRunOrchestrator {
           (candidate) => candidate.id === candidateRun.winnerCandidateId
         );
         if (!winner) {
+          const failureDetails = candidateRun.candidates.map((candidate) => ({
+            id: candidate.id,
+            status: candidate.status,
+            resultSummary: candidate.result?.summary ?? null,
+            gateSummaries: candidate.gates.map((gate) => gate.summary)
+          }));
           const semantic = {
             implementationAttempt: context.attempt,
-            candidates: candidateRun.candidates.map((candidate) => ({
-              id: candidate.id,
-              status: candidate.status,
-              summaries: candidate.gates.map((gate) => gate.summary)
-            }))
+            candidates: failureDetails
           };
+          const diagnostic = failureDetails
+            .map((candidate) => {
+              const summaries = [
+                candidate.resultSummary,
+                ...candidate.gateSummaries
+              ].filter((summary): summary is string => Boolean(summary));
+              return `${candidate.id}=${candidate.status}${
+                summaries.length === 0 ? "" : `: ${summaries.join("; ")}`
+              }`;
+            })
+            .join(", ")
+            .slice(0, 768);
           return {
             status: "failed",
             artifacts: [
@@ -450,7 +464,9 @@ export class GovernedRunOrchestrator {
             failure: {
               kind: "stage_failure",
               retryable: false,
-              reason: "Candidate implementation produced no selectable winner"
+              reason: `Candidate implementation produced no selectable winner${
+                diagnostic.length === 0 ? "" : ` (${diagnostic})`
+              }`
             },
             failureSignature: sha256Canonical(semantic)
           };
