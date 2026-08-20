@@ -35,6 +35,8 @@ test("Kubernetes Gate authority Pod is immutable, tokenless and digest-pinned", 
   assert.equal(pod.spec?.automountServiceAccountToken, false);
   assert.equal(pod.spec?.containers.length, 1);
   assert.equal(pod.spec?.containers[0]?.securityContext?.readOnlyRootFilesystem, true);
+  assert.equal(pod.spec?.containers[0]?.resources?.requests?.cpu, "250m");
+  assert.equal(pod.spec?.containers[0]?.resources?.limits?.cpu, "1");
   assert.deepEqual(pod.spec?.containers[0]?.securityContext?.capabilities?.drop, ["ALL"]);
   assert.equal(pod.spec?.containers[0]?.volumeMounts?.filter((mount) => mount.name === "workspace").every((mount) => mount.readOnly), true);
   assert.equal(pod.spec?.volumes?.some((volume) => volume.hostPath), false);

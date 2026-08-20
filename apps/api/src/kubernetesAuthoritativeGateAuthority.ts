@@ -5,6 +5,7 @@ import { sha256Canonical } from "@mn/governance";
 import {
   DefaultKubernetesPodControl,
   captureContractBaseline,
+  kubernetesSandboxCpuRequest,
   projectAtSnapshot,
   runGovernedGatePlan,
   type GateCommandExecutionRequest,
@@ -199,7 +200,10 @@ export function buildKubernetesAuthoritativeGatePod(value: {
           seccompProfile: { type: "RuntimeDefault" }
         },
         resources: {
-          requests: { cpu: String(resources.cpu), memory: `${resources.memoryMb}Mi` },
+          requests: {
+            cpu: kubernetesSandboxCpuRequest(resources.cpu),
+            memory: `${resources.memoryMb}Mi`
+          },
           limits: { cpu: String(resources.cpu), memory: `${resources.memoryMb}Mi` }
         },
         volumeMounts: [

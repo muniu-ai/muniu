@@ -500,7 +500,7 @@ export function buildKubernetesSandboxPod(input: {
         },
         resources: {
           requests: {
-            cpu: String(attestation.policy.resources.cpu),
+            cpu: kubernetesSandboxCpuRequest(attestation.policy.resources.cpu),
             memory: `${attestation.policy.resources.memoryMb}Mi`
           },
           limits: {
@@ -634,6 +634,17 @@ export function kubernetesLeaseDirectoryName(attestation: SandboxLeaseAttestatio
 
 export function kubernetesSandboxRuntimeId(namespace: string, podName: string): string {
   return sha256(`kubernetes-pod-v1\0${requireKubernetesName(namespace, "namespace")}\0${requireKubernetesName(podName, "podName")}`);
+}
+
+/** Keep the attested CPU ceiling as the container limit while reserving only
+ * the bounded scheduler share needed to let the independent Gate authority
+ * overlap the candidate Pod on small clusters. Worker capacity still bounds
+ * concurrency and the cgroup limit remains fail-closed. */
+export function kubernetesSandboxCpuRequest(cpuLimit: number): string {
+  if (!Number.isFinite(cpuLimit) || cpuLimit <= 0) {
+    throw new TypeError("Kubernetes sandbox CPU limit must be positive");
+  }
+  return cpuLimit <= 0.25 ? String(cpuLimit) : "250m";
 }
 
 export class DefaultKubernetesPodControl implements KubernetesPodControl {

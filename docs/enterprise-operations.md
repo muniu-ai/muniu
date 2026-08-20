@@ -14,8 +14,8 @@ API 与 Worker 使用不同 ServiceAccount。Worker 只拥有候选 Pod 的 crea
 
 非 fixture Worker 默认只声明 `builtin`。模型 Provider 凭据仅配置在 API 的 secret/vault 中，不得写入 Worker 或候选 Pod。`node` 必须同时存在于 Harness command allowlist 和候选镜像，因为文件工具通过无 shell 的 Node runtime 执行；任意命令仍需命中签名租约的可执行文件白名单。
 
-活动工具 broker 已使用 PostgreSQL generation、owner lease、mailbox 与运行绑定的审批决定，不依赖负载均衡粘滞。API Pod 名通过 Downward API 绑定为稳定 owner identity，优雅退出会 relinquish owner；租约过期或 claim 变更会创建新 generation，并在恢复 durable session 后继续。未确认工具不得自动重放：旧审批必须以 `interrupted/deny` 结束，恢复后的模型重新发起工具调用和审批。broker 表中的原始工具载荷只承担活动传输，长期证据仍写入受保护的 Agent session。运行绑定的 `on-risk` 审批由请求事件摘要、binding 摘要和决定共同幂等绑定，任意 API 副本均可提交；独立 `/v1/agent-sessions` 审批仍需命中持有本机会话 waiter 的 API。
+活动工具 broker 已使用 PostgreSQL generation、owner lease、mailbox 与运行绑定的审批决定，不依赖负载均衡粘滞。API Pod 名通过 Downward API 绑定为稳定 owner identity，优雅退出会 relinquish owner；租约过期或 claim 变更会创建新 generation，并在恢复 durable session 后继续。未确认工具不得自动重放：旧审批必须以 `interrupted/deny` 结束，恢复后的模型重新发起工具调用和审批。broker 表中的原始工具载荷只承担活动传输，长期证据仍写入受保护的 Agent session。运行绑定的 `on-risk` 审批由请求事件摘要、binding 摘要和决定共同幂等绑定，任意 API 副本均可提交；Gate CAS 句柄与权威回执在消费前从 PostgreSQL 合并到副本缓存，不要求注册请求与 checkpoint 命中同一 API。独立 `/v1/agent-sessions` 审批仍需命中持有本机会话 waiter 的 API。
 
 唯一租户 scope 的 Provider 非敏感目录元数据由 PostgreSQL 保存并在替换副本启动时恢复；旧的无 scope 或多租户目录保持进程本地兼容，不会被权威 restore 删除，也不具备跨副本保证。首次从旧企业快照升级时只追加迁移 provider kind，不用尚未 hydrate 的内存镜像覆盖权威数据。API key 等密钥不进入 provider 元数据，必须由每个 API 副本通过环境变量或 Vault/KMS 获取。
 
-上线前运行 `npm run verify:helm`；具备 Docker/Kind/kubectl/Helm/buildx/curl 的环境还应运行 `npm run verify:kind`。后者使用 Calico 启动两个 API 与两个 Worker，验证真实候选 Pod 的源码摘要、命令执行、token 缺失、Kubernetes API 网络隔离；随后删除精确 owner API Pod，验证 generation/会话/审批恢复与证据导出，再重启 PostgreSQL 并检查结果仍可读取及租约清理。
+上线前运行 `npm run verify:helm`；具备 Docker/Kind/kubectl/Helm/buildx/curl 的环境还应运行 `npm run verify:kind`。后者使用 Calico 启动两个 API 与两个 Worker，验证真实候选 Pod 的源码摘要、命令执行、token 缺失、Kubernetes API 网络隔离；随后删除精确 owner API Pod，验证 generation/会话/审批恢复与证据导出，再重启 PostgreSQL 并检查结果仍可读取及租约清理。候选 Pod 和独立 Gate Pod 的 CPU `limit` 采用签名 attestation 上限，调度 `request` 最高为 250m，使两类隔离执行可在小型节点重叠；并发总量仍由 Worker capacity、HPA 与资源限额共同约束。共享 PVC 上的候选源码使用可跨非 root Pod 读取的 `0644/0755` 模式，不承载 Provider 凭据或其他 secret。

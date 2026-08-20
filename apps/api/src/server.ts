@@ -205,6 +205,10 @@ import {
 import { executionStateFromEnterpriseClaim } from "./enterpriseClaimState.js";
 import { enterpriseResumeDiffFromClaim } from "./enterpriseResumeDiff.js";
 import {
+  ENTERPRISE_GATE_EVIDENCE_METADATA_KINDS,
+  mergeEnterpriseGateEvidenceMetadata
+} from "./enterpriseEvidenceMetadata.js";
+import {
   ENTERPRISE_METADATA_KINDS,
   restoreEnterpriseSnapshot
 } from "./enterpriseState.js";
@@ -1788,6 +1792,19 @@ export function buildServer(options: BuildServerOptions = {}) {
       records: durableRecords,
       managedKinds: ENTERPRISE_METADATA_KINDS
     });
+  };
+  const refreshEnterpriseGateEvidenceMetadata = async (
+    tenantId: string
+  ): Promise<void> => {
+    if (!enterprisePostgres) return;
+    mergeEnterpriseGateEvidenceMetadata(
+      store,
+      tenantId,
+      await enterprisePostgres.listMetadata({
+        tenantId,
+        kinds: ENTERPRISE_GATE_EVIDENCE_METADATA_KINDS
+      })
+    );
   };
   const migrateEnterpriseProviderMetadata = async (): Promise<boolean> => {
     if (!enterprisePostgres) return false;
@@ -5804,6 +5821,7 @@ export function buildServer(options: BuildServerOptions = {}) {
         });
       }
       const claimTokenHash = item.claimTokenHash ?? sha256(body.claimToken);
+      await refreshEnterpriseGateEvidenceMetadata(context.tenantId);
       const artifact: Omit<GateArtifactV2, "handle" | "path"> = {
         id: body.artifact.id,
         kind: body.artifact.kind,
@@ -6301,6 +6319,7 @@ export function buildServer(options: BuildServerOptions = {}) {
         ? validateEnterpriseExternalRunFilesystem(incoming, project.rootPath)
         : "external run project does not exist";
       if (filesystemError) return reply.code(400).send({ error: filesystemError });
+      await refreshEnterpriseGateEvidenceMetadata(context.tenantId);
       const gateArtifactError = await validateEnterpriseGateArtifactHandles({
         existing,
         incoming,
@@ -6528,6 +6547,7 @@ export function buildServer(options: BuildServerOptions = {}) {
         ? validateEnterpriseExternalRunFilesystem(run, project.rootPath)
         : "external run project does not exist";
       if (filesystemError) return reply.code(400).send({ error: filesystemError });
+      await refreshEnterpriseGateEvidenceMetadata(context.tenantId);
       const gateArtifactError = await validateEnterpriseGateArtifactHandles({
         existing: existingRun,
         incoming: run,

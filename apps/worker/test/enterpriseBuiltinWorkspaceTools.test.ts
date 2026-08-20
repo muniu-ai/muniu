@@ -2,7 +2,17 @@
 
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdtemp,
+  mkdir,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  symlink,
+  writeFile
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import test from "node:test";
@@ -28,6 +38,8 @@ test("enterprise builtin workspace tools mutate and inspect only through the san
   }, 1));
   assert.equal(written.ok, true);
   assert.equal(await readFile(join(workspace, "src/index.ts"), "utf8"), "export const value = 1;\n");
+  assert.equal((await stat(join(workspace, "src"))).mode & 0o777, 0o755);
+  assert.equal((await stat(join(workspace, "src/index.ts"))).mode & 0o777, 0o644);
 
   const patched = await executeTool(backend, workspace, call("apply_patch", {
     path: "src/index.ts",
@@ -35,11 +47,22 @@ test("enterprise builtin workspace tools mutate and inspect only through the san
     newText: "value = 2"
   }, 2));
   assert.equal(patched.ok, true);
+  assert.equal((await stat(join(workspace, "src/index.ts"))).mode & 0o777, 0o644);
+
+  await writeFile(join(workspace, "src/executable.mjs"), "process.exit(0);\n");
+  await chmod(join(workspace, "src/executable.mjs"), 0o755);
+  const executablePatched = await executeTool(backend, workspace, call("apply_patch", {
+    path: "src/executable.mjs",
+    oldText: "exit(0)",
+    newText: "exitCode = 0"
+  }, 3));
+  assert.equal(executablePatched.ok, true);
+  assert.equal((await stat(join(workspace, "src/executable.mjs"))).mode & 0o777, 0o755);
 
   const searched = await executeTool(backend, workspace, call("search_text", {
     path: ".",
     query: "value = 2"
-  }, 3));
+  }, 4));
   assert.equal(searched.ok, true);
   assert.deepEqual(searched.result, {
     matches: [{ path: "src/index.ts", line: 1, text: "export const value = 2;" }],
@@ -51,7 +74,7 @@ test("enterprise builtin workspace tools mutate and inspect only through the san
     args: ["-e", "process.stdout.write(process.cwd())"],
     cwd: ".",
     timeoutSeconds: 5
-  }, 4));
+  }, 5));
   assert.equal(command.ok, true);
   assert.equal((command.result as { exitCode: number }).exitCode, 0);
   assert.equal((command.result as { stdout: string }).stdout, await realpath(workspace));

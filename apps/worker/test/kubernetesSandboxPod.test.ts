@@ -83,6 +83,8 @@ test("Kubernetes backend provisions a digest-pinned, tokenless, network-denied P
   assert.equal(pod.spec?.containers[0]?.env?.length, 0);
   assert.equal(pod.spec?.containers[0]?.envFrom?.length, 0);
   assert.equal(pod.spec?.containers[0]?.securityContext?.readOnlyRootFilesystem, true);
+  assert.equal(pod.spec?.containers[0]?.resources?.requests?.cpu, "250m");
+  assert.equal(pod.spec?.containers[0]?.resources?.limits?.cpu, "1");
   assert.deepEqual(pod.spec?.containers[0]?.securityContext?.capabilities?.drop, ["ALL"]);
   assert.match(pod.spec?.containers[0]?.image ?? "", /@sha256:[a-f0-9]{64}$/u);
   assert.equal(

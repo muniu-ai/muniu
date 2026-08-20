@@ -274,7 +274,8 @@ async function writeTarget(root, input) {
       if (stats.isSymbolicLink() || !stats.isDirectory()) throw new Error("write parent is unsafe");
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
-      await fs.mkdir(cursor, { mode: 0o700 });
+      await fs.mkdir(cursor, { mode: 0o755 });
+      await fs.chmod(cursor, 0o755);
     }
   }
   const parent = await fs.realpath(path.dirname(target));
@@ -317,9 +318,17 @@ async function walk(root) {
 }
 async function atomicWrite(target, content) {
   const temporary = target + ".muniu-" + crypto.randomUUID() + ".tmp";
+  let mode = 0o644;
   try {
-    await fs.writeFile(temporary, content, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    const existing = await fs.lstat(target).catch((error) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (existing?.mode & 0o111) mode = 0o755;
+    await fs.writeFile(temporary, content, { encoding: "utf8", mode, flag: "wx" });
+    await fs.chmod(temporary, mode);
     await fs.rename(temporary, target);
+    await fs.chmod(target, mode);
   } catch (error) {
     await fs.rm(temporary, { force: true }).catch(() => undefined);
     throw error;
