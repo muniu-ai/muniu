@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { V1Pod } from "@kubernetes/client-node";
+import {
+  V1Capabilities,
+  V1Container,
+  V1PodSecurityContext,
+  V1ResourceRequirements,
+  V1SecurityContext,
+  V1Volume,
+  V1VolumeMount,
+  type V1Pod
+} from "@kubernetes/client-node";
 import { sha256Canonical } from "@mn/governance";
 import type { SandboxExecutionEvidence, SandboxLeaseAttestation } from "@mn/harness";
 import type { AuthoritativeGateExecutionInput } from "../src/authoritativeGateVerification.js";
@@ -47,6 +56,61 @@ test("Kubernetes Gate authority Pod is immutable, tokenless and digest-pinned", 
     () => verifyKubernetesAuthoritativeGatePod(pod, manifest, input),
     /security inspection|specification drifted/u
   );
+});
+
+test("Kubernetes Gate authority accepts official client model instances", () => {
+  const attestation = lease();
+  const input = {
+    attestation,
+    sandboxExecution: execution(attestation),
+    candidateSnapshotDigest: "9".repeat(64)
+  } as unknown as AuthoritativeGateExecutionInput;
+  const configuration = {
+    namespace: "muniu-system",
+    sharedVolumeClaimName: "muniu-sandbox-workspaces",
+    sharedWorkspaceRoot: "/work/sandboxes",
+    serviceAccountName: "muniu-candidate",
+    runtimeClassName: "muniu-sandbox"
+  };
+  const manifest = buildKubernetesAuthoritativeGatePod({
+    input,
+    configuration,
+    directoryName: "authority-" + "a".repeat(40),
+    podName: "mn-gate-" + "a".repeat(32)
+  });
+  const pod = ready(structuredClone(manifest), attestation.policy.runtimeImage!.digest);
+  const original = pod.spec!.containers[0]!;
+  const container = Object.assign(new V1Container(), original);
+  container.securityContext = Object.assign(new V1SecurityContext(), original.securityContext);
+  container.securityContext.capabilities = Object.assign(
+    new V1Capabilities(),
+    original.securityContext?.capabilities
+  );
+  container.resources = Object.assign(new V1ResourceRequirements(), original.resources);
+  container.volumeMounts = original.volumeMounts?.map((mount) =>
+    Object.assign(new V1VolumeMount(), mount)
+  );
+  for (const mount of container.volumeMounts ?? []) {
+    if (mount.readOnly === false) delete mount.readOnly;
+  }
+  delete container.env;
+  delete container.envFrom;
+  delete container.stdin;
+  delete container.stdinOnce;
+  delete container.tty;
+  pod.spec!.containers = [container];
+  pod.spec!.securityContext = Object.assign(
+    new V1PodSecurityContext(),
+    pod.spec!.securityContext
+  );
+  pod.spec!.volumes = pod.spec!.volumes?.map((volume) => Object.assign(new V1Volume(), volume));
+  for (const volume of pod.spec!.volumes ?? []) {
+    if (volume.persistentVolumeClaim?.readOnly === false) {
+      delete volume.persistentVolumeClaim.readOnly;
+    }
+  }
+
+  assert.doesNotThrow(() => verifyKubernetesAuthoritativeGatePod(pod, manifest, input));
 });
 
 function ready(pod: V1Pod, digest: string): V1Pod {

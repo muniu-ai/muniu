@@ -574,8 +574,8 @@ export function verifyKubernetesSandboxPod(
       throw new Error("Kubernetes sandbox Pod claim annotations drifted");
     }
   }
-  const observedSecurity = securityProjection(pod.spec);
-  const expectedSecurity = securityProjection(expected.spec);
+  const observedSecurity = kubernetesPodSecurityProjection(pod.spec);
+  const expectedSecurity = kubernetesPodSecurityProjection(expected.spec);
   if (sha256Canonical(observedSecurity) !== sha256Canonical(expectedSecurity)) {
     throw new Error(
       `Kubernetes sandbox Pod security specification drifted at ${firstProjectionMismatch(
@@ -606,7 +606,7 @@ export function verifyKubernetesSandboxPod(
     uid,
     runtimeClassName: pod.spec?.runtimeClassName,
     nodeName: pod.spec?.nodeName,
-    podSpecDigest: sha256Canonical(securityProjection(pod.spec)),
+    podSpecDigest: sha256Canonical(kubernetesPodSecurityProjection(pod.spec)),
     attestationDigest: input.attestation.digest,
     sourceSnapshotDigest: input.sourceSnapshotDigest,
     imageDigest: approvedDigest,
@@ -769,7 +769,10 @@ function normalizeConfiguration(input: KubernetesSandboxConfiguration) {
   });
 }
 
-function securityProjection(spec: V1Pod["spec"]): unknown {
+/** Returns a strict, canonical-JSON-safe projection of every Pod field that
+ * can affect the sandbox boundary. Kubernetes client model instances are
+ * copied as enumerable data and API-server default omissions are normalized. */
+export function kubernetesPodSecurityProjection(spec: V1Pod["spec"]): unknown {
   if (!spec) return null;
   return plainKubernetesValue({
     serviceAccountName: spec.serviceAccountName,
