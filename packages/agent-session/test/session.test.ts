@@ -849,7 +849,10 @@ test("descriptor lock timeout waits one close observation and preserves the prim
     "--input-type=module",
     "--eval",
     "setInterval(() => {}, 1000)"
-  ], { stdio: ["ignore", "ignore", "ignore"] });
+  ], {
+    env: CHILD_PROCESS_ENV,
+    stdio: ["ignore", "ignore", "ignore"]
+  });
   const startedAt = Date.now();
   await assert.rejects(
     () => settleDescriptorLockCommand(child, 10),
