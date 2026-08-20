@@ -65,6 +65,13 @@ export interface GovernedRunOrchestratorOptions extends RunOrchestratorOptions {
     readonly candidateId: string;
     readonly workspacePath: string;
   }) => string;
+  /** A takeover worker restored this candidate from an API-authenticated diff
+   * CAS object. The path itself remains process-local on RunRecord; only the
+   * changed-path set crosses into Gate policy evaluation. */
+  restoredCandidateWorkspace?: {
+    readonly candidateId: string;
+    readonly changedPaths: readonly string[];
+  };
 }
 
 export interface GovernedRunExecutionOptions {
@@ -330,6 +337,56 @@ export class GovernedRunOrchestrator {
     let gateRepairFeedback = "";
     const candidateBaselines = new Map<string, WorkspaceSnapshot>();
     const candidateContentBaselines = new Map<string, WorkspaceContentSnapshot>();
+    if (this.options.restoredCandidateWorkspace) {
+      const restored = this.options.restoredCandidateWorkspace;
+      const candidate = candidateRun.candidates.find(
+        (entry) => entry.id === restored.candidateId
+      );
+      if (
+        !candidate ||
+        (candidateRun.winnerCandidateId !== undefined &&
+          candidateRun.winnerCandidateId !== candidate.id)
+      ) {
+        throw new TypeError("Restored candidate does not match the durable Run winner");
+      }
+      const declaredPaths = [...restored.changedPaths];
+      if (
+        declaredPaths.some((path, index) =>
+          !path ||
+          path !== path.trim() ||
+          (index > 0 && path <= declaredPaths[index - 1]!)
+        )
+      ) {
+        throw new TypeError("Restored candidate changed paths must be unique and sorted");
+      }
+      const [candidateSnapshot, sourceContents, candidateContents] = await Promise.all([
+        snapshotWorkspace(candidate.worktreePath),
+        snapshotWorkspaceContents(project.rootPath),
+        snapshotWorkspaceContents(candidate.worktreePath)
+      ]);
+      const observedPaths = changedWorkspacePaths(initialProjectSnapshot, candidateSnapshot);
+      if (observedPaths.some((path) => !declaredPaths.includes(path))) {
+        throw new TypeError(
+          "Restored candidate contains changes outside its authoritative diff manifest"
+        );
+      }
+      latestChangedPaths = Object.freeze(declaredPaths);
+      const changedDigests = declaredPaths.map((path) => ({
+        path,
+        before: initialProjectSnapshot.get(path) ?? null,
+        after: candidateSnapshot.get(path) ?? null
+      }));
+      latestDiffDigest = sha256Canonical(changedDigests);
+      latestDiffManifestBase64 = encodeDiffManifest(
+        declaredPaths,
+        sourceContents,
+        candidateContents
+      );
+      // A repair after takeover must measure and evaluate the cumulative diff
+      // against source, not only the delta made by the resumed model turn.
+      candidateBaselines.set(candidate.id, initialProjectSnapshot);
+      candidateContentBaselines.set(candidate.id, sourceContents);
+    }
     const selectedServices = baseRun.harnessManifest.selectedServices;
     const languageByService = projectLanguages(project, selectedServices);
     const handlers: GovernedStageHandlers = {

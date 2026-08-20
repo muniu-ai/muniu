@@ -616,15 +616,21 @@ export async function authorizeEnterpriseGateCheckpoint(
         !attestation ||
         !execution ||
         !input.item.claimTokenHash ||
-        diff.leaseId !== attestation.leaseId ||
-        diff.runtimeId !== execution.runtimeId ||
-        diff.runtimeProofDigest !== execution.runtimeProof.digest ||
+        execution.leaseId !== attestation.leaseId ||
         execution.runtimeProof.claimDigest !== input.item.claimTokenHash
       ) {
         return decisionError(
-          `verification attempt ${attempt.id} runtime does not match the active claim and implementation proof`
+          `verification attempt ${attempt.id} runtime does not match the active claim`
         );
       }
+      const verificationWorkspaceUri = gateCandidateWorkspaceUri({
+        reported,
+        leaseId: attestation.leaseId,
+        runId: input.incoming.id,
+        candidateId: diff.candidateId,
+        implementationWorkspaceUri: diff.workspaceUri,
+        implementationLeaseId: diff.leaseId
+      });
 
       if (!(await input.assertCurrentClaim())) {
         return decisionError("run job claim changed before authoritative Gate execution");
@@ -638,8 +644,8 @@ export async function authorizeEnterpriseGateCheckpoint(
         return decisionError("authoritative Gate runtime digest changed before execution");
       }
       const candidateRoot = await resolveAuthoritativeCandidateWorkspace({
-        workspaceUri: diff.workspaceUri,
-        leaseId: diff.leaseId,
+        workspaceUri: verificationWorkspaceUri,
+        leaseId: attestation.leaseId,
         scratchRoot: beforeRuntime.scratchRoot,
         runId: input.incoming.id,
         implementationAttempt: preceding.attempt,
@@ -711,8 +717,8 @@ export async function authorizeEnterpriseGateCheckpoint(
         resolveReportedWorkingDirectory: (value) =>
           resolveGateWorkspaceUri({
             value,
-            leaseId: diff.leaseId,
-            workspaceUri: diff.workspaceUri,
+            leaseId: attestation.leaseId,
+            workspaceUri: verificationWorkspaceUri,
             candidateRoot
           })
       });
@@ -740,12 +746,12 @@ export async function authorizeEnterpriseGateCheckpoint(
           attempt: attempt.attempt,
           workerId: input.workerId,
           claimDigest: input.item.claimTokenHash,
-          leaseId: diff.leaseId,
+          leaseId: attestation.leaseId,
           runtimeId: execution.runtimeId,
           runtimeDigest: execution.runtimeDigest,
           runtimeProofDigest: execution.runtimeProof.digest,
           candidateId: diff.candidateId,
-          workspaceUri: diff.workspaceUri,
+          workspaceUri: verificationWorkspaceUri,
           diffArtifactDigest: diff.digest,
           projectSnapshotDigest: diff.projectSnapshotDigest,
           candidateSnapshotDigest: diff.candidateSnapshotDigest,
@@ -888,6 +894,57 @@ function diffRef(
   };
 }
 
+/** Derives the current, lease-local candidate root from Gate evidence. During
+ * takeover this URI differs from the historical implementation URI, but its
+ * complete bytes are verified against that implementation's CAS proof before
+ * any authoritative Gate is executed. */
+function gateCandidateWorkspaceUri(input: {
+  readonly reported: readonly GateResultV2[];
+  readonly leaseId: string;
+  readonly runId: string;
+  readonly candidateId: string;
+  readonly implementationWorkspaceUri: string;
+  readonly implementationLeaseId: string;
+}): string {
+  const parsed = input.reported.map((result) =>
+    parseSandboxUri(result.workingDirectory, "Gate workingDirectory")
+  );
+  const workspace = parsed[0]?.segments[0];
+  if (
+    !workspace ||
+    parsed.some(
+      (value) => value.leaseId !== input.leaseId || value.segments[0] !== workspace
+    )
+  ) {
+    throw new TypeError("Gate results do not share one active-lease candidate workspace");
+  }
+  const governed = `${input.runId}--governed-${input.candidateId}`;
+  // Legacy implementation paths include the actual attempt number, while the
+  // governed failover path is stable. Accept the legacy shape here and let
+  // resolveAuthoritativeCandidateWorkspace enforce its exact attempt value.
+  const legacy = new RegExp(
+    `^${escapeRegex(input.runId)}--implementation-[1-9][0-9]*-${escapeRegex(input.candidateId)}$`,
+    "u"
+  );
+  if (workspace !== governed && !legacy.test(workspace)) {
+    throw new TypeError("Gate candidate workspace is not bound to its run and candidate");
+  }
+  if (input.implementationLeaseId === input.leaseId) {
+    const implementation = parseSandboxUri(
+      input.implementationWorkspaceUri,
+      "implementation workspaceUri"
+    );
+    if (
+      implementation.leaseId !== input.leaseId ||
+      implementation.segments.length !== 1 ||
+      implementation.segments[0] !== workspace
+    ) {
+      throw new TypeError("Gate candidate workspace differs from its implementation proof");
+    }
+  }
+  return `mn://sandbox/${encodeURIComponent(input.leaseId)}/${encodeURIComponent(workspace)}`;
+}
+
 /** Resolves a reported Gate cwd under the one candidate URI admitted by the
  * implementation proof. It does not accept another lease or sibling scratch
  * directory. */
@@ -956,6 +1013,10 @@ function parseSandboxUri(
     throw new TypeError(`${field} is not a safe mn sandbox URI`);
   }
   return { leaseId: segments[0]!, segments: segments.slice(1) };
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
 function decisionError(error: string): EnterpriseGateAuthorizationDecision {

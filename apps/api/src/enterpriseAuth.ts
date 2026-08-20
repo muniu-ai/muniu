@@ -324,7 +324,7 @@ function queueScopeForRoute(method: string, pathname: string): WorkerScope | und
   ) {
     return "run_jobs:checkpoint";
   }
-  const action = /^\/v1\/run-jobs\/queue\/[^/]+\/(heartbeat|release|events|artifacts|measurements|usage-receipts|update|finish|sandbox-runtime-proof|source-snapshot)$/u.exec(
+  const action = /^\/v1\/run-jobs\/queue\/[^/]+\/(heartbeat|release|events|artifacts|measurements|usage-receipts|update|finish|sandbox-runtime-proof|source-snapshot|resume-diff)$/u.exec(
     pathname
   )?.[1];
   switch (action) {
@@ -337,6 +337,7 @@ function queueScopeForRoute(method: string, pathname: string): WorkerScope | und
     case "update": return "run_jobs:checkpoint";
     case "sandbox-runtime-proof": return "run_jobs:checkpoint";
     case "source-snapshot": return "run_jobs:checkpoint";
+    case "resume-diff": return "run_jobs:checkpoint";
     case "finish": return "run_jobs:finish";
     default: return undefined;
   }

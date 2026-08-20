@@ -203,6 +203,7 @@ import {
   type ProviderUsageReconciliationEvidence
 } from "./enterprisePostgres.js";
 import { executionStateFromEnterpriseClaim } from "./enterpriseClaimState.js";
+import { enterpriseResumeDiffFromClaim } from "./enterpriseResumeDiff.js";
 import {
   ENTERPRISE_METADATA_KINDS,
   restoreEnterpriseSnapshot
@@ -926,6 +927,11 @@ const runJobLoopMeasurementSchema = runJobQueueClaimTokenSchema.extend({
   ]),
   workspaceUri: z.string().min(1).max(4_096).optional(),
   candidateId: z.string().min(1).max(512).optional()
+}).strict();
+const runJobResumeDiffSchema = runJobQueueClaimTokenSchema.extend({
+  stageAttemptId: z.string().min(1).max(1_024),
+  candidateId: z.string().min(1).max(512),
+  digest: z.string().regex(/^[a-f0-9]{64}$/u)
 }).strict();
 const runApprovalSchema = z.object({
   decision: z.enum(["approve", "reject"]).default("approve"),
@@ -5189,6 +5195,71 @@ export function buildServer(options: BuildServerOptions = {}) {
       .header("content-type", ref.contentType)
       .header("content-length", String(ref.byteLength))
       .header("x-muniu-content-digest", ref.digest)
+      .send(content);
+  });
+
+  app.post("/v1/run-jobs/queue/:id/resume-diff", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = runJobResumeDiffSchema.parse(request.body ?? {});
+    const context = requestContexts.get(request) ?? localRequestContext(request.id);
+    if (runtimeProfile !== "enterprise" || !enterprisePostgres || !sandboxAttestationKey) {
+      return reply.code(503).send({ error: "enterprise resume diff authority is unavailable" });
+    }
+    const active = await enterprisePostgres.inspectClaim({
+      runId: id,
+      ownerId: body.ownerId,
+      claimToken: body.claimToken
+    });
+    if (!active || active.item.tenantId !== context.tenantId) {
+      return reply.code(409).send({ error: "run job claim is not active" });
+    }
+    let binding;
+    try {
+      binding = enterpriseResumeDiffFromClaim(active, body, sandboxAttestationKey);
+    } catch (error) {
+      return reply.code(409).send({
+        error: error instanceof Error ? error.message : "resume diff binding is invalid"
+      });
+    }
+    let content: Buffer | undefined;
+    try {
+      content = await runScopedCas.readVerified(binding.ref);
+    } catch (error) {
+      return reply.code(409).send({
+        error: error instanceof Error ? error.message : "resume diff integrity check failed"
+      });
+    }
+    if (!content) {
+      return reply.code(410).send({ error: "content-addressed resume diff is unavailable" });
+    }
+    const stillActive = await enterprisePostgres.inspectClaim({
+      runId: id,
+      ownerId: body.ownerId,
+      claimToken: body.claimToken
+    });
+    let currentBinding;
+    try {
+      currentBinding = stillActive
+        ? enterpriseResumeDiffFromClaim(stillActive, body, sandboxAttestationKey)
+        : undefined;
+    } catch {
+      currentBinding = undefined;
+    }
+    if (
+      !stillActive ||
+      stillActive.item.tenantId !== context.tenantId ||
+      stillActive.item.claimTokenHash !== active.item.claimTokenHash ||
+      stillActive.checkpointDigest !== active.checkpointDigest ||
+      !currentBinding ||
+      currentBinding.ref.objectKey !== binding.ref.objectKey ||
+      currentBinding.ref.digest !== binding.ref.digest
+    ) {
+      return reply.code(409).send({ error: "run job claim changed during resume diff retrieval" });
+    }
+    return reply
+      .header("content-type", binding.ref.contentType)
+      .header("content-length", String(binding.ref.byteLength))
+      .header("x-muniu-content-digest", binding.ref.digest)
       .send(content);
   });
 

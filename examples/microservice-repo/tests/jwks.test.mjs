@@ -37,7 +37,7 @@ test("local JWKS stub issues an RS256 token that matches its published key", asy
   );
 });
 
-test("fixture model retries an interrupted tool call and completes only after a result", async (t) => {
+test("fixture model retries interrupted or pre-dispatch-cancelled tools", async (t) => {
   const server = createJwksServer();
   await new Promise((resolve, reject) => {
     server.once("error", reject);
@@ -59,19 +59,25 @@ test("fixture model retries an interrupted tool call and completes only after a 
 
   const first = await respond([{ type: "message", role: "user", content: "repair" }]);
   assert.match(first, /"name":"write_file"/u);
-  const interrupted = await respond([{
+  const cancelled = await respond([{
     type: "function_call_output",
     call_id: "kind-write-1",
-    output: "TOOL_NOT_STARTED: interrupted and not replayed"
+    output: "Tool execution was cancelled before dispatch."
   }]);
-  assert.match(interrupted, /"call_id":"kind-write-2"/u);
-  const completed = await respond([{
+  assert.match(cancelled, /"call_id":"kind-write-2"/u);
+  const interrupted = await respond([{
     type: "function_call_output",
     call_id: "kind-write-2",
+    output: "TOOL_NOT_STARTED: interrupted and not replayed"
+  }]);
+  assert.match(interrupted, /"call_id":"kind-write-3"/u);
+  const completed = await respond([{
+    type: "function_call_output",
+    call_id: "kind-write-3",
     output: "{\"path\":\"kind-failover.txt\",\"bytes\":45}"
   }]);
   assert.match(completed, /response\.output_text\.delta/u);
   assert.doesNotMatch(completed, /"name":"write_file"/u);
   const status = await fetch(`${baseUrl}/model/status`).then((response) => response.json());
-  assert.deepEqual(status, { modelRequests: 3, modelToolCalls: 2 });
+  assert.deepEqual(status, { modelRequests: 4, modelToolCalls: 3 });
 });

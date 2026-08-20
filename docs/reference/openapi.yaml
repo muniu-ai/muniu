@@ -580,6 +580,13 @@ paths:
         "200":
           description: Successful response
       x-muniu-source: apps/api/src/server.ts
+  /v1/run-jobs/queue/{id}/resume-diff:
+    post:
+      operationId: post__v1_run_jobs_queue_id_resume_diff
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/server.ts
   /v1/run-jobs/queue/{id}/sandbox-runtime-proof:
     post:
       operationId: post__v1_run_jobs_queue_id_sandbox_runtime_proof

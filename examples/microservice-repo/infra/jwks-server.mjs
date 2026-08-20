@@ -152,7 +152,7 @@ export function createJwksServer() {
           : [];
         const latestOutput = String(toolOutputs.at(-1)?.output ?? "");
         const needsTool = toolOutputs.length === 0 ||
-          /TOOL_NOT_STARTED|interrupted|not replayed/iu.test(latestOutput);
+          /TOOL_NOT_STARTED|TOOL_CANCELLED|interrupted|cancelled before dispatch|denied before dispatch|not replayed/iu.test(latestOutput);
         const events = [];
         if (needsTool) {
           modelToolCalls += 1;

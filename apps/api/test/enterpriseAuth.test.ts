@@ -173,6 +173,10 @@ test("machine principal scopes isolate worker queue operations from human approv
     true
   );
   assert.equal(
+    principalAllows(worker, "POST", "/v1/run-jobs/queue/run-1/resume-diff"),
+    true
+  );
+  assert.equal(
     principalAllows(worker, "POST", "/v1/run-jobs/queue/run-1/usage-receipts"),
     true
   );

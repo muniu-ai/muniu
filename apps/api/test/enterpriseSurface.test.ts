@@ -21,6 +21,7 @@ test("enterprise route allowlist contains only governed increment surfaces", () 
     ["POST", "/v1/run-jobs/queue/run-1/finish"],
     ["POST", "/v1/run-jobs/queue/run-1/artifacts"],
     ["POST", "/v1/run-jobs/queue/run-1/measurements"],
+    ["POST", "/v1/run-jobs/queue/run-1/resume-diff"],
     ["POST", "/v1/run-jobs/queue/run-1/usage-receipts"],
     ["POST", "/v1/run-jobs/queue/run-1/builtin-executions"],
     ["POST", "/v1/run-jobs/queue/run-1/builtin-executions/execution-1/poll"],

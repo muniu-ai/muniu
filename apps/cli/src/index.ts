@@ -25,6 +25,7 @@ import type {
 import type {
   ApprovalDecision,
   GovernedRunState,
+  LoopBudgetDiffArtifactBinding,
   LoopBudgetMeasurer
 } from "@mn/loop";
 import {
@@ -45,7 +46,9 @@ import {
   RunOrchestrator,
   gateResultV2OutputDigest,
   prepareSnapshotCandidateWorkspace,
-  projectAtSnapshot
+  projectAtSnapshot,
+  restoreLoopDiffWorkspace,
+  LOOP_DIFF_MANIFEST_CONTENT_TYPE
 } from "@mn/worker";
 import { parse as parseYaml } from "yaml";
 import { agentCommand } from "./agent-commands.js";
@@ -261,6 +264,20 @@ interface EnterpriseSourceSnapshotRef {
   digest: string;
   byteLength: number;
   contentType: "application/vnd.muniu.workspace-snapshot.v1+json";
+}
+
+interface EnterpriseBoundContentRef {
+  schemaVersion: 1;
+  objectKey: string;
+  digest: string;
+  byteLength: number;
+  contentType: string;
+}
+
+interface EnterpriseResumeDiffBinding {
+  stageAttemptId: string;
+  artifact: LoopBudgetDiffArtifactBinding;
+  ref: EnterpriseBoundContentRef;
 }
 
 interface EnterpriseWorkerExecutionContext {
@@ -2533,6 +2550,69 @@ async function runEnterpriseClaimedJob(
     const sandboxExecution = backend.executionEvidence(leaseId);
     const sandboxWorkspaceRoot = backend.workspaceRoot(leaseId);
     const sandboxProject = projectAtSnapshot(project, backend.sourceRoot(leaseId));
+    const resumeDiff = resumeFrom
+      ? latestEnterpriseResumeDiff(resumeFrom, run)
+      : undefined;
+    let restoredCandidateWorkspace:
+      | { candidateId: string; changedPaths: readonly string[] }
+      | undefined;
+    let executionRun = run;
+    if (resumeDiff) {
+      const diffContent = await postBytes(
+        `/v1/run-jobs/queue/${encodeURIComponent(item.runId)}/resume-diff`,
+        {
+          ...claimBody,
+          stageAttemptId: resumeDiff.stageAttemptId,
+          candidateId: resumeDiff.artifact.candidateId,
+          digest: resumeDiff.artifact.digest
+        },
+        resumeDiff.ref
+      );
+      const restored = await restoreLoopDiffWorkspace({
+        projectRoot: sandboxProject.rootPath,
+        workspaceRoot: sandboxWorkspaceRoot,
+        runId: run.id,
+        candidateId: resumeDiff.artifact.candidateId,
+        content: diffContent,
+        digest: resumeDiff.artifact.digest,
+        projectSnapshotDigest: resumeDiff.artifact.projectSnapshotDigest,
+        candidateSnapshotDigest: resumeDiff.artifact.candidateSnapshotDigest
+      });
+      restoredCandidateWorkspace = {
+        candidateId: resumeDiff.artifact.candidateId,
+        changedPaths: restored.changedPaths
+      };
+      const localCandidatePaths = new Map<string, string>([
+        [resumeDiff.artifact.candidateId, restored.path]
+      ]);
+      // Only the selected candidate has an authoritative diff. Recreate every
+      // non-winner at the immutable source baseline so a later repair round
+      // never hands an old lease URI to its durable Agent session.
+      for (const candidate of run.candidates) {
+        if (
+          candidate.id === resumeDiff.artifact.candidateId ||
+          !candidate.worktreePath.startsWith("mn://sandbox/")
+        ) {
+          continue;
+        }
+        const baseline = await prepareSnapshotCandidateWorkspace({
+          projectRoot: sandboxProject.rootPath,
+          workspaceRoot: sandboxWorkspaceRoot,
+          runId: `${run.id}--governed`,
+          candidateId: candidate.id,
+          isolated: true
+        });
+        localCandidatePaths.set(candidate.id, baseline.path);
+      }
+      executionRun = {
+        ...run,
+        candidates: run.candidates.map((candidate) =>
+          localCandidatePaths.has(candidate.id)
+            ? { ...candidate, worktreePath: localCandidatePaths.get(candidate.id)! }
+            : candidate
+        )
+      };
+    }
     const history: NonNullable<RunRecord["sandboxEvidenceHistory"]> =
       cloneJson(run.sandboxEvidenceHistory ?? []);
     let checkpointState: GovernedRunState | undefined;
@@ -2617,7 +2697,7 @@ async function runEnterpriseClaimedJob(
       })
     };
     const baseRun: RunRecord = {
-      ...run,
+      ...executionRun,
       sandboxAttestation: attestation,
       sandboxExecution,
       sandboxEvidenceHistory: history
@@ -2632,6 +2712,7 @@ async function runEnterpriseClaimedJob(
       measureBudgetDelta,
       measurementWorkspaceUri: ({ workspacePath }) =>
         sandboxWorkspaceUri(leaseId!, sandboxWorkspaceRoot, workspacePath),
+      ...(restoredCandidateWorkspace ? { restoredCandidateWorkspace } : {}),
       ...(options.proxyBaseUrl
         ? {
             proxyBaseUrl: options.proxyBaseUrl,
@@ -2904,6 +2985,45 @@ function validateSourceSnapshotRef(
   }
 }
 
+function latestEnterpriseResumeDiff(
+  state: GovernedRunState,
+  run: RunRecord
+): EnterpriseResumeDiffBinding | undefined {
+  for (let index = state.attempts.length - 1; index >= 0; index -= 1) {
+    const attempt = state.attempts[index]!;
+    const artifact = attempt.budgetMeasurement?.diffArtifact;
+    if (attempt.stage !== "implementation" || attempt.status !== "completed" || !artifact) {
+      continue;
+    }
+    const candidate = run.candidates.find((entry) => entry.id === artifact.candidateId);
+    if (
+      attempt.budgetMeasurement?.stageAttemptId !== attempt.id ||
+      !candidate ||
+      run.winnerCandidateId !== artifact.candidateId ||
+      candidate.worktreePath !== artifact.workspaceUri ||
+      artifact.uri !== `mn://cas/loop-diffs/${encodeURIComponent(artifact.id)}` ||
+      !/^[a-f0-9]{64}$/u.test(artifact.digest) ||
+      !Number.isSafeInteger(artifact.byteLength) ||
+      artifact.byteLength < 0 ||
+      artifact.byteLength > 16 * 1024 * 1024
+    ) {
+      throw new Error("Enterprise resume diff binding is inconsistent with the durable Run.");
+    }
+    return {
+      stageAttemptId: attempt.id,
+      artifact,
+      ref: {
+        schemaVersion: 1,
+        objectKey: artifact.id,
+        digest: artifact.digest,
+        byteLength: artifact.byteLength,
+        contentType: LOOP_DIFF_MANIFEST_CONTENT_TYPE
+      }
+    };
+  }
+  return undefined;
+}
+
 function requireWorkerSetting(value: string | undefined, environmentName: string): string {
   if (!value?.trim() || value !== value.trim() || /[\0\r\n]/u.test(value)) {
     throw new Error(`Kubernetes sandbox requires ${environmentName}.`);
@@ -2962,13 +3082,17 @@ function externalizeEnterpriseRun(input: {
     });
   }
   const candidates = record.candidates.map((candidate) => {
+    const evidenceWorkspaceUri = durableCandidateWorkspaceUri(
+      input.state,
+      candidate.id
+    );
     const external = {
       ...candidate,
-      worktreePath: sandboxWorkspaceUri(
-        input.attestation.leaseId,
-        input.sandboxWorkspaceRoot,
-        candidate.worktreePath
-      )
+      worktreePath: evidenceWorkspaceUri ?? sandboxWorkspaceUri(
+          input.attestation.leaseId,
+          input.sandboxWorkspaceRoot,
+          candidate.worktreePath
+        )
     };
     delete external.outputCheckpoint;
     return external;
@@ -2993,6 +3117,17 @@ function externalizeEnterpriseRun(input: {
     sandboxExecution: cloneJson(input.execution),
     sandboxEvidenceHistory: cloneJson(input.history)
   };
+}
+
+function durableCandidateWorkspaceUri(
+  state: GovernedRunState,
+  candidateId: string
+): string | undefined {
+  for (let index = state.attempts.length - 1; index >= 0; index -= 1) {
+    const artifact = state.attempts[index]?.budgetMeasurement?.diffArtifact;
+    if (artifact?.candidateId === candidateId) return artifact.workspaceUri;
+  }
+  return undefined;
 }
 
 function sandboxWorkspaceUri(
@@ -3536,9 +3671,22 @@ async function postJson<T = unknown>(path: string, body: unknown): Promise<T> {
 async function postBytes(
   path: string,
   body: unknown,
-  expected: EnterpriseSourceSnapshotRef
+  expected: EnterpriseBoundContentRef
 ): Promise<Buffer> {
-  validateSourceSnapshotRef(expected);
+  if (
+    expected.schemaVersion !== 1 ||
+    typeof expected.objectKey !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(expected.digest) ||
+    !Number.isSafeInteger(expected.byteLength) ||
+    expected.byteLength < 0 ||
+    expected.byteLength > 256 * 1024 * 1024 ||
+    ![
+      "application/vnd.muniu.workspace-snapshot.v1+json",
+      LOOP_DIFF_MANIFEST_CONTENT_TYPE
+    ].includes(expected.contentType)
+  ) {
+    throw new Error("Content-addressed queue response binding is invalid.");
+  }
   const targetApiUrl = await resolveApiUrl();
   const response = await fetch(`${targetApiUrl}${path}`, {
     method: "POST",
@@ -3552,12 +3700,12 @@ async function postBytes(
     response.headers.get("content-type")?.split(";", 1)[0] !== expected.contentType ||
     announcedLength !== expected.byteLength
   ) {
-    throw new Error("Source snapshot response headers do not match the queue binding.");
+    throw new Error("Content-addressed response headers do not match the queue binding.");
   }
   const content = Buffer.from(await response.arrayBuffer());
   const digest = createHash("sha256").update(content).digest("hex");
   if (content.byteLength !== expected.byteLength || digest !== expected.digest) {
-    throw new Error("Source snapshot response bytes do not match the queue binding.");
+    throw new Error("Content-addressed response bytes do not match the queue binding.");
   }
   return content;
 }
