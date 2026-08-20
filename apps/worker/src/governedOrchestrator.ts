@@ -386,8 +386,12 @@ export class GovernedRunOrchestrator {
             candidateRun = record;
           }
         });
-        const implementationWorkspaceRunId =
-          `${baseRun.id}--implementation-${context.attempt}`;
+        // The host scratch root is lease-specific, while the path observed by
+        // the Agent session is the sandbox mount target plus this suffix. Keep
+        // the suffix stable across infrastructure takeover so a durable
+        // session can resume against a new attested lease without changing its
+        // immutable logical cwd. Repair rounds already reuse this workspace.
+        const implementationWorkspaceRunId = `${baseRun.id}--governed`;
         const classicResult = await classic.run(project, classicTask, {
           runId: baseRun.id,
           workspaceRunId: implementationWorkspaceRunId,
@@ -424,39 +428,60 @@ export class GovernedRunOrchestrator {
         const winner = candidateRun.candidates.find(
           (candidate) => candidate.id === candidateRun.winnerCandidateId
         );
-        if (winner) {
-          const before =
-            resolve(winner.worktreePath) === resolve(project.rootPath)
-              ? initialProjectSnapshot
-              : candidateBaselines.get(winner.id);
-          if (!before) {
-            throw new Error(`Missing pre-execution snapshot for ${winner.id}`);
-          }
-          const [after, afterContents] = await Promise.all([
-            snapshotWorkspace(winner.worktreePath),
-            snapshotWorkspaceContents(winner.worktreePath)
-          ]);
-          latestChangedPaths = changedWorkspacePaths(before, after);
-          const beforeContents = candidateContentBaselines.get(winner.id);
-          if (!beforeContents) {
-            throw new Error(`Missing pre-execution content snapshot for ${winner.id}`);
-          }
-          latestDiffManifestBase64 = encodeDiffManifest(
-            latestChangedPaths,
-            beforeContents,
-            afterContents
-          );
-          const changedDigests = latestChangedPaths.map((path) => ({
-            path,
-            before: before.get(path) ?? null,
-            after: after.get(path) ?? null
-          }));
-          latestDiffDigest = sha256Canonical(changedDigests);
-        } else {
-          latestChangedPaths = [];
-          latestDiffDigest = sha256Canonical([]);
-          latestDiffManifestBase64 = encodeDiffManifest([], new Map(), new Map());
+        if (!winner) {
+          const semantic = {
+            implementationAttempt: context.attempt,
+            candidates: candidateRun.candidates.map((candidate) => ({
+              id: candidate.id,
+              status: candidate.status,
+              summaries: candidate.gates.map((gate) => gate.summary)
+            }))
+          };
+          return {
+            status: "failed",
+            artifacts: [
+              loopArtifact(
+                baseRun.id,
+                `implementation-${context.attempt}-failure`,
+                "other",
+                semantic
+              )
+            ],
+            failure: {
+              kind: "stage_failure",
+              retryable: false,
+              reason: "Candidate implementation produced no selectable winner"
+            },
+            failureSignature: sha256Canonical(semantic)
+          };
         }
+        const before =
+          resolve(winner.worktreePath) === resolve(project.rootPath)
+            ? initialProjectSnapshot
+            : candidateBaselines.get(winner.id);
+        if (!before) {
+          throw new Error(`Missing pre-execution snapshot for ${winner.id}`);
+        }
+        const [after, afterContents] = await Promise.all([
+          snapshotWorkspace(winner.worktreePath),
+          snapshotWorkspaceContents(winner.worktreePath)
+        ]);
+        latestChangedPaths = changedWorkspacePaths(before, after);
+        const beforeContents = candidateContentBaselines.get(winner.id);
+        if (!beforeContents) {
+          throw new Error(`Missing pre-execution content snapshot for ${winner.id}`);
+        }
+        latestDiffManifestBase64 = encodeDiffManifest(
+          latestChangedPaths,
+          beforeContents,
+          afterContents
+        );
+        const changedDigests = latestChangedPaths.map((path) => ({
+          path,
+          before: before.get(path) ?? null,
+          after: after.get(path) ?? null
+        }));
+        latestDiffDigest = sha256Canonical(changedDigests);
         const diffSemantic = {
           implementationAttempt: context.attempt,
           winnerCandidateId: candidateRun.winnerCandidateId ?? null,

@@ -442,10 +442,12 @@ test("governed candidate authority loss preserves and recovers the running imple
   const spec = approvedSpec();
   const { governance, harness } = bindings(spec, ["unit_test"]);
   let calls = 0;
+  const candidatePaths: string[] = [];
   const executor = {
     provider: "codex" as const,
     async run(input: AgentRunInput): Promise<AgentRunResult> {
       calls += 1;
+      candidatePaths.push(input.cwd);
       if (calls === 1) {
         throw new GovernedLoopInterruptionError("model generation owner disappeared");
       }
@@ -502,6 +504,8 @@ test("governed candidate authority loss preserves and recovers the running imple
   });
 
   assert.equal(calls, 2);
+  assert.deepEqual(candidatePaths, [candidatePaths[0], candidatePaths[0]]);
+  assert.match(candidatePaths[0] ?? "", /run-1--governed-codex-1$/u);
   assert.equal(
     result.state.attempts.find((attempt) => attempt.id === "run-1:implementation:1")
       ?.failure?.kind,
@@ -509,6 +513,49 @@ test("governed candidate authority loss preserves and recovers the running imple
   );
   assert.equal(result.state.status, "waiting_approval");
   assert.deepEqual(result.run.gateResultsV2?.map((gate) => gate.status), ["pass"]);
+});
+
+test("governed candidate failure stops before an unverifiable empty verification", async (t) => {
+  const { root, workspaces } = await fixture(t);
+  const spec = approvedSpec();
+  const { governance, harness } = bindings(spec, ["unit_test"]);
+  const executor = {
+    provider: "codex" as const,
+    async run(input: AgentRunInput): Promise<AgentRunResult> {
+      const timestamp = new Date().toISOString();
+      return {
+        provider: "codex",
+        candidateId: input.candidateId,
+        status: "failed",
+        exitCode: 1,
+        stdout: "",
+        stderr: "provider rejected the generation",
+        summary: "provider failure",
+        artifacts: [],
+        startedAt: timestamp,
+        finishedAt: timestamp
+      };
+    }
+  };
+  const orchestrator = new GovernedRunOrchestrator({
+    workspaceRoot: workspaces,
+    executors: { codex: executor },
+    resolveSpecRevision: () => spec
+  });
+
+  const result = await orchestrator.run(
+    project(root),
+    task(spec),
+    baseRun(spec, governance, harness)
+  );
+
+  assert.equal(result.state.status, "failed");
+  assert.match(result.state.failure?.reason ?? "", /no selectable winner/u);
+  assert.equal(
+    result.state.attempts.filter((attempt) => attempt.stage === "verification").length,
+    0
+  );
+  assert.deepEqual(result.run.verificationEvidence, []);
 });
 
 test("builtin governed execution repairs in one durable embedded session without external CLIs", async (t) => {
@@ -578,7 +625,7 @@ test("builtin governed execution repairs in one durable embedded session without
   assert.ok(calls.every(
     (call) => call.executionBinding.effectPolicyDigest === expectedEffectPolicyDigest
   ));
-  assert.match(calls[0]?.cwd ?? "", /run-1--implementation-1-builtin-1$/u);
+  assert.match(calls[0]?.cwd ?? "", /run-1--governed-builtin-1$/u);
   assert.equal(calls[0]?.sessionId, calls[1]?.sessionId);
   assert.equal(calls[0]?.cwd, calls[1]?.cwd);
   assert.match(calls[1]?.prompt ?? "", /gate-repair-feedback/u);
