@@ -15,7 +15,11 @@ import {
 } from "@mn/core";
 import type { GovernanceSnapshot } from "@mn/governance";
 import type { HarnessManifest } from "@mn/harness";
-import { sha256Canonical } from "@mn/loop";
+import {
+  GovernedLoopInterruptionError,
+  sha256Canonical,
+  type GovernedRunState
+} from "@mn/loop";
 import { digestSpecRevision, type SpecRevision } from "@mn/specs";
 import { BuiltinAgentExecutor, type BuiltinAgentExecutionInput } from "@mn/executors";
 import {
@@ -337,6 +341,223 @@ test("governed verification runs real Gate V2 evidence and repairs until it pass
   );
 });
 
+test("governed resume binds an interrupted verification to explicit empty evidence", async (t) => {
+  const { root, workspaces } = await fixture(t);
+  const spec = approvedSpec();
+  const { governance, harness } = bindings(spec, ["unit_test"]);
+  const executor = new RepairingExecutor();
+  let captured: GovernedRunState | undefined;
+  let durableRun = baseRun(spec, governance, harness);
+  const interrupted = new GovernedRunOrchestrator({
+    workspaceRoot: workspaces,
+    executors: { claude: executor, codex: executor },
+    resolveSpecRevision: () => spec,
+    onUpdate: (run) => {
+      durableRun = run;
+    },
+    onLoopCheckpoint: (checkpoint) => {
+      const attempt = checkpoint.attempts.at(-1);
+      if (attempt?.stage === "verification" && attempt.status === "running") {
+        captured = checkpoint;
+        throw new Error("simulated API owner loss");
+      }
+    }
+  });
+
+  await assert.rejects(
+    interrupted.run(
+      project(root),
+      task(spec),
+      baseRun(spec, governance, harness)
+    ),
+    /checkpoint could not be persisted/u
+  );
+  assert.equal(captured?.attempts.at(-1)?.status, "running");
+
+  const recoveryUpdates: RunRecord[] = [];
+  const recovery = new GovernedRunOrchestrator({
+    workspaceRoot: workspaces,
+    executors: { claude: executor, codex: executor },
+    resolveSpecRevision: () => spec,
+    onUpdate: (run) => recoveryUpdates.push(run)
+  });
+  const result = await recovery.run(project(root), task(spec), durableRun, {
+    resumeFrom: captured
+  });
+
+  const discardedAttemptId = "run-1:verification:1";
+  assert.ok(
+    recoveryUpdates.some((run) => run.verificationEvidence?.some((binding) =>
+      binding.stageAttemptId === discardedAttemptId && binding.gateResultIds.length === 0
+    ))
+  );
+  assert.deepEqual(result.run.verificationEvidence?.[0], {
+    stageAttemptId: discardedAttemptId,
+    gateResultIds: []
+  });
+  assert.equal(
+    result.state.attempts.find((attempt) => attempt.id === discardedAttemptId)?.failure?.kind,
+    "interrupted"
+  );
+  assert.equal(result.state.status, "waiting_approval");
+});
+
+test("governed Gate publication loss preserves the running verification checkpoint", async (t) => {
+  const { root, workspaces } = await fixture(t);
+  const spec = approvedSpec();
+  const { governance, harness } = bindings(spec, ["unit_test"]);
+  const executor = new RepairingExecutor(false);
+  let captured: GovernedRunState | undefined;
+  const orchestrator = new GovernedRunOrchestrator({
+    workspaceRoot: workspaces,
+    executors: { claude: executor, codex: executor },
+    resolveSpecRevision: () => spec,
+    artifactPublisher: async () => {
+      throw new Error("owner API disappeared while registering Gate bytes");
+    },
+    onLoopCheckpoint: (checkpoint) => {
+      captured = checkpoint;
+    }
+  });
+
+  await assert.rejects(
+    orchestrator.run(
+      project(root),
+      task(spec),
+      baseRun(spec, governance, harness)
+    ),
+    (error) => {
+      assert.ok(error instanceof GovernedLoopInterruptionError);
+      assert.match(error.message, /Gate evidence was interrupted/u);
+      assert.match(error.cause instanceof Error ? error.cause.message : "", /owner API disappeared/u);
+      return true;
+    }
+  );
+  assert.equal(captured?.attempts.at(-1)?.stage, "verification");
+  assert.equal(captured?.attempts.at(-1)?.status, "running");
+});
+
+test("governed candidate authority loss preserves and recovers the running implementation", async (t) => {
+  const { root, workspaces } = await fixture(t);
+  const spec = approvedSpec();
+  const { governance, harness } = bindings(spec, ["unit_test"]);
+  let calls = 0;
+  const candidatePaths: string[] = [];
+  const executor = {
+    provider: "codex" as const,
+    async run(input: AgentRunInput): Promise<AgentRunResult> {
+      calls += 1;
+      candidatePaths.push(input.cwd);
+      if (calls === 1) {
+        throw new GovernedLoopInterruptionError("model generation owner disappeared");
+      }
+      await writeFile(
+        join(input.cwd, "package.json"),
+        JSON.stringify({
+          name: "governed-fixture",
+          scripts: { test: "node -e \"console.log('takeover-recovered')\"" }
+        }),
+        "utf8"
+      );
+      return {
+        provider: "codex",
+        candidateId: input.candidateId,
+        status: "completed",
+        exitCode: 0,
+        stdout: "takeover recovered",
+        stderr: "",
+        summary: "implementation complete",
+        artifacts: [],
+        startedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString()
+      };
+    }
+  };
+  let captured: GovernedRunState | undefined;
+  let durableRun = baseRun(spec, governance, harness);
+  const interrupted = new GovernedRunOrchestrator({
+    workspaceRoot: workspaces,
+    executors: { codex: executor },
+    resolveSpecRevision: () => spec,
+    onUpdate: (run) => {
+      durableRun = run;
+    },
+    onLoopCheckpoint: (checkpoint) => {
+      captured = checkpoint;
+    }
+  });
+
+  await assert.rejects(
+    interrupted.run(project(root), task(spec), durableRun),
+    GovernedLoopInterruptionError
+  );
+  assert.equal(captured?.attempts.at(-1)?.stage, "implementation");
+  assert.equal(captured?.attempts.at(-1)?.status, "running");
+
+  const recovery = new GovernedRunOrchestrator({
+    workspaceRoot: workspaces,
+    executors: { codex: executor },
+    resolveSpecRevision: () => spec
+  });
+  const result = await recovery.run(project(root), task(spec), durableRun, {
+    resumeFrom: captured
+  });
+
+  assert.equal(calls, 2);
+  assert.deepEqual(candidatePaths, [candidatePaths[0], candidatePaths[0]]);
+  assert.match(candidatePaths[0] ?? "", /run-1--governed-codex-1$/u);
+  assert.equal(
+    result.state.attempts.find((attempt) => attempt.id === "run-1:implementation:1")
+      ?.failure?.kind,
+    "interrupted"
+  );
+  assert.equal(result.state.status, "waiting_approval");
+  assert.deepEqual(result.run.gateResultsV2?.map((gate) => gate.status), ["pass"]);
+});
+
+test("governed candidate failure stops before an unverifiable empty verification", async (t) => {
+  const { root, workspaces } = await fixture(t);
+  const spec = approvedSpec();
+  const { governance, harness } = bindings(spec, ["unit_test"]);
+  const executor = {
+    provider: "codex" as const,
+    async run(input: AgentRunInput): Promise<AgentRunResult> {
+      const timestamp = new Date().toISOString();
+      return {
+        provider: "codex",
+        candidateId: input.candidateId,
+        status: "failed",
+        exitCode: 1,
+        stdout: "",
+        stderr: "provider rejected the generation",
+        summary: "provider failure",
+        artifacts: [],
+        startedAt: timestamp,
+        finishedAt: timestamp
+      };
+    }
+  };
+  const orchestrator = new GovernedRunOrchestrator({
+    workspaceRoot: workspaces,
+    executors: { codex: executor },
+    resolveSpecRevision: () => spec
+  });
+
+  const result = await orchestrator.run(
+    project(root),
+    task(spec),
+    baseRun(spec, governance, harness)
+  );
+
+  assert.equal(result.state.status, "failed");
+  assert.match(result.state.failure?.reason ?? "", /no selectable winner/u);
+  assert.equal(
+    result.state.attempts.filter((attempt) => attempt.stage === "verification").length,
+    0
+  );
+  assert.deepEqual(result.run.verificationEvidence, []);
+});
+
 test("builtin governed execution repairs in one durable embedded session without external CLIs", async (t) => {
   const { root, workspaces } = await fixture(t);
   const spec = approvedSpec();
@@ -393,6 +614,18 @@ test("builtin governed execution repairs in one durable embedded session without
 
   assert.equal(result.state.status, "waiting_approval");
   assert.equal(calls.length, 2);
+  assert.ok(calls.every((call) => call.runId === "run-1"));
+  assert.ok(calls.every((call) => call.executionBinding.runId === "run-1"));
+  const expectedEffectPolicyDigest = createHash("sha256").update(JSON.stringify({
+    sandbox: builtinTask.strategy.sandbox,
+    requiredGates: builtinTask.strategy.requiredGates,
+    humanApproval: builtinTask.strategy.humanApproval,
+    timeoutSeconds: builtinTask.strategy.timeoutSeconds
+  })).digest("hex");
+  assert.ok(calls.every(
+    (call) => call.executionBinding.effectPolicyDigest === expectedEffectPolicyDigest
+  ));
+  assert.match(calls[0]?.cwd ?? "", /run-1--governed-builtin-1$/u);
   assert.equal(calls[0]?.sessionId, calls[1]?.sessionId);
   assert.equal(calls[0]?.cwd, calls[1]?.cwd);
   assert.match(calls[1]?.prompt ?? "", /gate-repair-feedback/u);

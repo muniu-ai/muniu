@@ -4,6 +4,11 @@ This chart deploys production API replicas, a pre-install migration Job,
 Service/Ingress, HPA, PDB, default-deny NetworkPolicies, and non-root,
 read-only containers. PostgreSQL, S3, OIDC, OTLP and Vault/KMS are external
 standard adapters configured through values and existing Secrets.
+For an internal model endpoint signed by a private CA, configure
+`api.trustedCa.existingSecret` and `api.trustedCa.key`, then point
+`NODE_EXTRA_CA_CERTS` at `<api.trustedCa.mountPath>/ca.crt` through `extraEnv`.
+Only a Secret-backed CA volume is accepted; this setting cannot inject an
+arbitrary volume or `hostPath`.
 
 This chart deliberately supports only `sandbox.driver=kubernetes`. Running a
 Docker daemon through an in-cluster `hostPath` would break the isolation model,
@@ -12,14 +17,24 @@ so such values fail during rendering.
 When `networkPolicy.enabled=true`, production values must provide narrowly
 scoped `networkPolicy.apiEgress` rules for PostgreSQL, S3, OIDC/JWKS and OTLP,
 plus the Kubernetes API ClusterIP in `networkPolicy.kubernetesApiEgress`.
+Some CNIs apply egress policy after Service DNAT; for those clusters, add the
+API server endpoint CIDR too and include its target port in
+`networkPolicy.kubernetesApiPorts`. Each Worker Pod supplies its own
+`metadata.name` as `MN_WORKER_INSTANCE_ID`; the CLI combines it with the JWT
+subject as `principal@instance`, so replicas never share a lease identity.
 Kubernetes NetworkPolicy cannot portably allow DNS names, so the chart does not
 guess external CIDRs.
 
 The Worker is disabled by default. With `worker.enabled=true`, each claim is
 executed in an independent candidate Pod from an S3-backed content-addressed
 source snapshot. `worker.fixtureMode=true` selects the deterministic acceptance
-executor. Non-fixture mode requires compatible CLI binaries already present in
-the candidate image and does not receive hosted-provider network access.
+executor. Non-fixture mode advertises the builtin runtime: the model stream and
+provider credentials remain in the API, while bounded workspace tools execute
+through the active claim in the inspected candidate Pod. Claude/Codex remain
+explicit compatibility runtimes rather than default Worker dependencies.
+Set `worker.tools` to the executable tools actually available in that Worker
+image; queue claims fail closed when the active governance policy requires a
+tool the Worker has not declared.
 
 Candidate and API authority Pods use the
 `muniu.ai/component=candidate-sandbox` label, no `hostPath`, no service-account
@@ -34,4 +49,5 @@ enforcement. The chart never silently falls back to the cluster default.
 
 Run `npm run verify:helm` for static rendering checks. `npm run verify:kind`
 uses an ephemeral Kind + Calico cluster to execute the real Pod backend and
-verify token absence, network denial, source integrity and cleanup.
+verify token absence, network denial, source integrity, two-API/two-Worker
+owner loss, fresh approval, evidence export, PostgreSQL restart and cleanup.

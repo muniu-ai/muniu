@@ -10,6 +10,7 @@ data:
   MN_RUNTIME_PROFILE: enterprise
   MN_API_HOST: {{ .Values.api.host | quote }}
   MN_API_PORT: {{ .Values.api.port | quote }}
+  MN_WORKSPACE_ROOT: /tmp/muniu-worktrees
   MN_CORS_ALLOWLIST: {{ required "corsAllowlist is required" (join "," .Values.corsAllowlist) | quote }}
   MN_ENTERPRISE_PROJECT_ROOTS: {{ join "," .Values.enterpriseProjectRoots | quote }}
   MN_OIDC_ISSUER: {{ required "oidc.issuer is required" .Values.oidc.issuer | quote }}

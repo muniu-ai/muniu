@@ -38,9 +38,12 @@ spec:
           securityContext: {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           env:
             - { name: MN_API_URL, value: "http://{{ include "muniu.fullname" . }}:{{ .Values.service.port }}" }
+            - name: MN_WORKER_INSTANCE_ID
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
             - name: MN_API_TOKEN
               valueFrom: { secretKeyRef: { name: {{ .Values.worker.authExistingSecret }}, key: {{ .Values.worker.authTokenKey }} } }
             - { name: MN_WORKER_PROVIDERS, value: "builtin" }
+            - { name: MN_WORKER_TOOLS, value: {{ required "worker.tools is required" (join "," .Values.worker.tools) | quote }} }
             - { name: MN_ENTERPRISE_SANDBOX_IMAGE, value: {{ .Values.sandbox.image | quote }} }
             - { name: MN_WORKER_SANDBOX_DRIVER, value: kubernetes }
             - { name: MN_KUBERNETES_NAMESPACE, valueFrom: { fieldRef: { fieldPath: metadata.namespace } } }

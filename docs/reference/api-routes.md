@@ -88,6 +88,7 @@
 | POST | `/v1/run-jobs/queue/:id/heartbeat` | `apps/api/src/server.ts` |
 | POST | `/v1/run-jobs/queue/:id/measurements` | `apps/api/src/server.ts` |
 | POST | `/v1/run-jobs/queue/:id/release` | `apps/api/src/server.ts` |
+| POST | `/v1/run-jobs/queue/:id/resume-diff` | `apps/api/src/server.ts` |
 | POST | `/v1/run-jobs/queue/:id/sandbox-runtime-proof` | `apps/api/src/server.ts` |
 | POST | `/v1/run-jobs/queue/:id/source-snapshot` | `apps/api/src/server.ts` |
 | POST | `/v1/run-jobs/queue/:id/update` | `apps/api/src/server.ts` |

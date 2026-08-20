@@ -82,8 +82,10 @@ export async function resolveAuthoritativeCandidateWorkspace(input: {
   } catch (error) {
     throw new TypeError("workspaceUri contains invalid percent encoding", { cause: error });
   }
-  const expectedWorkspace =
+  const legacyWorkspace =
     `${input.runId}--implementation-${input.implementationAttempt}-${input.candidateId}`;
+  const governedWorkspace = `${input.runId}--governed-${input.candidateId}`;
+  const workspace = segments[1];
   if (
     parsed.protocol !== "mn:" ||
     parsed.hostname !== "sandbox" ||
@@ -94,7 +96,7 @@ export async function resolveAuthoritativeCandidateWorkspace(input: {
     parsed.hash !== "" ||
     segments.length !== 2 ||
     segments[0] !== input.leaseId ||
-    segments[1] !== expectedWorkspace ||
+    (workspace !== legacyWorkspace && workspace !== governedWorkspace) ||
     segments.some((segment) =>
       segment.length === 0 ||
       segment === "." ||
@@ -105,11 +107,11 @@ export async function resolveAuthoritativeCandidateWorkspace(input: {
     )
   ) {
     throw new TypeError(
-      "workspaceUri is not bound to the active lease, run, implementation attempt and candidate"
+      "workspaceUri is not bound to the active lease, run and candidate"
     );
   }
   const scratchRoot = await realpath(resolve(input.scratchRoot));
-  const candidate = resolve(scratchRoot, expectedWorkspace);
+  const candidate = resolve(scratchRoot, workspace!);
   const stats = await lstat(candidate);
   if (!stats.isDirectory() || stats.isSymbolicLink()) {
     throw new TypeError("workspaceUri does not identify a real candidate directory");

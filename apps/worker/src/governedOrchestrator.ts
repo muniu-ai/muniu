@@ -12,6 +12,7 @@ import type {
 import type { AgentExecutor } from "@mn/executors";
 import {
   executeGovernedIncrement,
+  GovernedLoopInterruptionError,
   sha256Canonical,
   type ApprovalDecision,
   type GovernedRunState,
@@ -64,6 +65,13 @@ export interface GovernedRunOrchestratorOptions extends RunOrchestratorOptions {
     readonly candidateId: string;
     readonly workspacePath: string;
   }) => string;
+  /** A takeover worker restored this candidate from an API-authenticated diff
+   * CAS object. The path itself remains process-local on RunRecord; only the
+   * changed-path set crosses into Gate policy evaluation. */
+  restoredCandidateWorkspace?: {
+    readonly candidateId: string;
+    readonly changedPaths: readonly string[];
+  };
 }
 
 export interface GovernedRunExecutionOptions {
@@ -329,6 +337,56 @@ export class GovernedRunOrchestrator {
     let gateRepairFeedback = "";
     const candidateBaselines = new Map<string, WorkspaceSnapshot>();
     const candidateContentBaselines = new Map<string, WorkspaceContentSnapshot>();
+    if (this.options.restoredCandidateWorkspace) {
+      const restored = this.options.restoredCandidateWorkspace;
+      const candidate = candidateRun.candidates.find(
+        (entry) => entry.id === restored.candidateId
+      );
+      if (
+        !candidate ||
+        (candidateRun.winnerCandidateId !== undefined &&
+          candidateRun.winnerCandidateId !== candidate.id)
+      ) {
+        throw new TypeError("Restored candidate does not match the durable Run winner");
+      }
+      const declaredPaths = [...restored.changedPaths];
+      if (
+        declaredPaths.some((path, index) =>
+          !path ||
+          path !== path.trim() ||
+          (index > 0 && path <= declaredPaths[index - 1]!)
+        )
+      ) {
+        throw new TypeError("Restored candidate changed paths must be unique and sorted");
+      }
+      const [candidateSnapshot, sourceContents, candidateContents] = await Promise.all([
+        snapshotWorkspace(candidate.worktreePath),
+        snapshotWorkspaceContents(project.rootPath),
+        snapshotWorkspaceContents(candidate.worktreePath)
+      ]);
+      const observedPaths = changedWorkspacePaths(initialProjectSnapshot, candidateSnapshot);
+      if (observedPaths.some((path) => !declaredPaths.includes(path))) {
+        throw new TypeError(
+          "Restored candidate contains changes outside its authoritative diff manifest"
+        );
+      }
+      latestChangedPaths = Object.freeze(declaredPaths);
+      const changedDigests = declaredPaths.map((path) => ({
+        path,
+        before: initialProjectSnapshot.get(path) ?? null,
+        after: candidateSnapshot.get(path) ?? null
+      }));
+      latestDiffDigest = sha256Canonical(changedDigests);
+      latestDiffManifestBase64 = encodeDiffManifest(
+        declaredPaths,
+        sourceContents,
+        candidateContents
+      );
+      // A repair after takeover must measure and evaluate the cumulative diff
+      // against source, not only the delta made by the resumed model turn.
+      candidateBaselines.set(candidate.id, initialProjectSnapshot);
+      candidateContentBaselines.set(candidate.id, sourceContents);
+    }
     const selectedServices = baseRun.harnessManifest.selectedServices;
     const languageByService = projectLanguages(project, selectedServices);
     const handlers: GovernedStageHandlers = {
@@ -385,9 +443,16 @@ export class GovernedRunOrchestrator {
             candidateRun = record;
           }
         });
-        const implementationRunId = `${baseRun.id}--implementation-${context.attempt}`;
+        // The host scratch root is lease-specific, while the path observed by
+        // the Agent session is the sandbox mount target plus this suffix. Keep
+        // the suffix stable across infrastructure takeover so a durable
+        // session can resume against a new attested lease without changing its
+        // immutable logical cwd. Repair rounds already reuse this workspace.
+        const implementationWorkspaceRunId = `${baseRun.id}--governed`;
         const classicResult = await classic.run(project, classicTask, {
-          runId: implementationRunId,
+          runId: baseRun.id,
+          workspaceRunId: implementationWorkspaceRunId,
+          executionBindingTask: task,
           abortSignal: execution.abortSignal,
           ...(context.isRepair && repairSessionIds.length > 0
             ? { sessionIds: repairSessionIds }
@@ -420,39 +485,76 @@ export class GovernedRunOrchestrator {
         const winner = candidateRun.candidates.find(
           (candidate) => candidate.id === candidateRun.winnerCandidateId
         );
-        if (winner) {
-          const before =
-            resolve(winner.worktreePath) === resolve(project.rootPath)
-              ? initialProjectSnapshot
-              : candidateBaselines.get(winner.id);
-          if (!before) {
-            throw new Error(`Missing pre-execution snapshot for ${winner.id}`);
-          }
-          const [after, afterContents] = await Promise.all([
-            snapshotWorkspace(winner.worktreePath),
-            snapshotWorkspaceContents(winner.worktreePath)
-          ]);
-          latestChangedPaths = changedWorkspacePaths(before, after);
-          const beforeContents = candidateContentBaselines.get(winner.id);
-          if (!beforeContents) {
-            throw new Error(`Missing pre-execution content snapshot for ${winner.id}`);
-          }
-          latestDiffManifestBase64 = encodeDiffManifest(
-            latestChangedPaths,
-            beforeContents,
-            afterContents
-          );
-          const changedDigests = latestChangedPaths.map((path) => ({
-            path,
-            before: before.get(path) ?? null,
-            after: after.get(path) ?? null
+        if (!winner) {
+          const failureDetails = candidateRun.candidates.map((candidate) => ({
+            id: candidate.id,
+            status: candidate.status,
+            resultSummary: candidate.result?.summary ?? null,
+            gateSummaries: candidate.gates.map((gate) => gate.summary)
           }));
-          latestDiffDigest = sha256Canonical(changedDigests);
-        } else {
-          latestChangedPaths = [];
-          latestDiffDigest = sha256Canonical([]);
-          latestDiffManifestBase64 = encodeDiffManifest([], new Map(), new Map());
+          const semantic = {
+            implementationAttempt: context.attempt,
+            candidates: failureDetails
+          };
+          const diagnostic = failureDetails
+            .map((candidate) => {
+              const summaries = [
+                candidate.resultSummary,
+                ...candidate.gateSummaries
+              ].filter((summary): summary is string => Boolean(summary));
+              return `${candidate.id}=${candidate.status}${
+                summaries.length === 0 ? "" : `: ${summaries.join("; ")}`
+              }`;
+            })
+            .join(", ")
+            .slice(0, 768);
+          return {
+            status: "failed",
+            artifacts: [
+              loopArtifact(
+                baseRun.id,
+                `implementation-${context.attempt}-failure`,
+                "other",
+                semantic
+              )
+            ],
+            failure: {
+              kind: "stage_failure",
+              retryable: false,
+              reason: `Candidate implementation produced no selectable winner${
+                diagnostic.length === 0 ? "" : ` (${diagnostic})`
+              }`
+            },
+            failureSignature: sha256Canonical(semantic)
+          };
         }
+        const before =
+          resolve(winner.worktreePath) === resolve(project.rootPath)
+            ? initialProjectSnapshot
+            : candidateBaselines.get(winner.id);
+        if (!before) {
+          throw new Error(`Missing pre-execution snapshot for ${winner.id}`);
+        }
+        const [after, afterContents] = await Promise.all([
+          snapshotWorkspace(winner.worktreePath),
+          snapshotWorkspaceContents(winner.worktreePath)
+        ]);
+        latestChangedPaths = changedWorkspacePaths(before, after);
+        const beforeContents = candidateContentBaselines.get(winner.id);
+        if (!beforeContents) {
+          throw new Error(`Missing pre-execution content snapshot for ${winner.id}`);
+        }
+        latestDiffManifestBase64 = encodeDiffManifest(
+          latestChangedPaths,
+          beforeContents,
+          afterContents
+        );
+        const changedDigests = latestChangedPaths.map((path) => ({
+          path,
+          before: before.get(path) ?? null,
+          after: after.get(path) ?? null
+        }));
+        latestDiffDigest = sha256Canonical(changedDigests);
         const diffSemantic = {
           implementationAttempt: context.attempt,
           winnerCandidateId: candidateRun.winnerCandidateId ?? null,
@@ -507,32 +609,16 @@ export class GovernedRunOrchestrator {
             : undefined;
         } catch (error) {
           const reason = error instanceof Error ? error.message : String(error);
-          const semantic = {
-            winnerCandidateId: candidateRun.winnerCandidateId ?? null,
-            error: reason
-          };
-          const artifact = loopArtifact(
-            baseRun.id,
-            `verification-${context.attempt}`,
-            "verification_evidence",
-            semantic
+          // A Gate plan returns a typed result for ordinary test, policy and
+          // tool failures. Reaching this catch means command transport or
+          // evidence publication failed before the result became durable.
+          // Preserve the running checkpoint so a new claim can recover it;
+          // recording an empty semantic failure would be unverifiable by the
+          // API authority and could consume the repair budget incorrectly.
+          throw new GovernedLoopInterruptionError(
+            `Governed Gate evidence was interrupted before it became durable: ${reason}`,
+            { cause: error }
           );
-          bindVerificationEvidence(
-            verificationEvidence,
-            `${baseRun.id}:verification:${context.attempt}`,
-            []
-          );
-          return {
-            status: "failed",
-            artifacts: [artifact],
-            failure: {
-              kind: "stage_failure",
-              retryable: true,
-              reason: `Governed Gate execution failed closed: ${reason}`
-            },
-            failureSignature: sha256Canonical(semantic),
-            diffDigest: latestDiffDigest
-          };
         }
         latestGateResults = verification?.results ?? [];
         allGateResults.push(...latestGateResults);
@@ -634,6 +720,21 @@ export class GovernedRunOrchestrator {
       harnessManifest: baseRun.harnessManifest,
       handlers,
       onCheckpoint: async (checkpoint) => {
+        // A resumed trailing verification handler has an indeterminate
+        // outcome. The Loop engine closes it as failed/interrupted before it
+        // starts the replacement attempt, so there can be no GateResultV2 to
+        // attach. Persist an explicit empty binding: absence would make the
+        // checkpoint structurally incomplete, while attaching later Gate
+        // results would misattribute evidence to work that was discarded.
+        for (const attempt of checkpoint.attempts) {
+          if (
+            attempt.stage === "verification" &&
+            attempt.status === "failed" &&
+            attempt.failure?.kind === "interrupted"
+          ) {
+            bindVerificationEvidence(verificationEvidence, attempt.id, []);
+          }
+        }
         materialized = {
           ...baseRun,
           candidates: candidateRun.candidates,

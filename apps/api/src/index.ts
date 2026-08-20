@@ -68,6 +68,7 @@ const kubernetesSandbox = sandboxDriver === "kubernetes"
 const enterpriseProxyPort = Number(process.env.MN_ENTERPRISE_PROXY_PORT ?? 7319);
 const enterpriseProxyHost = process.env.MN_ENTERPRISE_PROXY_HOST ?? "0.0.0.0";
 const enterpriseProxyPublicBaseUrl = process.env.MN_ENTERPRISE_PROXY_PUBLIC_BASE_URL;
+const enterpriseBuiltinInstanceId = process.env.MN_API_INSTANCE_ID;
 
 const app = buildServer({
   useMockExecutors,
@@ -81,6 +82,9 @@ const app = buildServer({
     : {}),
   ...(runtimeProfile === "enterprise" && postgresUrl
     ? { enterprisePostgres: { connectionString: postgresUrl } }
+    : {}),
+  ...(runtimeProfile === "enterprise" && enterpriseBuiltinInstanceId
+    ? { enterpriseBuiltinInstanceId }
     : {}),
   ...(runtimeProfile === "enterprise" && otlpEndpoint
     ? {
@@ -120,6 +124,21 @@ const app = buildServer({
 });
 
 await app.listen({ port, host });
+
+let closing = false;
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.once(signal, () => {
+    if (closing) return;
+    closing = true;
+    void app.close().then(
+      () => process.exit(signal === "SIGINT" ? 130 : 143),
+      (error) => {
+        console.error(error);
+        process.exit(1);
+      }
+    );
+  });
+}
 
 function requiredEnvironment(name: string): string {
   const value = process.env[name];

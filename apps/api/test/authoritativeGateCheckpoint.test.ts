@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import type { GateResultV2, Project, RunRecord } from "@mn/core";
 import type { SandboxLeaseAttestation } from "@mn/harness";
@@ -113,6 +113,154 @@ test("checkpoint authority rejects workspace mutation during Gate execution", as
     }
   });
   assert.match(decision.error ?? "", /changed during authoritative Gate execution/u);
+});
+
+test("checkpoint authority verifies a restored historical diff under the takeover lease", async (t) => {
+  const fixture = await checkpointFixture(t);
+  const takeoverClaim = "6".repeat(64);
+  const takeoverLease = "lease-b";
+  const takeoverScratch = join(dirname(dirname(fixture.candidateRoot)), "takeover-scratch");
+  const takeoverWorkspace = `${runId}--governed-${candidateId}`;
+  const takeoverCandidate = join(takeoverScratch, takeoverWorkspace);
+  await mkdir(join(takeoverCandidate, "service"), { recursive: true });
+  await writeFile(
+    join(takeoverCandidate, "service", "a.js"),
+    "export const value = 2;\n"
+  );
+  const execution = {
+    ...sandboxExecution(),
+    leaseId: takeoverLease,
+    attestationDigest: "a".repeat(64),
+    runtimeProof: {
+      ...sandboxExecution().runtimeProof,
+      claimDigest: takeoverClaim,
+      attestationDigest: "a".repeat(64),
+      digest: "b".repeat(64)
+    }
+  };
+  const issuedAttestation = {
+    ...attestation(),
+    leaseId: takeoverLease,
+    claimDigest: takeoverClaim,
+    digest: "a".repeat(64)
+  };
+  const workspaceUri = `mn://sandbox/${takeoverLease}/${takeoverWorkspace}`;
+  const storedGate = fixture.input.incoming.gateResultsV2![0]!;
+  const reportedGate = gateResult({
+    id: storedGate.id,
+    workingDirectory: workspaceUri,
+    artifact: storedGate.artifacts[0]!,
+    execution
+  });
+  const authorityGate = gateResult({
+    id: fixture.authorityGate.id,
+    workingDirectory: await realpath(takeoverCandidate),
+    artifact: fixture.authorityGate.artifacts[0]!,
+    execution
+  });
+  const decision = await authorizeEnterpriseGateCheckpoint({
+    ...fixture.input,
+    workerId: "worker-b",
+    item: {
+      ...fixture.input.item,
+      ownerId: "worker-b",
+      claimTokenHash: takeoverClaim
+    },
+    incoming: {
+      ...fixture.input.incoming,
+      gateResultsV2: [reportedGate],
+      sandboxAttestation: issuedAttestation,
+      sandboxExecution: execution,
+      sandboxEvidenceHistory: [{
+        attestation: issuedAttestation,
+        execution,
+        gateResultIds: [reportedGate.id],
+        stageAttemptIds: [`${runId}:verification:1`]
+      }]
+    },
+    runtimeVerifier: {
+      verify: async () => ({
+        runtimeId: execution.runtimeId,
+        runtimeDigest: execution.runtimeDigest,
+        imageDigest,
+        projectRoot: fixture.input.project.rootPath,
+        scratchRoot: takeoverScratch,
+        projectTarget: "/workspace/project",
+        scratchTarget: "/workspace/scratch"
+      })
+    },
+    authority: { execute: async () => authorityResult(authorityGate) }
+  });
+
+  assert.equal(decision.error, undefined);
+  assert.equal(decision.newReceipts.length, 1);
+  assert.equal(decision.newReceipts[0]!.receipt.leaseId, takeoverLease);
+  assert.equal(decision.newReceipts[0]!.receipt.workspaceUri, workspaceUri);
+  assert.equal(
+    decision.newReceipts[0]!.receipt.diffArtifactDigest,
+    fixture.state.attempts[0]!.budgetMeasurement!.diffArtifact!.digest
+  );
+});
+
+test("checkpoint authority discards an interrupted verification without replaying Gates", async (t) => {
+  const fixture = await checkpointFixture(t);
+  const interrupted = {
+    ...fixture.state.attempts[1]!,
+    status: "failed" as const,
+    failure: {
+      kind: "interrupted" as const,
+      retryable: true,
+      reason: "previous verification outcome was indeterminate"
+    }
+  };
+  const state = loopState([fixture.state.attempts[0]!, interrupted]);
+  let executions = 0;
+  const decision = await authorizeEnterpriseGateCheckpoint({
+    ...fixture.input,
+    state,
+    previousState: fixture.input.previousState,
+    incoming: {
+      ...fixture.input.incoming,
+      gateResultsV2: [],
+      verificationEvidence: [{
+        stageAttemptId: interrupted.id,
+        gateResultIds: []
+      }],
+      sandboxEvidenceHistory: []
+    },
+    authority: {
+      execute: async () => {
+        executions += 1;
+        return authorityResult(fixture.authorityGate);
+      }
+    }
+  });
+
+  assert.equal(decision.error, undefined);
+  assert.equal(decision.newReceipts.length, 0);
+  assert.equal(executions, 0);
+});
+
+test("checkpoint authority rejects evidence attached to an interrupted verification", async (t) => {
+  const fixture = await checkpointFixture(t);
+  const interrupted = {
+    ...fixture.state.attempts[1]!,
+    status: "failed" as const,
+    failure: {
+      kind: "interrupted" as const,
+      retryable: true,
+      reason: "previous verification outcome was indeterminate"
+    }
+  };
+  const decision = await authorizeEnterpriseGateCheckpoint({
+    ...fixture.input,
+    state: loopState([fixture.state.attempts[0]!, interrupted]),
+    authority: {
+      execute: async () => authorityResult(fixture.authorityGate)
+    }
+  });
+
+  assert.match(decision.error ?? "", /must have an empty evidence binding/u);
 });
 
 async function checkpointFixture(t: test.TestContext) {

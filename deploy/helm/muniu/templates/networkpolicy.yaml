@@ -87,8 +87,10 @@ spec:
     - to:
 {{ toYaml .Values.networkPolicy.kubernetesApiEgress | nindent 8 }}
       ports:
+{{- range .Values.networkPolicy.kubernetesApiPorts }}
         - protocol: TCP
-          port: 443
+          port: {{ . }}
+{{- end }}
 {{- if .Values.worker.enabled }}
 ---
 apiVersion: networking.k8s.io/v1

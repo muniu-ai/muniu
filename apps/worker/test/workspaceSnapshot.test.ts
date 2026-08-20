@@ -12,13 +12,62 @@ import {
   writeFile
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 import {
   WORKSPACE_SNAPSHOT_MATERIALIZER_SCRIPT,
   createWorkspaceSnapshot,
-  parseWorkspaceSnapshot
+  parseWorkspaceSnapshot,
+  projectAtSnapshot
 } from "../src/index.js";
+
+test("project snapshot metadata rebases trusted absolute paths and rejects escapes", () => {
+  const sourceRoot = resolve("/control-plane/projects/orders");
+  const snapshotRoot = resolve("/work/sandboxes/run-1/project");
+  const project = projectAtSnapshot({
+    id: "orders",
+    name: "orders",
+    rootPath: sourceRoot,
+    defaultBranch: "main",
+    policyId: "default",
+    services: [{
+      id: "api",
+      name: "api",
+      path: join(sourceRoot, "services", "api"),
+      owners: ["platform"],
+      language: "typescript",
+      contracts: [{
+        type: "openapi",
+        path: join(sourceRoot, "services", "api", "openapi.yaml")
+      }, {
+        type: "other",
+        path: "services/api/schema.json"
+      }]
+    }, {
+      id: "web",
+      name: "web",
+      path: "services/web",
+      owners: ["web"],
+      language: "typescript",
+      contracts: []
+    }]
+  }, snapshotRoot);
+
+  assert.equal(project.rootPath, snapshotRoot);
+  assert.equal(project.services[0]?.path, "services/api");
+  assert.equal(project.services[0]?.contracts[0]?.path, "services/api/openapi.yaml");
+  assert.equal(project.services[0]?.contracts[1]?.path, "services/api/schema.json");
+  assert.equal(project.services[1]?.path, "services/web");
+
+  assert.throws(() => projectAtSnapshot({
+    ...project,
+    rootPath: sourceRoot,
+    services: [{
+      ...project.services[0]!,
+      path: resolve(sourceRoot, "..", "secrets")
+    }]
+  }, snapshotRoot), /Service api escapes the project snapshot/u);
+});
 
 test("workspace snapshots are deterministic, bounded and omit generated state", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "mn-workspace-snapshot-"));

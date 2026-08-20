@@ -1,5 +1,6 @@
 import { chmod, cp, lstat, mkdir, readdir, rm } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import type { Project } from "@mn/core";
 import { runCommand } from "@mn/executors";
 
 export interface WorkspaceResult {
@@ -19,6 +20,55 @@ export interface CandidateWorkspaceRequest {
 export type CandidateWorkspacePreparer = (
   params: CandidateWorkspaceRequest
 ) => Promise<WorkspaceResult>;
+
+/**
+ * Relocates host-absolute project metadata to a materialized source snapshot.
+ * The source root does not need to exist in the worker process, so containment
+ * is deliberately lexical; the control plane already canonicalized and bound
+ * these paths before publishing the content-addressed snapshot.
+ */
+export function projectAtSnapshot(project: Project, snapshotRoot: string): Project {
+  const originalRoot = resolve(project.rootPath);
+  return {
+    ...project,
+    rootPath: resolve(snapshotRoot),
+    services: project.services.map((service) => {
+      const path = isAbsolute(service.path)
+        ? snapshotRelativePath(originalRoot, service.path, `Service ${service.id}`) || "."
+        : service.path;
+      return {
+        ...service,
+        path,
+        contracts: service.contracts.map((contract) => ({
+          ...contract,
+          path: isAbsolute(contract.path)
+            ? snapshotRelativePath(
+                originalRoot,
+                contract.path,
+                `Contract ${contract.path}`
+              )
+            : contract.path
+        }))
+      };
+    })
+  };
+}
+
+function snapshotRelativePath(
+  originalRoot: string,
+  absolutePath: string,
+  field: string
+): string {
+  const child = relative(resolve(originalRoot), resolve(absolutePath));
+  if (
+    child === ".." ||
+    child.startsWith(`..${sep}`) ||
+    isAbsolute(child)
+  ) {
+    throw new TypeError(`${field} escapes the project snapshot`);
+  }
+  return child;
+}
 
 export async function prepareCandidateWorkspace(
   params: CandidateWorkspaceRequest

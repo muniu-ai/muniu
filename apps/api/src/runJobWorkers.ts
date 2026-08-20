@@ -53,6 +53,15 @@ export interface RunJobWorkerRegistryOptions {
   rootDir: string;
 }
 
+export interface RunJobWorkerMutationOptions {
+  /**
+   * Enterprise queue ownership lives in PostgreSQL. A request may therefore
+   * reach an API replica whose local, best-effort fleet view never observed
+   * the claim. This reconciles that view without weakening local invariants.
+   */
+  allowUntrackedRun?: boolean;
+}
+
 export interface RunJobWorkerHeartbeatInput {
   ownerId: string;
   status?: RunJobWorkerStatus;
@@ -164,13 +173,18 @@ export class RunJobWorkerRegistry {
 
   markReleased(
     input: RunJobWorkerReleaseInput,
-    tenantId = LOCAL_WORKER_TENANT_ID
+    tenantId = LOCAL_WORKER_TENANT_ID,
+    options: RunJobWorkerMutationOptions = {}
   ): RunJobWorkerRecord {
     assertInputObject(input, "worker release", RELEASE_INPUT_KEYS);
     const ownerId = normalizeIdentifier(input.ownerId, "ownerId");
     const now = normalizeNow(input.now);
     const current = this.read(ownerId, tenantId);
-    if (input.runId && (!current || !current.activeRunIds.includes(input.runId))) {
+    if (
+      input.runId &&
+      (!current || !current.activeRunIds.includes(input.runId)) &&
+      !options.allowUntrackedRun
+    ) {
       throw new Error("cannot release a run that is not active on this worker");
     }
     const activeRunIds = input.runId
@@ -200,7 +214,8 @@ export class RunJobWorkerRegistry {
 
   markFinished(
     input: RunJobWorkerFinishInput,
-    tenantId = LOCAL_WORKER_TENANT_ID
+    tenantId = LOCAL_WORKER_TENANT_ID,
+    options: RunJobWorkerMutationOptions = {}
   ): RunJobWorkerRecord {
     assertInputObject(input, "worker finish", FINISH_INPUT_KEYS);
     const ownerId = normalizeIdentifier(input.ownerId, "ownerId");
@@ -209,7 +224,11 @@ export class RunJobWorkerRegistry {
     if (input.status !== "completed" && input.status !== "failed" && input.status !== "cancelled") {
       throw new TypeError("invalid terminal status");
     }
-    if (input.runId && (!current || !current.activeRunIds.includes(input.runId))) {
+    if (
+      input.runId &&
+      (!current || !current.activeRunIds.includes(input.runId)) &&
+      !options.allowUntrackedRun
+    ) {
       throw new Error("cannot finish a run that is not active on this worker");
     }
     const remainingRunIds = input.runId
@@ -401,7 +420,9 @@ function resolveCapabilityFields(
   const capabilities = normalizeWorkerCapabilities(input);
   const capabilityDigest = workerCapabilityDigest(capabilities);
   if (
-    current && current.activeRunIds.length > 0 &&
+    current?.version === 2 &&
+    current.capabilityDigest !== undefined &&
+    current.activeRunIds.length > 0 &&
     current.capabilityDigest !== capabilityDigest
   ) {
     throw new Error("worker capabilities cannot change while runs are active");

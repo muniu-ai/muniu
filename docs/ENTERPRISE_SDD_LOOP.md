@@ -79,7 +79,7 @@ Journal keyring 文件必须由 secret manager 以只读方式挂载，格式为
 `{"activeKeyId":"journal-v2","keys":[{"id":"journal-v2","secret":"...","status":"active"},{"id":"journal-v1","secret":"...","status":"retired"}]}`。
 轮换时先把旧 key 标记为 `retired` 并完成 replay；需要撤销前，必须为仍需保留的旧 journal 创建受审计 revocation checkpoint，再将 key 标记为 `revoked`。
 
-固定角色是 `org_admin`、`governance_admin`、`project_owner`、`developer`、`reviewer`、`auditor`。授权默认拒绝，并按 tenant/project 隔离资源。JWT subject 是企业审计 actor 的唯一来源，请求体不能替换认证身份。human principal 不能调用 queue worker 协议；machine principal 必须声明 `principal_type=worker` 和最小化 `run_jobs:claim|heartbeat|checkpoint|finish|events|release` scopes，且不能获得 human role。`POST /v1/projects` 只接受 allowlist 内已存在目录；服务端会拒绝相对路径、`..`、symlink escape 和任意主机路径。外部 worker 也不能通过 candidate、checkpoint 或 Gate artifact 字段让 API 读取本地文件。
+固定角色是 `org_admin`、`governance_admin`、`project_owner`、`developer`、`reviewer`、`auditor`。授权默认拒绝，并按 tenant/project 隔离资源；Agent 工具副作用的决定接口只允许 `reviewer` 或 `org_admin` 调用，`project_owner` 不能以运行所有者身份代替独立审批。JWT subject 是企业审计 actor 的唯一来源，请求体不能替换认证身份。human principal 不能调用 queue worker 协议；machine principal 必须声明 `principal_type=worker` 和最小化 `run_jobs:claim|heartbeat|checkpoint|finish|events|release` scopes，且不能获得 human role。`POST /v1/projects` 只接受 allowlist 内已存在目录；服务端会拒绝相对路径、`..`、symlink escape 和任意主机路径。外部 worker 也不能通过 candidate、checkpoint 或 Gate artifact 字段让 API 读取本地文件。
 
 PostgreSQL 使用事务 claim/outbox；claim token 绑定 tenant、run、worker、capability 和过期时间。API 还以服务端 HMAC 签发 sandbox lease，绑定 Run、tenant、worker、Harness digest、能力 digest、backend 和策略。参考 Docker backend 在真实容器中执行 Gate，使用只读 rootfs、只读源码挂载、独立 scratch、`network=none`、CPU/内存/PID 限制、drop capabilities、`no-new-privileges`、非 root 用户和工具 allowlist；API 验证 attestation、容器运行时 evidence 与 Gate digest，并以 append-only 历史支持 crash/reclaim。RunEvent 面向用户时间线；AuditEvent 追加记录 actor、策略决策、before/after digest、pack digest、traceId 和结果。artifact 使用 SigV4 S3-compatible API，遥测使用 OTLP/HTTP 并延续 W3C trace ID。
 
@@ -117,7 +117,7 @@ MN_API_TOKEN="$WORKER_JWT" node apps/cli/dist/index.js run worker \
   --language javascript --tool node --tool npm
 ```
 
-`--mock` 仅用于仓库内 `locally_verified` fixture：mock agent 本身仍在真实 enforced Docker backend 中运行，真实项目命令和 Gate 不会旁路到宿主机。企业内嵌 Agent 不依赖 Claude Code/Codex CLI 凭据；真实 provider 执行仍必须经过受治理的 provider broker、临时 secret resolution 和 network policy。Phase03 企业 PostgreSQL/S3 Agent 会话后端完成前，enterprise profile 对该路径保持 fail-closed，不应把本地 Agent 能力描述为已完成生产部署。
+`--mock` 仅用于仓库内 `locally_verified` fixture：mock agent 本身仍在真实 enforced sandbox backend 中运行，真实项目命令和 Gate 不会旁路到宿主机。企业内嵌 Agent 不依赖 Claude Code/Codex CLI 凭据；真实 provider 执行经过 API 内受治理的 provider broker，工作区工具经活跃 claim 进入已检查的候选 Pod。PostgreSQL/S3 Agent 会话、execution generation、owner lease、工具 mailbox 与运行绑定审批已经进入企业链路；Kind + Calico 门禁以双 API/Worker 注入 owner Pod 丢失和 PostgreSQL 重启。该验收仍只代表实验性 `locally_verified`，不应描述为生产认证。
 
 ## 本地验收
 

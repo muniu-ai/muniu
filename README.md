@@ -35,8 +35,8 @@ The default runtime is the embedded `builtin` Agent. Claude Code and Codex CLI r
 | PostgreSQL/S3 enterprise sessions | Experimental | Tenant CAS and integrity verification |
 | Multi-replica run queue | Implemented | PostgreSQL authoritative |
 | Helm API/Worker deployment | Experimental | Shared PVC, least-privilege RBAC and independent replicas |
-| Kubernetes candidate sandbox Pods | Experimental | CAS source, runtime verification, authority Gate Pod and Kind probe |
-| Enterprise builtin model/tool relay | Experimental | PostgreSQL mailbox/owner lease; API owns credentials; Worker executes tools in the inspected Pod |
+| Kubernetes candidate sandbox Pods | Experimental | CAS source, runtime verification, authority Gate Pod and Kind fault-injection suite |
+| Enterprise builtin model/tool relay | Experimental | PostgreSQL generations/mailbox/approvals; multi-replica Kind recovery |
 | macOS Desktop build | Implemented | No v0.1 signing/notarization/updater promise |
 | Release/SBOM/provenance | Release workflow | Produced for published tags |
 
@@ -145,7 +145,9 @@ Each claimed candidate is materialized from an S3-backed content-addressed sourc
 
 `worker.fixtureMode=true` runs the deterministic acceptance executor. A non-fixture Worker advertises `builtin` by default. The API owns provider credentials and the durable Agent session, while the Worker relays the six bounded workspace tools to the exact inspected candidate Pod. The Pod remains network-denied and receives neither model credentials nor a Kubernetes token. Claude/Codex CLI targets remain explicit compatibility runtimes and are rejected by the non-fixture enterprise Worker.
 
-The builtin execution mailbox, owner lease and run-bound manual approval decisions are PostgreSQL-backed. Start, poll, tool-result and run-bound `on-risk` approval requests may reach different API replicas; standalone `/v1/agent-sessions` approvals still use the serving API process. An expired owner is retired as an immutable generation and the same durable Agent session is recovered before a new owner resumes. Unconfirmed tool calls are never replayed across generations. The path stays experimental until the combined multi-replica API/Worker/Pod fault-injection acceptance suite is complete.
+The builtin execution mailbox, owner lease and run-bound manual approval decisions are PostgreSQL-backed. Start, poll, tool-result and run-bound `on-risk` approval requests may reach different API replicas; standalone `/v1/agent-sessions` approvals still use the serving API process. A terminating API relinquishes its lease. A lost owner is retired as an immutable generation and the same durable Agent session is recovered before a new owner resumes. Unconfirmed tool calls are never replayed: an outstanding approval is closed as `interrupted/deny`, and the recovered model must issue a fresh tool call and approval. Uniquely tenant-scoped provider metadata is restored from PostgreSQL on replacement replicas; legacy unscoped providers remain local, and provider secrets remain external environment/Vault/KMS inputs.
+
+The Kind + Calico release gate starts two API and two Worker replicas, deletes the exact API Pod that owns a waiting tool approval, verifies generation/session recovery and fresh approval, exports the completed evidence archive, restarts PostgreSQL, and verifies the result remains readable. The enterprise path remains experimental because this is a repository acceptance environment, not a production availability or isolation certification.
 
 ## Development checks
 
@@ -164,7 +166,7 @@ npm run typecheck:desktop
 npm run build:desktop
 ```
 
-`verify:kind` requires Docker, Kind, kubectl, buildx and jq. It installs Calico in an ephemeral cluster and proves source materialization, Pod execution, token absence, Kubernetes-API network denial and lease cleanup.
+`verify:kind` requires Docker, Kind, kubectl, Helm, buildx and curl. It installs Calico in an ephemeral cluster and proves source materialization, Pod execution, token absence, Kubernetes-API network denial, multi-replica owner loss, PostgreSQL restart, evidence export and lease cleanup.
 
 ## Cordis provenance
 

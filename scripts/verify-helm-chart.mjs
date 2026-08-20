@@ -4,10 +4,13 @@ import { spawnSync } from "node:child_process";
 
 const chart = "deploy/helm/muniu";
 const values = `${chart}/values-ci.yaml`;
+const kindValues = `${chart}/values-kind.yaml`;
 
 function helm(args, expectSuccess = true) {
   const result = spawnSync("helm", args, { encoding: "utf8" });
-  const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+  const output = `${result.stdout ?? ""}${result.stderr ?? ""}${
+    result.error ? `${result.error.message}\n` : ""
+  }`;
   if (expectSuccess && result.status !== 0) {
     throw new Error(`helm ${args.join(" ")} failed:\n${output}`);
   }
@@ -45,12 +48,16 @@ if (production.includes("            - --mock\n")) {
   throw new Error("production Worker unexpectedly uses the fixture executor");
 }
 for (const required of [
+  "name: muniu-migrate",
+  'helm.sh/hook-weight: "-10"',
+  "serviceAccountName: muniu-migrate",
   "name: muniu-candidate",
   "name: muniu-worker-sandbox-controller",
   "name: muniu-api-sandbox-authority",
   'resources: ["pods/exec"]',
   "name: muniu-sandbox-workspaces",
   "name: MN_KUBERNETES_RUNTIME_CLASS",
+  "name: MN_WORKER_TOOLS",
   "name: muniu-sandbox-default-deny",
   "name: muniu-kubernetes-api-egress",
   "name: muniu-worker-api-egress"
@@ -58,6 +65,26 @@ for (const required of [
   if (!production.includes(required)) {
     throw new Error(`production chart is missing Kubernetes boundary: ${required}`);
   }
+}
+if (!/kind: ServiceAccount[\s\S]*?name: muniu-migrate[\s\S]*?automountServiceAccountToken: false/u.test(production)) {
+  throw new Error("migration hook must own a tokenless pre-install ServiceAccount");
+}
+if (!production.includes("name: MN_API_INSTANCE_ID") ||
+    !production.includes("fieldPath: metadata.name")) {
+  throw new Error("production API does not bind durable ownership to its Pod identity");
+}
+if (!production.includes("name: MN_WORKER_INSTANCE_ID") ||
+    !production.includes("fieldPath: metadata.name")) {
+  throw new Error("production Workers do not bind queue ownership to their Pod identity");
+}
+if (!production.includes("name: HOME") ||
+    !production.includes("value: /opt/muniu") ||
+    !production.includes("mountPath: /opt/muniu/.muniu")) {
+  throw new Error("production API HOME must resolve inside the writable state mount");
+}
+if (!production.includes("MN_WORKSPACE_ROOT: /tmp/muniu-worktrees") ||
+    !production.includes("mountPath: /tmp")) {
+  throw new Error("production API workspace must resolve inside the writable tmp mount");
 }
 if (!/name: muniu-candidate[\s\S]*?automountServiceAccountToken: false/u.test(production)) {
   throw new Error("candidate ServiceAccount must not mount a Kubernetes token");
@@ -92,6 +119,35 @@ const fixture = helm([
 ]);
 if (!fixture.includes("            - --mock\n")) {
   throw new Error("fixture Worker does not explicitly use the mock executor");
+}
+
+const kind = helm([
+  "template",
+  "muniu",
+  chart,
+  "--namespace",
+  "muniu-kind",
+  "--values",
+  kindValues,
+  "--set",
+  "api.replicas=2",
+  "--set",
+  "worker.enabled=true"
+]);
+for (const required of [
+  "name: muniu-postgres",
+  "http://muniu-kind-minio:9000",
+  "http://muniu-kind-fixture:8080",
+  "NODE_EXTRA_CA_CERTS",
+  "secretName: muniu-kind-fixture-tls",
+  "port: 8443",
+  "claimName: muniu-kind-sandboxes",
+  "cidr: 172.18.0.2/32",
+  "port: 6443"
+]) {
+  if (!kind.includes(required)) {
+    throw new Error(`Kind profile is missing the enterprise fixture binding: ${required}`);
+  }
 }
 
 console.log("Helm chart verification passed");

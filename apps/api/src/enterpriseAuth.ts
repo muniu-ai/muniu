@@ -284,6 +284,30 @@ export function principalAllows(
   return roleAllows(context.roles, method, pathname);
 }
 
+/**
+ * A worker credential identifies a machine principal. Replicas that share the
+ * same credential may append a bounded instance name so queue leases remain
+ * independently recoverable. The credential already grants equal authority
+ * to every replica, so the suffix is an ownership discriminator, not a new
+ * security boundary.
+ */
+export function workerOwnerMatchesPrincipal(
+  ownerId: unknown,
+  actorId: string
+): ownerId is string {
+  if (ownerId === actorId) return true;
+  if (typeof ownerId !== "string" || !ownerId.startsWith(`${actorId}@`)) {
+    return false;
+  }
+  const instanceId = ownerId.slice(actorId.length + 1);
+  return (
+    ownerId.length <= 256 &&
+    instanceId.length >= 1 &&
+    instanceId.length <= 253 &&
+    /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/u.test(instanceId)
+  );
+}
+
 function queueScopeForRoute(method: string, pathname: string): WorkerScope | undefined {
   const normalized = method.toUpperCase();
   if (normalized === "GET" || normalized === "HEAD") {
@@ -300,7 +324,7 @@ function queueScopeForRoute(method: string, pathname: string): WorkerScope | und
   ) {
     return "run_jobs:checkpoint";
   }
-  const action = /^\/v1\/run-jobs\/queue\/[^/]+\/(heartbeat|release|events|artifacts|measurements|usage-receipts|update|finish|sandbox-runtime-proof|source-snapshot)$/u.exec(
+  const action = /^\/v1\/run-jobs\/queue\/[^/]+\/(heartbeat|release|events|artifacts|measurements|usage-receipts|update|finish|sandbox-runtime-proof|source-snapshot|resume-diff)$/u.exec(
     pathname
   )?.[1];
   switch (action) {
@@ -313,6 +337,7 @@ function queueScopeForRoute(method: string, pathname: string): WorkerScope | und
     case "update": return "run_jobs:checkpoint";
     case "sandbox-runtime-proof": return "run_jobs:checkpoint";
     case "source-snapshot": return "run_jobs:checkpoint";
+    case "resume-diff": return "run_jobs:checkpoint";
     case "finish": return "run_jobs:finish";
     default: return undefined;
   }
@@ -338,6 +363,9 @@ export function roleAllows(
     method === "POST" &&
     (/^\/v1\/(?:eval-assets|trace-graphs|maturity-report)$/u.test(pathname) ||
       /^\/v1\/learning-proposals(?:$|\/[^/]+\/submit$)/u.test(pathname));
+  const agentApprovalDecision =
+    method === "POST" &&
+    /^\/v1\/agent-sessions\/[^/]+\/approvals\/[^/]+$/u.test(pathname);
   if (roles.includes("auditor")) return readOnly;
   if (
     roles.includes("governance_admin") &&
@@ -349,7 +377,7 @@ export function roleAllows(
   }
   if (
     roles.includes("reviewer") &&
-    (readOnly || /\/approve$|\/review$|\/canary$/u.test(pathname))
+    (readOnly || agentApprovalDecision || /\/approve$|\/review$|\/canary$/u.test(pathname))
   ) {
     return true;
   }

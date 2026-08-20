@@ -24,6 +24,9 @@ spec:
           ports: [{ name: http, containerPort: {{ .Values.api.port }} }]
           envFrom: [{ configMapRef: { name: {{ include "muniu.fullname" . }} } }]
           env:
+            - { name: HOME, value: /opt/muniu }
+            - name: MN_API_INSTANCE_ID
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
             - name: MN_POSTGRES_URL
               valueFrom: { secretKeyRef: { name: {{ .Values.postgres.existingSecret }}, key: {{ .Values.postgres.urlKey }} } }
             - name: MN_ARTIFACT_S3_ACCESS_KEY_ID
@@ -38,6 +41,9 @@ spec:
             - { name: state, mountPath: /opt/muniu/.muniu }
             - { name: trust, mountPath: /etc/muniu/trust, readOnly: true }
             - { name: sandbox-workspaces, mountPath: {{ .Values.sandbox.sharedWorkspace.mountPath | quote }} }
+            {{- if .Values.api.trustedCa.existingSecret }}
+            - { name: api-trusted-ca, mountPath: {{ .Values.api.trustedCa.mountPath | quote }}, readOnly: true }
+            {{- end }}
           readinessProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 5 }
           livenessProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 10 }
           resources: {{- toYaml .Values.api.resources | nindent 12 }}
@@ -50,6 +56,12 @@ spec:
             items: [{ key: {{ .Values.standardPackTrust.key }}, path: trust.json }]
         - name: sandbox-workspaces
           persistentVolumeClaim: { claimName: {{ include "muniu.sharedWorkspaceClaimName" . }} }
+        {{- if .Values.api.trustedCa.existingSecret }}
+        - name: api-trusted-ca
+          secret:
+            secretName: {{ .Values.api.trustedCa.existingSecret }}
+            items: [{ key: {{ .Values.api.trustedCa.key }}, path: ca.crt }]
+        {{- end }}
       nodeSelector: {{- toYaml .Values.nodeSelector | nindent 8 }}
       tolerations: {{- toYaml .Values.tolerations | nindent 8 }}
       affinity: {{- toYaml .Values.affinity | nindent 8 }}

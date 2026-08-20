@@ -32,6 +32,7 @@ import type {
   StageHandlerResult
 } from "./types.js";
 import {
+  GovernedLoopInterruptionError,
   GovernedLoopInputError,
   LoopMeasurementError,
   LoopPersistenceError
@@ -1181,23 +1182,34 @@ function validateBudgetLedger(
   state: Omit<GovernedRunState, "digest">
 ): void {
   let cumulative: RunBudgetUsage = { ...ZERO_USAGE };
-  let implementationAttempts = 0;
+  const repairVerificationIds = new Set(
+    state.repairHistory.map((observation) => observation.verificationAttemptId)
+  );
+  let pendingRepair = false;
+  let completedRepairAttempts = 0;
   let previousMeasurement: LoopBudgetMeasurementProof | undefined;
   for (const [index, attempt] of state.attempts.entries()) {
-    if (attempt.stage === "implementation") implementationAttempts += 1;
-    const expectedRepairs = Math.max(0, implementationAttempts - 1);
+    // repairAttempts counts semantic Gate repair rounds, not infrastructure
+    // retries. A resumed indeterminate implementation can therefore produce
+    // implementation:2 without consuming the repair budget. Only a failed
+    // verification that is bound into repairHistory authorizes the next
+    // implementation to advance this counter.
+    if (attempt.stage === "implementation" && pendingRepair) {
+      completedRepairAttempts += 1;
+      pendingRepair = false;
+    }
     if (attempt.status === "running") {
       if (canonicalJson(attempt.budgetDelta) !== canonicalJson(ZERO_DELTA)) {
         throw new TypeError(`resumeFrom.attempts[${index}].running budgetDelta must be zero`);
       }
-      cumulative = { ...cumulative, repairAttempts: expectedRepairs };
+      cumulative = { ...cumulative, repairAttempts: completedRepairAttempts };
     } else {
       cumulative = {
         ...addUsage(
-          { ...cumulative, repairAttempts: expectedRepairs },
+          { ...cumulative, repairAttempts: completedRepairAttempts },
           attempt.budgetDelta
         ),
-        repairAttempts: expectedRepairs
+        repairAttempts: completedRepairAttempts
       };
     }
     if (canonicalJson(attempt.budgetUsage) !== canonicalJson(cumulative)) {
@@ -1231,8 +1243,16 @@ function validateBudgetLedger(
       }
       previousMeasurement = measurement;
     }
+    if (
+      attempt.stage === "verification" &&
+      attempt.status === "failed" &&
+      repairVerificationIds.has(attempt.id)
+    ) {
+      pendingRepair = true;
+    }
   }
-  const pendingRepair =
+  const checkpointedPendingRepair =
+    pendingRepair &&
     state.status === "running" &&
     state.currentStage === "implementation" &&
     state.attempts.at(-1)?.stage === "verification" &&
@@ -1241,7 +1261,7 @@ function validateBudgetLedger(
       (observation) =>
         observation.verificationAttemptId === state.attempts.at(-1)?.id
     );
-  if (pendingRepair) {
+  if (checkpointedPendingRepair) {
     cumulative = {
       ...cumulative,
       repairAttempts: cumulative.repairAttempts + 1
@@ -1836,7 +1856,8 @@ export async function executeGovernedIncrement(
     let rawResult: unknown;
     try {
       rawResult = await runtime.handlers[stage](context);
-    } catch {
+    } catch (error) {
+      if (error instanceof GovernedLoopInterruptionError) throw error;
       return checkpointHandlerFailure(
         runtime,
         state,

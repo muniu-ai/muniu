@@ -29,6 +29,7 @@ import type {
   EnterpriseClaimSnapshot,
   EnterprisePostgresRuntime
 } from "./enterprisePostgres.js";
+import { executionStateFromEnterpriseClaim } from "./enterpriseClaimState.js";
 import {
   sandboxExecutionMatchesAttestation,
   verifySandboxRuntimeProof
@@ -328,9 +329,10 @@ function validateExecutionStart(input: {
   target: { providerId: string; modelId: string };
 } {
   const request = input.request;
-  const run = input.store.runs.get(request.runId);
-  const task = run ? input.store.tasks.get(run.taskId) : undefined;
-  const project = run ? input.store.projects.get(run.projectId) : undefined;
+  const durable = executionStateFromEnterpriseClaim(input.active);
+  const run = durable.run;
+  const task = durable.task ?? input.store.tasks.get(run.taskId);
+  const project = durable.project ?? input.store.projects.get(run.projectId);
   if (
     !run?.harnessManifest ||
     !task ||

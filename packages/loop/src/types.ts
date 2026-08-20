@@ -341,3 +341,15 @@ export class LoopMeasurementError extends Error {
     this.name = "LoopMeasurementError";
   }
 }
+
+/**
+ * The active handler lost infrastructure ownership before its outcome became
+ * durable. The engine must leave the running checkpoint intact so another
+ * worker can recover it instead of recording a terminal stage failure.
+ */
+export class GovernedLoopInterruptionError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "GovernedLoopInterruptionError";
+  }
+}

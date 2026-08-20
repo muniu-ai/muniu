@@ -180,6 +180,34 @@ test("enterprise builtin broker lets a new active claim resume after the old exe
   );
 });
 
+test("enterprise builtin broker retains a bounded execution failure reason", async (t) => {
+  const broker = new EnterpriseBuiltinAgentBroker();
+  t.after(() => broker.dispose());
+  const request = startRequest();
+  const identity = {
+    tenantId: "tenant-1",
+    workerId: "worker-1",
+    claimDigest: "c".repeat(64)
+  };
+  const started = await broker.start({
+    ...identity,
+    request,
+    providerId: "provider-1",
+    modelId: "model-1",
+    executionBinding: request.executionBinding,
+    humanApproval: "never",
+    execute: async () => {
+      throw new Error(`session append conflict\n${"x".repeat(700)}`);
+    }
+  });
+
+  const failed = await waitForTerminal(broker, started.executionId, identity);
+  assert.equal(failed.state, "failed");
+  assert.match(failed.error ?? "", /^enterprise builtin execution failed: session append conflict x+/u);
+  assert.equal(failed.error?.includes("\n"), false);
+  assert.ok((failed.error?.length ?? 0) <= 549);
+});
+
 async function waitForTerminal(
   broker: EnterpriseBuiltinAgentBroker,
   executionId: string,

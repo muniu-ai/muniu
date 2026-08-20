@@ -89,7 +89,7 @@ Commands:
   mn run --spec <id@revision> --workflow <id[@version]> [--harness-profile id[@version]]
          [--title "..."] [--prompt "..."] [--wait] [--queue-only] [--priority -1000..1000]
   mn run worker [--once] [--mock] [--owner worker-id] [--capacity 1] [--ttl-ms 30000] [--workspace-root .mn/worktrees] [--proxy-base-url http://127.0.0.1:15721]
-  mn run worker --enterprise [--once] [--owner machine-jwt-sub] [--sandbox-image approved-image-assertion] [--sandbox-backend id] [--sandbox-capability id] [--provider builtin|claude|codex] [--language javascript] [--gate-runner id] [--tool executable]
+  mn run worker --enterprise [--once] [--owner machine-jwt-sub[@instance]] [--sandbox-image approved-image-assertion] [--sandbox-backend id] [--sandbox-capability id] [--provider builtin|claude|codex] [--language javascript] [--gate-runner id] [--tool executable]
   mn run workers [--state idle|running|stale] [--owner worker-id]
   mn run artifacts <run-id> [--candidate candidate-id] [--provider claude|codex] [--kind log|summary|test-report] [--gate gate] [--source source] [--persisted true|false]
   mn run artifacts-download <run-id> [--candidate candidate-id] [--provider claude|codex] [--kind log|summary|test-report] [--gate gate] [--source source] [--persisted true|false] [--out artifacts.tar]

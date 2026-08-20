@@ -5,6 +5,7 @@ import type { RunStageName } from "@mn/core";
 import {
   GOVERNED_INCREMENT_DEFINITION,
   GOVERNED_INCREMENT_WORKFLOW_REF,
+  GovernedLoopInterruptionError,
   GovernedLoopInputError,
   LoopPersistenceError,
   canonicalJson,
@@ -547,6 +548,40 @@ test("resume abandons an indeterminate handler and reruns from last definite sta
   assert.equal(result.attempts[0]?.failure?.kind, "interrupted");
 });
 
+test("an interrupted implementation retry does not consume the Gate repair budget", async () => {
+  let captured: GovernedRunState | undefined;
+  const first = baseInput({
+    onCheckpoint: (state) => {
+      const attempt = state.attempts.at(-1);
+      if (attempt?.stage === "implementation" && attempt.status === "running") {
+        captured = state;
+        throw new Error("simulated owner loss during implementation");
+      }
+    }
+  });
+  await assert.rejects(
+    executeGovernedIncrement(withoutCheckpoints(first)),
+    LoopPersistenceError
+  );
+  assert.equal(captured?.attempts.at(-1)?.stage, "implementation");
+
+  const resumed = baseInput({
+    resumeFrom: captured,
+    now: tickingClock(30)
+  });
+  const result = await executeGovernedIncrement(withoutCheckpoints(resumed));
+
+  assert.deepEqual(
+    result.attempts
+      .filter((attempt) => attempt.stage === "implementation")
+      .map((attempt) => [attempt.attempt, attempt.status]),
+    [[1, "failed"], [2, "completed"]]
+  );
+  assert.equal(result.attempts[3]?.failure?.kind, "interrupted");
+  assert.equal(result.budgetUsage.repairAttempts, 0);
+  assert.equal(validateGovernedRunState(result).digest, result.digest);
+});
+
 test("cancellation during a handler is checkpointed and terminal", async () => {
   const controller = new AbortController();
   const input = baseInput({
@@ -634,6 +669,24 @@ test("handler throws are classified without persisting exception or secret text"
   assert.equal(result.status, "failed");
   assert.equal(result.failure?.kind, "handler_error");
   assert.doesNotMatch(JSON.stringify(result), /do-not-persist/);
+});
+
+test("infrastructure interruption leaves the durable running checkpoint for takeover", async () => {
+  const input = baseInput({
+    handlers: defaultHandlers({
+      discovery: async () => {
+        throw new GovernedLoopInterruptionError("owner lease expired");
+      }
+    })
+  });
+  await assert.rejects(
+    executeGovernedIncrement(withoutCheckpoints(input)),
+    GovernedLoopInterruptionError
+  );
+  assert.equal(input.checkpoints.length, 1);
+  assert.equal(input.checkpoints[0]?.status, "running");
+  assert.equal(input.checkpoints[0]?.attempts.at(-1)?.status, "running");
+  assert.equal(input.checkpoints[0]?.attempts.at(-1)?.stage, "discovery");
 });
 
 test("Learning cannot auto-activate or emit non-proposal artifacts", async () => {

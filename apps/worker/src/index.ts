@@ -8,6 +8,7 @@ export * from "./dockerSandboxAgentExecutor.js";
 export * from "./kubernetesSandboxPod.js";
 export * from "./workspace.js";
 export * from "./workspaceSnapshot.js";
+export * from "./loopDiffRestore.js";
 export * from "./orchestrator.js";
 export * from "./governedOrchestrator.js";
 export * from "./governedGateExecution.js";

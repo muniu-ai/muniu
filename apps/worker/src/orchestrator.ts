@@ -9,6 +9,7 @@ import type {
   RunEvent,
   RunRecord
 } from "@mn/core";
+import { GovernedLoopInterruptionError } from "@mn/loop";
 import {
   buildArchitectureBrief,
   createRunContext,
@@ -43,6 +44,19 @@ export interface RunOrchestratorOptions {
 
 export interface RunExecutionOptions {
   runId?: string;
+  /**
+   * Optional filesystem namespace for candidate workspaces and checkpoints.
+   * The externally authorized Run identity remains runId; governed repair
+   * attempts use this field to keep their workspace snapshots distinct.
+   */
+  workspaceRunId?: string;
+  /**
+   * Optional authority-bound task used only to derive the immutable execution
+   * binding. Governed workflows may narrow the task they hand to the classic
+   * executor (for example, to avoid running Gates twice), while the binding
+   * must continue to attest the original API-authorized policy.
+   */
+  executionBindingTask?: AgentTask;
   resumeFrom?: RunRecord;
   abortSignal?: AbortSignal;
   /** Reuse an Agent session for a bounded repair attempt while issuing a new
@@ -61,6 +75,7 @@ export class RunOrchestrator {
     execution: RunExecutionOptions = {}
   ): Promise<RunRecord> {
     const runId = execution.runId ?? randomUUID();
+    const workspaceRunId = execution.workspaceRunId ?? runId;
     const now = new Date().toISOString();
     const record: RunRecord = execution.resumeFrom
       ? cloneRunForResume(execution.resumeFrom, runId, now)
@@ -151,7 +166,7 @@ export class RunOrchestrator {
             )({
               projectRoot: project.rootPath,
               workspaceRoot: this.options.workspaceRoot,
-              runId,
+              runId: workspaceRunId,
               candidateId,
               isolated: task.strategy.sandbox === "isolated-worktree"
             })
@@ -167,7 +182,7 @@ export class RunOrchestrator {
           worktreePath: workspace.path,
           outputCheckpoint: buildCandidateOutputCheckpoint({
             workspaceRoot: this.options.workspaceRoot,
-            runId,
+            runId: workspaceRunId,
             candidateId
           }),
           status: "queued",
@@ -181,14 +196,14 @@ export class RunOrchestrator {
 
       candidate.outputCheckpoint ??= buildCandidateOutputCheckpoint({
         workspaceRoot: this.options.workspaceRoot,
-        runId,
+        runId: workspaceRunId,
         candidateId
       });
       candidate.executionBinding ??= createExecutionBinding({
         runId,
         candidateId,
         target,
-        task,
+        task: execution.executionBindingTask ?? task,
         ...(execution.sessionIds?.[index] === undefined
           ? {}
           : { sessionId: execution.sessionIds[index] })
@@ -280,6 +295,12 @@ export class RunOrchestrator {
           );
         }
       } catch (error) {
+        // The governed adapter uses this explicit error to signal that the
+        // active infrastructure owner disappeared before the candidate
+        // outcome became durable. Converting it into a normal candidate
+        // failure would let verification run without a winner and fabricate
+        // an unverifiable zero-result Gate attempt.
+        if (error instanceof GovernedLoopInterruptionError) throw error;
         candidate.status = "failed";
         candidate.gates.push({
           gate: "llm_verifier",

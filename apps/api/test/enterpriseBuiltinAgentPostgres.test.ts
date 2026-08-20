@@ -35,8 +35,8 @@ test(
     const runtime = new EnterprisePostgresRuntime({ connectionString });
     const persistenceA = new EnterpriseBuiltinAgentPersistence(runtime.pool);
     const persistenceB = new EnterpriseBuiltinAgentPersistence(runtime.pool);
-    const brokerA = new EnterpriseBuiltinAgentBroker(persistenceA);
-    const brokerB = new EnterpriseBuiltinAgentBroker(persistenceB);
+    const brokerA = new EnterpriseBuiltinAgentBroker(persistenceA, "api-replica-a");
+    const brokerB = new EnterpriseBuiltinAgentBroker(persistenceB, "api-replica-b");
     t.after(async () => {
       await Promise.allSettled([brokerA.dispose(), brokerB.dispose()]);
       await runtime.close();
@@ -113,6 +113,11 @@ test(
       WHERE tenant_id=$1 AND execution_id=$2 ORDER BY generation
     `, [identity.tenantId, started.executionId]);
     assert.deepEqual(generations.rows, [{ generation: 1, state: "completed" }]);
+    const owner = await runtime.pool.query<{ owner_instance_id: string }>(`
+      SELECT owner_instance_id FROM mn_builtin_agent_executions
+      WHERE tenant_id=$1 AND execution_id=$2 AND generation=1
+    `, [identity.tenantId, started.executionId]);
+    assert.equal(owner.rows[0]?.owner_instance_id, "api-replica-a");
     const retainedToolEvidence = await runtime.pool.query<{
       call_redacted: boolean;
       result_redacted: boolean;
@@ -314,6 +319,128 @@ test(
   }
 );
 
+test(
+  "PostgreSQL interrupts an unresolved approval and authorizes a new one after takeover",
+  { skip: !connectionString },
+  async (t) => {
+    const runtime = new EnterprisePostgresRuntime({ connectionString });
+    const brokerA = new EnterpriseBuiltinAgentBroker(
+      new EnterpriseBuiltinAgentPersistence(runtime.pool),
+      "api-approval-owner"
+    );
+    const brokerB = new EnterpriseBuiltinAgentBroker(
+      new EnterpriseBuiltinAgentPersistence(runtime.pool),
+      "api-approval-takeover"
+    );
+    t.after(async () => {
+      await Promise.allSettled([brokerA.dispose(), brokerB.dispose()]);
+      await runtime.close();
+    });
+    await runtime.migrate();
+    await brokerA.migrate();
+    await runtime.pool.query(
+      "TRUNCATE mn_builtin_agent_approvals, mn_builtin_agent_tool_calls, mn_builtin_agent_executions"
+    );
+    const identity = {
+      tenantId: "tenant-pg-approval-takeover",
+      workerId: "worker-pg-approval-takeover",
+      claimDigest: "7".repeat(64)
+    };
+    const request = startRequest(identity);
+    const approval = approvalFixture(request, "owner");
+    const takeoverApproval = approvalFixture(request, "takeover");
+    const authorize = async (
+      broker: EnterpriseBuiltinAgentBroker,
+      signal: AbortSignal
+    ) => {
+      const coordinator = new AgentApprovalCoordinator({
+        durable: broker.approvalBridgeForTenant(identity.tenantId)
+      });
+      const selectedApproval = broker === brokerA ? approval : takeoverApproval;
+      const result = await coordinator.authorize({
+        name: "write_file",
+        risk: "side-effecting",
+        args: { path: "README.md", content: "approved after takeover" },
+        context: {
+          sessionId: request.sessionId,
+          cwd: request.workspacePath,
+          signal
+        },
+        approvalBinding: selectedApproval.binding,
+        approvalRequest: selectedApproval.event
+      });
+      assert.equal(result.decision, "approve");
+      return {
+        reason: "completed" as const,
+        summary: "approved after takeover",
+        steps: 1,
+        toolCalls: 0
+      };
+    };
+    const startWith = (broker: EnterpriseBuiltinAgentBroker) => broker.start({
+      ...identity,
+      request,
+      providerId: "provider-pg",
+      modelId: "model-pg",
+      executionBinding: request.executionBinding,
+      humanApproval: "on-risk",
+      execute: async (_input, signal) => authorize(broker, signal)
+    });
+
+    const started = await startWith(brokerA);
+    await waitForApprovalRow(runtime, identity.tenantId, request.sessionId);
+    await brokerA.dispose();
+    await startWith(brokerB);
+    await waitForApprovalGeneration(
+      runtime,
+      identity.tenantId,
+      request.sessionId,
+      takeoverApproval.binding.approvalId,
+      2
+    );
+    const remoteCoordinator = new AgentApprovalCoordinator({
+      durable: brokerB.approvalBridgeForTenant(identity.tenantId)
+    });
+    assert.equal(await remoteCoordinator.decideDurable(
+      takeoverApproval.event,
+      "approval-after-owner-takeover",
+      "approve_once"
+    ), true);
+    const terminal = await waitForTerminal(brokerB, started.executionId, identity);
+    assert.equal(terminal.state, "completed");
+    assert.equal(terminal.output?.summary, "approved after takeover");
+
+    const generations = await runtime.pool.query<{
+      generation: number;
+      state: string;
+      owner_instance_id: string;
+    }>(`
+      SELECT generation,state,owner_instance_id
+      FROM mn_builtin_agent_executions
+      WHERE tenant_id=$1 AND execution_id=$2
+      ORDER BY generation
+    `, [identity.tenantId, started.executionId]);
+    assert.deepEqual(generations.rows, [
+      { generation: 1, state: "cancelled", owner_instance_id: "api-approval-owner" },
+      { generation: 2, state: "completed", owner_instance_id: "api-approval-takeover" }
+    ]);
+    const interrupted = await runtime.pool.query<{
+      generation: number;
+      decision: string;
+      resolution: string;
+    }>(`
+      SELECT generation,decision,resolution
+      FROM mn_builtin_agent_approvals
+      WHERE tenant_id=$1 AND session_id=$2 AND approval_id=$3
+    `, [identity.tenantId, request.sessionId, approval.binding.approvalId]);
+    assert.deepEqual(interrupted.rows, [{
+      generation: 1,
+      decision: "deny",
+      resolution: "interrupted"
+    }]);
+  }
+);
+
 async function waitForTerminal(
   broker: EnterpriseBuiltinAgentBroker,
   executionId: string,
@@ -412,12 +539,15 @@ function startRequest(identity: {
   };
 }
 
-function approvalFixture(request: EnterpriseBuiltinExecutionStartV1) {
+function approvalFixture(
+  request: EnterpriseBuiltinExecutionStartV1,
+  suffix = "pg"
+) {
   const binder = createRuntimeEffectCommitmentBinderV1({
     governanceDigest: Digest(request.executionBinding.governanceDigest),
     harnessDigest: Digest(request.executionBinding.harnessDigest)
   });
-  const callId = CallId("approval-pg-call");
+  const callId = CallId(`approval-${suffix}-call`);
   const handle = binder.bind({
     effectKind: deriveToolEffectKindV1("write_file"),
     sessionId: SessionId(request.sessionId),
@@ -431,7 +561,7 @@ function approvalFixture(request: EnterpriseBuiltinExecutionStartV1) {
   });
   const binding = {
     schemaVersion: 1 as const,
-    approvalId: "approval-pg",
+    approvalId: `approval-${suffix}`,
     scope: handle.commitment.effectKind,
     risk: "side-effecting" as const,
     callId,
@@ -439,7 +569,7 @@ function approvalFixture(request: EnterpriseBuiltinExecutionStartV1) {
     commitment: handle.commitment
   };
   const event = createAgentSessionEvent({
-    eventId: EventId("approval-pg-event"),
+    eventId: EventId(`approval-${suffix}-event`),
     sessionId: SessionId(request.sessionId),
     seq: 0,
     occurredAt: "2026-08-20T00:00:00.000Z",
@@ -466,4 +596,22 @@ async function waitForApprovalRow(
     await new Promise<void>((resolve) => { setTimeout(resolve, 20); });
   }
   throw new Error("durable approval row was not registered");
+}
+
+async function waitForApprovalGeneration(
+  runtime: EnterprisePostgresRuntime,
+  tenantId: string,
+  sessionId: string,
+  approvalId: string,
+  generation: number
+): Promise<void> {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const result = await runtime.pool.query<{ generation: number }>(`
+      SELECT generation FROM mn_builtin_agent_approvals
+      WHERE tenant_id=$1 AND session_id=$2 AND approval_id=$3
+    `, [tenantId, sessionId, approvalId]);
+    if (result.rows[0]?.generation === generation) return;
+    await new Promise<void>((resolve) => { setTimeout(resolve, 20); });
+  }
+  throw new Error("durable approval row was not rebound to the takeover generation");
 }

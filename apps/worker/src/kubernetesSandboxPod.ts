@@ -500,7 +500,7 @@ export function buildKubernetesSandboxPod(input: {
         },
         resources: {
           requests: {
-            cpu: String(attestation.policy.resources.cpu),
+            cpu: kubernetesSandboxCpuRequest(attestation.policy.resources.cpu),
             memory: `${attestation.policy.resources.memoryMb}Mi`
           },
           limits: {
@@ -574,8 +574,8 @@ export function verifyKubernetesSandboxPod(
       throw new Error("Kubernetes sandbox Pod claim annotations drifted");
     }
   }
-  const observedSecurity = securityProjection(pod.spec);
-  const expectedSecurity = securityProjection(expected.spec);
+  const observedSecurity = kubernetesPodSecurityProjection(pod.spec);
+  const expectedSecurity = kubernetesPodSecurityProjection(expected.spec);
   if (sha256Canonical(observedSecurity) !== sha256Canonical(expectedSecurity)) {
     throw new Error(
       `Kubernetes sandbox Pod security specification drifted at ${firstProjectionMismatch(
@@ -606,7 +606,7 @@ export function verifyKubernetesSandboxPod(
     uid,
     runtimeClassName: pod.spec?.runtimeClassName,
     nodeName: pod.spec?.nodeName,
-    podSpecDigest: sha256Canonical(securityProjection(pod.spec)),
+    podSpecDigest: sha256Canonical(kubernetesPodSecurityProjection(pod.spec)),
     attestationDigest: input.attestation.digest,
     sourceSnapshotDigest: input.sourceSnapshotDigest,
     imageDigest: approvedDigest,
@@ -634,6 +634,17 @@ export function kubernetesLeaseDirectoryName(attestation: SandboxLeaseAttestatio
 
 export function kubernetesSandboxRuntimeId(namespace: string, podName: string): string {
   return sha256(`kubernetes-pod-v1\0${requireKubernetesName(namespace, "namespace")}\0${requireKubernetesName(podName, "podName")}`);
+}
+
+/** Keep the attested CPU ceiling as the container limit while reserving only
+ * the bounded scheduler share needed to let the independent Gate authority
+ * overlap the candidate Pod on small clusters. Worker capacity still bounds
+ * concurrency and the cgroup limit remains fail-closed. */
+export function kubernetesSandboxCpuRequest(cpuLimit: number): string {
+  if (!Number.isFinite(cpuLimit) || cpuLimit <= 0) {
+    throw new TypeError("Kubernetes sandbox CPU limit must be positive");
+  }
+  return cpuLimit <= 0.25 ? String(cpuLimit) : "250m";
 }
 
 export class DefaultKubernetesPodControl implements KubernetesPodControl {
@@ -758,7 +769,10 @@ function normalizeConfiguration(input: KubernetesSandboxConfiguration) {
   });
 }
 
-function securityProjection(spec: V1Pod["spec"]): unknown {
+/** Returns a strict, canonical-JSON-safe projection of every Pod field that
+ * can affect the sandbox boundary. Kubernetes client model instances are
+ * copied as enumerable data and API-server default omissions are normalized. */
+export function kubernetesPodSecurityProjection(spec: V1Pod["spec"]): unknown {
   if (!spec) return null;
   return plainKubernetesValue({
     serviceAccountName: spec.serviceAccountName,

@@ -17,6 +17,10 @@ api:
   replicas: 2
   host: 0.0.0.0
   port: 7318
+  trustedCa:
+    existingSecret: ""
+    key: ca.crt
+    mountPath: /etc/muniu/model-ca
   resources:
     requests: { cpu: 250m, memory: 512Mi }
     limits: { cpu: "2", memory: 2Gi }
@@ -30,6 +34,9 @@ worker:
   replicas: 2
   capacity: 1
   claimTtlMs: 30000
+  # Must describe the executable tool set actually present in the Worker and
+  # compatible with the active governance command allowlist.
+  tools: [node, npm]
   resources:
     requests: { cpu: 250m, memory: 512Mi }
     limits: { cpu: "2", memory: 2Gi }
@@ -83,8 +90,11 @@ networkPolicy:
   # names portably. Production values must narrow these selectors/CIDRs.
   apiEgress: []
   # Kubernetes API ClusterIP CIDR(s), normally a single /32. Both the API
-  # authority and Worker controller need port 443; candidate Pods never do.
+  # authority and Worker controller need these destinations; candidate Pods
+  # never do. CNIs that enforce after Service DNAT also require the API server
+  # endpoint CIDR and target port.
   kubernetesApiEgress: []
+  kubernetesApiPorts: [443]
 
 securityContext:
   runAsNonRoot: true

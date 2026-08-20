@@ -21,6 +21,8 @@ import type {
 import type { Waiver } from "@mn/governance";
 import type { GovernedRunState } from "@mn/loop";
 import type { FileSpecRepository, SpecRepositoryRecord } from "@mn/specs";
+import type { ProviderRecord } from "@mn/provider-catalog";
+import type { FileLocalStore } from "@mn/store";
 import type {
   EnterpriseMetadataRecord,
   EnterpriseStateSnapshot
@@ -43,8 +45,25 @@ export const ENTERPRISE_METADATA_KINDS = Object.freeze([
   "learning_proposal",
   "maturity_report",
   "gate_artifact_handle",
+  "authoritative_gate_receipt",
+  "provider"
+] as const);
+
+/** Immutable execution evidence is written by the claim/artifact transaction
+ * that creates it. A stale API replica must never prune it while reconciling
+ * its mutable control-plane cache. */
+export const ENTERPRISE_APPEND_ONLY_METADATA_KINDS = Object.freeze([
+  "gate_artifact_handle",
   "authoritative_gate_receipt"
 ] as const);
+
+export const ENTERPRISE_RECONCILED_METADATA_KINDS = Object.freeze(
+  ENTERPRISE_METADATA_KINDS.filter((kind) =>
+    !ENTERPRISE_APPEND_ONLY_METADATA_KINDS.includes(
+      kind as (typeof ENTERPRISE_APPEND_ONLY_METADATA_KINDS)[number]
+    )
+  )
+);
 
 function objectPayload(record: EnterpriseMetadataRecord): Record<string, unknown> {
   const payload = record.payload;
@@ -151,6 +170,7 @@ function validateCheckpointState(
 export async function restoreEnterpriseSnapshot(input: {
   store: MemoryStore;
   specRepository: FileSpecRepository;
+  localStore?: Pick<FileLocalStore, "restoreEnterpriseProviders">;
   snapshot: EnterpriseStateSnapshot;
 }): Promise<void> {
   const projects = new Map<string, Project>();
@@ -173,6 +193,7 @@ export async function restoreEnterpriseSnapshot(input: {
     string,
     AuthoritativeGateReceiptRecord
   >();
+  const providers = new Map<string, ProviderRecord>();
 
   for (const record of input.snapshot.metadata) {
     const payload = objectPayload(record);
@@ -307,6 +328,26 @@ export async function restoreEnterpriseSnapshot(input: {
           "authoritative Gate receipt"
         );
         break;
+      case "provider": {
+        matchingString(record, payload, "id", record.id);
+        const config = payload.config;
+        const scope = config && typeof config === "object" && !Array.isArray(config)
+          ? (config as Record<string, unknown>).enterpriseScope
+          : undefined;
+        const tenantIds = scope && typeof scope === "object" && !Array.isArray(scope)
+          ? (scope as Record<string, unknown>).tenantIds
+          : undefined;
+        if (!Array.isArray(tenantIds) || tenantIds.length !== 1 || tenantIds[0] !== record.tenantId) {
+          throw new Error(`Enterprise metadata provider/${record.id} has mismatched tenant scope`);
+        }
+        setUnique(
+          providers,
+          record.id,
+          payload as unknown as ProviderRecord,
+          "provider"
+        );
+        break;
+      }
       default:
         // Forward-compatible readers retain unknown metadata in PostgreSQL but
         // do not expose it through an older API process.
@@ -327,6 +368,7 @@ export async function restoreEnterpriseSnapshot(input: {
     }
     await input.specRepository.restore(record);
   }
+  await input.localStore?.restoreEnterpriseProviders([...providers.values()]);
 
   const runJobs = input.snapshot.runJobs.map(({ item, payload }) => {
     const run = validateCheckpointRun(

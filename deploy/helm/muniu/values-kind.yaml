@@ -1,0 +1,89 @@
+image:
+  repository: localhost:5001/muniu-kind
+  tag: ci
+  pullPolicy: Always
+
+api:
+  replicas: 1
+  trustedCa:
+    existingSecret: muniu-kind-fixture-tls
+    key: tls.crt
+    mountPath: /etc/muniu/fixture-model-ca
+
+worker:
+  enabled: false
+  fixtureMode: false
+  replicas: 2
+  capacity: 1
+  claimTtlMs: 15000
+  # The deterministic fixture exercises node/npm. The broader declaration is
+  # needed to match the built-in multi-language governance policy under test.
+  tools: [npm, pnpm, yarn, node, npx, tsc, vitest, go, cargo, pytest, python, git]
+
+corsAllowlist: [http://127.0.0.1:4173]
+enterpriseProjectRoots: [/work/sandboxes]
+
+autoscaling:
+  api: { enabled: false }
+  worker: { enabled: false }
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+networkPolicy:
+  enabled: true
+  ingressNamespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: muniu-kind
+  kubernetesApiEgress:
+    - ipBlock: { cidr: 10.96.0.1/32 }
+    # Calico enforces this egress rule after Service DNAT in the one-node Kind
+    # topology, where the API endpoint is the first Kind-network container.
+    - ipBlock: { cidr: 172.18.0.2/32 }
+  kubernetesApiPorts: [443, 6443]
+  apiEgress:
+    - to:
+        - podSelector:
+            matchLabels: { muniu.ai/adapter: "true" }
+      ports:
+        - { protocol: TCP, port: 5432 }
+        - { protocol: TCP, port: 9000 }
+        - { protocol: TCP, port: 8080 }
+        - { protocol: TCP, port: 8443 }
+
+postgres:
+  existingSecret: muniu-postgres
+
+s3:
+  endpointUrl: http://muniu-kind-minio:9000
+  bucket: muniu-kind
+  region: us-east-1
+  prefix: kind-failover
+  existingSecret: muniu-s3
+
+oidc:
+  issuer: http://muniu-kind-fixture:8080
+  audience: muniu-kind
+  jwksUrl: http://muniu-kind-fixture:8080/jwks.json
+
+otlp:
+  endpoint: http://muniu-kind-fixture:8080/otlp
+  serviceName: muniu-kind-api
+
+standardPackTrust:
+  existingSecret: muniu-standard-pack-trust
+
+sandbox:
+  driver: kubernetes
+  image: localhost:5001/muniu-kind:ci
+  imageDigest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  attestationExistingSecret: muniu-sandbox-attestation
+  runtimeClassName: muniu-sandbox
+  sharedWorkspace:
+    create: false
+    existingClaim: muniu-kind-sandboxes
+    mountPath: /work/sandboxes
+
+extraEnv:
+  - { name: NODE_EXTRA_CA_CERTS, value: /etc/muniu/fixture-model-ca/ca.crt }

@@ -109,7 +109,7 @@ test("chmod-only executable changes alter snapshot, diff, changed scope and budg
   );
 });
 
-test("workspace URI is bound to one active lease, run, attempt and candidate", async (t) => {
+test("workspace URI binds legacy attempts and stable governed sessions to one lease, run and candidate", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "mn-loop-workspace-uri-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const expected = "run-a--implementation-1-claude-1";
@@ -126,11 +126,26 @@ test("workspace URI is bound to one active lease, run, attempt and candidate", a
     }),
     await realpath(join(root, expected))
   );
+  const governed = "run-a--governed-claude-1";
+  await mkdir(join(root, governed));
+  assert.equal(
+    await resolveAuthoritativeCandidateWorkspace({
+      workspaceUri: `mn://sandbox/lease-a/${governed}`,
+      leaseId: "lease-a",
+      scratchRoot: root,
+      runId: "run-a",
+      implementationAttempt: 2,
+      candidateId: "claude-1"
+    }),
+    await realpath(join(root, governed))
+  );
   for (const workspaceUri of [
     "mn://sandbox/lease-a/.",
     `mn://sandbox/lease-b/${expected}`,
     "mn://sandbox/lease-a/run-b--implementation-1-claude-1",
     "mn://sandbox/lease-a/run-a--implementation-1-codex-1",
+    "mn://sandbox/lease-a/run-b--governed-claude-1",
+    "mn://sandbox/lease-a/run-a--governed-codex-1",
     `mn://sandbox/lease-a/${expected}/nested`
   ]) {
     await assert.rejects(

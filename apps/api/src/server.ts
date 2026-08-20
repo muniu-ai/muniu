@@ -183,6 +183,7 @@ import {
   localRequestContext,
   principalAllows,
   roleAllows,
+  workerOwnerMatchesPrincipal,
   type EnterpriseAuthOptions
 } from "./enterpriseAuth.js";
 import {
@@ -201,8 +202,14 @@ import {
   type ProviderUsageRequestSnapshot,
   type ProviderUsageReconciliationEvidence
 } from "./enterprisePostgres.js";
+import { executionStateFromEnterpriseClaim } from "./enterpriseClaimState.js";
+import { enterpriseResumeDiffFromClaim } from "./enterpriseResumeDiff.js";
 import {
-  ENTERPRISE_METADATA_KINDS,
+  ENTERPRISE_GATE_EVIDENCE_METADATA_KINDS,
+  mergeEnterpriseGateEvidenceMetadata
+} from "./enterpriseEvidenceMetadata.js";
+import {
+  ENTERPRISE_RECONCILED_METADATA_KINDS,
   restoreEnterpriseSnapshot
 } from "./enterpriseState.js";
 import {
@@ -381,6 +388,9 @@ export interface BuildServerOptions {
    * enterprise profile never opts out.
    */
   enterprisePostgres?: EnterprisePostgresOptions | false;
+  /** Stable replica identity used by the durable builtin execution owner
+   * lease. Kubernetes supplies the API Pod name through the Downward API. */
+  enterpriseBuiltinInstanceId?: string;
   /** false is reserved for isolated enterprise unit tests. */
   telemetry?: OtlpHttpTelemetryOptions | false;
   /** false is reserved for isolated enterprise unit tests. */
@@ -911,8 +921,21 @@ const runJobLoopMeasurementSchema = runJobQueueClaimTokenSchema.extend({
     "learning"
   ]),
   attempt: z.number().int().positive().max(1_000_000),
+  resultStatus: z.enum([
+    "completed",
+    "failed",
+    "waiting_approval",
+    "cancelled",
+    "handler_error",
+    "invalid_handler_result"
+  ]),
   workspaceUri: z.string().min(1).max(4_096).optional(),
   candidateId: z.string().min(1).max(512).optional()
+}).strict();
+const runJobResumeDiffSchema = runJobQueueClaimTokenSchema.extend({
+  stageAttemptId: z.string().min(1).max(1_024),
+  candidateId: z.string().min(1).max(512),
+  digest: z.string().regex(/^[a-f0-9]{64}$/u)
 }).strict();
 const runApprovalSchema = z.object({
   decision: z.enum(["approve", "reject"]).default("approve"),
@@ -1744,6 +1767,19 @@ export function buildServer(options: BuildServerOptions = {}) {
     for (const record of store.authoritativeGateReceipts.values()) {
       add(record.tenantId, "authoritative_gate_receipt", record.id, record);
     }
+    for (const provider of await localStore.listProviders()) {
+      const scope = provider.config.enterpriseScope;
+      const tenantIds = scope && typeof scope === "object" && !Array.isArray(scope)
+        ? (scope as Record<string, unknown>).tenantIds
+        : undefined;
+      if (!Array.isArray(tenantIds) || tenantIds.length !== 1 || typeof tenantIds[0] !== "string") {
+        // Legacy/global providers remain a process-local compatibility read
+        // model. Only uniquely tenant-scoped providers can be represented in
+        // the enterprise PostgreSQL metadata keyspace without scope widening.
+        continue;
+      }
+      add(tenantIds[0], "provider", provider.id, provider);
+    }
     return records.map((record) => ({
       ...record,
       digest: sha256Canonical(record.payload)
@@ -1751,11 +1787,43 @@ export function buildServer(options: BuildServerOptions = {}) {
   };
   const syncEnterpriseMetadata = async (): Promise<void> => {
     if (!enterprisePostgres) return;
-    const durableRecords = await collectEnterpriseMetadata();
+    const durableRecords = (await collectEnterpriseMetadata()).filter((record) =>
+      ENTERPRISE_RECONCILED_METADATA_KINDS.includes(
+        record.kind as (typeof ENTERPRISE_RECONCILED_METADATA_KINDS)[number]
+      )
+    );
     await enterprisePostgres.reconcileMetadata({
       records: durableRecords,
-      managedKinds: ENTERPRISE_METADATA_KINDS
+      managedKinds: ENTERPRISE_RECONCILED_METADATA_KINDS
     });
+  };
+  const refreshEnterpriseGateEvidenceMetadata = async (
+    tenantId: string
+  ): Promise<void> => {
+    if (!enterprisePostgres) return;
+    mergeEnterpriseGateEvidenceMetadata(
+      store,
+      tenantId,
+      await enterprisePostgres.listMetadata({
+        tenantId,
+        kinds: ENTERPRISE_GATE_EVIDENCE_METADATA_KINDS
+      })
+    );
+  };
+  const migrateEnterpriseProviderMetadata = async (): Promise<boolean> => {
+    if (!enterprisePostgres) return false;
+    const providerRecords = (await collectEnterpriseMetadata()).filter(
+      (record) => record.kind === "provider"
+    );
+    if (providerRecords.length === 0) return false;
+    // Provider metadata was added after the original enterprise snapshot
+    // format. Only append that new kind here: reconciling the whole in-memory
+    // image before the PostgreSQL snapshot is restored could delete durable
+    // records that this process has not loaded yet.
+    for (const record of providerRecords) {
+      await enterprisePostgres.upsertMetadata(record);
+    }
+    return true;
   };
   if (runtimeProfile === "enterprise" && options.agentSessionService) {
     throw new Error("Enterprise Agent sessions cannot replace the enforced PostgreSQL/S3 backend");
@@ -1767,7 +1835,8 @@ export function buildServer(options: BuildServerOptions = {}) {
   const enterpriseBuiltinAgentBroker = new EnterpriseBuiltinAgentBroker(
     enterprisePostgres
       ? new EnterpriseBuiltinAgentPersistence(enterprisePostgres.pool)
-      : undefined
+      : undefined,
+    options.enterpriseBuiltinInstanceId
   );
   let getAgentSessionService:
     | ((request?: FastifyRequest) => Promise<LocalMockAgentSessionService>)
@@ -2266,7 +2335,13 @@ export function buildServer(options: BuildServerOptions = {}) {
         await syncEnterpriseMetadata();
         snapshot = await enterprisePostgres.readStateSnapshot();
       }
-      await restoreEnterpriseSnapshot({ store, specRepository, snapshot });
+      if (
+        !snapshot.metadata.some((record) => record.kind === "provider") &&
+        await migrateEnterpriseProviderMetadata()
+      ) {
+        snapshot = await enterprisePostgres.readStateSnapshot();
+      }
+      await restoreEnterpriseSnapshot({ store, specRepository, localStore, snapshot });
       if (providerUsageTerminalJournal) {
         await providerUsageTerminalJournal.replayAll((log, ref) =>
           enterprisePostgres.appendProviderUsageLog(log, ref)
@@ -2381,9 +2456,9 @@ export function buildServer(options: BuildServerOptions = {}) {
       const body = request.body && typeof request.body === "object" && !Array.isArray(request.body)
         ? request.body as Record<string, unknown>
         : undefined;
-      if (body?.ownerId !== context.actorId) {
+      if (!workerOwnerMatchesPrincipal(body?.ownerId, context.actorId)) {
         return reply.code(403).send({
-          error: "worker ownerId must match the authenticated machine principal"
+          error: "worker ownerId must match the authenticated machine principal or one of its instances"
         });
       }
     }
@@ -2470,11 +2545,15 @@ export function buildServer(options: BuildServerOptions = {}) {
         succeeded &&
         domainPlans.some((plan) => plan.mutates)
       ) {
-        const records = await collectEnterpriseMetadata();
+        const records = (await collectEnterpriseMetadata()).filter((record) =>
+          ENTERPRISE_RECONCILED_METADATA_KINDS.includes(
+            record.kind as (typeof ENTERPRISE_RECONCILED_METADATA_KINDS)[number]
+          )
+        );
         try {
           await enterprisePostgres.reconcileMetadata({
             records,
-            managedKinds: ENTERPRISE_METADATA_KINDS,
+            managedKinds: ENTERPRISE_RECONCILED_METADATA_KINDS,
             auditEvents: domainEvents,
             now: timestamp
           });
@@ -2484,7 +2563,7 @@ export function buildServer(options: BuildServerOptions = {}) {
           // enterprise profile, so a failed atomic commit must restore that
           // durable image before the failed response is exposed to callers.
           const snapshot = await enterprisePostgres.readStateSnapshot();
-          await restoreEnterpriseSnapshot({ store, specRepository, snapshot });
+          await restoreEnterpriseSnapshot({ store, specRepository, localStore, snapshot });
           const failedAt = new Date().toISOString();
           for (const domainEvent of domainEvents) {
             const {
@@ -5144,6 +5223,71 @@ export function buildServer(options: BuildServerOptions = {}) {
       .send(content);
   });
 
+  app.post("/v1/run-jobs/queue/:id/resume-diff", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = runJobResumeDiffSchema.parse(request.body ?? {});
+    const context = requestContexts.get(request) ?? localRequestContext(request.id);
+    if (runtimeProfile !== "enterprise" || !enterprisePostgres || !sandboxAttestationKey) {
+      return reply.code(503).send({ error: "enterprise resume diff authority is unavailable" });
+    }
+    const active = await enterprisePostgres.inspectClaim({
+      runId: id,
+      ownerId: body.ownerId,
+      claimToken: body.claimToken
+    });
+    if (!active || active.item.tenantId !== context.tenantId) {
+      return reply.code(409).send({ error: "run job claim is not active" });
+    }
+    let binding;
+    try {
+      binding = enterpriseResumeDiffFromClaim(active, body, sandboxAttestationKey);
+    } catch (error) {
+      return reply.code(409).send({
+        error: error instanceof Error ? error.message : "resume diff binding is invalid"
+      });
+    }
+    let content: Buffer | undefined;
+    try {
+      content = await runScopedCas.readVerified(binding.ref);
+    } catch (error) {
+      return reply.code(409).send({
+        error: error instanceof Error ? error.message : "resume diff integrity check failed"
+      });
+    }
+    if (!content) {
+      return reply.code(410).send({ error: "content-addressed resume diff is unavailable" });
+    }
+    const stillActive = await enterprisePostgres.inspectClaim({
+      runId: id,
+      ownerId: body.ownerId,
+      claimToken: body.claimToken
+    });
+    let currentBinding;
+    try {
+      currentBinding = stillActive
+        ? enterpriseResumeDiffFromClaim(stillActive, body, sandboxAttestationKey)
+        : undefined;
+    } catch {
+      currentBinding = undefined;
+    }
+    if (
+      !stillActive ||
+      stillActive.item.tenantId !== context.tenantId ||
+      stillActive.item.claimTokenHash !== active.item.claimTokenHash ||
+      stillActive.checkpointDigest !== active.checkpointDigest ||
+      !currentBinding ||
+      currentBinding.ref.objectKey !== binding.ref.objectKey ||
+      currentBinding.ref.digest !== binding.ref.digest
+    ) {
+      return reply.code(409).send({ error: "run job claim changed during resume diff retrieval" });
+    }
+    return reply
+      .header("content-type", binding.ref.contentType)
+      .header("content-length", String(binding.ref.byteLength))
+      .header("x-muniu-content-digest", binding.ref.digest)
+      .send(content);
+  });
+
   app.post("/v1/run-jobs/queue/claim", async (request) => {
     const body = runJobQueueClaimSchema.parse(request.body ?? {});
     const ownerId = body.ownerId ?? `external-worker-${randomUUID()}`;
@@ -5195,7 +5339,9 @@ export function buildServer(options: BuildServerOptions = {}) {
       runtimeProfile === "enterprise" &&
       sandboxAttestationKey
     ) {
-      const claimedRun = store.runs.get(claimed.item.runId);
+      const claimedRun = enterpriseClaim
+        ? executionStateFromEnterpriseClaim(enterpriseClaim).run
+        : store.runs.get(claimed.item.runId);
       if (claimedRun?.harnessManifest) {
         if (
           !claimed.item.requirementsDigest ||
@@ -5286,16 +5432,21 @@ export function buildServer(options: BuildServerOptions = {}) {
       ownerId: body.ownerId,
       claimToken: body.claimToken
     });
-    const run = store.runs.get(id);
     if (
       !active ||
       active.item.tenantId !== context.tenantId ||
-      !run?.harnessManifest ||
       !active.item.requirementsDigest ||
       !active.item.workerCapabilityDigest ||
       !active.item.claimTokenHash ||
       !active.item.claimedAt
     ) {
+      return reply.code(409).send({
+        error: "active governed claim bindings are unavailable"
+      });
+    }
+    const durable = executionStateFromEnterpriseClaim(active);
+    const run = durable.run;
+    if (!run.harnessManifest) {
       return reply.code(409).send({
         error: "active governed claim bindings are unavailable"
       });
@@ -5310,8 +5461,8 @@ export function buildServer(options: BuildServerOptions = {}) {
       signingKey: sandboxAttestationKey
     }, active.item.claimedAt);
     const candidate = run.candidates.find((value) => value.id === body.candidateId);
-    const task = store.tasks.get(run.taskId);
-    const project = store.projects.get(run.projectId);
+    const task = durable?.task ?? store.tasks.get(run.taskId);
+    const project = durable?.project ?? store.projects.get(run.projectId);
     if (
       !project ||
       project.tenantId !== context.tenantId ||
@@ -5418,8 +5569,9 @@ export function buildServer(options: BuildServerOptions = {}) {
     if (!active || active.item.tenantId !== context.tenantId) {
       return reply.code(409).send({ error: "run job claim is not active" });
     }
-    const run = store.runs.get(id);
-    const project = run ? store.projects.get(run.projectId) : undefined;
+    const durable = executionStateFromEnterpriseClaim(active);
+    const run = durable.run;
+    const project = durable.project ?? store.projects.get(run.projectId);
     if (!run?.harnessManifest || !project) {
       return reply.code(400).send({ error: "governed run bindings are unavailable" });
     }
@@ -5591,7 +5743,7 @@ export function buildServer(options: BuildServerOptions = {}) {
       runId: id,
       capacity: body.capacity,
       ttlMs: body.ttlMs
-    }, context.tenantId);
+    }, context.tenantId, { allowUntrackedRun: Boolean(enterprisePostgres) });
     store.markRunJobQueued(id, item.updatedAt);
     return { item };
   });
@@ -5655,7 +5807,10 @@ export function buildServer(options: BuildServerOptions = {}) {
       if ((item.tenantId ?? LOCAL_TENANT_ID) !== context.tenantId) {
         return reply.code(404).send({ error: "run job queue item not found" });
       }
-      const run = store.runs.get(id);
+      const durable = enterpriseClaim
+        ? executionStateFromEnterpriseClaim(enterpriseClaim)
+        : undefined;
+      const run = durable?.run ?? store.runs.get(id);
       if (
         !run ||
         run.projectId !== item.projectId ||
@@ -5674,6 +5829,7 @@ export function buildServer(options: BuildServerOptions = {}) {
         });
       }
       const claimTokenHash = item.claimTokenHash ?? sha256(body.claimToken);
+      await refreshEnterpriseGateEvidenceMetadata(context.tenantId);
       const artifact: Omit<GateArtifactV2, "handle" | "path"> = {
         id: body.artifact.id,
         kind: body.artifact.kind,
@@ -5749,8 +5905,18 @@ export function buildServer(options: BuildServerOptions = {}) {
           cas,
           registeredAt: new Date().toISOString()
         });
-        store.gateArtifactHandles.set(record.handle, record);
       }
+      if (enterprisePostgres) {
+        await enterprisePostgres.upsertMetadata(
+          enterpriseMetadataWrite(
+            context.tenantId,
+            "gate_artifact_handle",
+            record.handle,
+            record
+          )
+        );
+      }
+      store.gateArtifactHandles.set(record.handle, record);
       return reply.code(created ? 201 : 200).send({
         id: record.handle,
         artifact: gateArtifactFromRecord(record)
@@ -5786,9 +5952,11 @@ export function buildServer(options: BuildServerOptions = {}) {
       if (!active || active.item.tenantId !== context.tenantId) {
         return reply.code(409).send({ error: "run job claim is not active" });
       }
-      const run = store.runs.get(id);
-      const project = run ? store.projects.get(run.projectId) : undefined;
-      const state = store.governedLoopStates.get(id);
+      const durable = executionStateFromEnterpriseClaim(active);
+      const run = durable.run;
+      const project = durable.project ?? store.projects.get(run.projectId);
+      const task = durable.task ?? store.tasks.get(run.taskId);
+      const state = durable.governedLoopState ?? store.governedLoopStates.get(id);
       if (
         !run?.harnessManifest ||
         !project ||
@@ -5890,146 +6058,163 @@ export function buildServer(options: BuildServerOptions = {}) {
         candidateSnapshotDigest: string;
       } | undefined;
       if (body.stage === "implementation") {
-        if (!body.workspaceUri || !body.candidateId) {
+        const discardedAttempt = [
+          "handler_error",
+          "invalid_handler_result",
+          "cancelled"
+        ].includes(body.resultStatus);
+        if (Boolean(body.workspaceUri) !== Boolean(body.candidateId)) {
+          return reply.code(400).send({
+            error: "implementation measurement requires both workspaceUri and candidateId"
+          });
+        }
+        if (!body.workspaceUri && !discardedAttempt) {
           return reply.code(400).send({
             error: "implementation measurement requires a winner workspaceUri and candidateId"
           });
         }
-        const task = store.tasks.get(run.taskId);
-        const attestation = run.sandboxAttestation;
-        const execution = run.sandboxExecution;
-        if (
-          !task ||
-          !attestation ||
-          !execution ||
-          !sandboxRuntimeVerifier ||
-          !active.item.requirementsDigest ||
-          !active.item.workerCapabilityDigest
-        ) {
-          return reply.code(409).send({
-            error: "authoritative implementation runtime bindings are unavailable"
-          });
-        }
-        const expectedCandidateIds = new Set(
-          selectRunRuntimes(task).map((runtimeId, index) => `${runtimeId}-${index + 1}`)
-        );
-        if (!expectedCandidateIds.has(body.candidateId)) {
-          return reply.code(400).send({
-            error: "candidateId is not declared by the immutable task strategy"
-          });
-        }
-        const attestationVerification = verifySandboxAttestation(attestation, {
-          run,
-          tenantId: context.tenantId,
-          workerId: body.ownerId,
-          requirementsDigest: active.item.requirementsDigest,
-          workerCapabilityDigest: active.item.workerCapabilityDigest,
-          claimDigest: active.item.claimTokenHash,
-          signingKey: sandboxAttestationKey
-        });
-        if (!attestationVerification.valid || !sandboxExecutionMatchesAttestation(
-          execution,
-          attestation
-        )) {
-          return reply.code(409).send({
-            error: `implementation sandbox binding is invalid: ${
-              attestationVerification.reason ?? "execution does not match attestation"
-            }`
-          });
-        }
-        const runtimeProofVerification = verifySandboxRuntimeProof(
-          execution.runtimeProof,
-          {
-            attestation,
+        // An indeterminate/invalid/cancelled handler outcome is discarded and
+        // rerun from the last durable checkpoint. Its provider usage and
+        // wall-clock duration remain authoritative, but its uncommitted
+        // workspace cannot become evidence or contribute source-change usage.
+        if (!body.workspaceUri || !body.candidateId) {
+          diffMeasurement = undefined;
+        } else {
+          const attestation = run.sandboxAttestation;
+          const execution = run.sandboxExecution;
+          if (
+            !task ||
+            !attestation ||
+            !execution ||
+            !sandboxRuntimeVerifier ||
+            !active.item.requirementsDigest ||
+            !active.item.workerCapabilityDigest
+          ) {
+            return reply.code(409).send({
+              error: "authoritative implementation runtime bindings are unavailable"
+            });
+          }
+          const expectedCandidateIds = new Set(
+            selectRunRuntimes(task).map((runtimeId, index) => `${runtimeId}-${index + 1}`)
+          );
+          if (!expectedCandidateIds.has(body.candidateId)) {
+            return reply.code(400).send({
+              error: "candidateId is not declared by the immutable task strategy"
+            });
+          }
+          const attestationVerification = verifySandboxAttestation(attestation, {
+            run,
             tenantId: context.tenantId,
-            runId: id,
             workerId: body.ownerId,
+            requirementsDigest: active.item.requirementsDigest,
+            workerCapabilityDigest: active.item.workerCapabilityDigest,
             claimDigest: active.item.claimTokenHash,
-            runtimeId: execution.runtimeId,
-            runtimeDigest: execution.runtimeDigest,
-            imageDigest: execution.imageDigest,
             signingKey: sandboxAttestationKey
-          }
-        );
-        if (!runtimeProofVerification.valid) {
-          return reply.code(409).send({
-            error: `implementation runtime proof is invalid: ${
-              runtimeProofVerification.reason ?? "verification failed"
-            }`
           });
-        }
-        try {
-          const inspected = await sandboxRuntimeVerifier.verify({
-            runtimeId: execution.runtimeId,
-            attestation,
-            projectRoot: project.rootPath
-          });
-          if (
-            inspected.runtimeId !== execution.runtimeId ||
-            inspected.runtimeDigest !== execution.runtimeDigest
-          ) {
-            throw new Error("runtime inspection no longer matches the API-issued proof");
+          if (!attestationVerification.valid || !sandboxExecutionMatchesAttestation(
+            execution,
+            attestation
+          )) {
+            return reply.code(409).send({
+              error: `implementation sandbox binding is invalid: ${
+                attestationVerification.reason ?? "execution does not match attestation"
+              }`
+            });
           }
-          const candidateRoot = await resolveAuthoritativeCandidateWorkspace({
-            workspaceUri: body.workspaceUri,
-            leaseId: attestation.leaseId,
-            scratchRoot: inspected.scratchRoot,
+          const runtimeProofVerification = verifySandboxRuntimeProof(
+            execution.runtimeProof,
+            {
+              attestation,
+              tenantId: context.tenantId,
+              runId: id,
+              workerId: body.ownerId,
+              claimDigest: active.item.claimTokenHash,
+              runtimeId: execution.runtimeId,
+              runtimeDigest: execution.runtimeDigest,
+              imageDigest: execution.imageDigest,
+              signingKey: sandboxAttestationKey
+            }
+          );
+          if (!runtimeProofVerification.valid) {
+            return reply.code(409).send({
+              error: `implementation runtime proof is invalid: ${
+                runtimeProofVerification.reason ?? "verification failed"
+              }`
+            });
+          }
+          try {
+            const inspected = await sandboxRuntimeVerifier.verify({
+              runtimeId: execution.runtimeId,
+              attestation,
+              projectRoot: project.rootPath
+            });
+            if (
+              inspected.runtimeId !== execution.runtimeId ||
+              inspected.runtimeDigest !== execution.runtimeDigest
+            ) {
+              throw new Error("runtime inspection no longer matches the API-issued proof");
+            }
+            const candidateRoot = await resolveAuthoritativeCandidateWorkspace({
+              workspaceUri: body.workspaceUri,
+              leaseId: attestation.leaseId,
+              scratchRoot: inspected.scratchRoot,
+              runId: id,
+              implementationAttempt: body.attempt,
+              candidateId: body.candidateId
+            });
+            diffMeasurement = await measureAuthoritativeLoopWorkspaceDiff({
+              projectRoot: inspected.projectRoot,
+              candidateRoot
+            });
+            const reinspection = await sandboxRuntimeVerifier.verify({
+              runtimeId: execution.runtimeId,
+              attestation,
+              projectRoot: project.rootPath
+            });
+            if (
+              reinspection.runtimeDigest !== inspected.runtimeDigest ||
+              reinspection.projectRoot !== inspected.projectRoot ||
+              reinspection.scratchRoot !== inspected.scratchRoot
+            ) {
+              throw new Error("runtime mount binding changed during diff measurement");
+            }
+            diffDomain = {
+              candidateId: body.candidateId,
+              workspaceUri: body.workspaceUri,
+              leaseId: attestation.leaseId,
+              runtimeId: execution.runtimeId,
+              runtimeProofDigest: execution.runtimeProof.digest,
+              projectSnapshotDigest: diffMeasurement.projectSnapshotDigest,
+              candidateSnapshotDigest: diffMeasurement.candidateSnapshotDigest
+            };
+          } catch (error) {
+            return reply.code(400).send({
+              error: error instanceof Error ? error.message : "authoritative Loop diff failed"
+            });
+          }
+          const stillActive = await enterprisePostgres.inspectClaim({
             runId: id,
-            implementationAttempt: body.attempt,
-            candidateId: body.candidateId
-          });
-          diffMeasurement = await measureAuthoritativeLoopWorkspaceDiff({
-            projectRoot: inspected.projectRoot,
-            candidateRoot
-          });
-          const reinspection = await sandboxRuntimeVerifier.verify({
-            runtimeId: execution.runtimeId,
-            attestation,
-            projectRoot: project.rootPath
+            ownerId: body.ownerId,
+            claimToken: body.claimToken
           });
           if (
-            reinspection.runtimeDigest !== inspected.runtimeDigest ||
-            reinspection.projectRoot !== inspected.projectRoot ||
-            reinspection.scratchRoot !== inspected.scratchRoot
+            !stillActive ||
+            stillActive.item.tenantId !== context.tenantId ||
+            stillActive.item.claimTokenHash !== active.item.claimTokenHash ||
+            stillActive.item.workerCapabilityDigest !== active.item.workerCapabilityDigest
           ) {
-            throw new Error("runtime mount binding changed during diff measurement");
+            return reply.code(409).send({
+              error: "run job claim changed during authoritative diff measurement"
+            });
           }
-          diffDomain = {
-            candidateId: body.candidateId,
-            workspaceUri: body.workspaceUri,
-            leaseId: attestation.leaseId,
-            runtimeId: execution.runtimeId,
-            runtimeProofDigest: execution.runtimeProof.digest,
-            projectSnapshotDigest: diffMeasurement.projectSnapshotDigest,
-            candidateSnapshotDigest: diffMeasurement.candidateSnapshotDigest
-          };
-        } catch (error) {
-          return reply.code(400).send({
-            error: error instanceof Error ? error.message : "authoritative Loop diff failed"
+          diffCas = await runScopedCas.put({
+            tenantId: context.tenantId,
+            projectId: run.projectId,
+            runId: id,
+            contentType: LOOP_DIFF_MANIFEST_CONTENT_TYPE,
+            content: diffMeasurement.content
           });
         }
-        const stillActive = await enterprisePostgres.inspectClaim({
-          runId: id,
-          ownerId: body.ownerId,
-          claimToken: body.claimToken
-        });
-        if (
-          !stillActive ||
-          stillActive.item.tenantId !== context.tenantId ||
-          stillActive.item.claimTokenHash !== active.item.claimTokenHash ||
-          stillActive.item.workerCapabilityDigest !== active.item.workerCapabilityDigest
-        ) {
-          return reply.code(409).send({
-            error: "run job claim changed during authoritative diff measurement"
-          });
-        }
-        diffCas = await runScopedCas.put({
-          tenantId: context.tenantId,
-          projectId: run.projectId,
-          runId: id,
-          contentType: LOOP_DIFF_MANIFEST_CONTENT_TYPE,
-          content: diffMeasurement.content
-        });
       } else if (body.workspaceUri !== undefined || body.candidateId !== undefined) {
         return reply.code(400).send({
           error: "only implementation attempts may submit a workspace reference"
@@ -6121,7 +6306,12 @@ export function buildServer(options: BuildServerOptions = {}) {
     if (body.run.id !== id) {
       return reply.code(400).send({ error: "run id does not match queue item" });
     }
-    const existing = store.runs.get(id);
+    const durable = enterpriseClaim
+      ? executionStateFromEnterpriseClaim(enterpriseClaim)
+      : undefined;
+    const existing = durable?.run ?? store.runs.get(id);
+    const previousCheckpoint =
+      durable?.governedLoopState ?? store.governedLoopStates.get(id);
     const normalizedEvidence = normalizeExternalGateEvidence(
       body.run as RunRecord,
       (body.run as RunRecord).status === "waiting_approval"
@@ -6142,11 +6332,12 @@ export function buildServer(options: BuildServerOptions = {}) {
         signingKey: sandboxAttestationKey
       });
       if (sandboxError) return reply.code(400).send({ error: sandboxError });
-      const project = store.projects.get(incoming.projectId);
+      const project = durable?.project ?? store.projects.get(incoming.projectId);
       const filesystemError = project
         ? validateEnterpriseExternalRunFilesystem(incoming, project.rootPath)
         : "external run project does not exist";
       if (filesystemError) return reply.code(400).send({ error: filesystemError });
+      await refreshEnterpriseGateEvidenceMetadata(context.tenantId);
       const gateArtifactError = await validateEnterpriseGateArtifactHandles({
         existing,
         incoming,
@@ -6164,7 +6355,7 @@ export function buildServer(options: BuildServerOptions = {}) {
       existing,
       incoming,
       body.governedLoopState,
-      store.governedLoopStates.get(id),
+      previousCheckpoint,
       false,
       enterpriseClaim
         ? approvalDecisionFromClaimPayload(enterpriseClaim.payload)
@@ -6183,7 +6374,7 @@ export function buildServer(options: BuildServerOptions = {}) {
     if (runtimeProfile === "enterprise") {
       const measurementError = await validateEnterpriseLoopBudgetMeasurements({
         state: checkpoint,
-        previous: store.governedLoopStates.get(id),
+        previous: previousCheckpoint,
         run: incoming,
         item,
         tenantId: context.tenantId,
@@ -6209,7 +6400,7 @@ export function buildServer(options: BuildServerOptions = {}) {
         existing,
         incoming,
         state: checkpoint,
-        previousState: store.governedLoopStates.get(id),
+        previousState: previousCheckpoint,
         item,
         tenantId: context.tenantId,
         ownerId: body.ownerId,
@@ -6244,7 +6435,6 @@ export function buildServer(options: BuildServerOptions = {}) {
     if (enterprisePostgres && enterpriseClaim) {
       const durablePayload: Readonly<Record<string, unknown>> = {
         ...enterpriseClaim.payload,
-        version: 1,
         run: incoming,
         ...(checkpoint ? { governedResumeState: checkpoint } : {})
       };
@@ -6326,7 +6516,6 @@ export function buildServer(options: BuildServerOptions = {}) {
     const { id } = request.params as { id: string };
     const body = runJobQueueUpdateSchema.parse(request.body ?? {});
     const context = requestContexts.get(request) ?? localRequestContext(request.id);
-    const existingRun = store.runs.get(id);
     const enterpriseClaim = enterprisePostgres
       ? await enterprisePostgres.inspectClaim({
           runId: id,
@@ -6334,6 +6523,12 @@ export function buildServer(options: BuildServerOptions = {}) {
           claimToken: body.claimToken
         })
       : undefined;
+    const durable = enterpriseClaim
+      ? executionStateFromEnterpriseClaim(enterpriseClaim)
+      : undefined;
+    const existingRun = durable?.run ?? store.runs.get(id);
+    const previousCheckpoint =
+      durable?.governedLoopState ?? store.governedLoopStates.get(id);
     const item = enterprisePostgres
       ? enterpriseClaim?.item
       : runJobQueue.heartbeat(id, {
@@ -6365,11 +6560,12 @@ export function buildServer(options: BuildServerOptions = {}) {
         signingKey: sandboxAttestationKey
       });
       if (sandboxError) return reply.code(400).send({ error: sandboxError });
-      const project = store.projects.get(run.projectId);
+      const project = durable?.project ?? store.projects.get(run.projectId);
       const filesystemError = project
         ? validateEnterpriseExternalRunFilesystem(run, project.rootPath)
         : "external run project does not exist";
       if (filesystemError) return reply.code(400).send({ error: filesystemError });
+      await refreshEnterpriseGateEvidenceMetadata(context.tenantId);
       const gateArtifactError = await validateEnterpriseGateArtifactHandles({
         existing: existingRun,
         incoming: run,
@@ -6387,7 +6583,7 @@ export function buildServer(options: BuildServerOptions = {}) {
       existingRun,
       run,
       body.governedLoopState,
-      store.governedLoopStates.get(id),
+      previousCheckpoint,
       true,
       enterpriseClaim
         ? approvalDecisionFromClaimPayload(enterpriseClaim.payload)
@@ -6406,7 +6602,7 @@ export function buildServer(options: BuildServerOptions = {}) {
     if (runtimeProfile === "enterprise") {
       const measurementError = await validateEnterpriseLoopBudgetMeasurements({
         state: checkpoint,
-        previous: store.governedLoopStates.get(id),
+        previous: previousCheckpoint,
         run,
         item,
         tenantId: context.tenantId,
@@ -6432,7 +6628,7 @@ export function buildServer(options: BuildServerOptions = {}) {
         existing: existingRun,
         incoming: run,
         state: checkpoint,
-        previousState: store.governedLoopStates.get(id),
+        previousState: previousCheckpoint,
         item,
         tenantId: context.tenantId,
         ownerId: body.ownerId,
@@ -6456,7 +6652,6 @@ export function buildServer(options: BuildServerOptions = {}) {
       enterpriseClaim
         ? {
             ...enterpriseClaim.payload,
-            version: 1,
             run,
             ...(checkpoint ? { governedResumeState: checkpoint } : {})
           }
@@ -6527,12 +6722,25 @@ export function buildServer(options: BuildServerOptions = {}) {
       capacity: body.capacity,
       ttlMs: body.ttlMs,
       now: finishedAt
-    }, context.tenantId);
+    }, context.tenantId, { allowUntrackedRun: Boolean(enterprisePostgres) });
     return { run: store.runs.get(id), item: finishedItem };
   });
 
   app.get("/v1/runs/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
+    if (enterprisePostgres) {
+      const context = requestContexts.get(request) ?? localRequestContext(request.id);
+      const snapshot = await enterprisePostgres.readRunJobSnapshot(id);
+      if (!snapshot || snapshot.item.tenantId !== context.tenantId) {
+        return reply.code(404).send({ error: "run not found" });
+      }
+      const durable = executionStateFromEnterpriseClaim(snapshot);
+      store.runs.set(id, durable.run);
+      if (durable.governedLoopState) {
+        store.governedLoopStates.set(id, durable.governedLoopState);
+      }
+      return durable.run;
+    }
     const run = store.runs.get(id);
     if (!run) return reply.code(404).send({ error: "run not found" });
     return run;
@@ -6640,9 +6848,45 @@ export function buildServer(options: BuildServerOptions = {}) {
 
   app.post("/v1/runs/:id/approve", async (request, reply) => {
     const { id } = request.params as { id: string };
-    const run = store.runs.get(id);
+    const context = requestContexts.get(request) ?? localRequestContext(request.id);
+    const enterpriseSnapshot = enterprisePostgres
+      ? await enterprisePostgres.readRunJobSnapshot(id)
+      : undefined;
+    if (enterprisePostgres && !enterpriseSnapshot) {
+      return reply.code(404).send({ error: "run not found" });
+    }
+    if (
+      enterpriseSnapshot &&
+      enterpriseSnapshot.item.tenantId !== context.tenantId
+    ) {
+      return reply.code(404).send({ error: "run not found" });
+    }
+    const durable = enterpriseSnapshot
+      ? executionStateFromEnterpriseClaim(enterpriseSnapshot)
+      : undefined;
+    if (durable) {
+      store.runs.set(id, durable.run);
+      if (durable.project) store.projects.set(durable.project.id, durable.project);
+      if (durable.task) store.tasks.set(durable.task.id, durable.task);
+      if (durable.governedLoopState) {
+        store.governedLoopStates.set(id, durable.governedLoopState);
+      }
+    }
+    const run = durable?.run ?? store.runs.get(id);
     if (!run) return reply.code(404).send({ error: "run not found" });
     if (run.status !== "waiting_approval") {
+      if (enterpriseSnapshot) {
+        const body = runApprovalSchema.parse(request.body ?? {});
+        const actorId = context.authentication === "local" ? body.actorId : context.actorId;
+        if (matchesEnterpriseApprovalReplay(
+          enterpriseSnapshot.payload,
+          id,
+          body.decision,
+          actorId
+        )) {
+          return reply.code(isTerminalRunStatus(run.status) ? 200 : 202).send(run);
+        }
+      }
       return reply.code(409).send({ error: "run is not waiting for approval" });
     }
     const task = store.tasks.get(run.taskId);
@@ -6650,7 +6894,6 @@ export function buildServer(options: BuildServerOptions = {}) {
     const loopState = store.governedLoopStates.get(id);
     if (task?.specRef && project && loopState) {
       const body = runApprovalSchema.parse(request.body ?? {});
-      const context = requestContexts.get(request) ?? localRequestContext(request.id);
       const actorId = context.authentication === "local"
         ? body.actorId
         : context.actorId;
@@ -6682,11 +6925,35 @@ export function buildServer(options: BuildServerOptions = {}) {
           statusCode: 202,
           timestamp: decision.decidedAt
         });
-        await enqueueEnterpriseRunJob(project, task, queued, {
-          governedResumeState: loopState,
-          approvalDecision: decision,
-          auditEvent
-        });
+        try {
+          await enqueueEnterpriseRunJob(project, task, queued, {
+            governedResumeState: loopState,
+            approvalDecision: decision,
+            auditEvent
+          });
+        } catch (error) {
+          if (
+            error instanceof Error &&
+            error.message === "cannot enqueue over an active enterprise claim"
+          ) {
+            const latest = await enterprisePostgres.readRunJobSnapshot(id);
+            if (
+              latest?.item.tenantId === context.tenantId &&
+              matchesEnterpriseApprovalReplay(
+                latest.payload,
+                id,
+                body.decision,
+                actorId
+              )
+            ) {
+              const latestRun = executionStateFromEnterpriseClaim(latest).run;
+              store.runs.set(id, latestRun);
+              return reply.code(isTerminalRunStatus(latestRun.status) ? 200 : 202)
+                .send(latestRun);
+            }
+          }
+          throw error;
+        }
         precommittedDomainAuditEvents.set(request, [auditEvent]);
         return reply.code(202).send(queued);
       }
@@ -7288,7 +7555,7 @@ export function buildServer(options: BuildServerOptions = {}) {
       });
     } catch (error) {
       const snapshot = await enterprisePostgres.readStateSnapshot();
-      await restoreEnterpriseSnapshot({ store, specRepository, snapshot });
+      await restoreEnterpriseSnapshot({ store, specRepository, localStore, snapshot });
       throw error;
     }
   }
@@ -8053,9 +8320,19 @@ export async function validateEnterpriseLoopBudgetMeasurements(input: {
     }
     if (attempt.stage === "implementation") {
       if (!proof.diffArtifact) {
-        return `implementation attempt ${attempt.id} has no authoritative diff artifact`;
-      }
-      if (newlyMeasured) {
+        const discardedAttempt =
+          [
+            "interrupted",
+            "handler_error",
+            "invalid_handler_result",
+            "cancelled"
+          ].includes(attempt.failure?.kind ?? "") &&
+          proof.delta.changedFiles === 0 &&
+          proof.delta.changedLines === 0;
+        if (!discardedAttempt) {
+          return `implementation attempt ${attempt.id} has no authoritative diff artifact`;
+        }
+      } else if (newlyMeasured) {
         const candidate = input.run.candidates.find(
           (entry) => entry.id === proof.diffArtifact?.candidateId
         );
@@ -8068,59 +8345,61 @@ export async function validateEnterpriseLoopBudgetMeasurements(input: {
           return `implementation attempt ${attempt.id} diff source is not bound to the reported winner workspace`;
         }
       }
-      const runtimeBindings = [
-        ...(input.run.sandboxEvidenceHistory ?? []).map((binding) => binding.execution),
-        ...(input.run.sandboxExecution ? [input.run.sandboxExecution] : [])
-      ];
-      const runtime = runtimeBindings.find(
-        (execution) =>
-          execution.leaseId === proof.diffArtifact?.leaseId &&
-          execution.runtimeId === proof.diffArtifact.runtimeId &&
-          execution.runtimeProof.digest === proof.diffArtifact.runtimeProofDigest
-      );
-      if (
-        !runtime ||
-        runtime.runtimeProof.claimDigest !== proof.claimDigest ||
-        runtime.runtimeProof.runId !== input.run.id ||
-        runtime.runtimeProof.tenantId !== input.tenantId
-      ) {
-        return `implementation attempt ${attempt.id} diff source runtime domain is invalid`;
-      }
-      const expectedUri = `mn://cas/loop-diffs/${encodeURIComponent(proof.diffArtifact.id)}`;
-      if (proof.diffArtifact.uri !== expectedUri) {
-        return `implementation attempt ${attempt.id} diff artifact URI is invalid`;
-      }
-      const ref: RunScopedCasObjectRef = {
-        schemaVersion: 1,
-        objectKey: proof.diffArtifact.id,
-        digest: proof.diffArtifact.digest,
-        byteLength: proof.diffArtifact.byteLength,
-        contentType: LOOP_DIFF_MANIFEST_CONTENT_TYPE
-      };
-      let content: Buffer | undefined;
-      try {
-        content = await input.cas.readVerified(ref);
-      } catch (error) {
-        return `implementation attempt ${attempt.id} diff CAS verification failed: ${
-          error instanceof Error ? error.message : "invalid CAS object"
-        }`;
-      }
-      if (!content) {
-        return `implementation attempt ${attempt.id} diff CAS object is missing`;
-      }
-      let measured;
-      try {
-        measured = measureLoopDiffManifest(content);
-      } catch (error) {
-        return `implementation attempt ${attempt.id} diff manifest is invalid: ${
-          error instanceof Error ? error.message : "invalid diff manifest"
-        }`;
-      }
-      if (
-        proof.delta.changedFiles !== measured.changedFiles ||
-        proof.delta.changedLines !== measured.changedLines
-      ) {
-        return `implementation attempt ${attempt.id} change usage does not match CAS bytes`;
+      if (proof.diffArtifact) {
+        const runtimeBindings = [
+          ...(input.run.sandboxEvidenceHistory ?? []).map((binding) => binding.execution),
+          ...(input.run.sandboxExecution ? [input.run.sandboxExecution] : [])
+        ];
+        const runtime = runtimeBindings.find(
+          (execution) =>
+            execution.leaseId === proof.diffArtifact?.leaseId &&
+            execution.runtimeId === proof.diffArtifact.runtimeId &&
+            execution.runtimeProof.digest === proof.diffArtifact.runtimeProofDigest
+        );
+        if (
+          !runtime ||
+          runtime.runtimeProof.claimDigest !== proof.claimDigest ||
+          runtime.runtimeProof.runId !== input.run.id ||
+          runtime.runtimeProof.tenantId !== input.tenantId
+        ) {
+          return `implementation attempt ${attempt.id} diff source runtime domain is invalid`;
+        }
+        const expectedUri = `mn://cas/loop-diffs/${encodeURIComponent(proof.diffArtifact.id)}`;
+        if (proof.diffArtifact.uri !== expectedUri) {
+          return `implementation attempt ${attempt.id} diff artifact URI is invalid`;
+        }
+        const ref: RunScopedCasObjectRef = {
+          schemaVersion: 1,
+          objectKey: proof.diffArtifact.id,
+          digest: proof.diffArtifact.digest,
+          byteLength: proof.diffArtifact.byteLength,
+          contentType: LOOP_DIFF_MANIFEST_CONTENT_TYPE
+        };
+        let content: Buffer | undefined;
+        try {
+          content = await input.cas.readVerified(ref);
+        } catch (error) {
+          return `implementation attempt ${attempt.id} diff CAS verification failed: ${
+            error instanceof Error ? error.message : "invalid CAS object"
+          }`;
+        }
+        if (!content) {
+          return `implementation attempt ${attempt.id} diff CAS object is missing`;
+        }
+        let measured;
+        try {
+          measured = measureLoopDiffManifest(content);
+        } catch (error) {
+          return `implementation attempt ${attempt.id} diff manifest is invalid: ${
+            error instanceof Error ? error.message : "invalid diff manifest"
+          }`;
+        }
+        if (
+          proof.delta.changedFiles !== measured.changedFiles ||
+          proof.delta.changedLines !== measured.changedLines
+        ) {
+          return `implementation attempt ${attempt.id} change usage does not match CAS bytes`;
+        }
       }
     } else if (
       proof.diffArtifact !== undefined ||
@@ -8578,6 +8857,19 @@ function approvalDecisionFromClaimPayload(
   } catch {
     return "enterprise approvalDecision payload is malformed";
   }
+}
+
+function matchesEnterpriseApprovalReplay(
+  payload: Readonly<Record<string, unknown>>,
+  runId: string,
+  decision: "approve" | "reject",
+  actorId: string
+): boolean {
+  const prior = approvalDecisionFromClaimPayload(payload);
+  return typeof prior === "object" && prior !== null &&
+    prior.runId === runId &&
+    prior.decision === decision &&
+    prior.actorId === actorId;
 }
 
 function normalizeExternalGateEvidence(

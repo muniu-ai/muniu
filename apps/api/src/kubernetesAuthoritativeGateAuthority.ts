@@ -5,6 +5,9 @@ import { sha256Canonical } from "@mn/governance";
 import {
   DefaultKubernetesPodControl,
   captureContractBaseline,
+  kubernetesPodSecurityProjection,
+  kubernetesSandboxCpuRequest,
+  projectAtSnapshot,
   runGovernedGatePlan,
   type GateCommandExecutionRequest,
   type GateCommandExecutor,
@@ -16,7 +19,6 @@ import type {
   AuthoritativeGateAuthority,
   AuthoritativeGateExecutionInput
 } from "./authoritativeGateVerification.js";
-import { projectAtSnapshot } from "./authoritativeGateVerification.js";
 import { measureAuthoritativeLoopWorkspaceDiff } from "./loopDiffMeasurement.js";
 
 export interface KubernetesAuthoritativeGateAuthorityOptions
@@ -199,7 +201,10 @@ export function buildKubernetesAuthoritativeGatePod(value: {
           seccompProfile: { type: "RuntimeDefault" }
         },
         resources: {
-          requests: { cpu: String(resources.cpu), memory: `${resources.memoryMb}Mi` },
+          requests: {
+            cpu: kubernetesSandboxCpuRequest(resources.cpu),
+            memory: `${resources.memoryMb}Mi`
+          },
           limits: { cpu: String(resources.cpu), memory: `${resources.memoryMb}Mi` }
         },
         volumeMounts: [
@@ -368,33 +373,11 @@ export function verifyKubernetesAuthoritativeGatePod(
     throw new Error("Kubernetes authoritative Gate Pod did not run the approved image");
   }
   if (
-    sha256Canonical(authoritySecurityProjection(pod.spec)) !==
-    sha256Canonical(authoritySecurityProjection(manifest.spec))
+    sha256Canonical(kubernetesPodSecurityProjection(pod.spec)) !==
+    sha256Canonical(kubernetesPodSecurityProjection(manifest.spec))
   ) {
     throw new Error("Kubernetes authoritative Gate Pod specification drifted");
   }
-}
-
-function authoritySecurityProjection(spec: V1Pod["spec"]): unknown {
-  if (!spec) return null;
-  return {
-    serviceAccountName: spec.serviceAccountName,
-    automountServiceAccountToken: spec.automountServiceAccountToken,
-    runtimeClassName: spec.runtimeClassName,
-    restartPolicy: spec.restartPolicy,
-    activeDeadlineSeconds: spec.activeDeadlineSeconds,
-    terminationGracePeriodSeconds: spec.terminationGracePeriodSeconds,
-    enableServiceLinks: spec.enableServiceLinks,
-    hostNetwork: spec.hostNetwork ?? false,
-    hostPID: spec.hostPID ?? false,
-    hostIPC: spec.hostIPC ?? false,
-    shareProcessNamespace: spec.shareProcessNamespace ?? false,
-    securityContext: spec.securityContext,
-    containers: spec.containers,
-    initContainers: spec.initContainers ?? [],
-    ephemeralContainers: spec.ephemeralContainers ?? [],
-    volumes: spec.volumes
-  };
 }
 
 function imageIdMatches(imageId: string | undefined, digest: string): boolean {
