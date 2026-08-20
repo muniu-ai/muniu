@@ -16,6 +16,7 @@ export * from "./transport.js";
 export { snapshotBoundedJsonValue } from "./strict-json.js";
 export {
   assertSafePublicControlIdV1,
+  createSafeDeterministicPublicControlIdV1,
   createSafeRandomPublicControlIdV1,
   isSafePublicControlIdV1
 } from "./public-control.js";

@@ -2,7 +2,7 @@
 
 本手册用于木牛的 macOS 直接分发，即通过 DMG、ZIP、GitHub Release、官网或 Homebrew 提供安装包。它不涉及 Mac App Store 上架。
 
-v0.1.0 Developer Preview 不包含运行时自动更新器，因此本手册只管理 Apple 代码签名和公证凭据。
+v0.1.1 Developer Preview 不包含运行时自动更新器，因此本手册只管理 Apple 代码签名和公证凭据。
 
 ## 是否现在必须办理
 
@@ -112,7 +112,7 @@ npm run release:mac
 
 ```bash
 APP="apps/desktop-mac/src-tauri/target/universal-apple-darwin/release/bundle/macos/木牛.app"
-DMG="apps/desktop-mac/src-tauri/target/universal-apple-darwin/release/bundle/dmg/Muniu_0.1.0_universal.dmg"
+DMG="apps/desktop-mac/src-tauri/target/universal-apple-darwin/release/bundle/dmg/Muniu_0.1.1_universal.dmg"
 
 codesign --verify --deep --strict --verbose=2 "$APP"
 xcrun stapler validate "$APP"

@@ -10,7 +10,7 @@ task → run → candidate → gate → evidence
 
 The default runtime is the embedded `builtin` Agent. Claude Code and Codex CLI remain explicit compatibility runtimes; they are not required for a default engineering run.
 
-> v0.1.0 is a Developer Preview. Do not infer production readiness from an API or configuration surface alone; use the status matrix below.
+> v0.1.1 is a Developer Preview. Do not infer production readiness from an API or configuration surface alone; use the status matrix below.
 
 ## Why Muniu
 
@@ -40,7 +40,7 @@ The default runtime is the embedded `builtin` Agent. Claude Code and Codex CLI r
 | macOS Desktop build | Implemented | No v0.1 signing/notarization/updater promise |
 | Release/SBOM/provenance | Release workflow | Produced for published tags |
 
-v0.1.0 does not publish or enable a desktop runtime updater. Signing,
+v0.1.1 does not publish or enable a desktop runtime updater. Signing,
 notarization and automatic-update artifacts remain outside this release.
 
 ## Five-minute local start

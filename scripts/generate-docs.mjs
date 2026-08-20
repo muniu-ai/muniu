@@ -9,6 +9,7 @@ import { stringify as stringifyYaml, parse as parseYaml } from "yaml";
 const root = process.cwd();
 const check = process.argv.includes("--check");
 const generated = new Map();
+const packageVersion = JSON.parse(await readFile(join(root, "package.json"), "utf8")).version;
 
 function digest(value) {
   return createHash("sha256").update(value).digest("hex");
@@ -60,7 +61,7 @@ for (const route of routes) {
 }
 put("docs/reference/openapi.yaml", stringifyYaml({
   openapi: "3.1.0",
-  info: { title: "Muniu API", version: "0.1.0" },
+  info: { title: "Muniu API", version: packageVersion },
   servers: [{ url: "http://127.0.0.1:7318" }],
   paths
 }));

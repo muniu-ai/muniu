@@ -101,13 +101,13 @@ assertIncludes(cask, 'sha256 "00000000000000000000000000000000000000000000000000
 assertMatch(cask, /url "https:\/\/github\.com\/[^"]+\/releases\/download\/v#\{version\}\/Muniu_#\{version\}_universal\.dmg"/, "Homebrew cask URL");
 
 if (tauriConfig.bundle?.createUpdaterArtifacts !== false) {
-  throw new Error("Tauri bundle.createUpdaterArtifacts must be false for v0.1.0");
+  throw new Error("Tauri bundle.createUpdaterArtifacts must be false for v0.1.x");
 }
 if (tauriConfig.plugins?.updater !== undefined) {
-  throw new Error("Tauri plugins.updater must be absent for v0.1.0");
+  throw new Error("Tauri plugins.updater must be absent for v0.1.x");
 }
 if (desktopPackage.dependencies?.["@tauri-apps/plugin-updater"] !== undefined) {
-  throw new Error("desktop updater JS dependency must be absent for v0.1.0");
+  throw new Error("desktop updater JS dependency must be absent for v0.1.x");
 }
 assertIncludes(desktopPackage.dependencies?.["@tauri-apps/plugin-process"] ?? "", "^2.", "desktop process JS dependency");
 assertIncludes(desktopPackage.scripts?.["tauri:build"] ?? "", "scripts/build-macos-release.mjs", "desktop release script");
@@ -262,7 +262,7 @@ execFileSync("ruby", ["-c", caskPath], { stdio: "inherit" });
 for (const expected of [
   "# macOS 发布指南",
   "Homebrew cask",
-  "v0.1.0 Developer Preview 不包含运行时自动更新器",
+  "v0.1.1 Developer Preview 不包含运行时自动更新器",
   "Apple Developer 签名",
   "Apple 公证",
   "安装",
@@ -286,7 +286,7 @@ for (const expected of [
   "Developer ID Application",
   "notarytool store-credentials",
   "preflight:mac-signing",
-  "v0.1.0 Developer Preview 不包含运行时自动更新器",
+  "v0.1.1 Developer Preview 不包含运行时自动更新器",
   "codesign --verify",
   "stapler validate",
   "spctl --assess",
@@ -318,8 +318,8 @@ for (const [document, label] of [
     assertExcludes(document, obsoleteClaim, label);
   }
 }
-assertIncludes(readme, "v0.1.0 does not publish or enable a desktop runtime updater", "README v0.1 release scope");
-assertIncludes(technicalDesign, "v0.1.0 不发布或启用桌面运行时 updater", "technical design v0.1 release scope");
+assertIncludes(readme, "v0.1.1 does not publish or enable a desktop runtime updater", "README v0.1 release scope");
+assertIncludes(technicalDesign, "v0.1.1 不发布或启用桌面运行时 updater", "technical design v0.1 release scope");
 
 const fakePublicPreflight = spawnSync(
   process.execPath,

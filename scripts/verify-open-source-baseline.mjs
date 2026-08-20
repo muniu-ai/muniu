@@ -135,16 +135,22 @@ const workspaceManifests = [
     .map((name) => "packages/" + name + "/package.json")
     .filter((relativePath) => existsSync(path.join(root, relativePath)))
 ];
+const rootPackage = readJson("package.json");
+const releaseVersion = rootPackage.version;
+if (!/^0\.1\.\d+$/u.test(releaseVersion ?? "")) {
+  fail(`root package must use a v0.1.x release version, received ${String(releaseVersion)}`);
+}
 const workspaceManifestRecords = [];
 for (const manifestPath of workspaceManifests) {
   const manifest = readJson(manifestPath);
   workspaceManifestRecords.push({ path: manifestPath, license: manifest.license });
-  if (manifest.version !== "0.1.0") fail(manifestPath + " must use version 0.1.0");
-  if (manifest.private !== true) fail(manifestPath + " must remain private for v0.1.0");
+  if (manifest.version !== releaseVersion) {
+    fail(`${manifestPath} must use release version ${String(releaseVersion)}`);
+  }
+  if (manifest.private !== true) fail(manifestPath + " must remain private for v0.1.x");
   if (manifest.repository !== repository) fail(manifestPath + " has the wrong repository");
 }
 
-const rootPackage = readJson("package.json");
 if (rootPackage.packageManager !== "npm@11.10.1") fail("packageManager must be npm@11.10.1");
 if (rootPackage.engines?.node !== ">=22.19.0 <22.20.0") {
   fail("Node engine must stay within the supported 22.19.x line");
@@ -247,8 +253,9 @@ const cargoManifest = readFileSync(
   path.join(root, "apps/desktop-mac/src-tauri/Cargo.toml"),
   "utf8"
 );
-if (!/^version = "0\.1\.0"$/mu.test(cargoManifest)) {
-  fail("desktop Cargo package must use version 0.1.0");
+const cargoVersion = /^version = "([^"]+)"$/mu.exec(cargoManifest)?.[1];
+if (cargoVersion !== releaseVersion) {
+  fail(`desktop Cargo package must use release version ${String(releaseVersion)}`);
 }
 if (!/^license = "Apache-2\.0"$/mu.test(cargoManifest)) {
   fail("desktop Cargo package must declare Apache-2.0");
@@ -274,14 +281,14 @@ const tauriConfig = readJson("apps/desktop-mac/src-tauri/tauri.conf.json");
 const tauriCapabilities = readJson("apps/desktop-mac/src-tauri/capabilities/default.json");
 const desktopPackage = readJson("apps/desktop-mac/package.json");
 if (tauriConfig.bundle?.createUpdaterArtifacts !== false) {
-  fail("v0.1.0 must disable Tauri updater artifacts");
+  fail("v0.1.x must disable Tauri updater artifacts");
 }
-if (tauriConfig.plugins?.updater) fail("v0.1.0 must not configure an updater endpoint");
+if (tauriConfig.plugins?.updater) fail("v0.1.x must not configure an updater endpoint");
 if (tauriCapabilities.permissions.some((permission) => JSON.stringify(permission).includes("updater:"))) {
-  fail("v0.1.0 must not grant updater capabilities");
+  fail("v0.1.x must not grant updater capabilities");
 }
 if (desktopPackage.dependencies?.["@tauri-apps/plugin-updater"] !== undefined) {
-  fail("v0.1.0 must not depend on the Tauri updater JavaScript plugin");
+  fail("v0.1.x must not depend on the Tauri updater JavaScript plugin");
 }
 const updaterSourceFiles = [
   "apps/desktop-mac/src/App.tsx",
@@ -295,14 +302,14 @@ const updaterSourceFiles = [
 for (const sourcePath of updaterSourceFiles) {
   const text = readFileSync(path.join(root, sourcePath), "utf8");
   if (/tauri-plugin-updater|@tauri-apps\/plugin-updater|tauri_plugin_updater|updater:/u.test(text)) {
-    fail("v0.1.0 updater residue in " + sourcePath);
+    fail("v0.1.x updater residue in " + sourcePath);
   }
 }
 for (const removedPath of [
   "scripts/generate-macos-updater-manifest.mjs",
   "packaging/updater/latest.dry-run.json"
 ]) {
-  if (existsSync(path.join(root, removedPath))) fail("v0.1.0 must not ship " + removedPath);
+  if (existsSync(path.join(root, removedPath))) fail("v0.1.x must not ship " + removedPath);
 }
 
 const tracked = execFileSync(

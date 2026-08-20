@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { createSafeDeterministicPublicControlIdV1 } from "@mn/agent-protocol";
 import type {
   AgentExecutionBindingV1,
   AgentProvider,
@@ -405,10 +406,10 @@ function createExecutionBinding(input: {
   readonly task: AgentTask;
   readonly sessionId?: string;
 }): AgentExecutionBindingV1 {
-  const sessionId = input.sessionId ?? `agent-${semanticDigest({
+  const sessionId = input.sessionId ?? createSafeDeterministicPublicControlIdV1("agent", JSON.stringify({
     runId: input.runId,
     candidateId: input.candidateId
-  }).slice(0, 40)}`;
+  }));
   return Object.freeze({
     schemaVersion: 1,
     runId: input.runId,

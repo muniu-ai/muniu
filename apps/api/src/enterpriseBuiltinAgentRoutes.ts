@@ -5,6 +5,7 @@ import { posix } from "node:path";
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
+import { createSafeDeterministicPublicControlIdV1 } from "@mn/agent-protocol";
 
 import {
   executionTargets,
@@ -449,7 +450,10 @@ function expectedExecutionBindingForRun(
     schemaVersion: 1,
     runId,
     candidateId,
-    sessionId: sessionId ?? `agent-${semanticDigest({ runId, candidateId }).slice(0, 40)}`,
+    sessionId: sessionId ?? createSafeDeterministicPublicControlIdV1(
+      "agent",
+      JSON.stringify({ runId, candidateId })
+    ),
     runtimeId: target.runtimeId,
     providerId: target.providerId,
     modelId: target.modelId,

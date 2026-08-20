@@ -5,6 +5,7 @@ import test from "node:test";
 
 import {
   assertSafePublicControlIdV1,
+  createSafeDeterministicPublicControlIdV1,
   createSafeRandomPublicControlIdV1,
   isSafePublicControlIdV1
 } from "../src/index.js";
@@ -72,4 +73,41 @@ test("random public control IDs use an alphabet that cannot resemble protected n
     assert.match(value, /^message-[wxyz]{64}$/u);
     assert.equal(isSafePublicControlIdV1(value), true);
   }
+});
+
+test("deterministic public control IDs cannot resemble protected numeric material", () => {
+  const material = JSON.stringify({
+    runId: "ec3d06f8-a91c-46f0-a215-859330415eb2",
+    candidateId: "builtin-1"
+  });
+  const value = createSafeDeterministicPublicControlIdV1("agent", material);
+
+  assert.match(value, /^agent-[wxyz]{64}$/u);
+  assert.equal(isSafePublicControlIdV1(value), true);
+  assert.equal(createSafeDeterministicPublicControlIdV1("agent", material), value);
+  assert.notEqual(
+    createSafeDeterministicPublicControlIdV1("agent", `${material}-different`),
+    value
+  );
+
+  const createWithUnknownMaterial = createSafeDeterministicPublicControlIdV1 as unknown as (
+    prefix: string,
+    material: unknown
+  ) => string;
+  let coercions = 0;
+  assert.throws(
+    () => createWithUnknownMaterial("agent", {
+      [Symbol.toPrimitive]() {
+        coercions += 1;
+        return material;
+      }
+    }),
+    (error: unknown) => error instanceof TypeError
+      && error.message === "deterministic identifier material is invalid"
+  );
+  assert.equal(coercions, 0);
+  assert.throws(
+    () => createSafeDeterministicPublicControlIdV1("agent", "x".repeat(4_097)),
+    /deterministic identifier material is invalid/u
+  );
 });

@@ -1,6 +1,6 @@
 {
   "name": "@mn/cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "license": "Apache-2.0",
   "repository": "https://github.com/muniu-ai/muniu",
@@ -17,12 +17,12 @@
     "dev": "npm run build && node dist/index.js"
   },
   "dependencies": {
-    "@mn/core": "^0.1.0",
-    "@mn/executors": "^0.1.0",
-    "@mn/harness": "^0.1.0",
-    "@mn/loop": "^0.1.0",
-    "@mn/specs": "^0.1.0",
-    "@mn/worker": "^0.1.0",
+    "@mn/core": "^0.1.1",
+    "@mn/executors": "^0.1.1",
+    "@mn/harness": "^0.1.1",
+    "@mn/loop": "^0.1.1",
+    "@mn/specs": "^0.1.1",
+    "@mn/worker": "^0.1.1",
     "yaml": "^2.4.2"
   }
 }

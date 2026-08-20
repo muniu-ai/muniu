@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import {
   isMainlandMobile,
@@ -86,12 +86,29 @@ export function assertSafePublicControlIdV1(
   assertSafePublicControlStringV1(value, label, PUBLIC_CONTROL_ID_PATTERN, 128);
 }
 
-/** Generate a random structural identifier whose representation cannot form phone or identity digits. */
-export function createSafeRandomPublicControlIdV1(prefix: string): string {
-  assertSafePublicControlStringV1(prefix, "random identifier prefix", SAFE_RANDOM_PREFIX_PATTERN, 63);
-  const encoded = randomUUID().replaceAll("-", "").replace(/[0-9a-f]/gu, (character) => {
+function encodeSafeQuaternary(hex: string): string {
+  return hex.replace(/[0-9a-f]/gu, (character) => {
     const value = Number.parseInt(character, 16);
     return `${SAFE_QUATERNARY_ALPHABET[value >> 2]}${SAFE_QUATERNARY_ALPHABET[value & 3]}`;
   });
+}
+
+/** Derive a stable structural identifier without reflecting numeric or credential-like material. */
+export function createSafeDeterministicPublicControlIdV1(
+  prefix: string,
+  material: string
+): string {
+  assertSafePublicControlStringV1(prefix, "deterministic identifier prefix", SAFE_RANDOM_PREFIX_PATTERN, 63);
+  if (typeof material !== "string" || material.length === 0 || material.length > 4_096) {
+    throw new TypeError("deterministic identifier material is invalid");
+  }
+  const digest = createHash("sha256").update(material, "utf8").digest("hex").slice(0, 32);
+  return `${prefix}-${encodeSafeQuaternary(digest)}`;
+}
+
+/** Generate a random structural identifier whose representation cannot form phone or identity digits. */
+export function createSafeRandomPublicControlIdV1(prefix: string): string {
+  assertSafePublicControlStringV1(prefix, "random identifier prefix", SAFE_RANDOM_PREFIX_PATTERN, 63);
+  const encoded = encodeSafeQuaternary(randomUUID().replaceAll("-", ""));
   return `${prefix}-${encoded}`;
 }

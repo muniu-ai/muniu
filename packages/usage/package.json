@@ -1,6 +1,6 @@
 {
   "name": "@mn/usage",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "license": "Apache-2.0",
   "repository": "https://github.com/muniu-ai/muniu",
@@ -19,6 +19,6 @@
     "test": "tsc -p tsconfig.test.json && node --test dist-test/test/**/*.test.js"
   },
   "dependencies": {
-    "@mn/provider-catalog": "0.1.0"
+    "@mn/provider-catalog": "0.1.1"
   }
 }

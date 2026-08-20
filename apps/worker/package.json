@@ -1,6 +1,6 @@
 {
   "name": "@mn/worker",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "license": "Apache-2.0",
   "repository": "https://github.com/muniu-ai/muniu",
@@ -21,13 +21,14 @@
   },
   "dependencies": {
     "@kubernetes/client-node": "1.4.0",
-    "@mn/core": "0.1.0",
-    "@mn/executors": "0.1.0",
-    "@mn/harness": "0.1.0",
-    "@mn/governance": "0.1.0",
-    "@mn/loop": "0.1.0",
-    "@mn/specs": "0.1.0",
-    "@mn/verifier": "0.1.0",
+    "@mn/agent-protocol": "0.1.1",
+    "@mn/core": "0.1.1",
+    "@mn/executors": "0.1.1",
+    "@mn/harness": "0.1.1",
+    "@mn/governance": "0.1.1",
+    "@mn/loop": "0.1.1",
+    "@mn/specs": "0.1.1",
+    "@mn/verifier": "0.1.1",
     "yaml": "^2.4.2"
   }
 }

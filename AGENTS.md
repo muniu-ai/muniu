@@ -6,7 +6,7 @@ These rules apply to the whole repository unless a deeper AGENTS.md narrows them
 
 - Use Node.js 22.19.x and npm 11.10.1. Keep TypeScript exactly at 5.7.2 until an approved migration plan changes it.
 - Install from package-lock.json with npm ci. Do not commit generated dist, dist-test, target, coverage, sidecar binaries, local state, or credentials.
-- First-party workspaces remain private for v0.1.0; publishing an npm package requires a separate release review.
+- First-party workspaces remain private for v0.1.x; publishing an npm package requires a separate release review.
 
 ## Development workflow
 
