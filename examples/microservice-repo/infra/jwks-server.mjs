@@ -1,5 +1,7 @@
 import { generateKeyPairSync, randomUUID, sign } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { createServer as createSecureServer } from "node:https";
 import { pathToFileURL } from "node:url";
 
 const port = Number.parseInt(process.env.JWKS_PORT ?? "8080", 10);
@@ -221,4 +223,24 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   server.listen(port, "0.0.0.0", () => {
     console.log(`JWKS stub listening on ${port} with issuer ${issuer}`);
   });
+  const tlsCertPath = process.env.JWKS_TLS_CERT_PATH;
+  const tlsKeyPath = process.env.JWKS_TLS_KEY_PATH;
+  const tlsPort = Number.parseInt(process.env.JWKS_TLS_PORT ?? "8443", 10);
+  if ((tlsCertPath && !tlsKeyPath) || (!tlsCertPath && tlsKeyPath)) {
+    throw new TypeError("JWKS_TLS_CERT_PATH and JWKS_TLS_KEY_PATH must be configured together");
+  }
+  if (tlsCertPath && tlsKeyPath) {
+    if (!Number.isSafeInteger(tlsPort) || tlsPort < 1 || tlsPort > 65_535) {
+      throw new TypeError("JWKS_TLS_PORT must be a valid TCP port");
+    }
+    const handler = server.listeners("request")[0];
+    if (typeof handler !== "function") throw new Error("fixture request handler is unavailable");
+    const secureServer = createSecureServer({
+      cert: readFileSync(tlsCertPath),
+      key: readFileSync(tlsKeyPath)
+    }, handler);
+    secureServer.listen(tlsPort, "0.0.0.0", () => {
+      console.log(`Model fixture TLS endpoint listening on ${tlsPort}`);
+    });
+  }
 }

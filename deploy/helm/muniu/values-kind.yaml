@@ -5,6 +5,10 @@ image:
 
 api:
   replicas: 1
+  trustedCa:
+    existingSecret: muniu-kind-fixture-tls
+    key: tls.crt
+    mountPath: /etc/muniu/fixture-model-ca
 
 worker:
   enabled: false
@@ -46,6 +50,7 @@ networkPolicy:
         - { protocol: TCP, port: 5432 }
         - { protocol: TCP, port: 9000 }
         - { protocol: TCP, port: 8080 }
+        - { protocol: TCP, port: 8443 }
 
 postgres:
   existingSecret: muniu-postgres
@@ -79,3 +84,6 @@ sandbox:
     create: false
     existingClaim: muniu-kind-sandboxes
     mountPath: /work/sandboxes
+
+extraEnv:
+  - { name: NODE_EXTRA_CA_CERTS, value: /etc/muniu/fixture-model-ca/ca.crt }

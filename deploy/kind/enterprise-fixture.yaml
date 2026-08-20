@@ -229,7 +229,12 @@ spec:
             - { name: JWKS_ISSUER, value: http://muniu-kind-fixture:8080 }
             - { name: JWKS_AUDIENCE, value: muniu-kind }
             - { name: JWKS_TOKEN_TTL_SECONDS, value: "1800" }
-          ports: [{ name: http, containerPort: 8080 }]
+            - { name: JWKS_TLS_PORT, value: "8443" }
+            - { name: JWKS_TLS_CERT_PATH, value: /etc/muniu/fixture-tls/tls.crt }
+            - { name: JWKS_TLS_KEY_PATH, value: /etc/muniu/fixture-tls/tls.key }
+          ports:
+            - { name: http, containerPort: 8080 }
+            - { name: model-tls, containerPort: 8443 }
           readinessProbe:
             httpGet: { path: /health, port: http }
             periodSeconds: 2
@@ -237,8 +242,13 @@ spec:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities: { drop: [ALL] }
-          volumeMounts: [{ name: tmp, mountPath: /tmp }]
-      volumes: [{ name: tmp, emptyDir: {} }]
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+            - { name: fixture-tls, mountPath: /etc/muniu/fixture-tls, readOnly: true }
+      volumes:
+        - { name: tmp, emptyDir: {} }
+        - name: fixture-tls
+          secret: { secretName: muniu-kind-fixture-tls }
 ---
 apiVersion: v1
 kind: Service
@@ -247,7 +257,9 @@ metadata:
   namespace: muniu-kind
 spec:
   selector: { app: muniu-kind-fixture }
-  ports: [{ name: http, port: 8080, targetPort: http }]
+  ports:
+    - { name: http, port: 8080, targetPort: http }
+    - { name: model-tls, port: 8443, targetPort: model-tls }
 ---
 apiVersion: batch/v1
 kind: Job

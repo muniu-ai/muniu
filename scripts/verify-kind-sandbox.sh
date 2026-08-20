@@ -248,6 +248,18 @@ kubectl -n kube-system rollout status daemonset/calico-node --timeout=300s || {
 kubectl -n kube-system rollout status deployment/calico-kube-controllers --timeout=300s
 kubectl wait --for=condition=Ready node --all --timeout=300s
 kubectl create namespace muniu-kind
+fixture_state_dir="$(mktemp -d)"
+chmod 0777 "${fixture_state_dir}"
+openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 3650 \
+  -subj "/CN=muniu-kind-fixture" \
+  -addext "subjectAltName=DNS:muniu-kind-fixture,DNS:muniu-kind-fixture.muniu-kind.svc,DNS:localhost,IP:127.0.0.1" \
+  -addext "basicConstraints=critical,CA:TRUE" \
+  -addext "keyUsage=critical,digitalSignature,keyEncipherment,keyCertSign" \
+  -keyout "${fixture_state_dir}/tls.key" \
+  -out "${fixture_state_dir}/tls.crt" >/dev/null 2>&1
+kubectl -n muniu-kind create secret tls muniu-kind-fixture-tls \
+  --cert="${fixture_state_dir}/tls.crt" \
+  --key="${fixture_state_dir}/tls.key"
 kubectl -n muniu-kind create configmap muniu-kind-image \
   --from-literal="digest=${image_digest}" \
   --from-literal="reference=${registry_image}"
@@ -287,8 +299,6 @@ helm upgrade --install muniu deploy/helm/muniu \
   }
 kubectl -n muniu-kind rollout status deployment/muniu-api --timeout=180s
 
-fixture_state_dir="$(mktemp -d)"
-chmod 0777 "${fixture_state_dir}"
 start_port_forward service/muniu 57318:80 "${fixture_state_dir}/api-port-forward.log"
 api_port_forward_pid="${last_port_forward_pid}"
 start_port_forward service/muniu-kind-fixture 58080:8080 "${fixture_state_dir}/fixture-port-forward.log"

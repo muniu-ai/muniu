@@ -4,6 +4,11 @@ This chart deploys production API replicas, a pre-install migration Job,
 Service/Ingress, HPA, PDB, default-deny NetworkPolicies, and non-root,
 read-only containers. PostgreSQL, S3, OIDC, OTLP and Vault/KMS are external
 standard adapters configured through values and existing Secrets.
+For an internal model endpoint signed by a private CA, configure
+`api.trustedCa.existingSecret` and `api.trustedCa.key`, then point
+`NODE_EXTRA_CA_CERTS` at `<api.trustedCa.mountPath>/ca.crt` through `extraEnv`.
+Only a Secret-backed CA volume is accepted; this setting cannot inject an
+arbitrary volume or `hostPath`.
 
 This chart deliberately supports only `sandbox.driver=kubernetes`. Running a
 Docker daemon through an in-cluster `hostPath` would break the isolation model,

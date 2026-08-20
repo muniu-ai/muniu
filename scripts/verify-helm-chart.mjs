@@ -138,6 +138,9 @@ for (const required of [
   "name: muniu-postgres",
   "http://muniu-kind-minio:9000",
   "http://muniu-kind-fixture:8080",
+  "NODE_EXTRA_CA_CERTS",
+  "secretName: muniu-kind-fixture-tls",
+  "port: 8443",
   "claimName: muniu-kind-sandboxes",
   "cidr: 172.18.0.2/32",
   "port: 6443"

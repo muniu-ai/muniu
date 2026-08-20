@@ -73,7 +73,7 @@ async function bootstrap() {
     name: "Kind deterministic builtin model",
     kind: "openai_compatible",
     apiFormat: "openai_responses",
-    baseUrl: "http://muniu-kind-fixture:8080/v1",
+    baseUrl: "https://muniu-kind-fixture:8443/v1",
     defaultModel: "kind-deterministic-model",
     modelCatalog: [{ id: "kind-deterministic-model", displayName: "Kind deterministic model" }],
     enabled: true,
