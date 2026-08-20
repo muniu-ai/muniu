@@ -15,7 +15,11 @@ import {
 } from "@mn/core";
 import type { GovernanceSnapshot } from "@mn/governance";
 import type { HarnessManifest } from "@mn/harness";
-import { sha256Canonical, type GovernedRunState } from "@mn/loop";
+import {
+  GovernedLoopInterruptionError,
+  sha256Canonical,
+  type GovernedRunState
+} from "@mn/loop";
 import { digestSpecRevision, type SpecRevision } from "@mn/specs";
 import { BuiltinAgentExecutor, type BuiltinAgentExecutionInput } from "@mn/executors";
 import {
@@ -396,6 +400,41 @@ test("governed resume binds an interrupted verification to explicit empty eviden
     "interrupted"
   );
   assert.equal(result.state.status, "waiting_approval");
+});
+
+test("governed Gate publication loss preserves the running verification checkpoint", async (t) => {
+  const { root, workspaces } = await fixture(t);
+  const spec = approvedSpec();
+  const { governance, harness } = bindings(spec, ["unit_test"]);
+  const executor = new RepairingExecutor(false);
+  let captured: GovernedRunState | undefined;
+  const orchestrator = new GovernedRunOrchestrator({
+    workspaceRoot: workspaces,
+    executors: { claude: executor, codex: executor },
+    resolveSpecRevision: () => spec,
+    artifactPublisher: async () => {
+      throw new Error("owner API disappeared while registering Gate bytes");
+    },
+    onLoopCheckpoint: (checkpoint) => {
+      captured = checkpoint;
+    }
+  });
+
+  await assert.rejects(
+    orchestrator.run(
+      project(root),
+      task(spec),
+      baseRun(spec, governance, harness)
+    ),
+    (error) => {
+      assert.ok(error instanceof GovernedLoopInterruptionError);
+      assert.match(error.message, /Gate evidence was interrupted/u);
+      assert.match(error.cause instanceof Error ? error.cause.message : "", /owner API disappeared/u);
+      return true;
+    }
+  );
+  assert.equal(captured?.attempts.at(-1)?.stage, "verification");
+  assert.equal(captured?.attempts.at(-1)?.status, "running");
 });
 
 test("builtin governed execution repairs in one durable embedded session without external CLIs", async (t) => {

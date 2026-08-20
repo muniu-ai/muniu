@@ -12,6 +12,7 @@ import type {
 import type { AgentExecutor } from "@mn/executors";
 import {
   executeGovernedIncrement,
+  GovernedLoopInterruptionError,
   sha256Canonical,
   type ApprovalDecision,
   type GovernedRunState,
@@ -510,32 +511,16 @@ export class GovernedRunOrchestrator {
             : undefined;
         } catch (error) {
           const reason = error instanceof Error ? error.message : String(error);
-          const semantic = {
-            winnerCandidateId: candidateRun.winnerCandidateId ?? null,
-            error: reason
-          };
-          const artifact = loopArtifact(
-            baseRun.id,
-            `verification-${context.attempt}`,
-            "verification_evidence",
-            semantic
+          // A Gate plan returns a typed result for ordinary test, policy and
+          // tool failures. Reaching this catch means command transport or
+          // evidence publication failed before the result became durable.
+          // Preserve the running checkpoint so a new claim can recover it;
+          // recording an empty semantic failure would be unverifiable by the
+          // API authority and could consume the repair budget incorrectly.
+          throw new GovernedLoopInterruptionError(
+            `Governed Gate evidence was interrupted before it became durable: ${reason}`,
+            { cause: error }
           );
-          bindVerificationEvidence(
-            verificationEvidence,
-            `${baseRun.id}:verification:${context.attempt}`,
-            []
-          );
-          return {
-            status: "failed",
-            artifacts: [artifact],
-            failure: {
-              kind: "stage_failure",
-              retryable: true,
-              reason: `Governed Gate execution failed closed: ${reason}`
-            },
-            failureSignature: sha256Canonical(semantic),
-            diffDigest: latestDiffDigest
-          };
         }
         latestGateResults = verification?.results ?? [];
         allGateResults.push(...latestGateResults);

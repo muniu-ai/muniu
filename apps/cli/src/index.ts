@@ -51,6 +51,7 @@ import { parse as parseYaml } from "yaml";
 import { agentCommand } from "./agent-commands.js";
 import { runEnterpriseBuiltinAgentCandidate as runRemoteEnterpriseBuiltinAgentCandidate } from "./enterprise-builtin-runner.js";
 import { pluginCommand, profileCommand } from "./runtime-commands.js";
+import { SerializedWorkerPostQueue } from "./serialized-worker-posts.js";
 
 const defaultApiUrl = "http://127.0.0.1:7318";
 const execFileAsync = promisify(execFile);
@@ -2320,9 +2321,9 @@ async function runClaimedJob(
   }, Math.max(1_000, Math.floor(options.ttlMs / 2)));
   heartbeat.unref?.();
 
-  let updateChain = Promise.resolve();
+  const workerPosts = new SerializedWorkerPostQueue();
   const enqueueWorkerPost = (path: string, body: unknown): void => {
-    updateChain = updateChain.then(async () => {
+    workerPosts.enqueue(async () => {
       await postJson(path, body);
     });
   };
@@ -2367,7 +2368,7 @@ async function runClaimedJob(
       resumeFrom: run,
       abortSignal: abortController.signal
     });
-    await updateChain;
+    await workerPosts.drain();
     if (heartbeatError) throw heartbeatError;
     const result = await postJson(
       `/v1/run-jobs/queue/${encodeURIComponent(item.runId)}/finish`,
@@ -2382,7 +2383,7 @@ async function runClaimedJob(
     console.log(JSON.stringify(result, null, 2));
   } catch (error) {
     abortController.abort();
-    await updateChain.catch(() => undefined);
+    await workerPosts.drain().catch(() => undefined);
     const cause = nestedErrorCauseSummary(error);
     if (cause) console.error(`[mn enterprise worker cause] ${cause}`);
     await postJson(`/v1/run-jobs/queue/${encodeURIComponent(item.runId)}/release`, {
@@ -2441,7 +2442,7 @@ async function runEnterpriseClaimedJob(
 
   let backend: DockerEnforcedSandboxBackend | KubernetesSandboxPodBackend | undefined;
   let leaseId: string | undefined;
-  let updateChain = Promise.resolve();
+  const workerPosts = new SerializedWorkerPostQueue();
   try {
     const runtimeProofAuthority = async ({
       attestation: issued,
@@ -2538,7 +2539,7 @@ async function runEnterpriseClaimedJob(
     let latestRun: RunRecord | undefined;
 
     const enqueueWorkerPost = (path: string, body: unknown): void => {
-      updateChain = updateChain.then(async () => {
+      workerPosts.enqueue(async () => {
         await postJson(path, body);
       });
     };
@@ -2568,7 +2569,7 @@ async function runEnterpriseClaimedJob(
     const measureBudgetDelta: LoopBudgetMeasurer = async (request) => {
       // A stage's running checkpoint must become durable before the API can
       // issue a measurement bound to that exact attempt.
-      await updateChain;
+      await workerPosts.drain();
       const response = await postJson<{
         measurement: Awaited<ReturnType<LoopBudgetMeasurer>>;
       }>(`/v1/run-jobs/queue/${encodeURIComponent(item.runId)}/measurements`, {
@@ -2695,7 +2696,7 @@ async function runEnterpriseClaimedJob(
       ...(approvalDecision ? { approvalDecision } : {}),
       abortSignal: abortController.signal
     });
-    await updateChain;
+    await workerPosts.drain();
     if (heartbeatError) throw heartbeatError;
     if (
       budgetStop &&
@@ -2758,7 +2759,7 @@ async function runEnterpriseClaimedJob(
     );
   } catch (error) {
     abortController.abort();
-    await updateChain.catch(() => undefined);
+    await workerPosts.drain().catch(() => undefined);
     // A server budget stop intentionally does not renew the lease. Releasing
     // it would make an over-budget job claimable again. Normal transport or
     // execution failures retain the classic release/retry behavior.
