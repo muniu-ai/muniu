@@ -18,10 +18,13 @@ import {
 } from "@mn/agent-llm";
 import {
   snapshotEffectPolicyBindingV1,
+  snapshotBoundedJsonValue,
   type CandidateId,
+  type ContentBlock,
   type EffectPolicyBindingV1,
   type RunId,
-  type SessionId
+  type SessionId,
+  type ModelImageInput
 } from "@mn/agent-protocol";
 import {
   InMemoryAgentSessionStore,
@@ -50,6 +53,8 @@ export interface AgentHostRunInput {
   readonly cwd?: string;
   readonly labels?: Record<string, string>;
   readonly prompt: string;
+  readonly userContent?: readonly ContentBlock[];
+  readonly imageInputs?: readonly ModelImageInput[];
   readonly provider: string;
   readonly model: string;
   readonly signal?: AbortSignal;
@@ -86,6 +91,8 @@ interface AgentHostRunInputSnapshot {
   readonly mode: "create" | "open";
   readonly creation: CreateAgentSessionOptionsSnapshot;
   readonly prompt: string;
+  readonly userContent?: readonly ContentBlock[];
+  readonly imageInputs?: readonly ModelImageInput[];
   readonly provider: string;
   readonly model: string;
   readonly signal?: AbortSignal;
@@ -105,6 +112,8 @@ const EVENT_TARGET_REMOVE = EventTarget.prototype.removeEventListener;
 const RESUME_INPUT_KEYS = new Set([
   "sessionId",
   "prompt",
+  "userContent",
+  "imageInputs",
   "provider",
   "model",
   "signal",
@@ -131,6 +140,12 @@ function snapshotAgentHostRunInput(input: AgentHostRunInput): AgentHostRunInputS
   const runId = input.runId;
   const candidateId = input.candidateId;
   const effectPolicyBinding = input.effectPolicyBinding;
+  const userContent = input.userContent === undefined
+    ? undefined
+    : snapshotBoundedJsonValue(input.userContent) as unknown as ContentBlock[];
+  const imageInputs = input.imageInputs === undefined
+    ? undefined
+    : snapshotBoundedJsonValue(input.imageInputs) as unknown as ModelImageInput[];
   const creation = snapshotCreateAgentSessionOptions({ sessionId, cwd, labels });
   const fixedEffectPolicyBinding = effectPolicyBinding === undefined
     ? undefined
@@ -139,6 +154,8 @@ function snapshotAgentHostRunInput(input: AgentHostRunInput): AgentHostRunInputS
     mode: "create" as const,
     creation,
     prompt,
+    ...(userContent === undefined ? {} : { userContent }),
+    ...(imageInputs === undefined ? {} : { imageInputs }),
     provider,
     model,
     ...(signal === undefined ? {} : { signal }),
@@ -192,10 +209,22 @@ function snapshotAgentHostResumeInput(input: AgentHostResumeInput): AgentHostRun
   const effectPolicyBinding = values.effectPolicyBinding === undefined
     ? undefined
     : snapshotEffectPolicyBindingV1(values.effectPolicyBinding as EffectPolicyBindingV1);
+  const userContent = values.userContent === undefined
+    ? undefined
+    : snapshotBoundedJsonValue(values.userContent) as unknown as ContentBlock[];
+  const imageInputs = values.imageInputs === undefined
+    ? undefined
+    : snapshotBoundedJsonValue(values.imageInputs) as unknown as ModelImageInput[];
+  if (userContent !== undefined && !Array.isArray(userContent)
+    || imageInputs !== undefined && !Array.isArray(imageInputs)) {
+    throw new TypeError("agent host multimodal input is invalid");
+  }
   return Object.freeze({
     mode: "open" as const,
     creation: snapshotCreateAgentSessionOptions({ sessionId: sessionId as SessionId }),
     prompt,
+    ...(userContent === undefined ? {} : { userContent }),
+    ...(imageInputs === undefined ? {} : { imageInputs }),
     provider,
     model,
     ...(signal === undefined ? {} : { signal: signal as AbortSignal }),
@@ -420,6 +449,8 @@ export class AgentHost {
       agentId: "builtin",
       session,
       prompt: input.prompt,
+      ...(input.userContent === undefined ? {} : { userContent: input.userContent }),
+      ...(input.imageInputs === undefined ? {} : { imageInputs: input.imageInputs }),
       provider: input.provider,
       model: input.model,
       signal,

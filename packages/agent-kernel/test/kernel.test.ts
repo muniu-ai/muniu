@@ -93,6 +93,15 @@ test("builtin kernel closes cancellation and step/tool budget boundaries", async
   cancelledLlm.register({
     id: "cancel",
     async *stream() {
+      yield { type: "thinking-delta" as const, index: 0, text: "partial thought" };
+      yield { type: "text-delta" as const, index: 1, text: "partial answer" };
+      yield {
+        type: "tool-call-delta" as const,
+        index: 2,
+        id: CallId("cancelled-call"),
+        name: "act",
+        argumentsDelta: "{"
+      };
       cancelledController.abort();
       yield { type: "text-delta" as const, index: 0, text: "late" };
     }
@@ -109,6 +118,15 @@ test("builtin kernel closes cancellation and step/tool budget boundaries", async
     signal: cancelledController.signal
   });
   assert.equal(cancelled.reason, "cancelled");
+  const interrupted = cancelledSession.runtimeMessages().find((message) => message.role === "assistant");
+  assert.deepEqual(
+    interrupted?.content,
+    [
+      { type: "thinking", text: "partial thought" },
+      { type: "text", text: "partial answer" }
+    ]
+  );
+  assert.equal(JSON.stringify(cancelledSession.events).includes("cancelled-call"), false);
   assert.deepEqual(cancelledSession.events.slice(-2).map((event) => event.type), ["step/end", "turn/end"]);
 
   let stepCalls = 0;
@@ -140,6 +158,98 @@ test("builtin kernel closes cancellation and step/tool budget boundaries", async
   assert.equal(toolResult.reason, "budget-exceeded");
   assert.equal(toolCalls, 0);
   assert.equal(toolSession.events.some((event) => event.type === "tool/result"), true);
+});
+
+test("cancelled prefixes are projected once while whitespace and provider errors add no prefix", async () => {
+  const controller = new AbortController();
+  const observedHistories: string[][] = [];
+  let invocation = 0;
+  const llm = new LlmRuntime();
+  llm.register({
+    id: "cancel-follow-up",
+    async *stream(request) {
+      invocation += 1;
+      observedHistories.push(request.messages.flatMap((message) =>
+        message.content.flatMap((block) => block.type === "text" ? [block.text] : [])));
+      if (invocation === 1) {
+        yield { type: "text-delta" as const, index: 0, text: "kept exactly once" };
+        controller.abort();
+        yield { type: "text-delta" as const, index: 0, text: "late" };
+        return;
+      }
+      yield { type: "text-delta" as const, index: 0, text: "follow-up answer" };
+      yield { type: "finish" as const, reason: "stop" as const };
+    }
+  });
+  llm.seal();
+  const tools = new ToolRegistry({ authorize: async () => ({ decision: "deny" }) });
+  tools.seal();
+  const session = await new InMemoryAgentSessionStore().create({ sessionId: SessionId("cancel-follow-up") });
+  const kernel = createBuiltinAgentKernel({ llm, tools, systemPrompt: new StaticSystemPrompt([]) });
+
+  const first = await kernel.run({
+    session,
+    prompt: "first",
+    provider: "cancel-follow-up",
+    model: "scripted",
+    signal: controller.signal
+  });
+  assert.equal(first.reason, "cancelled");
+  const second = await kernel.run({
+    session,
+    prompt: "second",
+    provider: "cancel-follow-up",
+    model: "scripted"
+  });
+  assert.equal(second.reason, "completed");
+  assert.equal(observedHistories[1]?.filter((text) => text === "kept exactly once").length, 1);
+  assert.equal(session.runtimeMessages().filter((message) => message.role === "assistant"
+    && message.content.some((block) =>
+      block.type === "text" && block.text === "kept exactly once")).length, 1);
+
+  const whitespaceController = new AbortController();
+  const whitespaceLlm = new LlmRuntime();
+  whitespaceLlm.register({
+    id: "cancel-whitespace",
+    async *stream() {
+      yield { type: "text-delta" as const, index: 0, text: " \n\t" };
+      whitespaceController.abort();
+      yield { type: "finish" as const, reason: "cancelled" as const };
+    }
+  });
+  whitespaceLlm.seal();
+  const whitespaceSession = await new InMemoryAgentSessionStore().create({
+    sessionId: SessionId("cancel-whitespace")
+  });
+  await createBuiltinAgentKernel({
+    llm: whitespaceLlm,
+    tools,
+    systemPrompt: new StaticSystemPrompt([])
+  }).run({
+    session: whitespaceSession,
+    prompt: "blank",
+    provider: "cancel-whitespace",
+    model: "scripted",
+    signal: whitespaceController.signal
+  });
+  assert.equal(whitespaceSession.events.some((event) => event.type === "assistant/message"), false);
+
+  const errorLlm = new LlmRuntime();
+  errorLlm.register(new ScriptedLlmAdapter("provider-error", [[
+    { type: "text-delta", index: 0, text: "provider prefix" },
+    { type: "error", error: { code: "UPSTREAM", message: "provider failed" } },
+    { type: "finish", reason: "error" }
+  ]]));
+  errorLlm.seal();
+  const errorSession = await new InMemoryAgentSessionStore().create({ sessionId: SessionId("provider-error") });
+  const errorResult = await createBuiltinAgentKernel({
+    llm: errorLlm,
+    tools,
+    systemPrompt: new StaticSystemPrompt([])
+  }).run({ session: errorSession, prompt: "fail", provider: "provider-error", model: "scripted" });
+  assert.equal(errorResult.reason, "error");
+  assert.equal(errorSession.events.filter((event) => event.type === "assistant/message").length, 1);
+  assert.equal(errorSession.events.at(-1)?.type, "turn/end");
 });
 
 test("AgentKernel routes only registered static executors", async () => {

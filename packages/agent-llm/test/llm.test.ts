@@ -76,6 +76,47 @@ test("assembler records errors and drops an incomplete tool call at max tokens",
   assert.deepEqual(assembler.error, { code: "UPSTREAM", message: "provider stopped" });
 });
 
+test("assembler snapshots only nonblank text and thinking blocks for interruption", () => {
+  const assembler = new BlockAssembler();
+  assembler.push({ type: "text-delta", index: 0, text: "  visible prefix  " });
+  assembler.push({ type: "thinking-delta", index: 1, text: "reasoning prefix" });
+  assembler.push({ type: "text-delta", index: 2, text: " \n\t " });
+  assembler.push({
+    type: "tool-call-delta",
+    index: 3,
+    id: CallId("interrupted-call"),
+    name: "write",
+    argumentsDelta: "{"
+  });
+  assembler.push({
+    type: "block-end",
+    index: 4,
+    block: { type: "tool-call", id: CallId("complete-call"), name: "read", arguments: "{}" }
+  });
+
+  const blocks = assembler.interruptedBlocks();
+  assert.deepEqual(blocks, [
+    { type: "text", text: "  visible prefix  " },
+    { type: "thinking", text: "reasoning prefix" }
+  ]);
+  assert.equal(Object.isFrozen(blocks), true);
+  assert.equal(Object.isFrozen(blocks[0]), true);
+  assert.throws(() => { (blocks[0] as { text: string }).text = "mutated"; }, TypeError);
+});
+
+test("assembler interruption snapshot is empty for whitespace and tool calls", () => {
+  const assembler = new BlockAssembler();
+  assembler.push({ type: "thinking-delta", index: 0, text: "\n" });
+  assembler.push({
+    type: "tool-call-delta",
+    index: 1,
+    id: CallId("only-call"),
+    name: "read",
+    argumentsDelta: "{}"
+  });
+  assert.deepEqual(assembler.interruptedBlocks(), []);
+});
+
 test("assembler snapshots and freezes block, usage, and error push boundaries", () => {
   const assembler = new BlockAssembler();
   const block = { type: "text" as const, text: "stable" };

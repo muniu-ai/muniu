@@ -4,8 +4,9 @@ Copyright 2026 Muniu contributors
 This product includes software developed by Muniu contributors.
 
 Selected source files are copied or adapted from DeepSeek Harness
-(https://github.com/deepseek-ai/deepseek-harness) at commit
-47f943859bef60e4160492346772ded9b24f765a.
+(https://github.com/deepseek-ai/deepseek-harness) at the per-file fixed commits
+47f943859bef60e4160492346772ded9b24f765a and
+141eb6fef83422698aef7a981029e843e8161534 recorded in the provenance manifest.
 Copyright (c) 2026 DeepSeek. Licensed under the MIT License.
 
 The private Cordis framework workspaces under vendor/ are copied from

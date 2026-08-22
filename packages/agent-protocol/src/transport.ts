@@ -8,6 +8,7 @@ import { isSafePublicControlIdV1 } from "./public-control.js";
 import type { AgentApprovalDecisionV1 } from "./session-payload.js";
 
 export const AGENT_SESSION_TRANSPORT_VERSION_V1 = 1 as const;
+export const AGENT_SESSION_TRANSPORT_VERSION_V2 = 2 as const;
 
 export type AgentSessionViewStateV1 =
   | "idle"
@@ -34,6 +35,45 @@ export interface AgentMessageRequestV1 {
   readonly kind: "agent-message-request";
   readonly clientRequestId: string;
   readonly prompt: string;
+}
+
+export interface AgentSessionCreateRequestV2 {
+  readonly schemaVersion: 2;
+  readonly kind: "agent-session-create-request";
+  readonly clientRequestId: string;
+  readonly modelBinding: AgentModelBindingV1;
+  readonly cwd?: string;
+  readonly labels?: Readonly<Record<string, string>>;
+}
+
+export interface AgentMessageRequestV2 {
+  readonly schemaVersion: 2;
+  readonly kind: "agent-message-request";
+  readonly clientRequestId: string;
+  readonly prompt: string;
+  readonly attachmentIds?: readonly string[];
+}
+
+export interface AgentAttachmentUploadRequestV1 {
+  readonly schemaVersion: 1;
+  readonly kind: "agent-attachment-upload-request";
+  readonly clientRequestId: string;
+  readonly contentType: "image/png" | "image/jpeg" | "image/webp";
+  readonly dataBase64: string;
+  readonly sha256: string;
+  readonly byteLength: number;
+}
+
+export interface AgentSessionViewV2 {
+  readonly schemaVersion: 2;
+  readonly kind: "agent-session-view";
+  readonly sessionId: string;
+  readonly state: AgentSessionViewStateV1;
+  readonly modelBinding: AgentModelBindingV1;
+  readonly eventCursor: {
+    readonly lastSeq: number;
+    readonly lastDigest: string;
+  };
 }
 
 export interface AgentSessionControlRequestV1 {
@@ -115,6 +155,10 @@ const MAX_LABEL_VALUE_LENGTH = 16_384;
 const MAX_PROMPT_LENGTH = 1_000_000;
 const MAX_TRANSPORT_CODE_UNITS = 1_048_576;
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
+// Transport safety ceiling only. The effective product limit is deployment
+// configuration in the Agent service (20 by default).
+const MAX_ATTACHMENTS_PER_MESSAGE = 256;
+const MAX_ATTACHMENT_BASE64_CODE_UNITS = 5_000_000;
 
 function exactDataRecord(
   value: unknown,
@@ -226,6 +270,107 @@ export function inspectAgentMessageRequestV1(value: unknown): AgentMessageReques
     kind: "agent-message-request",
     clientRequestId: record.clientRequestId,
     prompt: record.prompt
+  });
+}
+
+export function inspectAgentSessionCreateRequestV2(value: unknown): AgentSessionCreateRequestV2 | undefined {
+  const record = exactDataRecord(
+    value,
+    ["schemaVersion", "kind", "clientRequestId", "modelBinding"],
+    ["cwd", "labels"]
+  );
+  if (record === undefined || record.schemaVersion !== AGENT_SESSION_TRANSPORT_VERSION_V2
+    || record.kind !== "agent-session-create-request"
+    || !inspectClientRequestId(record.clientRequestId)) return undefined;
+  const modelBinding = inspectAgentModelBindingV1(record.modelBinding);
+  if (modelBinding === undefined
+    || record.cwd !== undefined
+      && (typeof record.cwd !== "string" || record.cwd.length > MAX_CWD_LENGTH)) return undefined;
+  const labels = record.labels === undefined ? undefined : inspectLabels(record.labels);
+  if (record.labels !== undefined && labels === undefined) return undefined;
+  let codeUnits = (record.cwd as string | undefined)?.length ?? 0;
+  if (labels !== undefined) {
+    for (const [key, label] of Object.entries(labels)) codeUnits += key.length + label.length;
+  }
+  if (codeUnits > MAX_TRANSPORT_CODE_UNITS) return undefined;
+  return deepFreeze({
+    schemaVersion: 2,
+    kind: "agent-session-create-request",
+    clientRequestId: record.clientRequestId,
+    modelBinding,
+    ...(record.cwd === undefined ? {} : { cwd: record.cwd as string }),
+    ...(labels === undefined ? {} : { labels })
+  });
+}
+
+export function inspectAgentMessageRequestV2(value: unknown): AgentMessageRequestV2 | undefined {
+  const record = exactDataRecord(
+    value,
+    ["schemaVersion", "kind", "clientRequestId", "prompt"],
+    ["attachmentIds"]
+  );
+  if (record === undefined || record.schemaVersion !== AGENT_SESSION_TRANSPORT_VERSION_V2
+    || record.kind !== "agent-message-request"
+    || !inspectClientRequestId(record.clientRequestId)
+    || typeof record.prompt !== "string"
+    || record.prompt.length > MAX_PROMPT_LENGTH) return undefined;
+  let attachmentIds: string[] | undefined;
+  if (record.attachmentIds !== undefined) {
+    if (!Array.isArray(record.attachmentIds)
+      || record.attachmentIds.length === 0
+      || record.attachmentIds.length > MAX_ATTACHMENTS_PER_MESSAGE) return undefined;
+    attachmentIds = [];
+    const seen = new Set<string>();
+    for (const attachmentId of record.attachmentIds) {
+      if (!isSafePublicControlIdV1(attachmentId) || seen.has(attachmentId)) return undefined;
+      seen.add(attachmentId);
+      attachmentIds.push(attachmentId);
+    }
+  }
+  if (record.prompt.length === 0 && attachmentIds === undefined) return undefined;
+  return deepFreeze({
+    schemaVersion: 2,
+    kind: "agent-message-request",
+    clientRequestId: record.clientRequestId,
+    prompt: record.prompt,
+    ...(attachmentIds === undefined ? {} : { attachmentIds })
+  });
+}
+
+export function inspectAgentAttachmentUploadRequestV1(
+  value: unknown
+): AgentAttachmentUploadRequestV1 | undefined {
+  const record = exactDataRecord(value, [
+    "schemaVersion",
+    "kind",
+    "clientRequestId",
+    "contentType",
+    "dataBase64",
+    "sha256",
+    "byteLength"
+  ]);
+  if (record === undefined || record.schemaVersion !== 1
+    || record.kind !== "agent-attachment-upload-request"
+    || !inspectClientRequestId(record.clientRequestId)
+    || record.contentType !== "image/png"
+      && record.contentType !== "image/jpeg"
+      && record.contentType !== "image/webp"
+    || typeof record.dataBase64 !== "string"
+    || record.dataBase64.length === 0
+    || record.dataBase64.length > MAX_ATTACHMENT_BASE64_CODE_UNITS
+    || record.dataBase64.length % 4 !== 0
+    || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(record.dataBase64)
+    || typeof record.sha256 !== "string" || !DIGEST_PATTERN.test(record.sha256)
+    || typeof record.byteLength !== "number" || !Number.isSafeInteger(record.byteLength)
+    || record.byteLength <= 0) return undefined;
+  return deepFreeze({
+    schemaVersion: 1,
+    kind: "agent-attachment-upload-request",
+    clientRequestId: record.clientRequestId,
+    contentType: record.contentType,
+    dataBase64: record.dataBase64,
+    sha256: record.sha256,
+    byteLength: record.byteLength
   });
 }
 

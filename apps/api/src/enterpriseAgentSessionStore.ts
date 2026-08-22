@@ -4,21 +4,23 @@ import { createHash } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import {
   AGENT_SESSION_PROTECTION_PROFILE_V1,
+  AGENT_SESSION_PROTECTION_PROFILE_V2,
   PROTECTION_POLICY_DIGEST_V1,
   SessionId,
   deepFreeze,
   inspectAgentModelBindingV1,
   isAgentSessionEventV1,
+  isAgentSessionEventV2,
   isCanonicalRfc3339,
   isProtectedTextV1,
-  type AgentSessionEventPayloadMapV1,
-  type AgentSessionEventTypeV1,
-  type AgentSessionEventV1
+  type AgentSessionEvent,
+  type AgentSessionEventPayloadMap,
+  type AgentSessionEventType
 } from "@mn/agent-protocol";
 import {
   AgentSessionNotFoundError,
   RemoteAgentSessionStore,
-  type AgentSessionHeaderV1,
+  type AgentSessionHeader,
   type RemoteAgentSessionBackend,
   type RemoteAgentSessionSnapshot
 } from "@mn/agent-session";
@@ -34,21 +36,21 @@ interface EnterpriseAgentSessionBackendOptions {
 
 interface EventEnvelope {
   readonly schemaVersion: 1;
-  readonly event: AgentSessionEventV1;
-  readonly runtimePayload: AgentSessionEventPayloadMapV1[AgentSessionEventTypeV1];
+  readonly event: AgentSessionEvent;
+  readonly runtimePayload: AgentSessionEventPayloadMap[AgentSessionEventType];
 }
 
 function sha256(bytes: Buffer | string): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-function objectKey(prefix: string, sessionId: string, event: AgentSessionEventV1): string {
+function objectKey(prefix: string, sessionId: string, event: AgentSessionEvent): string {
   return [prefix, "agent-sessions", sessionId, "events", `${String(event.seq).padStart(12, "0")}-${event.digest}.json`]
     .filter(Boolean)
     .join("/");
 }
 
-function validateHeader(value: unknown, sessionId: string): AgentSessionHeaderV1 {
+function validateHeader(value: unknown, sessionId: string): AgentSessionHeader {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid enterprise session header");
   const header = value as Record<string, unknown>;
   const allowed = new Set([
@@ -61,16 +63,18 @@ function validateHeader(value: unknown, sessionId: string): AgentSessionHeaderV1
     "modelBinding"
   ]);
   if (Object.keys(header).some((key) => !allowed.has(key))
-    || header.schemaVersion !== 1
+    || header.schemaVersion !== 1 && header.schemaVersion !== 2
     || header.sessionId !== sessionId
-    || header.protectionProfile !== AGENT_SESSION_PROTECTION_PROFILE_V1
+    || header.protectionProfile !== (header.schemaVersion === 1
+      ? AGENT_SESSION_PROTECTION_PROFILE_V1
+      : AGENT_SESSION_PROTECTION_PROFILE_V2)
     || header.protectionPolicyDigest !== PROTECTION_POLICY_DIGEST_V1
     || !isCanonicalRfc3339(header.createdAt)
     || (header.protectedCwd !== undefined && !isProtectedTextV1(header.protectedCwd))
     || (header.modelBinding !== undefined && inspectAgentModelBindingV1(header.modelBinding) === undefined)) {
     throw new Error("invalid enterprise session header");
   }
-  return deepFreeze(header as unknown as AgentSessionHeaderV1);
+  return deepFreeze(header as unknown as AgentSessionHeader);
 }
 
 export class EnterpriseAgentSessionBackend implements RemoteAgentSessionBackend {
@@ -116,9 +120,9 @@ export class EnterpriseAgentSessionBackend implements RemoteAgentSessionBackend 
   }
 
   async create(input: {
-    readonly header: AgentSessionHeaderV1;
-    readonly event: AgentSessionEventV1<"session/created">;
-    readonly runtimePayload: AgentSessionEventPayloadMapV1["session/created"];
+    readonly header: AgentSessionHeader;
+    readonly event: AgentSessionEvent<"session/created">;
+    readonly runtimePayload: AgentSessionEventPayloadMap["session/created"];
   }): Promise<void> {
     await this.ready;
     const stored = await this.storeEnvelope(input.event, input.runtimePayload);
@@ -139,8 +143,8 @@ export class EnterpriseAgentSessionBackend implements RemoteAgentSessionBackend 
   }
 
   async append(
-    event: AgentSessionEventV1,
-    runtimePayload?: AgentSessionEventPayloadMapV1[AgentSessionEventTypeV1]
+    event: AgentSessionEvent,
+    runtimePayload?: AgentSessionEventPayloadMap[AgentSessionEventType]
   ): Promise<void> {
     await this.ready;
     if (runtimePayload === undefined) throw new Error("enterprise Agent session events require a runtime overlay");
@@ -190,15 +194,16 @@ export class EnterpriseAgentSessionBackend implements RemoteAgentSessionBackend 
     if (refs.rows.length !== Number(session.rows[0].last_seq) + 1 || refs.rows.length > 100_000) {
       throw new Error("enterprise Agent session event index is incomplete or exceeds its bound");
     }
-    const events: AgentSessionEventV1[] = [];
-    const overlays = new Map<number, AgentSessionEventPayloadMapV1[AgentSessionEventTypeV1]>();
+    const events: AgentSessionEvent[] = [];
+    const overlays = new Map<number, AgentSessionEventPayloadMap[AgentSessionEventType]>();
     for (const ref of refs.rows) {
       const bytes = await this.options.objectStore.getObject(ref.object_key);
       if (!bytes || bytes.byteLength !== Number(ref.object_bytes) || sha256(bytes) !== ref.object_sha256) {
         throw new Error("enterprise Agent session object is missing or has been tampered with");
       }
       const envelope = JSON.parse(bytes.toString("utf8")) as EventEnvelope;
-      if (envelope.schemaVersion !== 1 || !isAgentSessionEventV1(envelope.event)
+      if (envelope.schemaVersion !== 1
+        || !isAgentSessionEventV1(envelope.event) && !isAgentSessionEventV2(envelope.event)
         || envelope.event.sessionId !== sessionId
         || envelope.event.seq !== Number(ref.seq)
         || envelope.event.digest !== ref.event_digest
@@ -228,8 +233,8 @@ export class EnterpriseAgentSessionBackend implements RemoteAgentSessionBackend 
   }
 
   private async storeEnvelope(
-    event: AgentSessionEventV1,
-    runtimePayload: AgentSessionEventPayloadMapV1[AgentSessionEventTypeV1]
+    event: AgentSessionEvent,
+    runtimePayload: AgentSessionEventPayloadMap[AgentSessionEventType]
   ) {
     const key = objectKey(this.prefix, event.sessionId, event);
     const bytes = Buffer.from(JSON.stringify({ schemaVersion: 1, event, runtimePayload } satisfies EventEnvelope));
@@ -252,7 +257,7 @@ export class EnterpriseAgentSessionBackend implements RemoteAgentSessionBackend 
 
   private async insertEvent(
     client: PoolClient,
-    event: AgentSessionEventV1,
+    event: AgentSessionEvent,
     stored: { key: string; sha256: string; bytes: number }
   ): Promise<void> {
     await client.query(`

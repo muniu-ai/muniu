@@ -35,18 +35,26 @@ import {
   inspectAgentSessionControlResponseV1,
   snapshotBoundedJsonValue,
   type AgentApprovalDecisionRequestV1,
+  type AgentAttachmentDescriptorV1,
+  type AgentAttachmentUploadRequestV1,
   type AgentErrorResponseV1,
   type AgentMessageRequestV1,
+  type AgentMessageRequestV2,
   type AgentModelBindingV1,
   type AgentSessionControlRequestV1,
   type AgentSessionControlResponseV1,
   type AgentSessionCreateRequestV1,
+  type AgentSessionCreateRequestV2,
+  type AgentSessionEvent,
   type AgentSessionEventV1,
   type AgentSessionViewStateV1,
   type AgentSessionViewV1,
+  type AgentSessionViewV2,
   type EffectPolicyBindingV1,
   type JsonValue,
   type LlmRequest,
+  type ContentBlock,
+  type ModelImageInput,
   type StreamChunk
 } from "@mn/agent-protocol";
 import {
@@ -61,6 +69,10 @@ import {
 } from "@mn/agent-session";
 
 import { AgentApprovalCoordinator } from "./agentApprovalCoordinator.js";
+import {
+  LocalAgentAttachmentStore,
+  type AgentAttachmentStore
+} from "./agentAttachmentStore.js";
 import type { ProductionAgentRuntimeFactory } from "./agentRuntimeFactory.js";
 
 export interface AgentServiceResponse<T extends JsonValue = JsonValue> {
@@ -78,7 +90,7 @@ type AgentSessionViewState = AgentSessionViewStateV1;
 
 interface AgentSessionSubscriptionState {
   readonly session: AgentSession;
-  readonly listener: (event: AgentSessionEventV1) => boolean | void;
+  readonly listener: (event: AgentSessionEvent) => boolean | void;
   cursor: number;
   paused: boolean;
   active: boolean;
@@ -162,6 +174,9 @@ export interface LocalAgentSessionServiceOptions {
   readonly effectPolicyBinding?: EffectPolicyBindingV1;
   readonly sessionStore?: AgentSessionStore;
   readonly shouldRecoverInterruptedSession?: (sessionId: string) => boolean | Promise<boolean>;
+  readonly attachmentStore?: AgentAttachmentStore;
+  readonly attachmentTenantId?: string;
+  readonly maxImagesPerMessage?: number;
 }
 
 export interface EmbeddedCandidateExecutionInput {
@@ -505,6 +520,9 @@ export class LocalMockAgentSessionService {
   private readonly shouldRecoverInterruptedSession:
     | ((sessionId: string) => boolean | Promise<boolean>)
     | undefined;
+  private readonly attachmentStore: AgentAttachmentStore;
+  private readonly attachmentTenantId: string | undefined;
+  private readonly maxImagesPerMessage: number;
 
   constructor(
     private readonly root: string,
@@ -536,6 +554,13 @@ export class LocalMockAgentSessionService {
     this.approvalCoordinator = options.approvalCoordinator ?? new AgentApprovalCoordinator();
     this.effectPolicyBinding = options.effectPolicyBinding;
     this.shouldRecoverInterruptedSession = options.shouldRecoverInterruptedSession;
+    this.attachmentStore = options.attachmentStore
+      ?? new LocalAgentAttachmentStore({ rootDir: join(root, "attachments") });
+    this.attachmentTenantId = options.attachmentTenantId;
+    this.maxImagesPerMessage = options.maxImagesPerMessage ?? 20;
+    if (!Number.isSafeInteger(this.maxImagesPerMessage) || this.maxImagesPerMessage <= 0) {
+      throw new TypeError("agent maximum images per message is invalid");
+    }
     this.ready = this.initialize();
     // Initialization starts in the constructor so the service is ready for the
     // first request. Attach a handler immediately: callers still await the
@@ -950,10 +975,10 @@ export class LocalMockAgentSessionService {
   private view(
     session: AgentSession,
     persistProjection = true,
-    events: readonly AgentSessionEventV1[] = session.events,
+    events: readonly AgentSessionEvent[] = session.events,
     includeCurrentClosedState = true,
     stateOverride?: AgentSessionViewState
-  ): AgentSessionViewV1 {
+  ): AgentSessionViewV1 | AgentSessionViewV2 {
     const projection = projectSession(events);
     const state = stateOverride ?? (includeCurrentClosedState && this.closed.has(session.header.sessionId)
       ? "closed"
@@ -975,8 +1000,8 @@ export class LocalMockAgentSessionService {
         "agent session has no authoritative durable model binding"
       );
     }
-    return assertAgentSessionViewV1({
-      schemaVersion: 1,
+    const view = {
+      schemaVersion: session.header.schemaVersion,
       kind: "agent-session-view",
       sessionId: session.header.sessionId,
       state,
@@ -985,7 +1010,10 @@ export class LocalMockAgentSessionService {
         lastSeq: committed.seq,
         lastDigest: committed.digest
       }
-    });
+    } as const;
+    return session.header.schemaVersion === 1
+      ? assertAgentSessionViewV1(view)
+      : deepFreeze(view) as AgentSessionViewV2;
   }
 
   private sessionViewResult(statusCode: 200 | 201, session: AgentSession): IdempotentEffectResult {
@@ -1035,7 +1063,7 @@ export class LocalMockAgentSessionService {
     return deepFreeze({ statusCode: receipt.statusCode, body: body as unknown as JsonValue });
   }
 
-  async create(input: AgentSessionCreateRequestV1): Promise<AgentServiceResponse> {
+  async create(input: AgentSessionCreateRequestV1 | AgentSessionCreateRequestV2): Promise<AgentServiceResponse> {
     if (this.mode === "mock"
       && (input.modelBinding.providerId !== MOCK_PROVIDER || input.modelBinding.modelId !== MOCK_MODEL)) {
       throw new AgentSessionServiceError(400, "MODEL_UNAVAILABLE", "local mock service supports only its fixed model");
@@ -1050,6 +1078,7 @@ export class LocalMockAgentSessionService {
     const sessionId = SessionId(createSafeRandomPublicControlIdV1("session"));
     return this.idempotent(input.clientRequestId, "create", undefined, async () => {
       const session = await this.store.create({
+        schemaVersion: input.schemaVersion,
         sessionId,
         ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
         ...(input.labels === undefined ? {} : { labels: { ...input.labels } }),
@@ -1059,11 +1088,11 @@ export class LocalMockAgentSessionService {
     });
   }
 
-  async get(sessionId: string): Promise<AgentSessionViewV1> {
+  async get(sessionId: string): Promise<AgentSessionViewV1 | AgentSessionViewV2> {
     return this.view(await this.open(sessionId), false);
   }
 
-  async list(limit = 100): Promise<readonly AgentSessionViewV1[]> {
+  async list(limit = 100): Promise<readonly (AgentSessionViewV1 | AgentSessionViewV2)[]> {
     await this.ready;
     if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
       throw new AgentSessionServiceError(400, "INVALID_LIMIT", "session list limit must be between 1 and 500");
@@ -1078,7 +1107,7 @@ export class LocalMockAgentSessionService {
       order by rowid desc
       limit ?
     `).all(limit) as unknown as Array<{ sessionId: string }>;
-    const views: AgentSessionViewV1[] = [];
+    const views: Array<AgentSessionViewV1 | AgentSessionViewV2> = [];
     for (const row of rows) {
       try {
         views.push(await this.get(row.sessionId));
@@ -1167,7 +1196,7 @@ export class LocalMockAgentSessionService {
     }
   }
 
-  eventsAfter(sessionId: string, after: number): Promise<readonly AgentSessionEventV1[]> {
+  eventsAfter(sessionId: string, after: number): Promise<readonly AgentSessionEvent[]> {
     return this.open(sessionId).then((session) => session.events.filter((event) => event.seq > after));
   }
 
@@ -1178,7 +1207,7 @@ export class LocalMockAgentSessionService {
   async subscribeEvents(
     sessionId: string,
     after: number,
-    listener: (event: AgentSessionEventV1) => boolean | void
+    listener: (event: AgentSessionEvent) => boolean | void
   ): Promise<AgentSessionEventSubscription> {
     const session = await this.open(sessionId);
     const subscription: AgentSessionSubscriptionState = {
@@ -1245,9 +1274,161 @@ export class LocalMockAgentSessionService {
     }
   }
 
-  async message(sessionId: string, input: AgentMessageRequestV1): Promise<AgentServiceResponse> {
+  private attachmentDescriptors(session: AgentSession): ReadonlyMap<string, AgentAttachmentDescriptorV1> {
+    const descriptors = new Map<string, AgentAttachmentDescriptorV1>();
+    for (const event of session.events) {
+      if (event.type !== "attachment/stored") continue;
+      const descriptor = event.payload.publicControls.descriptor;
+      if (descriptors.has(descriptor.attachmentId)) {
+        throw new AgentSessionServiceError(503, "ATTACHMENT_INDEX_INVALID", "attachment identifier is duplicated");
+      }
+      descriptors.set(descriptor.attachmentId, descriptor);
+    }
+    return descriptors;
+  }
+
+  private async hydrateImageInputs(
+    session: AgentSession,
+    userContent: readonly ContentBlock[]
+  ): Promise<readonly ModelImageInput[]> {
+    const descriptors = this.attachmentDescriptors(session);
+    const referenced = new Set<string>();
+    for (const message of [...session.runtimeMessages(), {
+      id: "pending-user",
+      role: "user" as const,
+      source: { kind: "user" as const },
+      content: userContent
+    }]) {
+      for (const block of message.content) {
+        if (block.type === "image") referenced.add(block.attachmentId);
+      }
+    }
+    const output: ModelImageInput[] = [];
+    for (const attachmentId of referenced) {
+      const descriptor = descriptors.get(attachmentId);
+      if (descriptor === undefined || descriptor.sessionId !== session.header.sessionId) {
+        throw new AgentSessionServiceError(409, "ATTACHMENT_UNAVAILABLE", "attachment is unavailable for this session");
+      }
+      let bytes: Buffer;
+      try {
+        bytes = await this.attachmentStore.get({
+          ...(this.attachmentTenantId === undefined ? {} : { tenantId: this.attachmentTenantId }),
+          sessionId: session.header.sessionId,
+          descriptor
+        });
+      } catch {
+        throw new AgentSessionServiceError(409, "ATTACHMENT_UNAVAILABLE", "attachment object failed integrity validation");
+      }
+      output.push(deepFreeze({
+        attachmentId,
+        contentType: descriptor.contentType,
+        sha256: descriptor.sha256,
+        byteLength: descriptor.byteLength,
+        dataBase64: bytes.toString("base64")
+      }));
+    }
+    return Object.freeze(output);
+  }
+
+  async uploadAttachment(
+    sessionId: string,
+    input: AgentAttachmentUploadRequestV1
+  ): Promise<AgentServiceResponse> {
+    safeControlId(sessionId, "session identifier");
+    const session = await this.open(sessionId);
+    if (session.header.schemaVersion !== 2) {
+      throw new AgentSessionServiceError(409, "SESSION_MULTIMODAL_UNAVAILABLE", "v1 sessions are text-only");
+    }
+    const semanticDigest = digestJson({
+      schemaVersion: input.schemaVersion,
+      kind: input.kind,
+      contentType: input.contentType,
+      sha256: input.sha256,
+      byteLength: input.byteLength
+    });
+    return this.idempotent(
+      input.clientRequestId,
+      `attachment:${sessionId}`,
+      sessionId,
+      () => this.enqueueSession(sessionId, async () => {
+        if (this.closed.has(sessionId)) return this.inlineResult(409, errorResponse("SESSION_CLOSED"));
+        const bytes = Buffer.from(input.dataBase64, "base64");
+        let descriptor: AgentAttachmentDescriptorV1;
+        try {
+          descriptor = await this.attachmentStore.put({
+            ...(this.attachmentTenantId === undefined ? {} : { tenantId: this.attachmentTenantId }),
+            sessionId,
+            contentType: input.contentType,
+            bytes,
+            claimedSha256: input.sha256,
+            claimedByteLength: input.byteLength
+          });
+        } catch {
+          throw new AgentSessionServiceError(400, "ATTACHMENT_INVALID", "attachment failed validation");
+        }
+        await session.append("attachment/stored", { descriptor });
+        return this.inlineResult(201, {
+          schemaVersion: 1,
+          kind: "agent-attachment-upload-response",
+          descriptor
+        });
+      }),
+      semanticDigest
+    );
+  }
+
+  async message(
+    sessionId: string,
+    input: AgentMessageRequestV1 | AgentMessageRequestV2
+  ): Promise<AgentServiceResponse> {
     safeControlId(sessionId, "session identifier");
     const durableSession = await this.open(sessionId);
+    if (durableSession.header.schemaVersion !== input.schemaVersion) {
+      throw new AgentSessionServiceError(409, "SESSION_SCHEMA_MISMATCH", "request version does not match the session chain");
+    }
+    const descriptors = this.attachmentDescriptors(durableSession);
+    if (input.schemaVersion === 2
+      && (input.attachmentIds?.length ?? 0) > this.maxImagesPerMessage) {
+      throw new AgentSessionServiceError(400, "ATTACHMENT_LIMIT_EXCEEDED", "message image count exceeds deployment limit");
+    }
+    const userContent: ContentBlock[] = [
+      ...(input.prompt.length === 0 ? [] : [{ type: "text" as const, text: input.prompt }]),
+      ...(input.schemaVersion === 1 || input.attachmentIds === undefined
+        ? []
+        : input.attachmentIds.map((attachmentId) => {
+          const descriptor = descriptors.get(attachmentId);
+          if (descriptor === undefined || descriptor.sessionId !== sessionId) {
+            throw new AgentSessionServiceError(409, "ATTACHMENT_UNAVAILABLE", "attachment is unavailable for this session");
+          }
+          return {
+            type: "image" as const,
+            attachmentId: descriptor.attachmentId,
+            contentType: descriptor.contentType,
+            sha256: descriptor.sha256,
+            byteLength: descriptor.byteLength,
+            width: descriptor.width,
+            height: descriptor.height
+          };
+        }))
+    ];
+    let imageInputs: readonly ModelImageInput[] | undefined;
+    if (input.schemaVersion === 2) {
+      imageInputs = await this.hydrateImageInputs(durableSession, userContent);
+      if (imageInputs.length > 0) {
+        const binding = durableSession.header.modelBinding;
+        if (binding === undefined) {
+          throw new AgentSessionServiceError(409, "MODEL_BINDING_UNAVAILABLE", "model binding is unavailable");
+        }
+        const supportsImages = this.mode === "mock"
+          || (await this.runtimeFactory?.resolveModelCapabilities(binding))?.inputModalities.includes("image") === true;
+        if (!supportsImages) {
+          throw new AgentSessionServiceError(409, "MODEL_IMAGE_INPUT_UNAVAILABLE", "model does not support image input");
+        }
+      }
+    }
+    const semanticDigest = input.schemaVersion === 2
+      ? digestJson(input as unknown as JsonValue)
+      : undefined;
     return this.idempotent(input.clientRequestId, `message:${sessionId}`, sessionId, () => {
       return this.enqueueSession(sessionId, async () => {
         if (this.closed.has(sessionId)) {
@@ -1265,6 +1446,8 @@ export class LocalMockAgentSessionService {
           const result = await host.resume({
             sessionId: SessionId(sessionId),
             prompt: input.prompt,
+            ...(input.schemaVersion === 1 ? {} : { userContent }),
+            ...(imageInputs === undefined || imageInputs.length === 0 ? {} : { imageInputs }),
             provider: modelBinding.providerId,
             model: modelBinding.modelId,
             signal: controller.signal,
@@ -1284,7 +1467,7 @@ export class LocalMockAgentSessionService {
           if (this.active.get(sessionId) === controller) this.active.delete(sessionId);
         }
       });
-    });
+    }, semanticDigest);
   }
 
   async cancel(sessionId: string, input: AgentSessionControlRequestV1): Promise<AgentServiceResponse> {

@@ -17,7 +17,12 @@ These rules apply to the whole repository unless a deeper AGENTS.md narrows them
 
 ## Upstream and licensing
 
-- DeepSeek Harness adaptations are based only on commit 99f6f02fecdb7dff40c3fbc9470f5907c29f74ca.
+- DeepSeek Harness adaptations are based only on the approved fixed commits
+  `47f943859bef60e4160492346772ded9b24f765a` and
+  `141eb6fef83422698aef7a981029e843e8161534`. Every provenance entry must name
+  its exact source commit; floating tags and branches are forbidden.
+- The vendored Cordis source is separately pinned to DeepSeek Harness commit
+  `99f6f02fecdb7dff40c3fbc9470f5907c29f74ca` and verified by its source manifest.
 - Every copied or adapted upstream file must retain its original MIT notice and be added to docs/upstream-provenance/deepseek-harness.yaml before commit.
 - New Muniu code is Apache-2.0. Do not relabel adapted MIT code as solely Apache-2.0 and do not imply DeepSeek trademark endorsement.
 - Do not import the excluded Claude SDK payload, DSH Web/CLI, ACP, Linux Landlock, telemetry, anonymous identifiers, or feedback upload modules.

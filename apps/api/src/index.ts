@@ -69,6 +69,7 @@ const enterpriseProxyPort = Number(process.env.MN_ENTERPRISE_PROXY_PORT ?? 7319)
 const enterpriseProxyHost = process.env.MN_ENTERPRISE_PROXY_HOST ?? "0.0.0.0";
 const enterpriseProxyPublicBaseUrl = process.env.MN_ENTERPRISE_PROXY_PUBLIC_BASE_URL;
 const enterpriseBuiltinInstanceId = process.env.MN_API_INSTANCE_ID;
+const enterpriseAgentAttachmentKeySecret = process.env.MN_AGENT_ATTACHMENT_KEY_SECRET;
 
 const app = buildServer({
   useMockExecutors,
@@ -85,6 +86,9 @@ const app = buildServer({
     : {}),
   ...(runtimeProfile === "enterprise" && enterpriseBuiltinInstanceId
     ? { enterpriseBuiltinInstanceId }
+    : {}),
+  ...(runtimeProfile === "enterprise" && enterpriseAgentAttachmentKeySecret
+    ? { enterpriseAgentAttachmentKeySecret }
     : {}),
   ...(runtimeProfile === "enterprise" && otlpEndpoint
     ? {

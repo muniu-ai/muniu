@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import Fastify from "fastify";
+import { Transformer } from "@napi-rs/image";
 
 import { JsonlAgentSessionStore } from "@mn/agent-session";
 import {
@@ -31,6 +32,8 @@ import { registerAgentSessionRoutes } from "../src/agentSessionRoutes.js";
 import { AgentApprovalCoordinator } from "../src/agentApprovalCoordinator.js";
 import { buildServer } from "../src/server.js";
 import { LocalMockAgentSessionService } from "../src/agentSessionService.js";
+import type { AgentAttachmentStore } from "../src/agentAttachmentStore.js";
+import type { ProductionAgentRuntimeFactory } from "../src/agentRuntimeFactory.js";
 
 function appAt(root: string) {
   return buildServer({
@@ -69,6 +72,24 @@ function messageRequestV1(clientRequestId: string, prompt: string) {
     clientRequestId,
     prompt
   };
+}
+
+function createRequestV2(clientRequestId: string) {
+  return {
+    schemaVersion: 2 as const,
+    kind: "agent-session-create-request" as const,
+    clientRequestId,
+    modelBinding: MOCK_MODEL_BINDING_V1
+  };
+}
+
+async function pngBytes(): Promise<Buffer> {
+  return Transformer.fromRgbaPixels(Buffer.from([
+    1, 2, 3, 255,
+    1, 2, 3, 255,
+    1, 2, 3, 255,
+    1, 2, 3, 255
+  ]), 2, 2).png();
 }
 
 function controlRequestV1(clientRequestId: string) {
@@ -203,6 +224,214 @@ test("agent routes require exact V1 DTOs and return bounded authoritative views"
   assert.equal(unknownApproval.statusCode, 404, unknownApproval.body);
   assert.deepEqual(inspectAgentErrorResponseV1(unknownApproval.json()), unknownApproval.json());
   assert.doesNotMatch(unknownApproval.body, /unknown-approval/u);
+});
+
+test("v2 attachment routes persist opaque descriptors, enforce session binding, and hydrate image messages", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "mn-agent-api-v2-image-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const app = appAt(root);
+  t.after(() => app.close().catch(() => undefined));
+
+  const created = await app.inject({ method: "POST", url: "/v1/agent-sessions", payload: createRequestV2("create-image-v2") });
+  assert.equal(created.statusCode, 201);
+  const view = created.json<{ sessionId: string; schemaVersion: number }>();
+  assert.equal(view.schemaVersion, 2);
+
+  const bytes = await pngBytes();
+  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  const upload = await app.inject({
+    method: "POST",
+    url: `/v1/agent-sessions/${view.sessionId}/attachments`,
+    payload: {
+      schemaVersion: 1,
+      kind: "agent-attachment-upload-request",
+      clientRequestId: "upload-image-v2",
+      contentType: "image/png",
+      dataBase64: bytes.toString("base64"),
+      sha256,
+      byteLength: bytes.byteLength
+    }
+  });
+  assert.equal(upload.statusCode, 201, upload.body);
+  const descriptor = upload.json<{ descriptor: { attachmentId: string; sha256: string } }>().descriptor;
+  assert.equal(descriptor.sha256, sha256);
+
+  const sent = await app.inject({
+    method: "POST",
+    url: `/v1/agent-sessions/${view.sessionId}/messages`,
+    payload: {
+      schemaVersion: 2,
+      kind: "agent-message-request",
+      clientRequestId: "message-image-v2",
+      prompt: "describe",
+      attachmentIds: [descriptor.attachmentId]
+    }
+  });
+  assert.equal(sent.statusCode, 200, sent.body);
+  assert.equal(sent.json<{ schemaVersion: number }>().schemaVersion, 2);
+
+  const eventLog = await readFile(join(
+    root,
+    "agent-service",
+    "sessions",
+    view.sessionId,
+    "events.jsonl"
+  ), "utf8");
+  assert.equal(eventLog.includes(bytes.toString("base64")), false);
+  assert.equal(eventLog.includes("dataBase64"), false);
+  assert.match(eventLog, /attachment\/stored/u);
+  assert.equal(eventLog.includes('"type":"image"'), true);
+
+  const other = await app.inject({ method: "POST", url: "/v1/agent-sessions", payload: createRequestV2("create-image-v2-other") });
+  const otherId = other.json<{ sessionId: string }>().sessionId;
+  const crossSession = await app.inject({
+    method: "POST",
+    url: `/v1/agent-sessions/${otherId}/messages`,
+    payload: {
+      schemaVersion: 2,
+      kind: "agent-message-request",
+      clientRequestId: "message-image-v2-cross",
+      prompt: "describe",
+      attachmentIds: [descriptor.attachmentId]
+    }
+  });
+  assert.equal(crossSession.statusCode, 409);
+
+  const v1 = await app.inject({ method: "POST", url: "/v1/agent-sessions", payload: createRequestV1("create-image-v1") });
+  const v1Id = v1.json<{ sessionId: string }>().sessionId;
+  const v1Upload = await app.inject({
+    method: "POST",
+    url: `/v1/agent-sessions/${v1Id}/attachments`,
+    payload: {
+      schemaVersion: 1,
+      kind: "agent-attachment-upload-request",
+      clientRequestId: "upload-image-v1",
+      contentType: "image/png",
+      dataBase64: bytes.toString("base64"),
+      sha256,
+      byteLength: bytes.byteLength
+    }
+  });
+  assert.equal(v1Upload.statusCode, 409);
+});
+
+test("text-only model rejects a v2 image before a user message is persisted", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "mn-agent-api-v2-text-only-"));
+  const adapter = {
+    id: "text-provider",
+    async *stream() { yield { type: "finish" as const, reason: "stop" as const }; }
+  };
+  const runtimeFactory: ProductionAgentRuntimeFactory = {
+    resolveAdapter: async () => adapter,
+    resolveAdapterLease: async (request) => ({
+      adapter,
+      resolution: {
+        schemaVersion: 1,
+        kind: "llm-adapter-resolution",
+        providerId: request.providerId,
+        modelId: request.modelId,
+        configDigest: "a".repeat(64)
+      },
+      release: async () => undefined
+    }),
+    resolveModelCapabilities: async () => ({ inputModalities: ["text"] })
+  };
+  const service = new LocalMockAgentSessionService(join(root, "agent-service"), {
+    mode: "production",
+    runtimeFactory
+  });
+  t.after(async () => {
+    await service.dispose();
+    await rm(root, { recursive: true, force: true });
+  });
+  const created = await service.create({
+    schemaVersion: 2,
+    kind: "agent-session-create-request",
+    clientRequestId: "create-text-only-v2",
+    modelBinding: {
+      schemaVersion: 1,
+      kind: "agent-model-binding",
+      providerId: "text-provider",
+      modelId: "text-model"
+    }
+  });
+  const sessionId = (created.body as { sessionId: string }).sessionId;
+  const bytes = await pngBytes();
+  const uploaded = await service.uploadAttachment(sessionId, {
+    schemaVersion: 1,
+    kind: "agent-attachment-upload-request",
+    clientRequestId: "upload-text-only-v2",
+    contentType: "image/png",
+    dataBase64: bytes.toString("base64"),
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+    byteLength: bytes.byteLength
+  });
+  const attachmentId = (uploaded.body as { descriptor: { attachmentId: string } }).descriptor.attachmentId;
+  await assert.rejects(service.message(sessionId, {
+    schemaVersion: 2,
+    kind: "agent-message-request",
+    clientRequestId: "message-text-only-v2",
+    prompt: "describe",
+    attachmentIds: [attachmentId]
+  }), (error: unknown) => error instanceof Error
+    && "code" in error
+    && error.code === "MODEL_IMAGE_INPUT_UNAVAILABLE");
+  assert.equal((await service.eventsAfter(sessionId, -1)).some((event) => event.type === "user/message"), false);
+});
+
+test("enterprise attachment seams pass one tenant scope to object writes and reads", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "mn-agent-api-v2-tenant-"));
+  const bytes = await pngBytes();
+  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  const tenantIds: string[] = [];
+  const attachmentStore: AgentAttachmentStore = {
+    put: async (input) => {
+      tenantIds.push(input.tenantId ?? "");
+      return {
+        schemaVersion: 1,
+        kind: "agent-attachment-descriptor",
+        attachmentId: "tenant-attachment",
+        sessionId: input.sessionId,
+        sha256,
+        byteLength: bytes.byteLength,
+        contentType: "image/png",
+        width: 2,
+        height: 2,
+        tenantBinding: "b".repeat(64)
+      };
+    },
+    get: async (input) => {
+      tenantIds.push(input.tenantId ?? "");
+      return Buffer.from(bytes);
+    }
+  };
+  const service = new LocalMockAgentSessionService(join(root, "agent-service"), {
+    attachmentStore,
+    attachmentTenantId: "tenant-a"
+  });
+  t.after(async () => {
+    await service.dispose();
+    await rm(root, { recursive: true, force: true });
+  });
+  const created = await service.create(createRequestV2("create-tenant-v2"));
+  const sessionId = (created.body as { sessionId: string }).sessionId;
+  await service.uploadAttachment(sessionId, {
+    schemaVersion: 1,
+    kind: "agent-attachment-upload-request",
+    clientRequestId: "upload-tenant-v2",
+    contentType: "image/png",
+    dataBase64: bytes.toString("base64"),
+    sha256,
+    byteLength: bytes.byteLength
+  });
+  await service.message(sessionId, {
+    schemaVersion: 2,
+    kind: "agent-message-request",
+    clientRequestId: "message-tenant-v2",
+    prompt: "describe",
+    attachmentIds: ["tenant-attachment"]
+  });
+  assert.deepEqual(tenantIds, ["tenant-a", "tenant-a"]);
 });
 
 test("a durable pending approval without its process-local waiter is a fixed versioned 409", async (t) => {

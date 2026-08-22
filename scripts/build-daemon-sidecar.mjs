@@ -1,12 +1,15 @@
 import { execFileSync, spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createServer } from "node:net";
 import {
   closeSync,
   cpSync,
+  existsSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync
 } from "node:fs";
@@ -25,6 +28,8 @@ const arm64Path = path.join(binariesDir, "mn-api-aarch64-apple-darwin");
 const x64Path = path.join(binariesDir, "mn-api-x86_64-apple-darwin");
 const universalPath = path.join(binariesDir, "mn-api-universal-apple-darwin");
 
+await ensureNativeImageBindings();
+
 execFileSync(process.execPath, [
   path.join(rootDir, "scripts/build-descriptor-lock-helper.mjs"),
   "--desktop"
@@ -40,6 +45,9 @@ await build({
   platform: "node",
   format: "cjs",
   target: "node22",
+  // Keep the native image decoder as a package boundary so pkg can collect
+  // and extract the architecture-specific .node binding for each target.
+  external: ["@napi-rs/image"],
   define: {
     "import.meta.url": "__mnBundleImportMetaUrl"
   },
@@ -96,24 +104,29 @@ execFileSync("codesign", ["--verify", "--strict", arm64Path]);
 execFileSync("codesign", ["--verify", "--strict", x64Path]);
 
 await smokeSidecar(universalPath);
+await smokeSidecar(x64Path, "x86_64");
 await smokePackagedEventWriter(universalPath);
 rmSync(buildDir, { recursive: true, force: true });
 console.log(`daemon sidecars ready: ${arm64Path}, ${x64Path}, ${universalPath}`);
 
-async function smokeSidecar(binaryPath) {
+async function smokeSidecar(binaryPath, architecture) {
   const port = await freePort();
   const mniuRoot = await mkdtemp(path.join(tmpdir(), "mniu-sidecar-smoke-"));
-  const child = spawn(binaryPath, [], {
-    cwd: rootDir,
-    env: {
-      ...process.env,
-      MN_API_HOST: "127.0.0.1",
-      MN_API_PORT: String(port),
-      MN_MNIU_ROOT: mniuRoot,
-      MN_DESKTOP_PACKAGED: "1"
-    },
-    stdio: ["ignore", "pipe", "pipe"]
-  });
+  const child = spawn(
+    architecture === undefined ? binaryPath : "arch",
+    architecture === undefined ? [] : [`-${architecture}`, binaryPath],
+    {
+      cwd: rootDir,
+      env: {
+        ...process.env,
+        MN_API_HOST: "127.0.0.1",
+        MN_API_PORT: String(port),
+        MN_MNIU_ROOT: mniuRoot,
+        MN_DESKTOP_PACKAGED: "1"
+      },
+      stdio: ["ignore", "pipe", "pipe"]
+    }
+  );
   let output = "";
   child.stdout.on("data", (chunk) => (output += chunk.toString()));
   child.stderr.on("data", (chunk) => (output += chunk.toString()));
@@ -130,6 +143,57 @@ async function smokeSidecar(binaryPath) {
       await new Promise((resolve) => child.once("exit", resolve));
     }
     rmSync(mniuRoot, { recursive: true, force: true });
+  }
+}
+
+async function ensureNativeImageBindings() {
+  const lock = JSON.parse(readFileSync(path.join(rootDir, "package-lock.json"), "utf8"));
+  for (const [packageName, bindingName] of [
+    ["@napi-rs/image-darwin-arm64", "image.darwin-arm64.node"],
+    ["@napi-rs/image-darwin-x64", "image.darwin-x64.node"]
+  ]) {
+    const target = path.join(rootDir, "node_modules", ...packageName.split("/"));
+    const binding = path.join(target, bindingName);
+    if (existsSync(binding)) {
+      if (!lstatSync(binding).isFile()) throw new Error(`${packageName} binding is not a regular file`);
+      continue;
+    }
+    if (existsSync(target)) {
+      throw new Error(`${packageName} is incomplete; reinstall dependencies before building sidecars`);
+    }
+    const record = lock.packages?.[`node_modules/${packageName}`];
+    if (!record || typeof record.version !== "string"
+      || typeof record.resolved !== "string"
+      || !record.resolved.startsWith("https://registry.npmjs.org/")
+      || typeof record.integrity !== "string"
+      || !record.integrity.startsWith("sha512-")) {
+      throw new Error(`${packageName} is not pinned to an npm SHA-512 artifact`);
+    }
+    const response = await fetch(record.resolved);
+    if (!response.ok) throw new Error(`failed to fetch ${packageName}: HTTP ${response.status}`);
+    const archive = Buffer.from(await response.arrayBuffer());
+    if (archive.byteLength === 0 || archive.byteLength > 64 * 1024 * 1024) {
+      throw new Error(`${packageName} archive exceeds its build-time size bound`);
+    }
+    const actualIntegrity = `sha512-${createHash("sha512").update(archive).digest("base64")}`;
+    if (actualIntegrity !== record.integrity) throw new Error(`${packageName} archive integrity mismatch`);
+    const archivePath = path.join(tmpdir(), `${packageName.split("/").at(-1)}-${randomUUID()}.tgz`);
+    const staging = `${target}.tmp-${randomUUID()}`;
+    try {
+      writeFileSync(archivePath, archive, { mode: 0o600 });
+      mkdirSync(staging, { recursive: true, mode: 0o700 });
+      execFileSync("tar", ["-xzf", archivePath, "-C", staging, "--strip-components=1"]);
+      const stagedPackage = JSON.parse(readFileSync(path.join(staging, "package.json"), "utf8"));
+      const stagedBinding = path.join(staging, bindingName);
+      if (stagedPackage.name !== packageName || stagedPackage.version !== record.version
+        || !existsSync(stagedBinding) || !lstatSync(stagedBinding).isFile()) {
+        throw new Error(`${packageName} archive contents do not match the lock file`);
+      }
+      renameSync(staging, target);
+    } finally {
+      rmSync(archivePath, { force: true });
+      rmSync(staging, { recursive: true, force: true });
+    }
   }
 }
 

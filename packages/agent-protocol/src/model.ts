@@ -5,8 +5,9 @@
  * Copyright (c) 2026 DeepSeek
  * SPDX-License-Identifier: MIT
  *
- * Adaptation: removed Cordis augmentation, attachments, provider discovery,
- * and merge-extensible plugin unions; retained a closed v0.1 stream vocabulary.
+ * Adaptation: removed Cordis augmentation, upstream attachment/provider
+ * discovery, and merge-extensible plugin unions; retained a closed stream
+ * vocabulary and added Muniu-owned opaque image descriptors for V2 sessions.
  */
 
 import type { CallId, MessageId } from "./ids.js";
@@ -21,6 +22,28 @@ export interface LlmFailure {
 
 export interface TextBlock { readonly type: "text"; readonly text: string }
 export interface ThinkingBlock { readonly type: "thinking"; readonly text: string }
+export type ImageContentType = "image/png" | "image/jpeg" | "image/webp";
+export interface AgentAttachmentDescriptorV1 {
+  readonly schemaVersion: 1;
+  readonly kind: "agent-attachment-descriptor";
+  readonly attachmentId: string;
+  readonly sessionId: string;
+  readonly sha256: string;
+  readonly byteLength: number;
+  readonly contentType: ImageContentType;
+  readonly width: number;
+  readonly height: number;
+  readonly tenantBinding?: string;
+}
+export interface ImageBlock {
+  readonly type: "image";
+  readonly attachmentId: string;
+  readonly contentType: ImageContentType;
+  readonly sha256: string;
+  readonly byteLength: number;
+  readonly width: number;
+  readonly height: number;
+}
 export interface ToolCallBlock {
   readonly type: "tool-call";
   readonly id: CallId;
@@ -33,7 +56,7 @@ export interface ToolResultBlock {
   readonly content: readonly (TextBlock | ThinkingBlock)[];
   readonly isError?: boolean;
 }
-export type ContentBlock = TextBlock | ThinkingBlock | ToolCallBlock | ToolResultBlock;
+export type ContentBlock = TextBlock | ThinkingBlock | ImageBlock | ToolCallBlock | ToolResultBlock;
 export type ContentBlockType = ContentBlock["type"];
 
 export interface UserMessageSource { readonly kind: "user" }
@@ -90,11 +113,25 @@ export interface ToolSchema {
   readonly parameters: JsonValue;
 }
 
+/**
+ * Ephemeral provider input. This value must never be placed in a session event,
+ * receipt, diagnostic, or audit payload. The durable message contains only the
+ * matching ImageBlock descriptor.
+ */
+export interface ModelImageInput {
+  readonly attachmentId: string;
+  readonly contentType: ImageContentType;
+  readonly sha256: string;
+  readonly byteLength: number;
+  readonly dataBase64: string;
+}
+
 export interface LlmRequest {
   readonly provider: string;
   readonly model: string;
   readonly messages: readonly Message[];
   readonly system?: string;
   readonly tools?: readonly ToolSchema[];
+  readonly imageInputs?: readonly ModelImageInput[];
   readonly signal?: AbortSignal;
 }

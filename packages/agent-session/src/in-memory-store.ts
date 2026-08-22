@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import { SessionId, type AgentSessionEventV1 } from "@mn/agent-protocol";
+import { SessionId, type AgentSessionEvent } from "@mn/agent-protocol";
 
 import { snapshotCreateAgentSessionOptions, type CreateAgentSessionOptionsSnapshot } from "./create-options.js";
 import { createInitialAgentSessionState } from "./initial-state.js";
@@ -8,7 +8,7 @@ import { DurableAgentSession } from "./session.js";
 import type { CreateAgentSessionOptions, EventPersistence } from "./types.js";
 
 const memoryPersistence: EventPersistence = {
-  commitDurable: async (_event: AgentSessionEventV1): Promise<void> => {},
+  commitDurable: async (_event: AgentSessionEvent): Promise<void> => {},
   flush: async (): Promise<void> => {}
 };
 

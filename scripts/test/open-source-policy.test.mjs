@@ -350,17 +350,21 @@ test("license inventory reports unknown and forbidden third-party packages", () 
 
 test("workspace source license policy permits MIT only for exact provenance-backed files", () => {
   const provenance = [
+    "schemaVersion: 2",
     "upstream:",
-    "  commit: 47f943859bef60e4160492346772ded9b24f765a",
+    "  approvedSourceCommits:",
+    "    - 47f943859bef60e4160492346772ded9b24f765a",
+    "    - 141eb6fef83422698aef7a981029e843e8161534",
     "files:",
     "  - upstreamPath: packages/core/agent-loop/src/agent.ts",
     "    localPath: packages/agent-kernel/src/react-driver.ts",
+    "    upstreamCommit: 141eb6fef83422698aef7a981029e843e8161534",
     "    mode: adapted",
     "    summary: Static loop adaptation."
   ].join("\n");
   const source = [
     "/*",
-    " * 47f943859bef60e4160492346772ded9b24f765a.",
+    " * 141eb6fef83422698aef7a981029e843e8161534.",
     " * Original path: packages/core/agent-loop/src/agent.ts",
     " * Copyright (c) 2026 DeepSeek",
     " * SPDX-License-Identifier: MIT",
@@ -398,9 +402,15 @@ test("workspace source license policy fails closed on bad provenance metadata an
   const failures = validateWorkspaceSourceLicenses({
     manifests: [{ path: "packages/agent-kernel/package.json", license: "Apache-2.0 AND MIT" }],
     provenance: [
+      "schemaVersion: 2",
+      "upstream:",
+      "  approvedSourceCommits:",
+      "    - 47f943859bef60e4160492346772ded9b24f765a",
+      "    - 141eb6fef83422698aef7a981029e843e8161534",
       "files:",
       "  - upstreamPath: packages/core/agent-loop/src/agent.ts",
       "    localPath: packages/agent-kernel/src/react-driver.ts",
+      "    upstreamCommit: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
       "    mode: inspired",
       "    summary: ''"
     ].join("\n"),
@@ -414,4 +424,55 @@ test("workspace source license policy fails closed on bad provenance metadata an
   assert.equal(failures.some((failure) => /approved upstream commit/u.test(failure)), true);
   assert.equal(failures.some((failure) => /original upstream path/u.test(failure)), true);
   assert.equal(failures.some((failure) => /DeepSeek copyright/u.test(failure)), true);
+});
+
+test("workspace source license policy requires schema v2 and a per-file approved commit", () => {
+  const source = [
+    "/*",
+    " * 141eb6fef83422698aef7a981029e843e8161534.",
+    " * Original path: packages/core/agent-loop/src/agent.ts",
+    " * Copyright (c) 2026 DeepSeek",
+    " * SPDX-License-Identifier: MIT",
+    " */"
+  ].join("\n");
+  const base = [
+    "schemaVersion: 2",
+    "upstream:",
+    "  approvedSourceCommits:",
+    "    - 47f943859bef60e4160492346772ded9b24f765a",
+    "    - 141eb6fef83422698aef7a981029e843e8161534",
+    "files:",
+    "  - upstreamPath: packages/core/agent-loop/src/agent.ts",
+    "    localPath: packages/agent-kernel/src/react-driver.ts",
+    "    mode: adapted",
+    "    summary: Static loop adaptation."
+  ];
+  const common = {
+    manifests: [{ path: "packages/agent-kernel/package.json", license: "Apache-2.0 AND MIT" }],
+    sourceFiles: [{ path: "packages/agent-kernel/src/react-driver.ts", text: source }]
+  };
+
+  const missing = validateWorkspaceSourceLicenses({
+    ...common,
+    provenance: base.join("\n")
+  });
+  assert.equal(missing.some((failure) => /upstreamCommit must be an approved fixed commit/u.test(failure)), true);
+
+  const floating = validateWorkspaceSourceLicenses({
+    ...common,
+    provenance: base.toSpliced(8, 0, "    upstreamCommit: dsh-v0.1.0-rc.8").join("\n")
+  });
+  assert.equal(floating.some((failure) => /upstreamCommit must be an approved fixed commit/u.test(failure)), true);
+
+  const unapproved = validateWorkspaceSourceLicenses({
+    ...common,
+    provenance: base.toSpliced(8, 0, "    upstreamCommit: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef").join("\n")
+  });
+  assert.equal(unapproved.some((failure) => /upstreamCommit must be an approved fixed commit/u.test(failure)), true);
+
+  const legacy = validateWorkspaceSourceLicenses({
+    ...common,
+    provenance: base.with(0, "schemaVersion: 1").toSpliced(8, 0, "    upstreamCommit: 141eb6fef83422698aef7a981029e843e8161534").join("\n")
+  });
+  assert.equal(legacy.some((failure) => /schemaVersion must be 2/u.test(failure)), true);
 });

@@ -100,6 +100,8 @@ export interface ProviderSummary {
   apiFormat: ProviderApiFormat;
   baseUrl: string;
   defaultModel: string;
+  modelReasoningEffort?: "minimal" | "low" | "medium" | "high";
+  wireCompatibility?: ProviderWireCompatibilityV1;
   wireApi?: ProviderWireApi;
   modelCatalog?: ProviderModelSummary[];
   apiKeyRef?: {
@@ -116,12 +118,22 @@ export interface ProviderModelSummary {
   id: string;
   displayName: string;
   contextWindow?: number;
+  maxOutputTokens?: number;
+  inputModalities?: Array<"text" | "image">;
   inputTokenUsdPerMillion?: number;
   outputTokenUsdPerMillion?: number;
   cachedInputTokenUsdPerMillion?: number;
   cacheCreationInputTokenUsdPerMillion?: number;
   cacheReadInputTokenUsdPerMillion?: number;
   reasoningOutputTokenUsdPerMillion?: number;
+}
+
+export interface ProviderWireCompatibilityV1 {
+  systemRole?: "system" | "developer";
+  streamUsage?: "include" | "omit";
+  outputTokenField?: "omit" | "max_tokens" | "max_completion_tokens" | "max_output_tokens";
+  reasoningEncoding?: "omit" | "openai_effort" | "deepseek_thinking";
+  assistantReasoningField?: "omit" | "reasoning_content" | "reasoning";
 }
 
 export interface ProviderInput {
@@ -131,6 +143,8 @@ export interface ProviderInput {
   apiFormat: ProviderApiFormat;
   baseUrl: string;
   defaultModel: string;
+  modelReasoningEffort?: "minimal" | "low" | "medium" | "high";
+  wireCompatibility?: ProviderWireCompatibilityV1;
   wireApi?: ProviderWireApi;
   apiKey?: string;
   apiKeyEnv?: string;
@@ -142,6 +156,8 @@ export interface ProviderPatchInput {
   name?: string;
   baseUrl?: string;
   defaultModel?: string;
+  modelReasoningEffort?: "minimal" | "low" | "medium" | "high";
+  wireCompatibility?: ProviderWireCompatibilityV1;
   wireApi?: ProviderWireApi;
   apiKey?: string;
   apiKeyEnv?: string;
@@ -171,6 +187,8 @@ export interface ProviderExportItem {
   apiFormat: ProviderApiFormat;
   baseUrl: string;
   defaultModel: string;
+  modelReasoningEffort?: "minimal" | "low" | "medium" | "high";
+  wireCompatibility?: ProviderWireCompatibilityV1;
   wireApi?: ProviderWireApi;
   apiKeyEnv?: string;
   secretOmitted?: boolean;
@@ -178,6 +196,8 @@ export interface ProviderExportItem {
     id: string;
     displayName: string;
     contextWindow?: number;
+    maxOutputTokens?: number;
+    inputModalities?: Array<"text" | "image">;
     inputTokenUsdPerMillion?: number;
     outputTokenUsdPerMillion?: number;
     cachedInputTokenUsdPerMillion?: number;

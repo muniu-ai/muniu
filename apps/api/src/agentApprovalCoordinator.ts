@@ -7,9 +7,10 @@ import {
   deepFreeze,
   digestJson,
   isAgentSessionEventV1,
+  isAgentSessionEventV2,
   type AgentApprovalDecisionV1,
   type AgentApprovalResolutionV1,
-  type AgentSessionEventV1,
+  type AgentSessionEvent,
   type AgentToolApprovalBindingV1,
   type JsonValue
 } from "@mn/agent-protocol";
@@ -20,7 +21,7 @@ export type ToolAuthorizationResult = Awaited<ReturnType<AgentHostOptions["autho
 export interface DurableAgentApprovalBridge {
   authorize(request: ToolAuthorizationRequest): Promise<ToolAuthorizationResult | undefined>;
   decide(input: {
-    readonly request: AgentSessionEventV1<"approval/requested">;
+    readonly request: AgentSessionEvent<"approval/requested">;
     readonly binding: AgentToolApprovalBindingV1;
     readonly clientRequestId: string;
     readonly decision: AgentApprovalDecisionV1;
@@ -33,7 +34,7 @@ export interface AgentApprovalCoordinatorOptions {
 }
 
 interface PendingApproval {
-  readonly request: AgentSessionEventV1<"approval/requested">;
+  readonly request: AgentSessionEvent<"approval/requested">;
   readonly binding: AgentToolApprovalBindingV1;
   readonly resolve: (result: ToolAuthorizationResult) => void;
   readonly cleanup: () => void;
@@ -93,7 +94,8 @@ export class AgentApprovalCoordinator {
     const durable = request.approvalRequest;
     const suppliedBinding = request.approvalBinding;
     if (durable === undefined || suppliedBinding === undefined
-      || !isAgentSessionEventV1(durable) || durable.type !== "approval/requested") {
+      || !isAgentSessionEventV1(durable) && !isAgentSessionEventV2(durable)
+      || durable.type !== "approval/requested") {
       throw new TypeError("tool approval requires one exact durable request fact");
     }
     const binding = assertAgentToolApprovalBindingV1(durable.payload.publicControls.binding);
@@ -133,7 +135,7 @@ export class AgentApprovalCoordinator {
   }
 
   async decideDurable(
-    request: AgentSessionEventV1<"approval/requested">,
+    request: AgentSessionEvent<"approval/requested">,
     clientRequestId: string,
     decision: AgentApprovalDecisionV1
   ): Promise<boolean> {
@@ -143,7 +145,7 @@ export class AgentApprovalCoordinator {
   }
 
   reserve(
-    request: AgentSessionEventV1<"approval/requested">,
+    request: AgentSessionEvent<"approval/requested">,
     decision: AgentApprovalDecisionV1,
     resolution: AgentApprovalResolutionV1 = "decided"
   ): AgentApprovalReservation | undefined {

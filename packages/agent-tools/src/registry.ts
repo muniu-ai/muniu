@@ -6,11 +6,12 @@ import {
   deepFreeze,
   digestJson,
   isAgentSessionEventV1,
+  isAgentSessionEventV2,
   snapshotJsonValue,
   type AgentApprovalDecisionV1,
   type AgentApprovalResolutionV1,
   type AgentToolApprovalBindingV1,
-  type AgentSessionEventV1,
+  type AgentSessionEvent,
   type JsonValue,
   type ToolSchema
 } from "@mn/agent-protocol";
@@ -24,7 +25,7 @@ export interface ToolAuthorizationRequest {
   readonly args: Readonly<Record<string, unknown>>;
   readonly context: ToolRunContext;
   readonly approvalBinding?: AgentToolApprovalBindingV1;
-  readonly approvalRequest?: AgentSessionEventV1<"approval/requested">;
+  readonly approvalRequest?: AgentSessionEvent<"approval/requested">;
 }
 
 export type ToolAuthorizationResult =
@@ -121,7 +122,7 @@ interface PreparedState {
   readonly context: ToolRunContext;
   readonly argumentsJson: string;
   status: "prepared" | "approved-legacy" | "awaiting-resolution" | "denied" | "permitted" | "executed";
-  requestedEvent?: AgentSessionEventV1<"approval/requested">;
+  requestedEvent?: AgentSessionEvent<"approval/requested">;
   outcome?: ToolAuthorizationOutcome;
 }
 
@@ -234,7 +235,7 @@ export class ToolRegistry {
 
   async authorizePrepared(
     prepared: PreparedToolInvocation,
-    requestedEvent?: AgentSessionEventV1<"approval/requested">
+    requestedEvent?: AgentSessionEvent<"approval/requested">
   ): Promise<ToolAuthorizationOutcome> {
     const state = preparedStates.get(prepared as object);
     if (state === undefined || state.owner !== this || state.status !== "prepared") {
@@ -242,7 +243,8 @@ export class ToolRegistry {
     }
     let fixedBinding: AgentToolApprovalBindingV1 | undefined;
     if (requestedEvent !== undefined) {
-      if (!isAgentSessionEventV1(requestedEvent) || requestedEvent.type !== "approval/requested") {
+      if ((!isAgentSessionEventV1(requestedEvent) && !isAgentSessionEventV2(requestedEvent))
+        || requestedEvent.type !== "approval/requested") {
         throw new ToolExecutionError("Invalid durable approval request", "INVALID_ARGUMENTS");
       }
       fixedBinding = assertAgentToolApprovalBindingV1(requestedEvent.payload.publicControls.binding);
@@ -285,14 +287,15 @@ export class ToolRegistry {
 
   issueExecutePermit(
     prepared: PreparedToolInvocation,
-    resolvedEvent: AgentSessionEventV1<"approval/resolved">
+    resolvedEvent: AgentSessionEvent<"approval/resolved">
   ): AuthorizedToolInvocationPermit | undefined {
     const state = preparedStates.get(prepared as object);
     const requested = state?.requestedEvent;
     const outcome = state?.outcome;
     if (state === undefined || state.owner !== this || requested === undefined || outcome === undefined
       || (state.status !== "awaiting-resolution" && state.status !== "denied")
-      || !isAgentSessionEventV1(resolvedEvent) || resolvedEvent.type !== "approval/resolved") {
+      || !isAgentSessionEventV1(resolvedEvent) && !isAgentSessionEventV2(resolvedEvent)
+      || resolvedEvent.type !== "approval/resolved") {
       throw new ToolExecutionError("Invalid durable approval resolution", "TOOL_DENIED");
     }
     const requestedBinding = requested.payload.publicControls.binding;

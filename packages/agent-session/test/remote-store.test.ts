@@ -7,29 +7,29 @@ import {
   MessageId,
   SessionId,
   createUserMessage,
-  type AgentSessionEventPayloadMapV1,
-  type AgentSessionEventTypeV1,
-  type AgentSessionEventV1
+  type AgentSessionEvent,
+  type AgentSessionEventPayloadMap,
+  type AgentSessionEventType
 } from "@mn/agent-protocol";
 import {
   RemoteAgentSessionStore,
-  type AgentSessionHeaderV1,
+  type AgentSessionHeader,
   type RemoteAgentSessionBackend,
   type RemoteAgentSessionSnapshot
 } from "../src/index.js";
 
 class MemoryRemoteBackend implements RemoteAgentSessionBackend {
-  header?: AgentSessionHeaderV1;
-  events: AgentSessionEventV1[] = [];
+  header?: AgentSessionHeader;
+  events: AgentSessionEvent[] = [];
   payloads = new Map<
     number,
-    AgentSessionEventPayloadMapV1[AgentSessionEventTypeV1]
+    AgentSessionEventPayloadMap[AgentSessionEventType]
   >();
 
   async create(input: {
-    readonly header: AgentSessionHeaderV1;
-    readonly event: AgentSessionEventV1<"session/created">;
-    readonly runtimePayload: AgentSessionEventPayloadMapV1["session/created"];
+    readonly header: AgentSessionHeader;
+    readonly event: AgentSessionEvent<"session/created">;
+    readonly runtimePayload: AgentSessionEventPayloadMap["session/created"];
   }): Promise<void> {
     this.header = structuredClone(input.header);
     this.events = [structuredClone(input.event)];
@@ -37,8 +37,8 @@ class MemoryRemoteBackend implements RemoteAgentSessionBackend {
   }
 
   async append(
-    event: AgentSessionEventV1,
-    runtimePayload?: AgentSessionEventPayloadMapV1[AgentSessionEventTypeV1]
+    event: AgentSessionEvent,
+    runtimePayload?: AgentSessionEventPayloadMap[AgentSessionEventType]
   ): Promise<void> {
     if (runtimePayload === undefined) throw new Error("runtime payload required");
     this.events.push(structuredClone(event));

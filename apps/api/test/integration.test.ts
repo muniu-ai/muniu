@@ -2834,9 +2834,11 @@ test("api rejects tasks that violate policy", async (t) => {
 });
 
 test("api exposes desktop status for Claude Code and Codex", async (t) => {
-  const app = buildServer({ useMockExecutors: true });
+  const mniuRoot = await mkdtemp(join(tmpdir(), "mn-api-desktop-status-"));
+  const app = buildServer({ mniuRoot, useMockExecutors: true });
   t.after(async () => {
     await app.close();
+    await rm(mniuRoot, { recursive: true, force: true });
   });
 
   const response = await app.inject({
@@ -3202,6 +3204,86 @@ test("api provider CRUD accepts the agent consumer", async (t) => {
   });
   assert.equal(importPreviewResponse.statusCode, 200);
   assert.equal(importPreviewResponse.json().wouldImportCount, 1);
+});
+
+test("api persists closed provider wire compatibility and rejects invalid profiles", async (t) => {
+  const mniuRoot = await mkdtemp(join(tmpdir(), "mn-api-provider-wire-"));
+  t.after(async () => rm(mniuRoot, { recursive: true, force: true }));
+  const localStore = new FileLocalStore({ rootDir: mniuRoot });
+  const app = buildServer({ mniuRoot, localStore, useMockExecutors: true });
+  t.after(async () => app.close());
+
+  const createResponse = await app.inject({
+    method: "POST",
+    url: "/v1/providers",
+    payload: {
+      app: "agent",
+      name: "Compatible gateway",
+      kind: "openai_compatible",
+      apiFormat: "openai_chat",
+      baseUrl: "https://gateway.example.test/v1",
+      defaultModel: "reasoning-model",
+      modelReasoningEffort: "high",
+      wireCompatibility: {
+        systemRole: "developer",
+        streamUsage: "omit",
+        outputTokenField: "max_completion_tokens",
+        reasoningEncoding: "openai_effort",
+        assistantReasoningField: "reasoning"
+      },
+      modelCatalog: [{
+        id: "reasoning-model",
+        displayName: "Reasoning model",
+        maxOutputTokens: 8192,
+        inputModalities: ["text", "image"]
+      }]
+    }
+  });
+  assert.equal(createResponse.statusCode, 201, createResponse.body);
+  const created = createResponse.json();
+  assert.equal(created.wireCompatibility.systemRole, "developer");
+  assert.equal(created.modelCatalog[0].maxOutputTokens, 8192);
+  assert.deepEqual(created.modelCatalog[0].inputModalities, ["text", "image"]);
+  assert.deepEqual((await localStore.getProvider(created.id))?.wireCompatibility,
+    created.wireCompatibility);
+
+  const invalidCombination = await app.inject({
+    method: "POST",
+    url: "/v1/providers",
+    payload: {
+      app: "agent",
+      name: "Bad responses gateway",
+      kind: "openai_compatible",
+      apiFormat: "openai_responses",
+      baseUrl: "https://bad.example.test/v1",
+      defaultModel: "bad-model",
+      wireCompatibility: { systemRole: "developer" }
+    }
+  });
+  assert.equal(invalidCombination.statusCode, 400, invalidCombination.body);
+
+  const unknownSwitch = await app.inject({
+    method: "POST",
+    url: "/v1/providers",
+    payload: {
+      app: "agent",
+      name: "Unknown switch",
+      kind: "openai_compatible",
+      apiFormat: "openai_chat",
+      baseUrl: "https://unknown.example.test/v1",
+      defaultModel: "unknown-model",
+      wireCompatibility: { arbitraryHeaderScript: "forbidden" }
+    }
+  });
+  assert.equal(unknownSwitch.statusCode, 400, unknownSwitch.body);
+
+  const invalidPatch = await app.inject({
+    method: "PATCH",
+    url: `/v1/providers/${created.id}`,
+    payload: { wireCompatibility: { outputTokenField: "max_output_tokens" } }
+  });
+  assert.equal(invalidPatch.statusCode, 400, invalidPatch.body);
+  assert.equal((await localStore.getProvider(created.id))?.wireCompatibility?.systemRole, "developer");
 });
 
 test("api keeps agent outside managed provider projection and extension surfaces", async (t) => {

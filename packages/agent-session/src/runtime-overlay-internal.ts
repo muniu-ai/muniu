@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type {
-  AgentSessionEventPayloadMapV1,
-  AgentSessionEventTypeV1
+  AgentSessionEventPayloadMap,
+  AgentSessionEventType
 } from "@mn/agent-protocol";
 
 const RUNTIME_OVERLAY_TOKEN = Object.freeze({ kind: "agent-session-runtime-overlay" });
@@ -11,7 +11,7 @@ export interface InternalRuntimeOverlaySeed {
   readonly token: typeof RUNTIME_OVERLAY_TOKEN;
   readonly payloads: ReadonlyMap<
     number,
-    AgentSessionEventPayloadMapV1[AgentSessionEventTypeV1]
+    AgentSessionEventPayloadMap[AgentSessionEventType]
   >;
 }
 

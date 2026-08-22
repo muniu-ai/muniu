@@ -33,6 +33,8 @@ spec:
               valueFrom: { secretKeyRef: { name: {{ .Values.s3.existingSecret }}, key: {{ .Values.s3.accessKeyIdKey }} } }
             - name: MN_ARTIFACT_S3_SECRET_ACCESS_KEY
               valueFrom: { secretKeyRef: { name: {{ .Values.s3.existingSecret }}, key: {{ .Values.s3.secretAccessKeyKey }} } }
+            - name: MN_AGENT_ATTACHMENT_KEY_SECRET
+              valueFrom: { secretKeyRef: { name: {{ .Values.s3.existingSecret }}, key: {{ .Values.s3.agentAttachmentKeyKey }} } }
             - name: MN_SANDBOX_ATTESTATION_KEY
               valueFrom: { secretKeyRef: { name: {{ .Values.sandbox.attestationExistingSecret }}, key: {{ .Values.sandbox.attestationKey }} } }
             {{- with .Values.extraEnv }}{{ toYaml . | nindent 12 }}{{- end }}

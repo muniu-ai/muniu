@@ -43,9 +43,14 @@ line, function, and branch coverage when the workspace runner supports it.
 
 New Muniu contributions are accepted under Apache License 2.0. Do not copy
 source from another project unless its license is compatible and provenance is
-recorded. DeepSeek Harness work is limited to commit
-99f6f02fecdb7dff40c3fbc9470f5907c29f74ca; adapted files retain MIT notices and
-must be listed in docs/upstream-provenance/deepseek-harness.yaml.
+recorded. Selective DeepSeek Harness adaptations are limited to the approved fixed commits
+47f943859bef60e4160492346772ded9b24f765a and
+141eb6fef83422698aef7a981029e843e8161534. Adapted files retain MIT notices and
+must record their exact source commit in
+docs/upstream-provenance/deepseek-harness.yaml; floating tags and branches are
+not accepted. The separately vendored Cordis source is pinned to commit
+99f6f02fecdb7dff40c3fbc9470f5907c29f74ca and verified against
+docs/upstream-provenance/deepseek-harness-cordis.yaml and its source manifest.
 
 Do not submit proprietary model payloads, credentials, generated platform
 binaries, or code whose redistribution rights are unclear.

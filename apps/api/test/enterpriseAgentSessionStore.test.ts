@@ -192,6 +192,40 @@ test("enterprise Agent sessions restore from PostgreSQL/S3 with CAS and KMS bind
   ));
 });
 
+test("enterprise Agent sessions preserve one V2 chain and its attachment descriptor", async () => {
+  const database = new MemoryPg();
+  const objects = new MemoryObjects();
+  const options = {
+    tenantId: "tenant-v2",
+    pool: database.pool,
+    objectStore: objects.store
+  };
+  const sessionId = SessionId("enterprise-session-v2");
+  const session = await createEnterpriseAgentSessionStore(options).create({
+    schemaVersion: 2,
+    sessionId,
+    cwd: "/workspace/v2"
+  });
+  await session.append("attachment/stored", {
+    descriptor: {
+      schemaVersion: 1,
+      kind: "agent-attachment-descriptor",
+      attachmentId: "attachment-v2",
+      sessionId,
+      sha256: "a".repeat(64),
+      byteLength: 16,
+      contentType: "image/png",
+      width: 2,
+      height: 2
+    }
+  });
+
+  const reopened = await createEnterpriseAgentSessionStore(options).open(sessionId);
+  assert.equal(reopened.header.schemaVersion, 2);
+  assert.deepEqual(reopened.events.map((event) => event.schemaVersion), [2, 2]);
+  assert.equal(reopened.events[1]?.type, "attachment/stored");
+});
+
 test("enterprise Agent session restart orders multi-digit event sequences numerically", async () => {
   const database = new MemoryPg();
   const objects = new MemoryObjects();

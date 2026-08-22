@@ -2,39 +2,39 @@
 
 import {
   SessionId,
-  type AgentSessionEventPayloadMapV1,
-  type AgentSessionEventTypeV1,
-  type AgentSessionEventV1
+  type AgentSessionEvent,
+  type AgentSessionEventPayloadMap,
+  type AgentSessionEventType
 } from "@mn/agent-protocol";
 import { snapshotCreateAgentSessionOptions } from "./create-options.js";
 import { createInitialAgentSessionState } from "./initial-state.js";
 import { DurableAgentSession } from "./session.js";
 import { createInternalRuntimeOverlaySeed } from "./runtime-overlay-internal.js";
 import type {
-  AgentSessionHeaderV1,
+  AgentSessionHeader,
   CreateAgentSessionOptions,
   EventPersistence
 } from "./types.js";
 
 export interface RemoteAgentSessionSnapshot {
-  readonly header: AgentSessionHeaderV1;
-  readonly events: readonly AgentSessionEventV1[];
+  readonly header: AgentSessionHeader;
+  readonly events: readonly AgentSessionEvent[];
   readonly runtimePayloads: ReadonlyMap<
     number,
-    AgentSessionEventPayloadMapV1[AgentSessionEventTypeV1]
+    AgentSessionEventPayloadMap[AgentSessionEventType]
   >;
 }
 
 export interface RemoteAgentSessionBackend {
   create(input: {
-    readonly header: AgentSessionHeaderV1;
-    readonly event: AgentSessionEventV1<"session/created">;
-    readonly runtimePayload: AgentSessionEventPayloadMapV1["session/created"];
+    readonly header: AgentSessionHeader;
+    readonly event: AgentSessionEvent<"session/created">;
+    readonly runtimePayload: AgentSessionEventPayloadMap["session/created"];
   }): Promise<void>;
   load(sessionId: SessionId): Promise<RemoteAgentSessionSnapshot>;
   append(
-    event: AgentSessionEventV1,
-    runtimePayload?: AgentSessionEventPayloadMapV1[AgentSessionEventTypeV1]
+    event: AgentSessionEvent,
+    runtimePayload?: AgentSessionEventPayloadMap[AgentSessionEventType]
   ): Promise<void>;
   listSessionIds(): Promise<readonly SessionId[]>;
   dispose?(): void | Promise<void>;
@@ -69,7 +69,7 @@ export class RemoteAgentSessionStore {
     const snapshot = await this.backend.load(sessionId);
     const runtimePayloads = new Map(snapshot.runtimePayloads);
     const createdRuntime = runtimePayloads.get(0) as
-      | AgentSessionEventPayloadMapV1["session/created"]
+      | AgentSessionEventPayloadMap["session/created"]
       | undefined;
     return new DurableAgentSession(
       snapshot.header,

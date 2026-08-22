@@ -120,6 +120,7 @@ s3:
   existingSecret: muniu-s3
   accessKeyIdKey: access-key-id
   secretAccessKeyKey: secret-access-key
+  agentAttachmentKeyKey: agent-attachment-key
   sessionTokenKey: session-token
   kmsKeyId: ""
 

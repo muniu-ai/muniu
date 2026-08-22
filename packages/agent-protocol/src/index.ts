@@ -2,6 +2,7 @@
 
 export * from "./canonical.js";
 export * from "./events.js";
+export * from "./events-v2.js";
 export * from "./effect-commitment.js";
 export * from "./freeze.js";
 export * from "./ids.js";
@@ -12,7 +13,9 @@ export * from "./model-audit.js";
 export * from "./model.js";
 export * from "./protection.js";
 export * from "./session-payload.js";
+export * from "./session-payload-v2.js";
 export * from "./transport.js";
+export * from "./versioned-session.js";
 export { snapshotBoundedJsonValue } from "./strict-json.js";
 export {
   assertSafePublicControlIdV1,

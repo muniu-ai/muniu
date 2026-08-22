@@ -12,6 +12,7 @@ import {
 import type { CreateAgentSessionOptions } from "./types.js";
 
 export interface CreateAgentSessionOptionsSnapshot {
+  readonly schemaVersion: 1 | 2;
   readonly sessionId: SessionId;
   readonly cwd?: string;
   readonly labels?: Readonly<Record<string, string>>;
@@ -28,11 +29,15 @@ export function snapshotCreateAgentSessionOptions(
   // Read each public option exactly once. A caller may supply accessors or
   // mutate the source object as soon as create() returns.
   const suppliedSessionId = options.sessionId;
+  const schemaVersion = options.schemaVersion ?? 1;
   const cwd = options.cwd;
   const labels = options.labels;
   const modelBinding = options.modelBinding;
   if (suppliedSessionId !== undefined && (typeof suppliedSessionId !== "string" || suppliedSessionId.length === 0)) {
     throw new Error("session id must be a non-empty string");
+  }
+  if (schemaVersion !== 1 && schemaVersion !== 2) {
+    throw new Error("session schema version must be 1 or 2");
   }
   if (cwd !== undefined && typeof cwd !== "string") {
     throw new Error("session cwd must be a string");
@@ -50,6 +55,7 @@ export function snapshotCreateAgentSessionOptions(
   }
 
   return deepFreeze({
+    schemaVersion,
     sessionId: suppliedSessionId ?? SessionId(createSafeRandomPublicControlIdV1("session")),
     ...(cwd === undefined ? {} : { cwd }),
     ...(labelsSnapshot === undefined ? {} : { labels: labelsSnapshot }),

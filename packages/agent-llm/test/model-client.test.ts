@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 
 import {
@@ -629,6 +630,137 @@ test("serializes multi-turn tool history using each provider's native wire vocab
   ]);
 });
 
+test("OpenAI wire compatibility controls roles, usage, token caps, reasoning, and replay fields", async () => {
+  const callId = CallId("compat-call");
+  const messages: LlmRequest["messages"] = [
+    createAssistantMessage({
+      id: MessageId("compat-assistant"),
+      source: { kind: "model", provider: "compat-provider", model: "test-model" },
+      content: [
+        { type: "thinking", text: "replayed thought" },
+        { type: "text", text: "answer" },
+        { type: "tool-call", id: callId, name: "read_file", arguments: "{}" }
+      ]
+    })
+  ];
+  let captured: Record<string, unknown> | undefined;
+  const provider = route("openai_chat", {
+    maxOutputTokens: 321,
+    reasoningEffort: "high",
+    wireCompatibility: {
+      systemRole: "developer",
+      streamUsage: "omit",
+      outputTokenField: "max_completion_tokens",
+      reasoningEncoding: "openai_effort",
+      assistantReasoningField: "reasoning"
+    }
+  });
+  const adapter = new HttpModelAdapter({
+    id: provider.providerId,
+    routes: [provider],
+    resolveSecret: async () => secret,
+    fetch: async (input) => {
+      const sent = input instanceof Request ? input : new Request(input);
+      captured = JSON.parse(await sent.clone().text()) as Record<string, unknown>;
+      return sse(["[DONE]"]);
+    }
+  });
+
+  await collect(adapter.stream({ ...request(provider.providerId), messages }));
+  assert.equal(captured?.stream_options, undefined);
+  assert.equal(captured?.max_completion_tokens, 321);
+  assert.equal(captured?.reasoning_effort, "high");
+  assert.deepEqual((captured?.messages as Array<Record<string, unknown>>)[0], {
+    role: "developer",
+    content: "system contract"
+  });
+  assert.equal((captured?.messages as Array<Record<string, unknown>>)[1]?.reasoning, "replayed thought");
+  assert.equal((captured?.messages as Array<Record<string, unknown>>)[1]?.reasoning_content, undefined);
+});
+
+test("reasoning and output caps use each supported wire encoding", async () => {
+  const captures = new Map<string, Record<string, unknown>>();
+  const routes: ModelProviderRoute[] = [
+    route("openai_chat", {
+      providerId: "deepseek-thinking",
+      reasoningEffort: "medium",
+      maxOutputTokens: 222,
+      wireCompatibility: {
+        outputTokenField: "max_tokens",
+        reasoningEncoding: "deepseek_thinking",
+        assistantReasoningField: "omit"
+      }
+    }),
+    route("openai_responses", {
+      providerId: "responses-effort",
+      reasoningEffort: "low",
+      maxOutputTokens: 444,
+      wireCompatibility: {
+        outputTokenField: "max_output_tokens",
+        reasoningEncoding: "openai_effort"
+      }
+    })
+  ];
+
+  for (const provider of routes) {
+    const adapter = new HttpModelAdapter({
+      id: provider.providerId,
+      routes: [provider],
+      resolveSecret: async () => secret,
+      fetch: async (input) => {
+        const sent = input instanceof Request ? input : new Request(input);
+        captures.set(provider.providerId, JSON.parse(await sent.clone().text()) as Record<string, unknown>);
+        return sse(["[DONE]"]);
+      }
+    });
+    await collect(adapter.stream(request(provider.providerId)));
+  }
+
+  assert.deepEqual(captures.get("deepseek-thinking")?.thinking, { type: "enabled" });
+  assert.equal(captures.get("deepseek-thinking")?.max_tokens, 222);
+  assert.deepEqual(captures.get("responses-effort")?.reasoning, { effort: "low" });
+  assert.equal(captures.get("responses-effort")?.max_output_tokens, 444);
+});
+
+test("wire compatibility rejects unknown, malformed, and protocol-incompatible values before fetch", async () => {
+  let fetches = 0;
+  const invalidRoutes: unknown[] = [
+    route("openai_chat", {
+      wireCompatibility: { outputTokenField: "max_output_tokens" }
+    }),
+    route("openai_responses", {
+      wireCompatibility: { systemRole: "developer" }
+    }),
+    route("openai_responses", {
+      wireCompatibility: { reasoningEncoding: "deepseek_thinking" }
+    }),
+    route("anthropic_messages", {
+      wireCompatibility: { streamUsage: "omit" }
+    }),
+    {
+      ...route("openai_chat"),
+      wireCompatibility: { unknownSwitch: true }
+    },
+    {
+      ...route("openai_chat"),
+      reasoningEffort: "ultra"
+    }
+  ];
+
+  for (const invalid of invalidRoutes) {
+    assert.throws(() => new HttpModelAdapter({
+      id: "invalid-wire",
+      routes: [invalid as ModelProviderRoute],
+      resolveSecret: async () => secret,
+      fetch: async () => {
+        fetches += 1;
+        return sse(["[DONE]"]);
+      }
+    }), /wire|route|reasoning|compatible|format/i);
+  }
+  assert.equal(fetches, 0);
+});
+
 test("normalizes provider-declared stream errors for all three wire protocols", async () => {
   const cases: readonly {
     apiFormat: ModelProviderRoute["apiFormat"];
@@ -944,4 +1076,131 @@ test("reads AbortSignal state without invoking a hostile instance accessor", asy
     signal: controller.signal
   })), [{ type: "finish", reason: "stop" }]);
   assert.equal(abortedGetterReads, 0);
+});
+
+function multimodalRequest(provider: string, payloads: readonly Buffer[]): LlmRequest {
+  const inputs = payloads.map((bytes, index) => ({
+    attachmentId: `image-${index}`,
+    contentType: "image/png" as const,
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+    byteLength: bytes.byteLength,
+    dataBase64: bytes.toString("base64")
+  }));
+  return {
+    provider,
+    model: "image-model",
+    messages: inputs.map((input, index) => createUserMessage({
+      id: MessageId(`image-message-${index}`),
+      source: { kind: "user" },
+      content: [
+        { type: "text", text: `prompt-${index}` },
+        {
+          type: "image",
+          attachmentId: input.attachmentId,
+          contentType: input.contentType,
+          sha256: input.sha256,
+          byteLength: input.byteLength,
+          width: 2,
+          height: 2
+        }
+      ]
+    })),
+    imageInputs: inputs
+  };
+}
+
+test("serializes verified image inputs for all closed provider formats without auditing raw bytes", async () => {
+  const bytes = Buffer.from("verified-image-payload");
+  for (const apiFormat of ["openai_chat", "openai_responses", "anthropic_messages"] as const) {
+    let captured: Request | undefined;
+    const provider = route(apiFormat, { inputModalities: ["text", "image"] });
+    const adapter = new HttpModelAdapter({
+      id: provider.providerId,
+      routes: [provider],
+      resolveSecret: async () => secret,
+      fetch: async (input) => {
+        captured = input instanceof Request ? input : new Request(input);
+        return sse(["[DONE]"]);
+      }
+    });
+    const requestValue = multimodalRequest(provider.providerId, [bytes]);
+    const starts: unknown[] = [];
+    await collect(adapter.stream(requestValue, {
+      attemptAudit: {
+        started: async (attempt) => { starts.push(attempt); },
+        terminal: async () => undefined
+      }
+    }));
+    const body = await captured!.clone().text();
+    assert.equal(body.includes(bytes.toString("base64")), true, apiFormat);
+    assert.equal(JSON.stringify(starts).includes(bytes.toString("base64")), false, apiFormat);
+  }
+});
+
+test("deterministically replaces oldest request images without mutating durable history", async () => {
+  const oldBytes = Buffer.from("old-image-payload");
+  const newBytes = Buffer.from("new-image-payload");
+  const provider = route("openai_chat", {
+    inputModalities: ["text", "image"],
+    maxRequestImageBase64Bytes: newBytes.toString("base64").length
+  });
+  let captured: Request | undefined;
+  const adapter = new HttpModelAdapter({
+    id: provider.providerId,
+    routes: [provider],
+    resolveSecret: async () => secret,
+    fetch: async (input) => {
+      captured = input instanceof Request ? input : new Request(input);
+      return sse(["[DONE]"]);
+    }
+  });
+  const requestValue = multimodalRequest(provider.providerId, [oldBytes, newBytes]);
+  const historyBefore = JSON.stringify(requestValue.messages);
+  await collect(adapter.stream(requestValue));
+  const body = await captured!.clone().text();
+  assert.equal(body.includes(oldBytes.toString("base64")), false);
+  assert.equal(body.includes(newBytes.toString("base64")), true);
+  assert.match(body, /Earlier image omitted/u);
+  assert.equal(JSON.stringify(requestValue.messages), historyBefore);
+});
+
+test("rejects image modality and descriptor mismatches before provider fetch", async () => {
+  const bytes = Buffer.from("image-payload");
+  const cases: Array<{
+    readonly route: Partial<ModelProviderRoute>;
+    readonly mutate: (value: LlmRequest) => LlmRequest;
+  }> = [
+    { route: {}, mutate: (value) => value },
+    {
+      route: { inputModalities: ["text", "image"] },
+      mutate: (value) => ({
+        ...value,
+        imageInputs: value.imageInputs?.map((input) => ({ ...input, sha256: "0".repeat(64) }))
+      })
+    }
+  ];
+  for (const candidate of cases) {
+    let fetches = 0;
+    const provider = route("openai_chat", candidate.route);
+    const adapter = new HttpModelAdapter({
+      id: provider.providerId,
+      routes: [provider],
+      resolveSecret: async () => secret,
+      fetch: async () => {
+        fetches += 1;
+        return sse(["[DONE]"]);
+      }
+    });
+    let rejected = false;
+    let chunks: StreamChunk[] = [];
+    try {
+      chunks = await collect(adapter.stream(
+        candidate.mutate(multimodalRequest(provider.providerId, [bytes]))
+      ));
+    } catch {
+      rejected = true;
+    }
+    assert.equal(fetches, 0);
+    assert.equal(rejected || chunks.some((chunk) => chunk.type === "error"), true);
+  }
 });

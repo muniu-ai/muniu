@@ -12,7 +12,7 @@ import type {
 } from "@mn/core";
 import type {
   AgentApprovalDecisionV1,
-  AgentSessionEventV1,
+  AgentSessionEvent,
   AgentToolApprovalBindingV1
 } from "@mn/agent-protocol";
 import { sha256Canonical } from "@mn/governance";
@@ -296,7 +296,7 @@ export class EnterpriseBuiltinAgentPersistence {
 
   async waitForApproval(
     key: DurableBuiltinExecutionOwnerKey,
-    request: AgentSessionEventV1<"approval/requested">,
+    request: AgentSessionEvent<"approval/requested">,
     binding: AgentToolApprovalBindingV1,
     signal?: AbortSignal
   ): Promise<AgentApprovalDecisionV1> {
@@ -340,7 +340,7 @@ export class EnterpriseBuiltinAgentPersistence {
 
   async decideApproval(input: {
     readonly tenantId: string;
-    readonly request: AgentSessionEventV1<"approval/requested">;
+    readonly request: AgentSessionEvent<"approval/requested">;
     readonly binding: AgentToolApprovalBindingV1;
     readonly clientRequestId: string;
     readonly decision: AgentApprovalDecisionV1;
