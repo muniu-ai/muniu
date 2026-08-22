@@ -13,7 +13,7 @@ import {
   MessageId,
   createModelAttemptTerminalV1,
   createToolResultMessage,
-  type AgentSessionEventV1
+  type AgentSessionEvent
 } from "@mn/agent-protocol";
 
 import { projectSession } from "./projection.js";
@@ -22,10 +22,10 @@ import type { AgentSessionExclusiveView, AgentSessionLike } from "./types.js";
 export const TOOL_NOT_STARTED = "TOOL_NOT_STARTED";
 export const TOOL_OUTCOME_UNKNOWN = "TOOL_OUTCOME_UNKNOWN";
 
-async function recoverOnce(session: AgentSessionExclusiveView): Promise<AgentSessionEventV1[]> {
+async function recoverOnce(session: AgentSessionExclusiveView): Promise<AgentSessionEvent[]> {
   const projection = projectSession(session.events);
   if (projection.openTurn === undefined) return [];
-  const appended: AgentSessionEventV1[] = [];
+  const appended: AgentSessionEvent[] = [];
   for (const attempt of projection.pendingModelAttempts) {
     appended.push(await session.append("model/audit", {
       turn: attempt.turn,
@@ -111,6 +111,6 @@ async function recoverOnce(session: AgentSessionExclusiveView): Promise<AgentSes
   return appended;
 }
 
-export function recoverInterruptedSession(session: AgentSessionLike): Promise<AgentSessionEventV1[]> {
+export function recoverInterruptedSession(session: AgentSessionLike): Promise<AgentSessionEvent[]> {
   return session.withExclusive(recoverOnce);
 }

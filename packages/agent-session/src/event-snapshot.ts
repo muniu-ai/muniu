@@ -11,19 +11,22 @@
 
 import {
   deepFreeze,
+  isAgentSessionEventV2,
   isAgentSessionEventV1,
   snapshotJsonValue,
-  type AgentSessionEventV1
+  type AgentSessionEvent
 } from "@mn/agent-protocol";
 
-export function adoptAgentSessionEvent<T extends AgentSessionEventV1>(event: T): T {
-  if (!isAgentSessionEventV1(event)) throw new Error("invalid agent session event envelope");
+export function adoptAgentSessionEvent<T extends AgentSessionEvent>(event: T): T {
+  if (!isAgentSessionEventV1(event) && !isAgentSessionEventV2(event)) {
+    throw new Error("invalid agent session event envelope");
+  }
   return deepFreeze(event);
 }
 
-export function snapshotAgentSessionEvent<T extends AgentSessionEventV1>(event: T): T {
+export function snapshotAgentSessionEvent<T extends AgentSessionEvent>(event: T): T {
   const snapshot = snapshotJsonValue(event);
-  if (snapshot === undefined || !isAgentSessionEventV1(snapshot)) {
+  if (snapshot === undefined || !isAgentSessionEventV1(snapshot) && !isAgentSessionEventV2(snapshot)) {
     throw new Error("agent session event is not losslessly JSON-serializable");
   }
   return adoptAgentSessionEvent(snapshot as T);

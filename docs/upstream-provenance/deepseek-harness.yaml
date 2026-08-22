@@ -1,8 +1,10 @@
-schemaVersion: 1
+schemaVersion: 2
 upstream:
   name: DeepSeek Harness
   repository: https://github.com/deepseek-ai/deepseek-harness
-  commit: 47f943859bef60e4160492346772ded9b24f765a
+  approvedSourceCommits:
+    - 47f943859bef60e4160492346772ded9b24f765a
+    - 141eb6fef83422698aef7a981029e843e8161534
   license: MIT
   copyright: Copyright (c) 2026 DeepSeek
   trademarkNote: No DeepSeek trademark rights or endorsement are implied.
@@ -71,61 +73,76 @@ excluded:
 files:
   - upstreamPath: packages/core/session/src/json.ts
     localPath: packages/agent-protocol/src/json.ts
+    upstreamCommit: 47f943859bef60e4160492346772ded9b24f765a
     mode: adapted
     summary: Retained the lossless JSON validation and detached snapshot algorithm while adapting comments, formatting, and module ownership.
   - upstreamPath: packages/llm/llm/src/brand.ts
     localPath: packages/agent-protocol/src/ids.ts
+    upstreamCommit: 47f943859bef60e4160492346772ded9b24f765a
     mode: adapted
     summary: Replaced the external brand package with a local closed set of protocol identifiers.
   - upstreamPath: packages/llm/llm/src/types.ts
     localPath: packages/agent-protocol/src/model.ts
+    upstreamCommit: 47f943859bef60e4160492346772ded9b24f765a
     mode: adapted
     summary: Retained a provider-neutral message and stream vocabulary while removing Cordis, attachments, discovery, and plugin extension points.
   - upstreamPath: packages/llm/llm/src/message.ts
     localPath: packages/agent-protocol/src/messages.ts
+    upstreamCommit: 47f943859bef60e4160492346772ded9b24f765a
     mode: adapted
     summary: Reduced immutable message constructors to the closed Muniu v0.1 source and content union.
   - upstreamPath: packages/llm/llm/src/call-config.ts
     localPath: packages/agent-protocol/src/freeze.ts
+    upstreamCommit: 47f943859bef60e4160492346772ded9b24f765a
     mode: adapted
     summary: Retained only the cycle-safe iterative deep-freeze helper and removed request ownership state.
   - upstreamPath: packages/core/session/src/types.ts
     localPath: packages/agent-protocol/src/events.ts
+    upstreamCommit: 47f943859bef60e4160492346772ded9b24f765a
     mode: adapted
     summary: Replaced Session v0 and plugin-merged events with the versioned Muniu event envelope and digest chain.
   - upstreamPath: packages/core/session/src/surface.ts
     localPath: packages/agent-session/src/projection.ts
+    upstreamCommit: 47f943859bef60e4160492346772ded9b24f765a
     mode: adapted
     summary: Replaced the extensible surface fold with a closed projection of messages and active turn, step, and tool state.
   - upstreamPath: packages/core/session/src/repair.ts
     localPath: packages/agent-session/src/recovery.ts
+    upstreamCommit: 47f943859bef60e4160492346772ded9b24f765a
     mode: adapted
     summary: Emits digest-chained interrupted results and boundaries through the session API without any side-effect replay capability.
   - upstreamPath: packages/core/session/src/index.ts
     localPath: packages/agent-session/src/event-snapshot.ts
+    upstreamCommit: 47f943859bef60e4160492346772ded9b24f765a
     mode: adapted
     summary: Retained only the event adopt and detached immutable snapshot boundary; removed Cordis lifecycle and store coupling.
   - upstreamPath: packages/llm/llm/src/assembler.ts
     localPath: packages/agent-llm/src/assembler.ts
+    upstreamCommit: 141eb6fef83422698aef7a981029e843e8161534
     mode: adapted
     summary: Adapted incremental block assembly to the closed Muniu thinking/error stream and immutable message types.
   - upstreamPath: packages/core/tools/src/json-schema.ts
     localPath: packages/agent-tools/src/json-schema.ts
+    upstreamCommit: 47f943859bef60e4160492346772ded9b24f765a
     mode: adapted
     summary: Retained the enforced JSON Schema subset and path-qualified validator in a smaller Cordis-free implementation.
   - upstreamPath: packages/core/tools/src/schema.ts
     localPath: packages/agent-tools/src/define-tool.ts
+    upstreamCommit: 47f943859bef60e4160492346772ded9b24f765a
     mode: adapted
     summary: Retained schema enforcement and typed tool construction while removing output DSL, presentation hooks, and plugin concurrency policy.
   - upstreamPath: packages/core/agent-loop/src/agent.ts
     localPath: packages/agent-kernel/src/react-driver.ts
+    upstreamCommit: 141eb6fef83422698aef7a981029e843e8161534
     mode: adapted
     summary: Retained a bounded model and tool reaction loop while replacing Cordis hooks and plugin extension points with static runtimes and durable events.
   - upstreamPath: packages/core/agent-loop/src/tool-calls.ts
     localPath: packages/agent-kernel/src/tool-step.ts
+    upstreamCommit: 47f943859bef60e4160492346772ded9b24f765a
     mode: adapted
     summary: Reduced tool-call processing to sequential execution with an awaited durable call event before dispatch and a closed result event afterward.
   - upstreamPath: packages/core/system-prompt/src/index.ts
     localPath: packages/agent-kernel/src/system-prompt.ts
+    upstreamCommit: 47f943859bef60e4160492346772ded9b24f765a
     mode: adapted
     summary: Retained deterministic section joining and variable interpolation while removing Cordis services, runtime discovery, and extension hooks.

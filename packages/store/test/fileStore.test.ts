@@ -1,4 +1,4 @@
-import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { tmpdir } from "node:os";
@@ -119,7 +119,7 @@ test("legacy JSON enabledApps remains readable without rewriting the fixture", a
   assert.equal(await readFile(dataFile, "utf8"), original);
 });
 
-test("legacy SQLite enabledApps remains readable without rewriting the fixture", async (t) => {
+test("legacy SQLite blob migrates transactionally with a recoverable immutable backup", async (t) => {
   const rootDir = await mkdtemp(join(tmpdir(), "mn-legacy-sqlite-provider-store-"));
   t.after(async () => rm(rootDir, { recursive: true, force: true }));
   const databaseFile = join(rootDir, "mniu.db");
@@ -135,10 +135,12 @@ test("legacy SQLite enabledApps remains readable without rewriting the fixture",
     .prepare("insert into local_state (key, value) values (?, ?)")
     .run("data", original);
   fixtureDatabase.close();
+  await chmod(databaseFile, 0o600);
 
   const store = new SqliteLocalStore({ rootDir });
   const claude = await store.getEnabledProvider("claude");
   const agent = await store.getEnabledProvider("agent");
+  const backupFile = store.legacyBackupFile;
   store.close();
 
   assert.equal(claude?.id, "legacy-unified");
@@ -147,10 +149,19 @@ test("legacy SQLite enabledApps remains readable without rewriting the fixture",
   assert.equal(agent, undefined);
 
   const verificationDatabase = new DatabaseSync(databaseFile);
-  const row = verificationDatabase
-    .prepare("select value from local_state where key = ?")
-    .get("data") as { value: string };
+  const version = (verificationDatabase.prepare("pragma user_version").get() as { user_version: number }).user_version;
+  const legacyTable = verificationDatabase.prepare(`
+    select name from sqlite_schema where type = 'table' and name = 'local_state'
+  `).get();
+  const providerRows = (verificationDatabase.prepare("select count(*) as count from providers").get() as { count: number }).count;
   verificationDatabase.close();
+  assert.equal(version, 2);
+  assert.equal(legacyTable, undefined);
+  assert.equal(providerRows, 1);
+  assert.ok(backupFile);
+  const backupDatabase = new DatabaseSync(backupFile, { readOnly: true });
+  const row = backupDatabase.prepare("select value from local_state where key = ?").get("data") as { value: string };
+  backupDatabase.close();
   assert.equal(row.value, original);
 });
 

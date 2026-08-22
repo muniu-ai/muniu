@@ -233,3 +233,91 @@ test("production factory supports an explicitly credential-free provider route",
   assert.equal(authorization, null);
   await lease.release();
 });
+
+test("production factory snapshots wire compatibility, model caps, and reasoning into request and digest", async () => {
+  let current = provider({
+    modelReasoningEffort: "high",
+    wireCompatibility: {
+      systemRole: "developer",
+      streamUsage: "omit",
+      outputTokenField: "max_completion_tokens",
+      reasoningEncoding: "openai_effort",
+      assistantReasoningField: "reasoning"
+    },
+    modelCatalog: [{
+      id: "model-safe",
+      displayName: "Safe model",
+      maxOutputTokens: 777,
+      inputModalities: ["text", "image"]
+    }]
+  });
+  const requests: Record<string, unknown>[] = [];
+  const factory = createProductionAgentRuntimeFactory({
+    providerSource: { getProvider: async () => current },
+    resolveStoredSecret: async () => "synthetic-secret",
+    fetch: async (input) => {
+      const request = input instanceof Request ? input : new Request(input);
+      requests.push(JSON.parse(await request.clone().text()) as Record<string, unknown>);
+      return new Response("data: [DONE]\n\n", { status: 200 });
+    }
+  });
+  const first = await factory.resolveAdapterLease({
+    providerId: binding.providerId,
+    modelId: binding.modelId
+  });
+  await collect(first.adapter.stream({
+    provider: binding.providerId,
+    model: binding.modelId,
+    messages: [],
+    system: "system"
+  }));
+  assert.deepEqual(requests[0], {
+    model: "model-safe",
+    messages: [{ role: "developer", content: "system" }],
+    stream: true,
+    max_completion_tokens: 777,
+    reasoning_effort: "high"
+  });
+
+  current = provider({
+    ...current,
+    wireCompatibility: { ...current.wireCompatibility, streamUsage: "include" }
+  });
+  const changed = await factory.resolveAdapterLease({
+    providerId: binding.providerId,
+    modelId: binding.modelId
+  });
+  assert.notEqual(changed.resolution.configDigest, first.resolution.configDigest);
+  assert.notEqual(changed.adapter, first.adapter);
+});
+
+test("production factory rejects invalid wire profiles and model metadata before fetch", async () => {
+  let fetches = 0;
+  const cases: ProviderRecord[] = [
+    provider({ wireCompatibility: { outputTokenField: "max_output_tokens" } }),
+    provider({
+      wireCompatibility: { reasoningEncoding: "openai_effort" },
+      modelReasoningEffort: "high",
+      modelCatalog: [{ id: "model-safe", displayName: "Safe", maxOutputTokens: 0 }]
+    }),
+    provider({
+      modelCatalog: [{ id: "model-safe", displayName: "Safe", inputModalities: ["text", "text"] }]
+    })
+  ];
+  for (const record of cases) {
+    const factory = createProductionAgentRuntimeFactory({
+      providerSource: { getProvider: async () => record },
+      resolveStoredSecret: async () => undefined,
+      fetch: async () => {
+        fetches += 1;
+        return new Response("data: [DONE]\n\n");
+      }
+    });
+    await assert.rejects(
+      factory.resolveAdapter(binding),
+      (error: unknown) => error instanceof AgentRuntimeResolutionError
+        && (error.code === "PROVIDER_RECORD_INVALID" || error.code === "PROVIDER_ROUTE_INVALID")
+    );
+  }
+  assert.equal(fetches, 0);
+});

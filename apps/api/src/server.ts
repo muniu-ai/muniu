@@ -62,6 +62,7 @@ import {
   type ProviderUsagePreparationIntent
 } from "@mn/local-proxy";
 import {
+  assertProviderWireConfiguration,
   createProviderInputFromPreset,
   maskSecret,
   normalizeProviderApp,
@@ -101,6 +102,7 @@ import {
   registerControlPlaneRoutes
 } from "./controlPlane.js";
 import { LocalMockAgentSessionService } from "./agentSessionService.js";
+import { LocalAgentAttachmentStore } from "./agentAttachmentStore.js";
 import { createProductionAgentRuntimeFactory } from "./agentRuntimeFactory.js";
 import { registerAgentSessionRoutes } from "./agentSessionRoutes.js";
 import {
@@ -383,6 +385,14 @@ export interface BuildServerOptions {
   learningProposalSignatureVerifier?: EvidenceRouteOptions["verifyLearningProposalSignature"];
   /** Local-only test/embedding seam. The server owns disposal when supplied. */
   agentSessionService?: LocalMockAgentSessionService;
+  /** Local multimodal deployment limits; values are snapshotted into runtime routes. */
+  agentMultimodalLimits?: Readonly<{
+    maxImageBytes?: number;
+    maxDimension?: number;
+    maxPixels?: number;
+    maxImagesPerMessage?: number;
+    maxRequestImageBase64Bytes?: number;
+  }>;
 }
 
 const projectSchema = z.object({
@@ -438,13 +448,21 @@ const providerModelSchema = z.object({
   id: z.string().min(1),
   displayName: z.string().min(1),
   contextWindow: z.number().int().positive().optional(),
+  maxOutputTokens: z.number().int().positive().optional(),
+  inputModalities: z.array(z.enum(["text", "image"]))
+    .min(1)
+    .refine((modalities) => modalities.includes("text")
+      && new Set(modalities).size === modalities.length, {
+      message: "inputModalities must be unique and include text"
+    })
+    .optional(),
   inputTokenUsdPerMillion: z.number().nonnegative().optional(),
   outputTokenUsdPerMillion: z.number().nonnegative().optional(),
   cachedInputTokenUsdPerMillion: z.number().nonnegative().optional(),
   cacheCreationInputTokenUsdPerMillion: z.number().nonnegative().optional(),
   cacheReadInputTokenUsdPerMillion: z.number().nonnegative().optional(),
   reasoningOutputTokenUsdPerMillion: z.number().nonnegative().optional()
-});
+}).strict();
 const providerModelCatalogModelsSchema = z
   .array(providerModelSchema)
   .min(1)
@@ -478,6 +496,15 @@ const providerEnterpriseCapabilitiesSchema = z.object({
   }).strict().optional(),
   retryableFailureResponsesUnbilled: z.literal(true).optional()
 }).strict();
+const providerWireCompatibilitySchema = z.object({
+  systemRole: z.enum(["system", "developer"]).optional(),
+  streamUsage: z.enum(["include", "omit"]).optional(),
+  outputTokenField: z
+    .enum(["omit", "max_tokens", "max_completion_tokens", "max_output_tokens"])
+    .optional(),
+  reasoningEncoding: z.enum(["omit", "openai_effort", "deepseek_thinking"]).optional(),
+  assistantReasoningField: z.enum(["omit", "reasoning_content", "reasoning"]).optional()
+}).strict();
 const providerCreateSchema = z.object({
   presetId: z.string().optional(),
   app: providerAppSchema.optional(),
@@ -491,6 +518,7 @@ const providerCreateSchema = z.object({
   baseUrl: z.string().url().optional(),
   defaultModel: z.string().optional(),
   modelReasoningEffort: z.enum(["minimal", "low", "medium", "high"]).optional(),
+  wireCompatibility: providerWireCompatibilitySchema.optional(),
   disableResponseStorage: z.boolean().optional(),
   wireApi: z.enum(["responses", "chat"]).optional(),
   modelCatalog: z.array(providerModelSchema).optional(),
@@ -507,6 +535,7 @@ const providerPatchSchema = z.object({
   baseUrl: z.string().url().optional(),
   defaultModel: z.string().optional(),
   modelReasoningEffort: z.enum(["minimal", "low", "medium", "high"]).optional(),
+  wireCompatibility: providerWireCompatibilitySchema.optional(),
   disableResponseStorage: z.boolean().optional(),
   wireApi: z.enum(["responses", "chat"]).optional(),
   modelCatalog: z.array(providerModelSchema).optional(),
@@ -535,6 +564,7 @@ const providerImportItemSchema = z.object({
   baseUrl: z.string().url(),
   defaultModel: z.string().min(1),
   modelReasoningEffort: z.enum(["minimal", "low", "medium", "high"]).optional(),
+  wireCompatibility: providerWireCompatibilitySchema.optional(),
   disableResponseStorage: z.boolean().optional(),
   wireApi: z.enum(["responses", "chat"]).optional(),
   modelCatalog: z.array(providerModelSchema).optional(),
@@ -1848,11 +1878,43 @@ export function buildServer(options: BuildServerOptions = {}) {
         providerSource: {
           getProvider: (providerId) => localStore.getProvider(providerId)
         },
-        resolveStoredSecret: (reference) => resolveStoredSecret(reference)
+        resolveStoredSecret: (reference) => resolveStoredSecret(reference),
+        ...(options.agentMultimodalLimits === undefined ? {} : {
+          multimodalLimits: {
+            ...(options.agentMultimodalLimits.maxImagesPerMessage === undefined
+              ? {}
+              : { maxImagesPerMessage: options.agentMultimodalLimits.maxImagesPerMessage }),
+            ...(options.agentMultimodalLimits.maxRequestImageBase64Bytes === undefined
+              ? {}
+              : { maxRequestImageBase64Bytes: options.agentMultimodalLimits.maxRequestImageBase64Bytes })
+          }
+        })
       });
       agentSessionService = new LocalMockAgentSessionService(
         join(mniuRoot, "agent-service"),
-        { mode: "production", runtimeFactory }
+        {
+          mode: "production",
+          runtimeFactory,
+          ...(options.agentMultimodalLimits?.maxImagesPerMessage === undefined
+            ? {}
+            : { maxImagesPerMessage: options.agentMultimodalLimits.maxImagesPerMessage }),
+          attachmentStore: new LocalAgentAttachmentStore({
+            rootDir: join(mniuRoot, "agent-service", "attachments"),
+            ...(options.agentMultimodalLimits === undefined ? {} : {
+              limits: {
+                ...(options.agentMultimodalLimits.maxImageBytes === undefined
+                  ? {}
+                  : { maxImageBytes: options.agentMultimodalLimits.maxImageBytes }),
+                ...(options.agentMultimodalLimits.maxDimension === undefined
+                  ? {}
+                  : { maxDimension: options.agentMultimodalLimits.maxDimension }),
+                ...(options.agentMultimodalLimits.maxPixels === undefined
+                  ? {}
+                  : { maxPixels: options.agentMultimodalLimits.maxPixels })
+              }
+            })
+          })
+        }
       );
       return agentSessionService;
     };
@@ -3028,7 +3090,14 @@ export function buildServer(options: BuildServerOptions = {}) {
   });
 
   app.post("/v1/providers", async (request, reply) => {
-    const body = providerCreateSchema.parse(request.body);
+    const bodyResult = providerCreateSchema.safeParse(request.body);
+    if (!bodyResult.success) {
+      return reply.code(400).send({
+        error: "invalid provider request",
+        details: bodyResult.error.issues.map((issue) => issue.message)
+      });
+    }
+    const body = bodyResult.data;
     const context = requestContexts.get(request) ?? localRequestContext(request.id);
     if (runtimeProfile === "enterprise") {
       const scope = body.config?.enterpriseScope;
@@ -3050,8 +3119,22 @@ export function buildServer(options: BuildServerOptions = {}) {
         return reply.code(400).send({ error: "enterprise provider scope crosses the authenticated tenant" });
       }
     }
+    const draft = buildProviderCreateInput(body, undefined);
+    try {
+      assertProviderWireConfiguration({
+        apiFormat: draft.apiFormat,
+        modelCatalog: draft.modelCatalog ?? [],
+        modelReasoningEffort: draft.modelReasoningEffort,
+        wireCompatibility: draft.wireCompatibility
+      });
+    } catch {
+      return reply.code(400).send({ error: "invalid provider wire compatibility" });
+    }
     const apiKeyRef = await providerApiKeyRef(body.apiKey, body.apiKeyEnv);
-    const input = buildProviderCreateInput(body, apiKeyRef);
+    const input: ProviderCreateInput = {
+      ...draft,
+      ...(apiKeyRef === undefined ? {} : { apiKeyRef })
+    };
     try {
       const provider = await localStore.createProvider(input);
       const redacted = redactProvider(provider);
@@ -3154,9 +3237,26 @@ export function buildServer(options: BuildServerOptions = {}) {
 
   app.patch("/v1/providers/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
-    const body = providerPatchSchema.parse(request.body);
+    const bodyResult = providerPatchSchema.safeParse(request.body);
+    if (!bodyResult.success) {
+      return reply.code(400).send({
+        error: "invalid provider request",
+        details: bodyResult.error.issues.map((issue) => issue.message)
+      });
+    }
+    const body = bodyResult.data;
     const existing = await localStore.getProvider(id);
     if (!existing) return reply.code(404).send({ error: "provider not found" });
+    try {
+      assertProviderWireConfiguration({
+        apiFormat: existing.apiFormat,
+        modelCatalog: body.modelCatalog ?? existing.modelCatalog,
+        modelReasoningEffort: body.modelReasoningEffort ?? existing.modelReasoningEffort,
+        wireCompatibility: body.wireCompatibility ?? existing.wireCompatibility
+      });
+    } catch {
+      return reply.code(400).send({ error: "invalid provider wire compatibility" });
+    }
     const apiKeyRef = await providerApiKeyRef(body.apiKey, body.apiKeyEnv);
     let provider;
     try {
@@ -3271,6 +3371,7 @@ export function buildServer(options: BuildServerOptions = {}) {
       baseUrl: source.baseUrl,
       defaultModel: source.defaultModel,
       modelReasoningEffort: source.modelReasoningEffort,
+      wireCompatibility: source.wireCompatibility,
       disableResponseStorage: source.disableResponseStorage,
       wireApi: source.wireApi,
       apiKeyRef: source.apiKeyRef,
@@ -8463,6 +8564,7 @@ function buildProviderCreateInput(
       baseUrl: body.baseUrl,
       defaultModel: body.defaultModel,
       modelReasoningEffort: body.modelReasoningEffort,
+      wireCompatibility: body.wireCompatibility,
       disableResponseStorage: body.disableResponseStorage,
       wireApi: body.wireApi,
       modelCatalog: body.modelCatalog,
@@ -8488,6 +8590,7 @@ function buildProviderCreateInput(
     baseUrl: body.baseUrl,
     defaultModel: body.defaultModel,
     modelReasoningEffort: body.modelReasoningEffort,
+    wireCompatibility: body.wireCompatibility,
     disableResponseStorage: body.disableResponseStorage,
     wireApi: body.wireApi,
     apiKeyRef,
@@ -8535,6 +8638,7 @@ function providerToExportItem(provider: ProviderRecord): Record<string, unknown>
     baseUrl: provider.baseUrl,
     defaultModel: provider.defaultModel,
     ...(provider.modelReasoningEffort ? { modelReasoningEffort: provider.modelReasoningEffort } : {}),
+    ...(provider.wireCompatibility ? { wireCompatibility: provider.wireCompatibility } : {}),
     ...(provider.disableResponseStorage !== undefined
       ? { disableResponseStorage: provider.disableResponseStorage }
       : {}),
@@ -8627,6 +8731,7 @@ function importedProviderInput(provider: ProviderImportItem): ProviderCreateInpu
     baseUrl: provider.baseUrl.trim(),
     defaultModel: provider.defaultModel.trim(),
     modelReasoningEffort: provider.modelReasoningEffort,
+    wireCompatibility: provider.wireCompatibility,
     disableResponseStorage: provider.disableResponseStorage,
     wireApi: provider.wireApi,
     apiKeyRef: apiKeyEnv

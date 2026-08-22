@@ -13,7 +13,7 @@ source may be adapted from DeepSeek Harness:
 
 - Project: DeepSeek Harness
 - Repository: https://github.com/deepseek-ai/deepseek-harness
-- Fixed source commit: 47f943859bef60e4160492346772ded9b24f765a
+- Approved fixed source commits: 47f943859bef60e4160492346772ded9b24f765a and 141eb6fef83422698aef7a981029e843e8161534
 - Copyright: Copyright (c) 2026 DeepSeek
 - License: MIT; see LICENSES/MIT.txt
 - Provenance: docs/upstream-provenance/deepseek-harness.yaml
@@ -49,3 +49,10 @@ the bytes in each release artifact.
 validation. The dependency is licensed under MIT, has no runtime dependencies,
 and is represented by the exact lockfile entry and its copyright-bearing MIT
 license text in `LICENSES/libphonenumber-js-MIT.txt`.
+
+### @napi-rs/image
+
+`@mn/api` uses `@napi-rs/image` 1.14.0 for bounded, full image decoding and
+format/dimension validation. The package and its locked platform binaries are
+licensed under MIT; their package license texts remain part of the dependency
+and release license inventory.

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type {
-  AgentSessionEventV1,
+  AgentSessionEvent,
   CandidateId,
   EffectPolicyBindingV1,
   RunId
@@ -16,6 +16,8 @@ export type AgentRunReason = "completed" | "cancelled" | "budget-exceeded" | "er
 export interface AgentRunInput {
   readonly session: Session;
   readonly prompt: string;
+  readonly userContent?: readonly import("@mn/agent-protocol").ContentBlock[];
+  readonly imageInputs?: readonly import("@mn/agent-protocol").ModelImageInput[];
   readonly provider: string;
   readonly model: string;
   readonly signal?: AbortSignal;
@@ -30,7 +32,7 @@ export interface AgentRunResult {
   readonly reason: AgentRunReason;
   readonly steps: number;
   readonly toolCalls: number;
-  readonly lastEvent?: AgentSessionEventV1;
+  readonly lastEvent?: AgentSessionEvent;
 }
 
 export interface AgentExecutor {

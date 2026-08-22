@@ -5,7 +5,8 @@ import type {
   ProviderCreateInput,
   ProviderPreset,
   ProviderRecord,
-  ProviderUpdateInput
+  ProviderUpdateInput,
+  ProviderWireCompatibilityV1
 } from "./types.js";
 
 export const managedApps: readonly ManagedAgentApp[] = ["claude", "codex"] as const;
@@ -14,6 +15,73 @@ export const providerConsumers: readonly ProviderConsumerId[] = [
   "codex",
   "agent"
 ] as const;
+
+const wireCompatibilityKeys = new Set<keyof ProviderWireCompatibilityV1>([
+  "systemRole",
+  "streamUsage",
+  "outputTokenField",
+  "reasoningEncoding",
+  "assistantReasoningField"
+]);
+
+export function assertProviderWireConfiguration(
+  provider: Pick<
+    ProviderRecord,
+    "apiFormat" | "modelCatalog" | "modelReasoningEffort" | "wireCompatibility"
+  >
+): void {
+  const compatibility = provider.wireCompatibility;
+  if (compatibility !== undefined) {
+    if (compatibility === null || typeof compatibility !== "object" || Array.isArray(compatibility)
+      || Object.keys(compatibility).some((key) => !wireCompatibilityKeys.has(key as keyof ProviderWireCompatibilityV1))) {
+      throw new TypeError("provider wire compatibility contains an unknown field");
+    }
+    if ((provider.apiFormat === "openai_chat"
+        && compatibility.outputTokenField === "max_output_tokens")
+      || (provider.apiFormat === "openai_responses"
+        && (compatibility.systemRole !== undefined
+          || compatibility.streamUsage !== undefined
+          || compatibility.assistantReasoningField !== undefined
+          || compatibility.outputTokenField === "max_tokens"
+          || compatibility.outputTokenField === "max_completion_tokens"
+          || compatibility.reasoningEncoding === "deepseek_thinking"))
+      || (provider.apiFormat === "anthropic_messages"
+        && (compatibility.systemRole !== undefined
+          || compatibility.streamUsage !== undefined
+          || compatibility.assistantReasoningField !== undefined
+          || compatibility.outputTokenField === "max_completion_tokens"
+          || compatibility.outputTokenField === "max_output_tokens"
+          || compatibility.reasoningEncoding === "openai_effort"
+          || compatibility.reasoningEncoding === "deepseek_thinking"))) {
+      throw new TypeError("provider wire compatibility is incompatible with the API format");
+    }
+    if (compatibility.reasoningEncoding !== undefined
+      && compatibility.reasoningEncoding !== "omit"
+      && provider.modelReasoningEffort === undefined) {
+      throw new TypeError("provider wire reasoning encoding requires a reasoning effort");
+    }
+    if (provider.apiFormat !== "anthropic_messages"
+      && compatibility.outputTokenField !== undefined
+      && compatibility.outputTokenField !== "omit"
+      && provider.modelCatalog.some((model) => model.maxOutputTokens === undefined)) {
+      throw new TypeError("provider wire output token field requires every model to declare maxOutputTokens");
+    }
+  }
+  for (const model of provider.modelCatalog) {
+    if (model.maxOutputTokens !== undefined
+      && (!Number.isSafeInteger(model.maxOutputTokens) || model.maxOutputTokens <= 0)) {
+      throw new TypeError("provider model maxOutputTokens must be a positive safe integer");
+    }
+    if (model.inputModalities !== undefined) {
+      if (model.inputModalities.length === 0
+        || !model.inputModalities.includes("text")
+        || new Set(model.inputModalities).size !== model.inputModalities.length
+        || model.inputModalities.some((modality) => modality !== "text" && modality !== "image")) {
+        throw new TypeError("provider model inputModalities must be a unique list containing text");
+      }
+    }
+  }
+}
 
 export const providerPresets: readonly ProviderPreset[] = [
   {
@@ -160,6 +228,7 @@ export function createProviderInputFromPreset(
     baseUrl: overrides.baseUrl ?? preset.baseUrl,
     defaultModel: overrides.defaultModel ?? preset.defaultModel,
     modelReasoningEffort: overrides.modelReasoningEffort,
+    wireCompatibility: overrides.wireCompatibility ?? preset.wireCompatibility,
     disableResponseStorage: overrides.disableResponseStorage,
     wireApi: overrides.wireApi ?? preset.wireApi,
     apiKeyRef: overrides.apiKeyRef,

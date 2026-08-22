@@ -17,6 +17,7 @@ import path from "node:path";
 
 import {
   AGENT_SESSION_PROTECTION_PROFILE_V1,
+  AGENT_SESSION_PROTECTION_PROFILE_V2,
   PROTECTION_POLICY_DIGEST_V1,
   SessionId,
   assertSafePublicControlIdV1,
@@ -25,11 +26,14 @@ import {
   deepFreeze,
   inspectAgentModelBindingV1,
   isAgentSessionEventV1,
+  isAgentSessionEventV2,
   isCanonicalRfc3339,
   isProtectedTextV1,
   protectAgentSessionPayloadV1,
+  protectAgentSessionPayloadV2,
   verifyAgentSessionEventChain,
-  type AgentSessionEventV1,
+  verifyAgentSessionEventChainV2,
+  type AgentSessionEvent,
   type ProtectedJsonNodeV1,
   type ProtectedTextV1
 } from "@mn/agent-protocol";
@@ -45,7 +49,7 @@ import { snapshotAgentSessionEvent } from "./event-snapshot.js";
 import { snapshotCreateAgentSessionOptions, type CreateAgentSessionOptionsSnapshot } from "./create-options.js";
 import { createInitialAgentSessionState } from "./initial-state.js";
 import { DurableAgentSession } from "./session.js";
-import type { AgentSessionHeaderV1, CreateAgentSessionOptions, EventPersistence } from "./types.js";
+import type { AgentSessionHeader, CreateAgentSessionOptions, EventPersistence } from "./types.js";
 import {
   acquireEventWriterLock,
   acquireOsWriterLock,
@@ -74,7 +78,7 @@ interface WriterLease {
 }
 
 export interface JsonlAgentSessionStoreOptions {
-  readonly beforeAppend?: (event: AgentSessionEventV1) => void | Promise<void>;
+  readonly beforeAppend?: (event: AgentSessionEvent) => void | Promise<void>;
   readonly afterPublish?: (
     phase: "renamed" | "committed",
     sessionId: SessionId
@@ -129,7 +133,7 @@ function assertSessionId(sessionId: SessionId): void {
   if (!SESSION_ID_PATTERN.test(sessionId)) throw new Error("session id is not safe for durable storage");
 }
 
-function validateHeader(value: unknown, expectedId: SessionId): AgentSessionHeaderV1 {
+function validateHeader(value: unknown, expectedId: SessionId): AgentSessionHeader {
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid session header");
   const header = value as Record<string, unknown>;
   if (header.schemaVersion === 1
@@ -146,10 +150,12 @@ function validateHeader(value: unknown, expectedId: SessionId): AgentSessionHead
   const allowed = new Set([...required, "protectedCwd", "modelBinding"]);
   if (!required.every((key) => Object.hasOwn(header, key))
     || !Object.keys(header).every((key) => allowed.has(key))
-    || header.schemaVersion !== 1
+    || header.schemaVersion !== 1 && header.schemaVersion !== 2
     || header.sessionId !== expectedId
     || !isCanonicalRfc3339(header.createdAt)
-    || header.protectionProfile !== AGENT_SESSION_PROTECTION_PROFILE_V1
+    || header.protectionProfile !== (header.schemaVersion === 1
+      ? AGENT_SESSION_PROTECTION_PROFILE_V1
+      : AGENT_SESSION_PROTECTION_PROFILE_V2)
     || header.protectionPolicyDigest !== PROTECTION_POLICY_DIGEST_V1) {
     throw new Error("invalid session header");
   }
@@ -159,15 +165,18 @@ function validateHeader(value: unknown, expectedId: SessionId): AgentSessionHead
   if (header.modelBinding !== undefined && inspectAgentModelBindingV1(header.modelBinding) === undefined) {
     throw new Error("invalid session header model binding");
   }
-  return deepFreeze(header as unknown as AgentSessionHeaderV1);
+  return deepFreeze(header as unknown as AgentSessionHeader);
 }
 
 function creationSnapshotDigest(options: CreateAgentSessionOptionsSnapshot): string {
-  const payload = protectAgentSessionPayloadV1("session/created", {
+  const raw = {
     ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
     ...(options.labels === undefined ? {} : { labels: options.labels }),
     ...(options.modelBinding === undefined ? {} : { modelBinding: options.modelBinding })
-  });
+  };
+  const payload = options.schemaVersion === 1
+    ? protectAgentSessionPayloadV1("session/created", raw)
+    : protectAgentSessionPayloadV2("session/created", raw);
   return digestJson({
     sessionId: options.sessionId,
     ...(options.modelBinding === undefined ? {} : { modelBinding: options.modelBinding }),
@@ -201,17 +210,20 @@ function protectedNodeContainsMarker(
 }
 
 function creationSnapshotIsAmbiguous(options: CreateAgentSessionOptionsSnapshot): boolean {
-  const payload = protectAgentSessionPayloadV1("session/created", {
+  const raw = {
     ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
     ...(options.labels === undefined ? {} : { labels: options.labels }),
     ...(options.modelBinding === undefined ? {} : { modelBinding: options.modelBinding })
-  });
+  };
+  const payload = options.schemaVersion === 1
+    ? protectAgentSessionPayloadV1("session/created", raw)
+    : protectAgentSessionPayloadV2("session/created", raw);
   return protectedNodeContainsMarker(payload.protectedContent.root);
 }
 
 function persistedCreationSnapshotDigest(
-  header: AgentSessionHeaderV1,
-  created: AgentSessionEventV1<"session/created">
+  header: AgentSessionHeader,
+  created: AgentSessionEvent<"session/created">
 ): string {
   return digestJson({
     sessionId: header.sessionId,
@@ -221,7 +233,7 @@ function persistedCreationSnapshotDigest(
   });
 }
 
-function protectedCreatedCwd(event: AgentSessionEventV1<"session/created">): ProtectedTextV1 | undefined {
+function protectedCreatedCwd(event: AgentSessionEvent<"session/created">): ProtectedTextV1 | undefined {
   const root = event.payload.protectedContent.root;
   if (root.type !== "object") throw new Error("protected creation payload must be an object");
   const cwd = root.entries.find((entry) => entry.key.text === "cwd")?.value;
@@ -322,7 +334,7 @@ async function loadEvents(
   handle: FileHandle,
   repairTail: (committedLength: number) => Promise<void>,
   verifyIdentity?: (fileStat: Stats) => void
-): Promise<AgentSessionEventV1[]> {
+): Promise<AgentSessionEvent[]> {
   const fileStat = await handle.stat();
   let buffer: Buffer;
   verifyIdentity?.(fileStat);
@@ -342,7 +354,7 @@ async function loadEvents(
     buffer = buffer.subarray(0, committedLength);
   }
 
-  const events: AgentSessionEventV1[] = [];
+  const events: AgentSessionEvent[] = [];
   const lines = buffer.toString("utf8").split("\n");
   if (lines.at(-1) === "") lines.pop();
   for (const [index, line] of lines.entries()) {
@@ -353,14 +365,20 @@ async function loadEvents(
     } catch {
       throw new Error(`corrupt session event at line ${index + 1}: invalid JSON`);
     }
-    if (!isAgentSessionEventV1(parsed)) {
+    if (!isAgentSessionEventV1(parsed) && !isAgentSessionEventV2(parsed)) {
       if (isLegacyUnprotectedEvent(parsed)) throw new LegacyUnprotectedSessionError();
       throw new Error(`corrupt session event at line ${index + 1}: invalid envelope`);
     }
     events.push(snapshotAgentSessionEvent(parsed));
   }
   try {
-    verifyAgentSessionEventChain(events);
+    if (events[0]?.schemaVersion === 2) {
+      if (events.some((event) => event.schemaVersion !== 2)) throw new Error("event chain mixes schema versions");
+      verifyAgentSessionEventChainV2(events as Parameters<typeof verifyAgentSessionEventChainV2>[0]);
+    } else {
+      if (events.some((event) => event.schemaVersion !== 1)) throw new Error("event chain mixes schema versions");
+      verifyAgentSessionEventChain(events as Parameters<typeof verifyAgentSessionEventChain>[0]);
+    }
   } catch (error: unknown) {
     throw new Error(`corrupt session event chain: ${error instanceof Error ? error.message : "invalid event"}`);
   }
@@ -606,7 +624,7 @@ export class JsonlAgentSessionStore {
     const eventReader = await openRegularNoFollow(paths.events, constants.O_RDONLY);
     let eventWriteHandle: Awaited<ReturnType<typeof openRegularNoFollow>> | undefined;
     let writeHandleClosed = false;
-    let events: AgentSessionEventV1[] | undefined;
+    let events: AgentSessionEvent[] | undefined;
     let eventFailure: unknown;
     try {
       eventWriteHandle = await openRegularNoFollow(paths.events, constants.O_RDWR | constants.O_APPEND);
@@ -645,7 +663,7 @@ export class JsonlAgentSessionStore {
       }
     }
     if (eventFailure !== undefined) throw eventFailure;
-    const loadedEvents = events as AgentSessionEventV1[];
+    const loadedEvents = events as AgentSessionEvent[];
     if (loadedEvents.length === 0) throw new Error(`session "${sessionId}" has an empty event log`);
     const created = loadedEvents[0];
     if (created?.type !== "session/created") {

@@ -34,12 +34,22 @@ export interface ProviderModel {
   id: string;
   displayName: string;
   contextWindow?: number;
+  maxOutputTokens?: number;
+  inputModalities?: Array<"text" | "image">;
   inputTokenUsdPerMillion?: number;
   outputTokenUsdPerMillion?: number;
   cachedInputTokenUsdPerMillion?: number;
   cacheCreationInputTokenUsdPerMillion?: number;
   cacheReadInputTokenUsdPerMillion?: number;
   reasoningOutputTokenUsdPerMillion?: number;
+}
+
+export interface ProviderWireCompatibilityV1 {
+  systemRole?: "system" | "developer";
+  streamUsage?: "include" | "omit";
+  outputTokenField?: "omit" | "max_tokens" | "max_completion_tokens" | "max_output_tokens";
+  reasoningEncoding?: "omit" | "openai_effort" | "deepseek_thinking";
+  assistantReasoningField?: "omit" | "reasoning_content" | "reasoning";
 }
 
 /**
@@ -65,6 +75,7 @@ export interface ProviderRecord {
   baseUrl: string;
   defaultModel: string;
   modelReasoningEffort?: "minimal" | "low" | "medium" | "high";
+  wireCompatibility?: ProviderWireCompatibilityV1;
   disableResponseStorage?: boolean;
   wireApi?: CodexWireApi;
   apiKeyRef?: ProviderSecretRef;
@@ -88,6 +99,7 @@ export interface ProviderPreset {
   apiFormat: ProviderApiFormat;
   baseUrl: string;
   defaultModel: string;
+  wireCompatibility?: ProviderWireCompatibilityV1;
   wireApi?: CodexWireApi;
   modelCatalog: ProviderModel[];
   enterpriseCapabilities?: ProviderEnterpriseCapabilities;
@@ -261,6 +273,7 @@ export interface ProviderCreateInput {
   baseUrl: string;
   defaultModel: string;
   modelReasoningEffort?: ProviderRecord["modelReasoningEffort"];
+  wireCompatibility?: ProviderWireCompatibilityV1;
   disableResponseStorage?: boolean;
   wireApi?: CodexWireApi;
   apiKeyRef?: ProviderSecretRef;
@@ -276,6 +289,7 @@ export interface ProviderUpdateInput {
   baseUrl?: string;
   defaultModel?: string;
   modelReasoningEffort?: ProviderRecord["modelReasoningEffort"];
+  wireCompatibility?: ProviderWireCompatibilityV1;
   disableResponseStorage?: boolean;
   wireApi?: CodexWireApi;
   apiKeyRef?: ProviderSecretRef;

@@ -19,7 +19,10 @@ import {
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repository = "https://github.com/muniu-ai/muniu";
-const upstreamCommit = "47f943859bef60e4160492346772ded9b24f765a";
+const upstreamCommits = [
+  "47f943859bef60e4160492346772ded9b24f765a",
+  "141eb6fef83422698aef7a981029e843e8161534"
+];
 const localAbsolutePath = ["", "Users", "wangxiaoming"].join("/");
 const obsoleteRepositoryPath = ["muniu-dev", "mn"].join("/");
 const obsoleteRegistryHost = ["registry", "npmmirror", "com"].join(".");
@@ -75,8 +78,13 @@ if (
 }
 
 const provenancePath = path.join(root, "docs/upstream-provenance/deepseek-harness.yaml");
-if (existsSync(provenancePath) && !readFileSync(provenancePath, "utf8").includes(upstreamCommit)) {
-  fail("DeepSeek Harness provenance does not pin the approved commit");
+if (existsSync(provenancePath)) {
+  const provenance = readFileSync(provenancePath, "utf8");
+  for (const upstreamCommit of upstreamCommits) {
+    if (!provenance.includes(upstreamCommit)) {
+      fail(`DeepSeek Harness provenance does not pin approved commit ${upstreamCommit}`);
+    }
+  }
 }
 try {
   validateAttributionPolicy({

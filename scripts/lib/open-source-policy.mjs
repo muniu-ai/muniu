@@ -59,7 +59,10 @@ const allowedLicenseTerms = new Set([
   "Zlib"
 ]);
 
-const deepSeekHarnessCommit = "47f943859bef60e4160492346772ded9b24f765a";
+const deepSeekHarnessApprovedCommits = new Set([
+  "47f943859bef60e4160492346772ded9b24f765a",
+  "141eb6fef83422698aef7a981029e843e8161534"
+]);
 const agentCoverageCommand = [
   "npm run test:coverage -w @mn/agent-protocol",
   "npm run test:coverage -w @mn/agent-session",
@@ -255,7 +258,7 @@ function hasMitSpdxNotice(text) {
   return /^[ \t]*(?:\/\*+|\*|\/\/|#)?[ \t]*SPDX-License-Identifier:[ \t]*MIT[ \t]*(?:\*\/)?[ \t]*$/mu.test(text);
 }
 
-function parseProvenanceFiles(provenance, failures) {
+function parseProvenance(provenance, failures) {
   let value;
   try {
     const document = parseDocument(provenance, {
@@ -269,19 +272,49 @@ function parseProvenanceFiles(provenance, failures) {
     value = document.toJS({ maxAliasCount: 0 });
   } catch (error) {
     failures.push(`provenance is invalid YAML: ${error instanceof Error ? error.message.split("\n", 1)[0] : String(error)}`);
-    return [];
+    return { approvedCommits: new Set(), files: [] };
   }
-  if (!value || typeof value !== "object" || !Array.isArray(value.files)) {
+  if (!value || typeof value !== "object") {
+    failures.push("provenance must be an object");
+    return { approvedCommits: new Set(), files: [] };
+  }
+  if (value.schemaVersion !== 2) failures.push("provenance schemaVersion must be 2");
+
+  const rawApproved = value.upstream?.approvedSourceCommits;
+  const approvedCommits = new Set();
+  if (!Array.isArray(rawApproved)) {
+    failures.push("provenance upstream.approvedSourceCommits must be an array");
+  } else {
+    for (const [index, commit] of rawApproved.entries()) {
+      if (typeof commit !== "string"
+        || !/^[0-9a-f]{40}$/u.test(commit)
+        || !deepSeekHarnessApprovedCommits.has(commit)) {
+        failures.push(`provenance approvedSourceCommits[${index}] is not an approved fixed commit`);
+        continue;
+      }
+      if (approvedCommits.has(commit)) {
+        failures.push(`provenance approvedSourceCommits[${index}] duplicates ${commit}`);
+      }
+      approvedCommits.add(commit);
+    }
+  }
+  for (const commit of deepSeekHarnessApprovedCommits) {
+    if (!approvedCommits.has(commit)) {
+      failures.push(`provenance approvedSourceCommits is missing ${commit}`);
+    }
+  }
+
+  if (!Array.isArray(value.files)) {
     failures.push("provenance files must be an array");
-    return [];
+    return { approvedCommits, files: [] };
   }
-  return value.files;
+  return { approvedCommits, files: value.files };
 }
 
 /** Enforce Apache-by-default and exact, provenance-backed DeepSeek MIT exceptions. */
 export function validateWorkspaceSourceLicenses({ manifests, provenance, sourceFiles }) {
   const failures = [];
-  const entries = parseProvenanceFiles(provenance, failures);
+  const { approvedCommits, files: entries } = parseProvenance(provenance, failures);
   const sources = new Map(sourceFiles.map((file) => [file.path, file.text]));
   const listed = new Map();
   const mixedManifests = new Set();
@@ -308,6 +341,12 @@ export function validateWorkspaceSourceLicenses({ manifests, provenance, sourceF
     if (typeof entry.upstreamPath !== "string" || entry.upstreamPath.length === 0) {
       failures.push(`${label} upstreamPath must not be empty`);
     }
+    const upstreamCommit = entry.upstreamCommit;
+    if (typeof upstreamCommit !== "string"
+      || !/^[0-9a-f]{40}$/u.test(upstreamCommit)
+      || !approvedCommits.has(upstreamCommit)) {
+      failures.push(`${label} upstreamCommit must be an approved fixed commit`);
+    }
     const manifestPath = workspaceManifestForSource(entry.localPath);
     if (manifestPath === undefined) failures.push(`${label} localPath must belong to a workspace`);
     else mixedManifests.add(manifestPath);
@@ -317,7 +356,7 @@ export function validateWorkspaceSourceLicenses({ manifests, provenance, sourceF
       failures.push(`${entry.localPath} listed in provenance is missing`);
       continue;
     }
-    if (!text.includes(deepSeekHarnessCommit)) {
+    if (typeof upstreamCommit !== "string" || !text.includes(upstreamCommit)) {
       failures.push(`${entry.localPath} notice is missing the approved upstream commit`);
     }
     if (typeof entry.upstreamPath !== "string" || !text.includes(`Original path: ${entry.upstreamPath}`)) {

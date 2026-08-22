@@ -5,22 +5,25 @@ import { types as utilTypes } from "node:util";
 import {
   assertAgentModelBindingV1,
   createAgentSessionEvent,
+  createAgentSessionEventV2,
   deepFreeze,
   digestJson,
   protectAgentSessionPayloadV1,
+  protectAgentSessionPayloadV2,
   snapshotJsonValue,
   verifyAgentSessionEventChain,
-  type AgentSessionEventPayloadMapV1,
-  type AgentSessionEventTypeV1,
-  type AgentSessionEventV1,
-  type AgentSessionProtectedPayloadV1,
+  verifyAgentSessionEventChainV2,
+  type AgentSessionEventPayloadMap,
+  type AgentSessionEventType,
+  type AgentSessionEvent,
+  type AgentSessionProtectedPayload,
   type Message
 } from "@mn/agent-protocol";
 import { protectJsonValue } from "@mn/data-policy";
 
 import { snapshotAgentSessionEvent } from "./event-snapshot.js";
 import { createSafeRandomEventId } from "./event-id.js";
-import type { AgentEventMetadata, AgentSessionExclusiveView, AgentSessionHeaderV1, EventPersistence } from "./types.js";
+import type { AgentEventMetadata, AgentSessionExclusiveView, AgentSessionHeader, EventPersistence } from "./types.js";
 
 export class RuntimeOverlayRequiredError extends Error {
   readonly code = "RUNTIME_OVERLAY_REQUIRED";
@@ -60,20 +63,27 @@ function snapshotMetadata(metadata: AgentEventMetadata): AgentEventMetadata {
 }
 
 export class DurableAgentSession {
-  private readonly log: AgentSessionEventV1[];
-  private readonly runtimePayloads = new Map<number, AgentSessionEventPayloadMapV1[AgentSessionEventTypeV1]>();
+  private readonly log: AgentSessionEvent[];
+  private readonly runtimePayloads = new Map<number, AgentSessionEventPayloadMap[AgentSessionEventType]>();
   private tail: Promise<void> = Promise.resolve();
-  private eventsSnapshot: readonly AgentSessionEventV1[] | undefined;
+  private eventsSnapshot: readonly AgentSessionEvent[] | undefined;
   private persistencePoisoned = false;
   private persistenceFailure: unknown;
 
   constructor(
-    readonly header: AgentSessionHeaderV1,
-    seed: readonly AgentSessionEventV1[],
+    readonly header: AgentSessionHeader,
+    seed: readonly AgentSessionEvent[],
     private readonly persistence: EventPersistence
   ) {
     this.log = seed.map((event) => snapshotAgentSessionEvent(event));
-    verifyAgentSessionEventChain(this.log);
+    if (this.log.some((event) => event.schemaVersion !== header.schemaVersion)) {
+      throw new Error("session event chain mixes schema versions");
+    }
+    if (header.schemaVersion === 1) {
+      verifyAgentSessionEventChain(this.log as Parameters<typeof verifyAgentSessionEventChain>[0]);
+    } else {
+      verifyAgentSessionEventChainV2(this.log as Parameters<typeof verifyAgentSessionEventChainV2>[0]);
+    }
     if (this.log.some((event) => event.sessionId !== header.sessionId)) {
       throw new Error("session event id does not match the header");
     }
@@ -92,7 +102,7 @@ export class DurableAgentSession {
     deepFreeze(this.header);
   }
 
-  get events(): readonly AgentSessionEventV1[] {
+  get events(): readonly AgentSessionEvent[] {
     this.eventsSnapshot ??= Object.freeze([...this.log]);
     return this.eventsSnapshot;
   }
@@ -104,9 +114,9 @@ export class DurableAgentSession {
         && event.type !== "assistant/message"
         && event.type !== "tool/result") continue;
       const runtime = this.runtimePayloads.get(event.seq) as
-        | AgentSessionEventPayloadMapV1["user/message"]
-        | AgentSessionEventPayloadMapV1["assistant/message"]
-        | AgentSessionEventPayloadMapV1["tool/result"]
+        | AgentSessionEventPayloadMap["user/message"]
+        | AgentSessionEventPayloadMap["assistant/message"]
+        | AgentSessionEventPayloadMap["tool/result"]
         | undefined;
       if (runtime === undefined) throw new RuntimeOverlayRequiredError();
       const protectedMessage = protectJsonValue(runtime.message, { businessRedaction: false });
@@ -118,11 +128,11 @@ export class DurableAgentSession {
     return Object.freeze(messages);
   }
 
-  append<T extends AgentSessionEventTypeV1>(
+  append<T extends AgentSessionEventType>(
     type: T,
-    payload: AgentSessionEventPayloadMapV1[T],
+    payload: AgentSessionEventPayloadMap[T],
     metadata: AgentEventMetadata = {}
-  ): Promise<AgentSessionEventV1<T>> {
+  ): Promise<AgentSessionEvent<T>> {
     const prepared = this.prepareAppend(type, payload, metadata);
     return this.enqueue(() => this.appendPrepared(prepared));
   }
@@ -150,13 +160,13 @@ export class DurableAgentSession {
       };
       const owner = this;
       const view: AgentSessionExclusiveView = Object.freeze({
-        get header(): AgentSessionHeaderV1 { assertActive(); return owner.header; },
-        get events(): readonly AgentSessionEventV1[] { assertActive(); return owner.events; },
-        append<EventType extends AgentSessionEventTypeV1>(
+        get header(): AgentSessionHeader { assertActive(); return owner.header; },
+        get events(): readonly AgentSessionEvent[] { assertActive(); return owner.events; },
+        append<EventType extends AgentSessionEventType>(
           type: EventType,
-          payload: AgentSessionEventPayloadMapV1[EventType],
+          payload: AgentSessionEventPayloadMap[EventType],
           metadata: AgentEventMetadata = {}
-        ): Promise<AgentSessionEventV1<EventType>> {
+        ): Promise<AgentSessionEvent<EventType>> {
           assertActive();
           const prepared = owner.prepareAppend(type, payload, metadata);
           return scopeEnqueue(() => owner.appendPrepared(prepared));
@@ -182,19 +192,27 @@ export class DurableAgentSession {
     return this.enqueue(() => this.flushPersistence());
   }
 
-  private prepareAppend<T extends AgentSessionEventTypeV1>(
+  private prepareAppend<T extends AgentSessionEventType>(
     type: T,
-    payload: AgentSessionEventPayloadMapV1[T],
+    payload: AgentSessionEventPayloadMap[T],
     metadata: AgentEventMetadata
   ): {
     type: T;
-    payload: AgentSessionEventPayloadMapV1[T];
-    protectedPayload: AgentSessionProtectedPayloadV1<T>;
+    payload: AgentSessionEventPayloadMap[T];
+    protectedPayload: AgentSessionProtectedPayload<T>;
     metadata: AgentEventMetadata;
   } {
     // The profile builder performs the strict, trap-free exact-data validation
     // before the legacy snapshot helper is allowed to inspect the input.
-    const protectedPayload = protectAgentSessionPayloadV1(type, payload);
+    if (this.header.schemaVersion === 1 && type === "attachment/stored") {
+      throw new TypeError("v1 sessions cannot append attachment events");
+    }
+    const protectedPayload = this.header.schemaVersion === 1
+      ? protectAgentSessionPayloadV1(
+        type as Exclude<AgentSessionEventType, "attachment/stored">,
+        payload as never
+      )
+      : protectAgentSessionPayloadV2(type, payload);
     const payloadSnapshot = snapshotJsonValue(payload);
     if (payloadSnapshot === undefined) {
       throw new Error(`event ${type} payload is not losslessly JSON-serializable`);
@@ -204,30 +222,39 @@ export class DurableAgentSession {
     return {
       type,
       payload: payloadSnapshot,
-      protectedPayload,
+      protectedPayload: protectedPayload as AgentSessionProtectedPayload<T>,
       metadata: metadataSnapshot
     };
   }
 
-  private async appendPrepared<T extends AgentSessionEventTypeV1>(prepared: {
+  private async appendPrepared<T extends AgentSessionEventType>(prepared: {
     type: T;
-    payload: AgentSessionEventPayloadMapV1[T];
-    protectedPayload: AgentSessionProtectedPayloadV1<T>;
+    payload: AgentSessionEventPayloadMap[T];
+    protectedPayload: AgentSessionProtectedPayload<T>;
     metadata: AgentEventMetadata;
-  }): Promise<AgentSessionEventV1<T>> {
+  }): Promise<AgentSessionEvent<T>> {
     this.assertPersistenceHealthy();
     const previous = this.log.at(-1);
-    const event = createAgentSessionEvent({
+    const common = {
       eventId: createSafeRandomEventId(),
       sessionId: this.header.sessionId,
       seq: this.log.length,
       occurredAt: new Date().toISOString(),
       type: prepared.type,
-      payload: prepared.protectedPayload,
       ...(prepared.metadata.runId === undefined ? {} : { runId: prepared.metadata.runId }),
       ...(prepared.metadata.candidateId === undefined ? {} : { candidateId: prepared.metadata.candidateId }),
       ...(previous === undefined ? {} : { previousDigest: previous.digest })
-    });
+    };
+    const event: AgentSessionEvent<T> = this.header.schemaVersion === 1
+      ? createAgentSessionEvent({
+        ...common,
+        type: prepared.type as Exclude<AgentSessionEventType, "attachment/stored">,
+        payload: prepared.protectedPayload as never
+      }) as AgentSessionEvent<T>
+      : createAgentSessionEventV2({
+        ...common,
+        payload: prepared.protectedPayload as never
+      }) as AgentSessionEvent<T>;
     try {
       await this.persistence.commitDurable(event);
     } catch (error: unknown) {

@@ -231,9 +231,10 @@ export function createAgentSessionEvent<T extends AgentSessionEventTypeV1>(
   return deepFreeze(event) as AgentSessionEventV1<T>;
 }
 
-export function verifyAgentSessionEventChain(events: readonly AgentSessionEventV1[]): void {
+export function verifyAgentSessionEventChain(events: readonly unknown[]): void {
   let previous: AgentSessionEventV1 | undefined;
-  for (const [index, event] of events.entries()) {
+  for (const [index, candidate] of events.entries()) {
+    const event = candidate as AgentSessionEventV1;
     if (!isAgentSessionEventV1(event)) throw new Error(`invalid event schema at index ${index}`);
     if (event.seq !== index) throw new Error(`event seq ${event.seq} is not contiguous; expected ${index}`);
     if (previous !== undefined && event.sessionId !== previous.sessionId) {

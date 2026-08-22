@@ -13,8 +13,8 @@ import {
   UNBOUND_PROTECTED_TOOL_CALL_V1,
   digestJson,
   type AgentToolApprovalBindingV1,
-  type AgentSessionEventV1,
-  type AgentSessionProtectedPayloadV1,
+  type AgentSessionEvent,
+  type AgentSessionProtectedPayload,
   type CallId,
   type CandidateId,
   type Digest,
@@ -48,7 +48,7 @@ export type PendingToolCall = PendingToolCallBase & (
   }
 );
 
-export type ProjectedProtectedMessage = AgentSessionProtectedPayloadV1<
+export type ProjectedProtectedMessage = AgentSessionProtectedPayload<
   "user/message" | "assistant/message" | "tool/result"
 >;
 
@@ -95,7 +95,7 @@ export function projectRuntimeMessages(session: AgentSessionLike): readonly Mess
   return session.runtimeMessages();
 }
 
-export function projectSession(events: readonly AgentSessionEventV1[]): AgentSessionProjection {
+export function projectSession(events: readonly AgentSessionEvent[]): AgentSessionProjection {
   const messages: ProjectedProtectedMessage[] = [];
   const pending = new Map<CallId, PendingToolCall>();
   const approvals = new Map<string, PendingToolApproval>();
@@ -109,6 +109,8 @@ export function projectSession(events: readonly AgentSessionEventV1[]): AgentSes
 
   for (const event of events) {
     switch (event.type) {
+      case "attachment/stored":
+        break;
       case "turn/start":
         if (modelAttempts.size !== 0) {
           throw new TypeError("a new turn cannot bypass a pending model attempt audit");

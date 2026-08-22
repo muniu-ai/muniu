@@ -16,8 +16,8 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@mn/agent-llm": "0.1.0",
     "@mn/agent-host": "0.1.0",
+    "@mn/agent-llm": "0.1.0",
     "@mn/agent-protocol": "0.1.0",
     "@mn/agent-session": "0.1.0",
     "@mn/config-manager": "0.1.0",
@@ -35,6 +35,7 @@
     "@mn/store": "0.1.0",
     "@mn/usage": "0.1.0",
     "@mn/worker": "0.1.0",
+    "@napi-rs/image": "1.14.0",
     "fastify": "^5.12.0",
     "pg": "^8.22.0",
     "zod": "^3.24.1"

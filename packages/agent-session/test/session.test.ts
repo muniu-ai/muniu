@@ -12,6 +12,7 @@ import {
   readlink,
   realpath,
   rename,
+  rm,
   stat,
   symlink,
   unlink,
@@ -42,7 +43,8 @@ import {
   createUserMessage,
   deriveToolEffectKindV1,
   protectAgentSessionPayloadV1,
-  verifyAgentSessionEventChain
+  verifyAgentSessionEventChain,
+  verifyAgentSessionEventChainV2
 } from "@mn/agent-protocol";
 import {
   InMemoryAgentSessionStore,
@@ -1901,4 +1903,63 @@ test("recovery closes a durably started model attempt as unknown without replay"
   assert.equal(audit.candidateId, candidateId);
   assert.deepEqual(await recoverInterruptedSession(session), []);
   assert.equal(projectSession(session.events).pendingModelAttempts.length, 0);
+});
+
+test("v2 sessions persist image descriptors without raw bytes and reject cross-version appends", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "muniu-session-v2-image-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const store = new JsonlAgentSessionStore(root);
+  const session = await store.create({
+    schemaVersion: 2,
+    sessionId: SessionId("image-session-v2")
+  });
+  const descriptor = {
+    schemaVersion: 1 as const,
+    kind: "agent-attachment-descriptor" as const,
+    attachmentId: "attachment-image-v2",
+    sessionId: "image-session-v2",
+    sha256: "a".repeat(64),
+    byteLength: 123,
+    contentType: "image/png" as const,
+    width: 10,
+    height: 20
+  };
+  await session.append("attachment/stored", { descriptor });
+  await session.append("turn/start", { turn: 1 });
+  await session.append("user/message", {
+    turn: 1,
+    message: createUserMessage({
+      id: MessageId("image-user-v2"),
+      source: { kind: "user" },
+      content: [{
+        type: "image",
+        attachmentId: descriptor.attachmentId,
+        sha256: descriptor.sha256,
+        byteLength: descriptor.byteLength,
+        contentType: descriptor.contentType,
+        width: descriptor.width,
+        height: descriptor.height
+      }]
+    })
+  });
+  await session.flush();
+  assert.equal(session.header.schemaVersion, 2);
+  assert.doesNotThrow(() => verifyAgentSessionEventChainV2(
+    session.events as Parameters<typeof verifyAgentSessionEventChainV2>[0]
+  ));
+  assert.equal(JSON.stringify(session.events).includes("dataBase64"), false);
+  await store.dispose();
+
+  const reopenedStore = new JsonlAgentSessionStore(root);
+  const reopened = await reopenedStore.open(SessionId("image-session-v2"));
+  assert.equal(reopened.events.every((event) => event.schemaVersion === 2), true);
+  assert.equal(reopened.events[1]?.type, "attachment/stored");
+  await reopenedStore.dispose();
+
+  const v1 = await new InMemoryAgentSessionStore().create({
+    sessionId: SessionId("image-session-v1")
+  });
+  assert.throws(() => v1.append("attachment/stored", {
+    descriptor: { ...descriptor, sessionId: "image-session-v1" }
+  }), /v1 sessions|attachment/iu);
 });

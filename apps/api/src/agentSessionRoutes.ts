@@ -5,9 +5,12 @@ import { z } from "zod";
 
 import {
   inspectAgentApprovalDecisionRequestV1,
+  inspectAgentAttachmentUploadRequestV1,
   inspectAgentMessageRequestV1,
+  inspectAgentMessageRequestV2,
   inspectAgentSessionControlRequestV1,
-  inspectAgentSessionCreateRequestV1
+  inspectAgentSessionCreateRequestV1,
+  inspectAgentSessionCreateRequestV2
 } from "@mn/agent-protocol";
 
 import {
@@ -77,7 +80,8 @@ function registerRoutes(
   });
 
   app.post("/v1/agent-sessions", async (request, reply) => {
-    const parsed = inspectAgentSessionCreateRequestV1(request.body);
+    const parsed = inspectAgentSessionCreateRequestV1(request.body)
+      ?? inspectAgentSessionCreateRequestV2(request.body);
     if (parsed === undefined) return invalid(reply);
     try {
       const result = await (await service()).create(parsed);
@@ -99,10 +103,25 @@ function registerRoutes(
 
   app.post("/v1/agent-sessions/:id/messages", async (request, reply) => {
     const params = paramsSchema.safeParse(request.params);
-    const body = inspectAgentMessageRequestV1(request.body);
+    const body = inspectAgentMessageRequestV1(request.body)
+      ?? inspectAgentMessageRequestV2(request.body);
     if (!params.success || body === undefined) return invalid(reply);
     try {
       const result = await (await service()).message(params.data.id, body);
+      return reply.code(result.statusCode).send(result.body);
+    } catch (error: unknown) {
+      return failure(reply, error);
+    }
+  });
+
+  app.post("/v1/agent-sessions/:id/attachments", {
+    bodyLimit: 6 * 1024 * 1024
+  }, async (request, reply) => {
+    const params = paramsSchema.safeParse(request.params);
+    const body = inspectAgentAttachmentUploadRequestV1(request.body);
+    if (!params.success || body === undefined) return invalid(reply);
+    try {
+      const result = await (await service()).uploadAttachment(params.data.id, body);
       return reply.code(result.statusCode).send(result.body);
     } catch (error: unknown) {
       return failure(reply, error);

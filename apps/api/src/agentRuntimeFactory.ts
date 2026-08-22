@@ -20,6 +20,7 @@ import {
   type JsonValue
 } from "@mn/agent-protocol";
 import type { ProviderApiFormat, ProviderRecord } from "@mn/provider-catalog";
+import type { ProviderWireCompatibilityV1 } from "@mn/provider-catalog";
 
 export type AgentRuntimeResolutionErrorCode =
   | "PROVIDER_UNAVAILABLE"
@@ -46,11 +47,18 @@ export interface ProductionAgentRuntimeFactoryOptions {
   readonly resolveStoredSecret: (reference: ModelSecretRef) => Promise<string | undefined>;
   readonly resolveEnvironmentSecret?: (name: string) => string | undefined;
   readonly fetch?: typeof globalThis.fetch;
+  readonly multimodalLimits?: Readonly<{
+    readonly maxImagesPerMessage?: number;
+    readonly maxRequestImageBase64Bytes?: number;
+  }>;
 }
 
 export interface ProductionAgentRuntimeFactory {
   resolveAdapter(binding: AgentModelBindingV1): Promise<LlmAdapter>;
   resolveAdapterLease(request: LlmAdapterResolutionRequest): Promise<LlmAdapterLease>;
+  resolveModelCapabilities(binding: AgentModelBindingV1): Promise<Readonly<{
+    inputModalities: readonly ("text" | "image")[];
+  }>>;
 }
 
 type JsonRecord = Record<string, JsonValue>;
@@ -64,6 +72,7 @@ const PROVIDER_KEYS = new Set([
   "baseUrl",
   "defaultModel",
   "modelReasoningEffort",
+  "wireCompatibility",
   "disableResponseStorage",
   "wireApi",
   "apiKeyRef",
@@ -96,6 +105,8 @@ const MODEL_KEYS = new Set([
   "id",
   "displayName",
   "contextWindow",
+  "maxOutputTokens",
+  "inputModalities",
   "inputTokenUsdPerMillion",
   "outputTokenUsdPerMillion",
   "cachedInputTokenUsdPerMillion",
@@ -126,6 +137,7 @@ const AGENT_ENV_SECRET_ALLOWLIST = new Set([
   "DEEPSEEK_API_KEY",
   "OPENAI_API_KEY"
 ]);
+const REASONING_EFFORTS = new Set(["minimal", "low", "medium", "high"]);
 
 function record(value: JsonValue | undefined): JsonRecord | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -185,12 +197,76 @@ function findModel(source: JsonRecord, modelId: string): JsonRecord | undefined 
         && (typeof model.contextWindow !== "number"
           || !Number.isSafeInteger(model.contextWindow)
           || model.contextWindow <= 0))
+      || (model.maxOutputTokens !== undefined
+        && (typeof model.maxOutputTokens !== "number"
+          || !Number.isSafeInteger(model.maxOutputTokens)
+          || model.maxOutputTokens <= 0))
+      || (model.inputModalities !== undefined
+        && (!Array.isArray(model.inputModalities)
+          || model.inputModalities.length === 0
+          || new Set(model.inputModalities).size !== model.inputModalities.length
+          || model.inputModalities.some((modality) => modality !== "text" && modality !== "image")))
       || MODEL_PRICE_KEYS.some((key) => !validOptionalPrice(model[key]))) {
       throw new AgentRuntimeResolutionError("PROVIDER_RECORD_INVALID");
     }
     if (model.id === modelId) selected = model;
   }
   return selected;
+}
+
+function snapshotWireCompatibility(
+  value: JsonValue | undefined,
+  apiFormat: ProviderApiFormat
+): ProviderWireCompatibilityV1 | undefined {
+  if (value === undefined) return undefined;
+  const source = record(value);
+  const allowed = new Set([
+    "systemRole",
+    "streamUsage",
+    "outputTokenField",
+    "reasoningEncoding",
+    "assistantReasoningField"
+  ]);
+  if (source === undefined
+    || !exactKeys(source, allowed, [])
+    || (source.systemRole !== undefined
+      && source.systemRole !== "system" && source.systemRole !== "developer")
+    || (source.streamUsage !== undefined
+      && source.streamUsage !== "include" && source.streamUsage !== "omit")
+    || (source.outputTokenField !== undefined
+      && source.outputTokenField !== "omit"
+      && source.outputTokenField !== "max_tokens"
+      && source.outputTokenField !== "max_completion_tokens"
+      && source.outputTokenField !== "max_output_tokens")
+    || (source.reasoningEncoding !== undefined
+      && source.reasoningEncoding !== "omit"
+      && source.reasoningEncoding !== "openai_effort"
+      && source.reasoningEncoding !== "deepseek_thinking")
+    || (source.assistantReasoningField !== undefined
+      && source.assistantReasoningField !== "omit"
+      && source.assistantReasoningField !== "reasoning_content"
+      && source.assistantReasoningField !== "reasoning")) {
+    throw new AgentRuntimeResolutionError("PROVIDER_RECORD_INVALID");
+  }
+  if ((apiFormat === "openai_chat" && source.outputTokenField === "max_output_tokens")
+    || (apiFormat === "openai_responses"
+      && (source.systemRole !== undefined
+        || source.streamUsage !== undefined
+        || source.assistantReasoningField !== undefined
+        || source.outputTokenField === "max_tokens"
+        || source.outputTokenField === "max_completion_tokens"
+        || source.reasoningEncoding === "deepseek_thinking"))
+    || (apiFormat === "anthropic_messages"
+      && (source.systemRole !== undefined
+        || source.streamUsage !== undefined
+        || source.assistantReasoningField !== undefined
+        || source.outputTokenField === "max_completion_tokens"
+        || source.outputTokenField === "max_output_tokens"
+        || source.reasoningEncoding === "openai_effort"
+        || source.reasoningEncoding === "deepseek_thinking"))) {
+    throw new AgentRuntimeResolutionError("PROVIDER_ROUTE_INVALID");
+  }
+  return Object.freeze({ ...source }) as ProviderWireCompatibilityV1;
 }
 
 function snapshotSecretRef(value: JsonValue | undefined): ModelSecretRef {
@@ -214,7 +290,11 @@ function snapshotSecretRef(value: JsonValue | undefined): ModelSecretRef {
 
 function snapshotProviderRoute(
   value: unknown,
-  binding: AgentModelBindingV1
+  binding: AgentModelBindingV1,
+  multimodalLimits?: Readonly<{
+    maxImagesPerMessage?: number;
+    maxRequestImageBase64Bytes?: number;
+  }>
 ): Readonly<{ route: ModelProviderRoute; configDigest: string }> {
   let snapshot: JsonValue;
   try {
@@ -239,6 +319,9 @@ function snapshotProviderRoute(
     || !Number.isSafeInteger(source.sortOrder)
     || typeof source.createdAt !== "string"
     || typeof source.updatedAt !== "string"
+    || (source.modelReasoningEffort !== undefined
+      && (typeof source.modelReasoningEffort !== "string"
+        || !REASONING_EFFORTS.has(source.modelReasoningEffort)))
     || record(source.config) === undefined) {
     throw new AgentRuntimeResolutionError("PROVIDER_RECORD_INVALID");
   }
@@ -267,11 +350,31 @@ function snapshotProviderRoute(
   );
   const cacheWritePrice = canonicalPrice(model.cacheCreationInputTokenUsdPerMillion);
   const thinkingPrice = canonicalPrice(model.reasoningOutputTokenUsdPerMillion);
+  const wireCompatibility = snapshotWireCompatibility(
+    source.wireCompatibility,
+    source.apiFormat as ProviderApiFormat
+  );
   const route: ModelProviderRoute = {
     providerId: binding.providerId,
     apiFormat: source.apiFormat as ProviderApiFormat,
     baseUrl: source.baseUrl,
     ...(apiKeyRef === undefined ? {} : { apiKeyRef }),
+    ...(model.maxOutputTokens === undefined ? {} : { maxOutputTokens: model.maxOutputTokens as number }),
+    ...(source.modelReasoningEffort === undefined
+      ? {}
+      : { reasoningEffort: source.modelReasoningEffort as NonNullable<ProviderRecord["modelReasoningEffort"]> }),
+    ...(wireCompatibility === undefined ? {} : { wireCompatibility }),
+    inputModalities: Object.freeze(
+      model.inputModalities === undefined
+        ? ["text"]
+        : [...model.inputModalities as JsonValue[]]
+    ) as readonly ("text" | "image")[],
+    ...(multimodalLimits?.maxImagesPerMessage === undefined
+      ? {}
+      : { maxImagesPerMessage: multimodalLimits.maxImagesPerMessage }),
+    ...(multimodalLimits?.maxRequestImageBase64Bytes === undefined
+      ? {}
+      : { maxRequestImageBase64Bytes: multimodalLimits.maxRequestImageBase64Bytes }),
     pricing: createModelPricingSnapshotV1({
       ...(inputPrice === undefined ? {} : { inputUsdPerMillion: inputPrice }),
       ...(outputPrice === undefined ? {} : { outputUsdPerMillion: outputPrice }),
@@ -285,7 +388,8 @@ function snapshotProviderRoute(
       route: Object.freeze(route),
       configDigest: digestJson({
         ...source,
-        ...(apiKeyRef === undefined ? {} : { apiKeyRef })
+        ...(apiKeyRef === undefined ? {} : { apiKeyRef }),
+        ...(multimodalLimits === undefined ? {} : { multimodalLimits })
       })
     });
   } catch {
@@ -298,12 +402,22 @@ function stableOptions(value: ProductionAgentRuntimeFactoryOptions): Readonly<{
   resolveStoredSecret: ProductionAgentRuntimeFactoryOptions["resolveStoredSecret"];
   resolveEnvironmentSecret: NonNullable<ProductionAgentRuntimeFactoryOptions["resolveEnvironmentSecret"]>;
   fetch: typeof globalThis.fetch | undefined;
+  multimodalLimits: Readonly<{
+    maxImagesPerMessage?: number;
+    maxRequestImageBase64Bytes?: number;
+  }> | undefined;
 }> {
   if (value === null || typeof value !== "object" || utilTypes.isProxy(value) || Array.isArray(value)) {
     throw new TypeError("agent runtime factory options must be an exact data object");
   }
   const descriptors = Object.getOwnPropertyDescriptors(value);
-  const allowed = new Set(["providerSource", "resolveStoredSecret", "resolveEnvironmentSecret", "fetch"]);
+  const allowed = new Set([
+    "providerSource",
+    "resolveStoredSecret",
+    "resolveEnvironmentSecret",
+    "fetch",
+    "multimodalLimits"
+  ]);
   if (!Object.hasOwn(descriptors, "providerSource")
     || !Object.hasOwn(descriptors, "resolveStoredSecret")
     || Reflect.ownKeys(descriptors).some((key) => typeof key !== "string" || !allowed.has(key))) {
@@ -326,6 +440,7 @@ function stableOptions(value: ProductionAgentRuntimeFactoryOptions): Readonly<{
   const resolveEnvironmentSecret = descriptors.resolveEnvironmentSecret?.value
     ?? ((name: string) => process.env[name]);
   const fetch = descriptors.fetch?.value;
+  const multimodalLimitsValue = descriptors.multimodalLimits?.value;
   if (typeof getProvider !== "function"
     || utilTypes.isProxy(getProvider)
     || typeof resolveStoredSecret !== "function"
@@ -335,11 +450,33 @@ function stableOptions(value: ProductionAgentRuntimeFactoryOptions): Readonly<{
     || (fetch !== undefined && (typeof fetch !== "function" || utilTypes.isProxy(fetch)))) {
     throw new TypeError("agent runtime factory callbacks must be functions");
   }
+  let multimodalLimits: {
+    maxImagesPerMessage?: number;
+    maxRequestImageBase64Bytes?: number;
+  } | undefined;
+  if (multimodalLimitsValue !== undefined) {
+    const source = record(snapshotBoundedJsonValue(multimodalLimitsValue));
+    if (source === undefined
+      || !exactKeys(source, new Set(["maxImagesPerMessage", "maxRequestImageBase64Bytes"]), [])
+      || [source.maxImagesPerMessage, source.maxRequestImageBase64Bytes].some((limit) => limit !== undefined
+        && (typeof limit !== "number" || !Number.isSafeInteger(limit) || limit <= 0))) {
+      throw new TypeError("agent runtime multimodal limits are invalid");
+    }
+    multimodalLimits = Object.freeze({
+      ...(source.maxImagesPerMessage === undefined
+        ? {}
+        : { maxImagesPerMessage: source.maxImagesPerMessage as number }),
+      ...(source.maxRequestImageBase64Bytes === undefined
+        ? {}
+        : { maxRequestImageBase64Bytes: source.maxRequestImageBase64Bytes as number })
+    });
+  }
   return Object.freeze({
     getProvider: getProvider.bind(providerSource) as AgentProviderRecordSource["getProvider"],
     resolveStoredSecret: resolveStoredSecret as ProductionAgentRuntimeFactoryOptions["resolveStoredSecret"],
     resolveEnvironmentSecret: resolveEnvironmentSecret as NonNullable<ProductionAgentRuntimeFactoryOptions["resolveEnvironmentSecret"]>,
-    fetch: fetch as typeof globalThis.fetch | undefined
+    fetch: fetch as typeof globalThis.fetch | undefined,
+    multimodalLimits
   });
 }
 
@@ -363,7 +500,7 @@ export function createProductionAgentRuntimeFactory(
     if (provider === undefined) {
       throw new AgentRuntimeResolutionError("PROVIDER_NOT_FOUND");
     }
-    const configuration = snapshotProviderRoute(provider, binding);
+    const configuration = snapshotProviderRoute(provider, binding, stable.multimodalLimits);
     const key = digestJson({
       schemaVersion: 1,
       binding,
@@ -401,6 +538,23 @@ export function createProductionAgentRuntimeFactory(
 
   const resolveAdapter = async (input: AgentModelBindingV1): Promise<LlmAdapter> =>
     (await resolveConfiguration(input)).adapter;
+
+  const resolveModelCapabilities = async (
+    input: AgentModelBindingV1
+  ): Promise<Readonly<{ inputModalities: readonly ("text" | "image")[] }>> => {
+    const binding = assertAgentModelBindingV1(input);
+    let provider: unknown;
+    try {
+      provider = await stable.getProvider(binding.providerId);
+    } catch {
+      throw new AgentRuntimeResolutionError("PROVIDER_UNAVAILABLE");
+    }
+    if (provider === undefined) throw new AgentRuntimeResolutionError("PROVIDER_NOT_FOUND");
+    const configuration = snapshotProviderRoute(provider, binding, stable.multimodalLimits);
+    return Object.freeze({
+      inputModalities: Object.freeze([...(configuration.route.inputModalities ?? ["text"])])
+    });
+  };
 
   const resolveAdapterLease = async (
     input: LlmAdapterResolutionRequest
@@ -442,5 +596,5 @@ export function createProductionAgentRuntimeFactory(
     });
   };
 
-  return Object.freeze({ resolveAdapter, resolveAdapterLease });
+  return Object.freeze({ resolveAdapter, resolveAdapterLease, resolveModelCapabilities });
 }

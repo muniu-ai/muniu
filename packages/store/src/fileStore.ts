@@ -29,7 +29,11 @@ import type {
   ProxyReplayRecord,
   ProxyRequestLog
 } from "@mn/provider-catalog";
-import { mergeProviderUpdate, providerSupportsApp } from "@mn/provider-catalog";
+import {
+  assertProviderWireConfiguration,
+  mergeProviderUpdate,
+  providerSupportsApp
+} from "@mn/provider-catalog";
 import type { FileLocalStoreOptions, LocalStoreData } from "./types.js";
 
 const defaultProxy: ProxyConfig = {
@@ -75,6 +79,7 @@ export class FileLocalStore {
       baseUrl: input.baseUrl,
       defaultModel: input.defaultModel,
       modelReasoningEffort: input.modelReasoningEffort,
+      wireCompatibility: input.wireCompatibility,
       disableResponseStorage: input.disableResponseStorage ?? true,
       wireApi: input.wireApi,
       apiKeyRef: input.apiKeyRef,
@@ -89,6 +94,7 @@ export class FileLocalStore {
       createdAt: now,
       updatedAt: now
     };
+    assertProviderWireConfiguration(provider);
     data.providers.push(provider);
     await this.write(data);
     return provider;
@@ -104,6 +110,7 @@ export class FileLocalStore {
     const current = data.providers[index];
     if (!current) throw new Error(`Provider not found: ${id}`);
     const merged = mergeProviderUpdate(current, patch, new Date().toISOString());
+    assertProviderWireConfiguration(merged);
     const updated = patch.enabled === undefined
       ? normalizeProviderActivationRecord(merged)
       : {
@@ -850,7 +857,7 @@ export function defaultMniuRoot(homeDir = process.env.HOME ?? process.cwd()): st
   return join(homeDir, ".mniu");
 }
 
-function nextProviderHealth(
+export function nextProviderHealth(
   current: ProviderHealthRecord | undefined,
   event: ProviderHealthEvent
 ): ProviderHealthRecord {
@@ -892,7 +899,7 @@ function nextProviderHealth(
   };
 }
 
-function effectiveProviderHealth(
+export function effectiveProviderHealth(
   health: ProviderHealthRecord,
   now = new Date()
 ): ProviderHealthRecord {

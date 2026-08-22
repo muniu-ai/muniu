@@ -1,6 +1,6 @@
 /*
  * Adapted from DeepSeek Harness at fixed commit
- * 47f943859bef60e4160492346772ded9b24f765a.
+ * 141eb6fef83422698aef7a981029e843e8161534.
  * Original path: packages/llm/llm/src/assembler.ts
  * Copyright (c) 2026 DeepSeek
  * SPDX-License-Identifier: MIT
@@ -166,6 +166,19 @@ export class BlockAssembler {
     });
     const visible = this.finish === "max-tokens" ? blocks.filter((block) => block.type !== "tool-call") : blocks;
     return snapshotBoundary(visible, "blocks");
+  }
+
+  interruptedBlocks(): readonly ContentBlock[] {
+    const blocks = this.order.flatMap((index): ContentBlock[] => {
+      const partial = this.partials.get(index);
+      if (partial === undefined) throw new Error(`assembler invariant violated at index ${index}`);
+      if (partial.blockType !== "text" && partial.blockType !== "thinking") return [];
+      const block = this.assemble(partial, index);
+      return block.type === "text" || block.type === "thinking"
+        ? block.text.trim().length === 0 ? [] : [block]
+        : [];
+    });
+    return snapshotBoundary(blocks, "interrupted blocks");
   }
 
   get usage(): TokenUsage | undefined { return this.currentUsage; }

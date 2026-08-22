@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+import { createHash } from "node:crypto";
 import { types as utilTypes } from "node:util";
 
 import {
@@ -17,6 +18,7 @@ import {
   type JsonValue,
   type LlmRequest,
   type Message,
+  type ModelImageInput,
   type ModelAttemptStartedV1,
   type ModelPricingSnapshotV1,
   type StreamChunk,
@@ -40,12 +42,26 @@ export interface ModelSecretRef {
   readonly ref: string;
 }
 
+export interface ModelProviderWireCompatibilityV1 {
+  readonly systemRole?: "system" | "developer";
+  readonly streamUsage?: "include" | "omit";
+  readonly outputTokenField?: "omit" | "max_tokens" | "max_completion_tokens" | "max_output_tokens";
+  readonly reasoningEncoding?: "omit" | "openai_effort" | "deepseek_thinking";
+  readonly assistantReasoningField?: "omit" | "reasoning_content" | "reasoning";
+}
+
 export interface ModelProviderRoute {
   readonly providerId: string;
   readonly apiFormat: ModelApiFormat;
   readonly baseUrl: string;
   readonly apiKeyRef?: ModelSecretRef;
   readonly pricing?: ModelPricingSnapshotV1;
+  readonly maxOutputTokens?: number;
+  readonly reasoningEffort?: "minimal" | "low" | "medium" | "high";
+  readonly wireCompatibility?: ModelProviderWireCompatibilityV1;
+  readonly inputModalities?: readonly ("text" | "image")[];
+  readonly maxImagesPerMessage?: number;
+  readonly maxRequestImageBase64Bytes?: number;
 }
 
 export interface ModelPartialUsage {
@@ -99,6 +115,10 @@ interface DecodeState {
 }
 
 const ABORTED = Symbol("model-operation-aborted");
+const IMAGE_DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
+const DEFAULT_MAX_IMAGES_PER_MESSAGE = 20;
+const DEFAULT_MAX_REQUEST_IMAGE_BASE64_BYTES = 20 * 1024 * 1024;
+const OMITTED_IMAGE_TEXT = "[Earlier image omitted because the provider request image limit was exceeded.]";
 
 class ModelReceiptObserverError extends Error {}
 
@@ -156,8 +176,93 @@ function snapshotSecretRef(value: unknown): ModelSecretRef {
   return Object.freeze({ type: source.type, ref: source.ref });
 }
 
+function snapshotWireCompatibility(
+  value: unknown,
+  apiFormat: ModelApiFormat
+): ModelProviderWireCompatibilityV1 {
+  const source = exactDataRecord(value, [
+    "systemRole",
+    "streamUsage",
+    "outputTokenField",
+    "reasoningEncoding",
+    "assistantReasoningField"
+  ], "model provider wire compatibility");
+  if (source.systemRole !== undefined
+    && source.systemRole !== "system" && source.systemRole !== "developer") {
+    throw new TypeError("model provider wire system role is invalid");
+  }
+  if (source.streamUsage !== undefined
+    && source.streamUsage !== "include" && source.streamUsage !== "omit") {
+    throw new TypeError("model provider wire stream usage is invalid");
+  }
+  if (source.outputTokenField !== undefined
+    && source.outputTokenField !== "omit"
+    && source.outputTokenField !== "max_tokens"
+    && source.outputTokenField !== "max_completion_tokens"
+    && source.outputTokenField !== "max_output_tokens") {
+    throw new TypeError("model provider wire output token field is invalid");
+  }
+  if (source.reasoningEncoding !== undefined
+    && source.reasoningEncoding !== "omit"
+    && source.reasoningEncoding !== "openai_effort"
+    && source.reasoningEncoding !== "deepseek_thinking") {
+    throw new TypeError("model provider wire reasoning encoding is invalid");
+  }
+  if (source.assistantReasoningField !== undefined
+    && source.assistantReasoningField !== "omit"
+    && source.assistantReasoningField !== "reasoning_content"
+    && source.assistantReasoningField !== "reasoning") {
+    throw new TypeError("model provider wire assistant reasoning field is invalid");
+  }
+
+  if (apiFormat === "openai_chat") {
+    if (source.outputTokenField === "max_output_tokens") {
+      throw new TypeError("model provider wire output token field is incompatible with OpenAI Chat");
+    }
+  } else if (apiFormat === "openai_responses") {
+    if (source.systemRole !== undefined
+      || source.streamUsage !== undefined
+      || source.assistantReasoningField !== undefined
+      || source.outputTokenField === "max_tokens"
+      || source.outputTokenField === "max_completion_tokens"
+      || source.reasoningEncoding === "deepseek_thinking") {
+      throw new TypeError("model provider wire compatibility is incompatible with OpenAI Responses");
+    }
+  } else if (source.systemRole !== undefined
+    || source.streamUsage !== undefined
+    || source.assistantReasoningField !== undefined
+    || source.outputTokenField === "max_completion_tokens"
+    || source.outputTokenField === "max_output_tokens"
+    || source.reasoningEncoding === "openai_effort"
+    || source.reasoningEncoding === "deepseek_thinking") {
+    throw new TypeError("model provider wire compatibility is incompatible with Anthropic Messages");
+  }
+
+  return Object.freeze({
+    ...(source.systemRole === undefined ? {} : { systemRole: source.systemRole }),
+    ...(source.streamUsage === undefined ? {} : { streamUsage: source.streamUsage }),
+    ...(source.outputTokenField === undefined ? {} : { outputTokenField: source.outputTokenField }),
+    ...(source.reasoningEncoding === undefined ? {} : { reasoningEncoding: source.reasoningEncoding }),
+    ...(source.assistantReasoningField === undefined
+      ? {}
+      : { assistantReasoningField: source.assistantReasoningField })
+  }) as ModelProviderWireCompatibilityV1;
+}
+
 function snapshotRoute(value: unknown): ModelProviderRoute {
-  const source = exactDataRecord(value, ["providerId", "apiFormat", "baseUrl", "apiKeyRef", "pricing"], "model provider route");
+  const source = exactDataRecord(value, [
+    "providerId",
+    "apiFormat",
+    "baseUrl",
+    "apiKeyRef",
+    "pricing",
+    "maxOutputTokens",
+    "reasoningEffort",
+    "wireCompatibility",
+    "inputModalities",
+    "maxImagesPerMessage",
+    "maxRequestImageBase64Bytes"
+  ], "model provider route");
   assertSafePublicControlIdV1(source.providerId, "model provider identifier");
   if (source.apiFormat !== "openai_chat" && source.apiFormat !== "openai_responses" && source.apiFormat !== "anthropic_messages") {
     throw new TypeError("model provider API format is invalid");
@@ -185,6 +290,51 @@ function snapshotRoute(value: unknown): ModelProviderRoute {
     throw new TypeError("model provider base URL is invalid");
   }
   const apiKeyRef = source.apiKeyRef === undefined ? undefined : snapshotSecretRef(source.apiKeyRef);
+  if (source.maxOutputTokens !== undefined
+    && (typeof source.maxOutputTokens !== "number"
+      || !Number.isSafeInteger(source.maxOutputTokens)
+      || source.maxOutputTokens <= 0)) {
+    throw new TypeError("model provider maximum output tokens is invalid");
+  }
+  if (source.reasoningEffort !== undefined
+    && source.reasoningEffort !== "minimal"
+    && source.reasoningEffort !== "low"
+    && source.reasoningEffort !== "medium"
+    && source.reasoningEffort !== "high") {
+    throw new TypeError("model provider reasoning effort is invalid");
+  }
+  const inputModalities = source.inputModalities === undefined
+    ? Object.freeze(["text"] as const)
+    : exactDataArray(source.inputModalities, "model provider input modalities");
+  if (inputModalities.length === 0
+    || new Set(inputModalities).size !== inputModalities.length
+    || inputModalities.some((value) => value !== "text" && value !== "image")) {
+    throw new TypeError("model provider input modalities are invalid");
+  }
+  for (const [value, label] of [
+    [source.maxImagesPerMessage, "maximum images per message"],
+    [source.maxRequestImageBase64Bytes, "maximum request image payload"]
+  ] as const) {
+    if (value !== undefined
+      && (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0)) {
+      throw new TypeError(`model provider ${label} is invalid`);
+    }
+  }
+  const wireCompatibility = source.wireCompatibility === undefined
+    ? undefined
+    : snapshotWireCompatibility(source.wireCompatibility, source.apiFormat);
+  const outputTokenField = wireCompatibility?.outputTokenField;
+  if (source.apiFormat !== "anthropic_messages"
+    && outputTokenField !== undefined
+    && outputTokenField !== "omit"
+    && source.maxOutputTokens === undefined) {
+    throw new TypeError("model provider wire output token field requires a model output cap");
+  }
+  if (wireCompatibility?.reasoningEncoding !== undefined
+    && wireCompatibility.reasoningEncoding !== "omit"
+    && source.reasoningEffort === undefined) {
+    throw new TypeError("model provider wire reasoning encoding requires a reasoning effort");
+  }
   const pricing = source.pricing === undefined
     ? createModelPricingSnapshotV1({})
     : inspectModelPricingSnapshotV1(source.pricing);
@@ -194,7 +344,17 @@ function snapshotRoute(value: unknown): ModelProviderRoute {
     apiFormat: source.apiFormat,
     baseUrl: parsed.toString(),
     ...(apiKeyRef === undefined ? {} : { apiKeyRef }),
-    pricing
+    pricing,
+    ...(source.maxOutputTokens === undefined ? {} : { maxOutputTokens: source.maxOutputTokens }),
+    ...(source.reasoningEffort === undefined ? {} : { reasoningEffort: source.reasoningEffort }),
+    ...(wireCompatibility === undefined ? {} : { wireCompatibility }),
+    inputModalities: Object.freeze([...inputModalities]) as readonly ("text" | "image")[],
+    ...(source.maxImagesPerMessage === undefined
+      ? {}
+      : { maxImagesPerMessage: source.maxImagesPerMessage as number }),
+    ...(source.maxRequestImageBase64Bytes === undefined
+      ? {}
+      : { maxRequestImageBase64Bytes: source.maxRequestImageBase64Bytes as number })
   });
 }
 
@@ -235,14 +395,24 @@ function createAttemptStarted(
       providerId: route.providerId,
       apiFormat: route.apiFormat,
       baseUrl: route.baseUrl,
-      ...(route.apiKeyRef === undefined ? {} : { apiKeyRef: route.apiKeyRef })
+      ...(route.apiKeyRef === undefined ? {} : { apiKeyRef: route.apiKeyRef }),
+      ...(route.maxOutputTokens === undefined ? {} : { maxOutputTokens: route.maxOutputTokens }),
+      ...(route.reasoningEffort === undefined ? {} : { reasoningEffort: route.reasoningEffort }),
+      ...(route.wireCompatibility === undefined
+        ? {}
+        : { wireCompatibility: route.wireCompatibility }),
+      ...(route.inputModalities === undefined ? {} : { inputModalities: route.inputModalities }),
+      ...(route.maxImagesPerMessage === undefined ? {} : { maxImagesPerMessage: route.maxImagesPerMessage }),
+      ...(route.maxRequestImageBase64Bytes === undefined
+        ? {}
+        : { maxRequestImageBase64Bytes: route.maxRequestImageBase64Bytes })
     }),
     pricing: route.pricing ?? createModelPricingSnapshotV1({})
   });
 }
 
 function snapshotRequest(value: unknown): LlmRequest {
-  const source = exactDataRecord(value, ["provider", "model", "messages", "system", "tools", "signal"], "model request");
+  const source = exactDataRecord(value, ["provider", "model", "messages", "system", "tools", "imageInputs", "signal"], "model request");
   assertSafePublicControlIdV1(source.provider, "model request provider");
   assertSafePublicControlIdV1(source.model, "model request model");
   if (source.system !== undefined && typeof source.system !== "string") {
@@ -268,14 +438,69 @@ function snapshotRequest(value: unknown): LlmRequest {
   if (requestTools !== undefined && !Array.isArray(requestTools)) {
     throw new TypeError("model request tools must be an array");
   }
+  const imageInputs = source.imageInputs === undefined
+    ? undefined
+    : snapshotImageInputs(source.imageInputs);
   return deepFreeze({
     provider: source.provider,
     model: source.model,
     messages: messages as unknown as Message[],
     ...(source.system === undefined ? {} : { system: source.system }),
     ...(requestTools === undefined ? {} : { tools: requestTools as unknown as LlmRequest["tools"] }),
+    ...(imageInputs === undefined ? {} : { imageInputs }),
     ...(signal === undefined ? {} : { signal })
   });
+}
+
+function snapshotImageInputs(value: unknown): readonly ModelImageInput[] {
+  const values = exactDataArray(value, "model image inputs");
+  const ids = new Set<string>();
+  const output: ModelImageInput[] = [];
+  for (const item of values) {
+    const source = exactDataRecord(item, [
+      "attachmentId",
+      "contentType",
+      "sha256",
+      "byteLength",
+      "dataBase64"
+    ], "model image input");
+    assertSafePublicControlIdV1(source.attachmentId, "model image attachment identifier");
+    if (source.contentType !== "image/png"
+      && source.contentType !== "image/jpeg"
+      && source.contentType !== "image/webp") {
+      throw new TypeError("model image content type is invalid");
+    }
+    if (typeof source.sha256 !== "string" || !IMAGE_DIGEST_PATTERN.test(source.sha256)) {
+      throw new TypeError("model image digest is invalid");
+    }
+    if (typeof source.byteLength !== "number"
+      || !Number.isSafeInteger(source.byteLength) || source.byteLength <= 0) {
+      throw new TypeError("model image byte length is invalid");
+    }
+    if (typeof source.dataBase64 !== "string" || source.dataBase64.length === 0
+      || source.dataBase64.length % 4 !== 0
+      || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(source.dataBase64)) {
+      throw new TypeError("model image base64 is invalid");
+    }
+    const bytes = Buffer.from(source.dataBase64, "base64");
+    if (bytes.byteLength !== source.byteLength
+      || bytes.toString("base64") !== source.dataBase64
+      || createHash("sha256").update(bytes).digest("hex") !== source.sha256) {
+      throw new TypeError("model image payload does not match its descriptor");
+    }
+    if (ids.has(source.attachmentId as string)) {
+      throw new TypeError("model image attachment identifier is duplicated");
+    }
+    ids.add(source.attachmentId as string);
+    output.push(Object.freeze({
+      attachmentId: source.attachmentId as string,
+      contentType: source.contentType,
+      sha256: source.sha256,
+      byteLength: source.byteLength,
+      dataBase64: source.dataBase64
+    }));
+  }
+  return Object.freeze(output);
 }
 
 function cancelledChunks(): readonly StreamChunk[] {
@@ -371,9 +596,100 @@ function blockText(message: Message, type: "text" | "thinking"): string {
   return parts.join("\n");
 }
 
-function openAiMessages(request: LlmRequest): JsonValue[] {
+interface PreparedMultimodalRequest {
+  readonly request: LlmRequest;
+  readonly imageInputs: ReadonlyMap<string, ModelImageInput>;
+}
+
+function prepareMultimodalRequest(
+  route: ModelProviderRoute,
+  request: LlmRequest
+): PreparedMultimodalRequest {
+  const imageInputs = new Map<string, ModelImageInput>(
+    (request.imageInputs ?? []).map((input) => [input.attachmentId, input])
+  );
+  const occurrences: Array<{
+    readonly messageIndex: number;
+    readonly blockIndex: number;
+    readonly input: ModelImageInput;
+  }> = [];
+  const referenced = new Set<string>();
+  const maxPerMessage = route.maxImagesPerMessage ?? DEFAULT_MAX_IMAGES_PER_MESSAGE;
+  for (const [messageIndex, message] of request.messages.entries()) {
+    let count = 0;
+    for (const [blockIndex, block] of message.content.entries()) {
+      if (block.type !== "image") continue;
+      if (message.role !== "user" || message.source.kind !== "user") {
+        throw new TypeError("model image blocks are allowed only in user messages");
+      }
+      count += 1;
+      if (count > maxPerMessage) throw new TypeError("model message image count exceeds the configured limit");
+      assertSafePublicControlIdV1(block.attachmentId, "model image attachment identifier");
+      if (!IMAGE_DIGEST_PATTERN.test(block.sha256)
+        || !Number.isSafeInteger(block.byteLength) || block.byteLength <= 0
+        || !Number.isSafeInteger(block.width) || block.width <= 0
+        || !Number.isSafeInteger(block.height) || block.height <= 0) {
+        throw new TypeError("model image block descriptor is invalid");
+      }
+      const input = imageInputs.get(block.attachmentId);
+      if (input === undefined
+        || input.contentType !== block.contentType
+        || input.sha256 !== block.sha256
+        || input.byteLength !== block.byteLength) {
+        throw new TypeError("model image block has no matching verified input");
+      }
+      referenced.add(block.attachmentId);
+      occurrences.push({ messageIndex, blockIndex, input });
+    }
+  }
+  if (imageInputs.size !== referenced.size
+    || [...imageInputs.keys()].some((attachmentId) => !referenced.has(attachmentId))) {
+    throw new TypeError("model request contains an unreferenced image input");
+  }
+  if (occurrences.length > 0 && !route.inputModalities?.includes("image")) {
+    throw new TypeError("model provider route does not declare image input support");
+  }
+  const kept = new Set<string>();
+  const maximumBase64Bytes = route.maxRequestImageBase64Bytes
+    ?? DEFAULT_MAX_REQUEST_IMAGE_BASE64_BYTES;
+  let totalBase64Bytes = 0;
+  for (let index = occurrences.length - 1; index >= 0; index -= 1) {
+    const occurrence = occurrences[index];
+    if (occurrence === undefined) continue;
+    const size = Buffer.byteLength(occurrence.input.dataBase64, "ascii");
+    if (totalBase64Bytes + size > maximumBase64Bytes) continue;
+    totalBase64Bytes += size;
+    kept.add(`${occurrence.messageIndex}:${occurrence.blockIndex}`);
+  }
+  if (kept.size === occurrences.length) return Object.freeze({ request, imageInputs });
+  const messages = request.messages.map((message, messageIndex) => ({
+    ...message,
+    content: message.content.map((block, blockIndex) => block.type !== "image"
+      || kept.has(`${messageIndex}:${blockIndex}`)
+      ? block
+      : { type: "text" as const, text: OMITTED_IMAGE_TEXT })
+  }));
+  return Object.freeze({
+    request: Object.freeze({ ...request, messages: Object.freeze(messages) }),
+    imageInputs
+  });
+}
+
+function imageDataUrl(block: Extract<Message["content"][number], { type: "image" }>, inputs: ReadonlyMap<string, ModelImageInput>): string {
+  const input = inputs.get(block.attachmentId);
+  if (input === undefined) throw new TypeError("model image block has no verified input");
+  return `data:${input.contentType};base64,${input.dataBase64}`;
+}
+
+function openAiMessages(
+  request: LlmRequest,
+  compatibility: ModelProviderWireCompatibilityV1 | undefined,
+  imageInputs: ReadonlyMap<string, ModelImageInput>
+): JsonValue[] {
   const messages: JsonValue[] = [];
-  if (request.system !== undefined) messages.push({ role: "system", content: request.system });
+  if (request.system !== undefined) {
+    messages.push({ role: compatibility?.systemRole ?? "system", content: request.system });
+  }
   for (const message of request.messages) {
     if (message.source.kind === "tool") {
       messages.push({ role: "tool", tool_call_id: message.source.callId, content: textContent(message) });
@@ -384,11 +700,25 @@ function openAiMessages(request: LlmRequest): JsonValue[] {
       type: "function",
       function: { name: block.name, arguments: block.arguments }
     }));
+    const reasoning = blockText(message, "thinking");
+    const assistantReasoningField = compatibility?.assistantReasoningField ?? "reasoning_content";
+    const text = blockText(message, "text");
+    const images = message.content.filter((block) => block.type === "image");
+    const content: JsonValue = images.length === 0
+      ? text
+      : [
+        ...(text.length === 0 ? [] : [{ type: "text", text }]),
+        ...images.map((block) => ({
+          type: "image_url",
+          image_url: { url: imageDataUrl(block, imageInputs) }
+        }))
+      ];
     messages.push({
       role: message.role,
-      content: blockText(message, "text"),
-      ...(message.role === "assistant" && blockText(message, "thinking").length > 0
-        ? { reasoning_content: blockText(message, "thinking") }
+      content,
+      ...(message.role === "assistant" && reasoning.length > 0
+        && assistantReasoningField !== "omit"
+        ? { [assistantReasoningField]: reasoning }
         : {}),
       ...(toolCalls.length === 0 ? {} : { tool_calls: toolCalls })
     });
@@ -396,15 +726,28 @@ function openAiMessages(request: LlmRequest): JsonValue[] {
   return messages;
 }
 
-function openAiResponsesInput(request: LlmRequest): JsonValue[] {
+function openAiResponsesInput(
+  request: LlmRequest,
+  imageInputs: ReadonlyMap<string, ModelImageInput>
+): JsonValue[] {
   const input: JsonValue[] = [];
   for (const message of request.messages) {
     if (message.source.kind === "tool") {
       input.push({ type: "function_call_output", call_id: message.source.callId, output: textContent(message) });
       continue;
     }
-    const content = blockText(message, "text");
-    if (content.length > 0) input.push({ type: "message", role: message.role, content });
+    const text = blockText(message, "text");
+    const images = message.content.filter((block) => block.type === "image");
+    if (text.length > 0 || images.length > 0) input.push({
+      type: "message",
+      role: message.role,
+      content: images.length === 0
+        ? text
+        : [
+          ...(text.length === 0 ? [] : [{ type: "input_text", text }]),
+          ...images.map((block) => ({ type: "input_image", image_url: imageDataUrl(block, imageInputs) }))
+        ]
+    });
     for (const block of message.content) {
       if (block.type === "tool-call") {
         input.push({
@@ -429,7 +772,10 @@ function parseToolInput(value: string): JsonRecord {
   throw new TypeError("model tool arguments must contain a JSON object");
 }
 
-function anthropicMessages(request: LlmRequest): JsonValue[] {
+function anthropicMessages(
+  request: LlmRequest,
+  imageInputs: ReadonlyMap<string, ModelImageInput>
+): JsonValue[] {
   return request.messages.map((message) => {
     if (message.source.kind === "tool") {
       const result = message.content[0];
@@ -447,6 +793,14 @@ function anthropicMessages(request: LlmRequest): JsonValue[] {
     const content: JsonValue[] = [];
     for (const block of message.content) {
       if (block.type === "text") content.push({ type: "text", text: block.text });
+      if (block.type === "image") {
+        const input = imageInputs.get(block.attachmentId);
+        if (input === undefined) throw new TypeError("model image block has no verified input");
+        content.push({
+          type: "image",
+          source: { type: "base64", media_type: input.contentType, data: input.dataBase64 }
+        });
+      }
       if (block.type === "tool-call") {
         if (message.role !== "assistant") throw new TypeError("model user message cannot contain a tool call");
         content.push({ type: "tool_use", id: block.id, name: block.name, input: parseToolInput(block.arguments) });
@@ -464,21 +818,44 @@ function tools(request: LlmRequest): JsonValue[] | undefined {
 }
 
 function requestBody(route: ModelProviderRoute, request: LlmRequest): JsonValue {
+  const prepared = prepareMultimodalRequest(route, request);
+  request = prepared.request;
   const requestTools = tools(request);
   if (route.apiFormat === "openai_chat") {
+    const outputTokenField = route.wireCompatibility?.outputTokenField ?? "omit";
+    const reasoningEncoding = route.wireCompatibility?.reasoningEncoding ?? "omit";
     return {
       model: request.model,
-      messages: openAiMessages(request),
+      messages: openAiMessages(request, route.wireCompatibility, prepared.imageInputs),
       stream: true,
-      stream_options: { include_usage: true },
+      ...(route.wireCompatibility?.streamUsage === "omit"
+        ? {}
+        : { stream_options: { include_usage: true } }),
+      ...(outputTokenField === "omit" || route.maxOutputTokens === undefined
+        ? {}
+        : { [outputTokenField]: route.maxOutputTokens }),
+      ...(reasoningEncoding === "openai_effort" && route.reasoningEffort !== undefined
+        ? { reasoning_effort: route.reasoningEffort }
+        : {}),
+      ...(reasoningEncoding === "deepseek_thinking" && route.reasoningEffort !== undefined
+        ? { thinking: { type: "enabled" } }
+        : {}),
       ...(requestTools === undefined ? {} : { tools: requestTools })
     };
   }
   if (route.apiFormat === "openai_responses") {
+    const outputTokenField = route.wireCompatibility?.outputTokenField ?? "omit";
+    const reasoningEncoding = route.wireCompatibility?.reasoningEncoding ?? "omit";
     return {
       model: request.model,
-      input: openAiResponsesInput(request),
+      input: openAiResponsesInput(request, prepared.imageInputs),
       stream: true,
+      ...(outputTokenField === "max_output_tokens" && route.maxOutputTokens !== undefined
+        ? { max_output_tokens: route.maxOutputTokens }
+        : {}),
+      ...(reasoningEncoding === "openai_effort" && route.reasoningEffort !== undefined
+        ? { reasoning: { effort: route.reasoningEffort } }
+        : {}),
       ...(request.system === undefined ? {} : { instructions: request.system }),
       ...(requestTools === undefined ? {} : {
         tools: request.tools?.map((tool) => ({
@@ -492,9 +869,11 @@ function requestBody(route: ModelProviderRoute, request: LlmRequest): JsonValue 
   }
   return {
     model: request.model,
-    messages: anthropicMessages(request),
+    messages: anthropicMessages(request, prepared.imageInputs),
     stream: true,
-    max_tokens: 4096,
+    ...((route.wireCompatibility?.outputTokenField ?? "max_tokens") === "omit"
+      ? {}
+      : { max_tokens: route.maxOutputTokens ?? 4096 }),
     ...(request.system === undefined ? {} : { system: request.system }),
     ...(request.tools === undefined ? {} : {
       tools: request.tools.map((tool) => ({

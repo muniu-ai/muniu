@@ -1,6 +1,6 @@
 /*
  * Adapted from DeepSeek Harness at fixed commit
- * 47f943859bef60e4160492346772ded9b24f765a.
+ * 141eb6fef83422698aef7a981029e843e8161534.
  * Original path: packages/core/agent-loop/src/agent.ts
  * Copyright (c) 2026 DeepSeek
  * SPDX-License-Identifier: MIT
@@ -14,9 +14,10 @@ import {
   CandidateId,
   RunId,
   createSafeRandomPublicControlIdV1,
+  createAssistantMessage,
   createRuntimeEffectCommitmentBinderV1,
   createUserMessage,
-  type AgentSessionEventV1,
+  type AgentSessionEvent,
   type ToolCallBlock,
   type TurnEndReason
 } from "@mn/agent-protocol";
@@ -71,7 +72,9 @@ export class ReactDriver {
     const maxToolCalls = input.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
     assertBudget("maxSteps", maxSteps, false);
     assertBudget("maxToolCalls", maxToolCalls, true);
-    if (input.prompt.length === 0) throw new Error("agent prompt must not be empty");
+    if (input.prompt.length === 0 && (input.userContent === undefined || input.userContent.length === 0)) {
+      throw new Error("agent prompt or user content must not be empty");
+    }
     // A reopened protected history cannot be converted back into executable
     // model messages. Fail before appending a new turn unless the caller has
     // supplied the process-local runtime overlay for every prior message.
@@ -90,14 +93,19 @@ export class ReactDriver {
       };
       let steps = 0;
       let toolCalls = 0;
-      let lastEvent: AgentSessionEventV1 | undefined;
+      let lastEvent: AgentSessionEvent | undefined;
       let reason: TurnEndReason = "error";
 
       lastEvent = await input.session.append("turn/start", { turn }, metadata);
+      const userContent = input.userContent ?? [{ type: "text" as const, text: input.prompt }];
+      if (input.session.header.schemaVersion === 1
+        && userContent.some((block) => block.type === "image")) {
+        throw new TypeError("v1 agent sessions do not support image blocks");
+      }
       const userMessage = createUserMessage({
         id: MessageId(createSafeRandomPublicControlIdV1("user")),
         source: { kind: "user" },
-        content: [{ type: "text", text: input.prompt }]
+        content: userContent
       });
       lastEvent = await input.session.append("user/message", { turn, message: userMessage }, metadata);
 
@@ -110,7 +118,7 @@ export class ReactDriver {
             reason = "cancelled";
           } else {
             const assembler = new BlockAssembler();
-            let pendingModelAttempt: AgentSessionEventV1<"model/attempt-started"> | undefined;
+            let pendingModelAttempt: AgentSessionEvent<"model/attempt-started"> | undefined;
             const execution: LlmStreamExecutionContext = {
               attemptAudit: {
                 started: async (attempt) => {
@@ -142,6 +150,7 @@ export class ReactDriver {
               messages: projectRuntimeMessages(input.session),
               system: this.systemPrompt.render(),
               tools: this.tools.schemas(),
+              ...(input.imageInputs === undefined ? {} : { imageInputs: input.imageInputs }),
               ...(input.signal === undefined ? {} : { signal: input.signal })
             }, execution)) {
               if (isAborted(input.signal)) {
@@ -152,7 +161,26 @@ export class ReactDriver {
             }
             if (pendingModelAttempt !== undefined) throw new ModelOutcomePersistenceError();
 
-            if (reason !== "cancelled") {
+            const modelCancelled = reason === "cancelled"
+              || assembler.finish === "cancelled"
+              || isAborted(input.signal);
+            if (modelCancelled) {
+              reason = "cancelled";
+              const content = assembler.interruptedBlocks();
+              if (content.length > 0) {
+                const message = createAssistantMessage({
+                  id: MessageId(createSafeRandomPublicControlIdV1("assistant")),
+                  content,
+                  source: { kind: "model", provider: input.provider, model: input.model }
+                });
+                lastEvent = await input.session.append("assistant/message", {
+                  turn,
+                  step,
+                  message,
+                  ...(assembler.usage === undefined ? {} : { usage: assembler.usage })
+                }, metadata);
+              }
+            } else {
               const message = assembler.message({ kind: "model", provider: input.provider, model: input.model });
               lastEvent = await input.session.append("assistant/message", {
                 turn,
@@ -164,8 +192,6 @@ export class ReactDriver {
 
               if (assembler.error !== undefined || assembler.finish === "error") {
                 reason = "error";
-              } else if (assembler.finish === "cancelled" || isAborted(input.signal)) {
-                reason = "cancelled";
               } else if (assembler.finish === "max-tokens") {
                 reason = "budget-exceeded";
               } else if (calls.length === 0) {

@@ -2,9 +2,10 @@
 
 import type {
   AGENT_SESSION_PROTECTION_PROFILE_V1,
-  AgentSessionEventPayloadMapV1,
-  AgentSessionEventTypeV1,
-  AgentSessionEventV1,
+  AGENT_SESSION_PROTECTION_PROFILE_V2,
+  AgentSessionEventPayloadMap,
+  AgentSessionEventType,
+  AgentSessionEvent,
   AgentModelBindingV1,
   CandidateId,
   Digest,
@@ -24,7 +25,20 @@ export interface AgentSessionHeaderV1 {
   readonly modelBinding?: AgentModelBindingV1;
 }
 
+export interface AgentSessionHeaderV2 {
+  readonly schemaVersion: 2;
+  readonly sessionId: SessionId;
+  readonly createdAt: string;
+  readonly protectionProfile: typeof AGENT_SESSION_PROTECTION_PROFILE_V2;
+  readonly protectionPolicyDigest: Digest;
+  readonly protectedCwd?: ProtectedTextV1;
+  readonly modelBinding?: AgentModelBindingV1;
+}
+
+export type AgentSessionHeader = AgentSessionHeaderV1 | AgentSessionHeaderV2;
+
 export interface CreateAgentSessionOptions {
+  readonly schemaVersion?: 1 | 2;
   readonly sessionId?: SessionId;
   readonly cwd?: string;
   readonly labels?: Record<string, string>;
@@ -37,13 +51,13 @@ export interface AgentEventMetadata {
 }
 
 export interface AgentSessionExclusiveView {
-  readonly header: AgentSessionHeaderV1;
-  readonly events: readonly AgentSessionEventV1[];
-  append<T extends AgentSessionEventTypeV1>(
+  readonly header: AgentSessionHeader;
+  readonly events: readonly AgentSessionEvent[];
+  append<T extends AgentSessionEventType>(
     type: T,
-    payload: AgentSessionEventPayloadMapV1[T],
+    payload: AgentSessionEventPayloadMap[T],
     metadata?: AgentEventMetadata
-  ): Promise<AgentSessionEventV1<T>>;
+  ): Promise<AgentSessionEvent<T>>;
   flush(): Promise<void>;
 }
 
@@ -59,7 +73,7 @@ export interface AgentSessionStore {
 }
 
 export interface EventPersistence {
-  commitDurable(event: AgentSessionEventV1): Promise<void>;
+  commitDurable(event: AgentSessionEvent): Promise<void>;
   flush(): Promise<void>;
 }
 

@@ -4,7 +4,7 @@
 
 **目标：** 提供三类模型协议、持久会话和可通过 REST/SSE 使用的版本化 Agent API。
 
-**架构：** 从 local-proxy 抽出 model client；本地 JSONL 是会话事实源、SQLite 是可重建投影，企业版使用 PostgreSQL 与对象存储。所有传输映射到 AgentSessionEventV1，不兼容 DSH rc5 wire/session 格式。
+**架构：** 从 local-proxy 抽出 model client；本地 JSONL 是会话事实源、SQLite 是可重建投影，企业版使用 PostgreSQL 与对象存储。text-only 传输映射到 AgentSessionEventV1；显式 V2 会话可使用不可变图片 descriptor，V1/V2 不得在同一链中混写。仍不兼容 DSH wire/session 格式。
 
 **技术栈：** Fastify 5、SSE、SQLite、PostgreSQL、OpenAI Chat/Responses、Anthropic Messages、DeepSeek API。
 

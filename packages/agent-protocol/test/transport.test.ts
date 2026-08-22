@@ -10,9 +10,12 @@ import {
   inspectAgentApprovalResponseV1,
   inspectAgentErrorResponseV1,
   inspectAgentMessageRequestV1,
+  inspectAgentMessageRequestV2,
+  inspectAgentAttachmentUploadRequestV1,
   inspectAgentModelBindingV1,
   inspectAgentSessionControlRequestV1,
   inspectAgentSessionCreateRequestV1,
+  inspectAgentSessionCreateRequestV2,
   inspectAgentSessionViewV1,
   protectAgentSessionPayloadV1
 } from "../src/index.js";
@@ -265,4 +268,43 @@ test("transport v1 response DTOs are exact, versioned, and expose a bounded even
     decision: "deny",
     status: "pending"
   }), undefined);
+});
+
+test("transport v2 closes session/image request vocabularies and keeps v1 text-only", () => {
+  const create = {
+    schemaVersion: 2,
+    kind: "agent-session-create-request",
+    clientRequestId: "transport-create-v2",
+    modelBinding: binding
+  } as const;
+  assert.deepEqual(inspectAgentSessionCreateRequestV2(create), create);
+  assert.equal(inspectAgentSessionCreateRequestV1(create), undefined);
+
+  const message = {
+    schemaVersion: 2,
+    kind: "agent-message-request",
+    clientRequestId: "transport-message-v2",
+    prompt: "",
+    attachmentIds: ["attachment-one"]
+  } as const;
+  assert.deepEqual(inspectAgentMessageRequestV2(message), message);
+  assert.equal(inspectAgentMessageRequestV1(message), undefined);
+  assert.equal(inspectAgentMessageRequestV2({ ...message, attachmentIds: [] }), undefined);
+  assert.equal(inspectAgentMessageRequestV2({
+    ...message,
+    attachmentIds: Array.from({ length: 257 }, (_value, index) => `attachment-${index}`)
+  }), undefined);
+
+  const upload = {
+    schemaVersion: 1,
+    kind: "agent-attachment-upload-request",
+    clientRequestId: "transport-upload-v1",
+    contentType: "image/png",
+    dataBase64: Buffer.from("image").toString("base64"),
+    sha256: "a".repeat(64),
+    byteLength: 5
+  } as const;
+  assert.deepEqual(inspectAgentAttachmentUploadRequestV1(upload), upload);
+  assert.equal(inspectAgentAttachmentUploadRequestV1({ ...upload, extra: true }), undefined);
+  assert.equal(inspectAgentAttachmentUploadRequestV1({ ...upload, dataBase64: "not base64" }), undefined);
 });
