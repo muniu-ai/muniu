@@ -74,6 +74,7 @@ export interface TurnExecutionResult {
 
 export interface RecordTurnItemInput {
   readonly kind: ThreadItemKindV3;
+  readonly status?: "inProgress" | "completed" | "failed" | "declined" | "pending";
   readonly content: JsonValue;
   readonly publicControls?: Readonly<Record<string, JsonValue>>;
 }
@@ -183,6 +184,8 @@ export interface ThreadForkOverrides {
   readonly permissionProfile?: string;
   readonly sandbox?: Readonly<Record<string, JsonValue>>;
   readonly source?: string;
+  readonly inheritGoal?: boolean;
+  readonly inheritName?: boolean;
 }
 
 function defaultId(kind: IdKind): string {
@@ -301,8 +304,10 @@ export class ThreadManager {
       ...(parent.runId === undefined ? {} : { runId: parent.runId }),
       ...(parent.candidateId === undefined ? {} : { candidateId: parent.candidateId })
     });
-    if (parent.name !== undefined) await this.setThreadName(child.threadId, parent.name);
-    if (parent.goal !== undefined) {
+    if (parent.name !== undefined && overrides.inheritName !== false) {
+      await this.setThreadName(child.threadId, parent.name);
+    }
+    if (parent.goal !== undefined && overrides.inheritGoal !== false) {
       await this.setGoal(child.threadId, {
         objective: parent.goal.objective.text,
         status: parent.goal.status,
@@ -403,6 +408,20 @@ export class ThreadManager {
     const active = this.#active.get(threadIdValue);
     if (!active || active.turnId !== turnId) throw new Error("turn is not active");
     active.controller.abort("turn interrupted");
+  }
+
+  async recordItem(
+    threadIdValue: string,
+    input: RecordTurnItemInput,
+    turnId?: string
+  ): Promise<string> {
+    const threadId = SessionId(threadIdValue);
+    const thread = await this.readThread(threadId);
+    if (thread.tombstoned) throw new Error("tombstoned thread cannot accept items");
+    if (turnId !== undefined && !thread.turns.some((turn) => turn.turnId === turnId)) {
+      throw new Error("item turn does not belong to the thread");
+    }
+    return this.#recordItem(threadId, turnId, input);
   }
 
   async setGoal(threadIdValue: string, input: ThreadGoalInput): Promise<ThreadGoalProjectionV3> {
@@ -595,6 +614,14 @@ export class ThreadManager {
     turnId: string,
     input: RecordTurnItemInput
   ): Promise<string> {
+    return this.#recordItem(threadId, turnId, input);
+  }
+
+  async #recordItem(
+    threadId: SessionId,
+    turnId: string | undefined,
+    input: RecordTurnItemInput
+  ): Promise<string> {
     const itemId = this.#nextId("item");
     const snapshot = snapshotBoundedJsonValue(input.content);
     const encoded = Buffer.from(JSON.stringify(snapshot), "utf8");
@@ -613,15 +640,15 @@ export class ThreadManager {
     }
     await this.#store.append(threadId, {
       eventId: EventId(this.#nextId("event")),
-      turnId,
+      ...(turnId === undefined ? {} : { turnId }),
       itemId,
       occurredAt: this.#now(),
       type: "item/recorded",
       correlationId: threadId,
       publicControls: {
-        itemKind: input.kind,
-        status: "completed",
         ...input.publicControls,
+        itemKind: input.kind,
+        status: input.status ?? "completed",
         ...spill
       },
       protectedContent
