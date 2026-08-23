@@ -99,6 +99,7 @@ jobs:
       - run: npm run verify:release
       - run: npm run build
       - run: npm run verify:app-server-schema
+      - run: npm run verify:migration-v3
       - run: npm run typecheck
       - run: npm run docs:check
       - run: npm run docs:links

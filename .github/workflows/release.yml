@@ -103,6 +103,7 @@ jobs:
       - run: npm run test:release-contract
       - run: npm run build
       - run: npm run verify:app-server-schema
+      - run: npm run verify:migration-v3
       - run: npm run typecheck
       - run: npm test
       - name: Run PostgreSQL integration suites serially
