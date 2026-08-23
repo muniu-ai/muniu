@@ -17,6 +17,7 @@ import {
   validateAttributionPolicy,
   validateWorkspaceSourceLicenses
 } from "./lib/open-source-policy.mjs";
+import { validateOpenAiCodexProvenance } from "./lib/openai-codex-provenance.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repository = "https://github.com/muniu-ai/muniu";
@@ -72,9 +73,17 @@ const requiredFiles = [
   "docs/security/redaction-policy.md",
   "docs/security/secret-scanning.md",
   "docs/upstream-provenance/deepseek-harness.yaml",
-  "docs/upstream-provenance/deepseek-harness-cordis.yaml"
+  "docs/upstream-provenance/deepseek-harness-cordis.yaml",
+  "docs/upstream-provenance/openai-codex.yaml"
 ];
 requiredFiles.forEach(requireFile);
+
+const codexProvenancePath = path.join(root, "docs/upstream-provenance/openai-codex.yaml");
+if (existsSync(codexProvenancePath)) {
+  for (const failure of validateOpenAiCodexProvenance(readFileSync(codexProvenancePath, "utf8"))) {
+    fail(failure);
+  }
+}
 
 if (
   existsSync(path.join(root, "LICENSE")) &&
