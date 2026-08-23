@@ -5,6 +5,7 @@ import test from "node:test";
 
 import {
   CLIENT_METHODS,
+  MUNIU_METHODS,
   SERVER_NOTIFICATION_METHODS,
   SERVER_REQUEST_METHODS,
   type JsonRpcMessage
@@ -112,6 +113,38 @@ test("returns stable JSON-RPC errors for unknown methods and invalid params", as
     id: "invalid",
     error: { code: -32602, message: "Invalid params" }
   });
+});
+
+test("advertises and dispatches the complete namespaced control surface when installed", async () => {
+  const calls: unknown[] = [];
+  const messages: JsonRpcMessage[] = [];
+  const server = new AppServerConnection({
+    serverInfo: { name: "muniu", version: "0.2.0" },
+    instructionSources: [],
+    handlers: handlers(),
+    controlHandler: async (method, params) => {
+      calls.push({ method, params });
+      return { accepted: true };
+    },
+    notificationLog: new InMemoryNotificationLog(),
+    write: async (message) => { messages.push(message); },
+    close: () => undefined
+  });
+  await initialize(server);
+  await server.receive({
+    id: "control-1",
+    method: "muniu/task/tasks/post",
+    params: { body: { title: "upgrade" }, idempotencyKey: "task-1" }
+  });
+  await server.idle();
+
+  const initialized = messages[0] as unknown as { result: { capabilities: { methods: string[] } } };
+  assert.deepEqual(initialized.result.capabilities.methods, [...CLIENT_METHODS, ...MUNIU_METHODS]);
+  assert.deepEqual(calls, [{
+    method: "muniu/task/tasks/post",
+    params: { body: { title: "upgrade" }, idempotencyKey: "task-1" }
+  }]);
+  assert.deepEqual(messages.at(-1), { id: "control-1", result: { accepted: true } });
 });
 
 test("returns parse and invalid-request errors without exposing parser details", async () => {

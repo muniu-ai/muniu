@@ -3,6 +3,12 @@
 import { z } from "zod";
 
 import { JsonValueSchema } from "./json.js";
+import {
+  MuniuControlParamsSchema,
+  isMuniuMethod,
+  type MuniuControlParams,
+  type MuniuMethod
+} from "./control-methods.js";
 import { METHOD_SCHEMAS, type ClientMethod, type MethodParams } from "./methods.js";
 
 export const RequestIdSchema = z.union([z.string(), z.number().int().safe()]);
@@ -61,16 +67,29 @@ export type ParsedClientRequest<M extends ClientMethod = ClientMethod> = {
   trace?: JsonRpcRequest["trace"];
 };
 
+export type ParsedMuniuRequest = {
+  id: RequestId;
+  method: MuniuMethod;
+  params: MuniuControlParams;
+  trace?: JsonRpcRequest["trace"];
+};
+
 export function isClientMethod(method: string): method is ClientMethod {
   return Object.hasOwn(METHOD_SCHEMAS, method);
 }
 
-export function parseClientRequest(value: unknown): ParsedClientRequest {
+export function parseClientRequest(value: unknown): ParsedClientRequest | ParsedMuniuRequest {
   const request = JsonRpcRequestSchema.parse(value);
-  if (!isClientMethod(request.method)) throw new MethodNotFoundError(request.method);
-  const schema = METHOD_SCHEMAS[request.method].params as z.ZodTypeAny;
-  const params = schema.parse(request.params === undefined ? {} : request.params);
-  return { id: request.id, method: request.method, params, trace: request.trace } as ParsedClientRequest;
+  if (isClientMethod(request.method)) {
+    const schema = METHOD_SCHEMAS[request.method].params as z.ZodTypeAny;
+    const params = schema.parse(request.params === undefined ? {} : request.params);
+    return { id: request.id, method: request.method, params, trace: request.trace } as ParsedClientRequest;
+  }
+  if (isMuniuMethod(request.method)) {
+    const params = MuniuControlParamsSchema.parse(request.params === undefined ? {} : request.params);
+    return { id: request.id, method: request.method, params, trace: request.trace };
+  }
+  throw new MethodNotFoundError(request.method);
 }
 
 export function parseJsonRpcMessageText(text: string): JsonRpcMessage {

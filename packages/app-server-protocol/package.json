@@ -17,8 +17,10 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsc -p tsconfig.test.json && node --test dist-test/test/**/*.test.js",
-    "generate:schema": "npm run build && node scripts/generate-schema.mjs",
-    "verify:schema": "npm run build && node scripts/generate-schema.mjs --check"
+    "generate:control-methods": "node scripts/generate-control-methods.mjs",
+    "verify:control-methods": "node scripts/generate-control-methods.mjs --check",
+    "generate:schema": "npm run generate:control-methods && npm run build && node scripts/generate-schema.mjs",
+    "verify:schema": "npm run verify:control-methods && npm run build && node scripts/generate-schema.mjs --check"
   },
   "dependencies": {
     "zod": "^3.24.1"
