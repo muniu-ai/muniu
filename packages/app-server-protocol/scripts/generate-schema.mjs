@@ -10,6 +10,9 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import {
   CLIENT_METHODS,
   METHOD_SCHEMAS,
+  MUNIU_METHODS,
+  MuniuControlParamsSchema,
+  MuniuControlResultSchema,
   SERVER_NOTIFICATION_METHODS,
   SERVER_NOTIFICATION_SCHEMAS,
   SERVER_REQUEST_METHODS,
@@ -62,6 +65,11 @@ const bundle = stable({
     params: schemaFor(METHOD_SCHEMAS[method].params, `${identifier(method)}Params`),
     result: schemaFor(METHOD_SCHEMAS[method].result, `${identifier(method)}Result`)
   }])),
+  muniuControl: {
+    methods: MUNIU_METHODS,
+    params: schemaFor(MuniuControlParamsSchema, "MuniuControlParams"),
+    result: schemaFor(MuniuControlResultSchema, "MuniuControlResult")
+  },
   serverRequests: Object.fromEntries(SERVER_REQUEST_METHODS.map((method) => [method, {
     params: schemaFor(SERVER_REQUEST_SCHEMAS[method].params, `${identifier(method)}Params`),
     result: schemaFor(SERVER_REQUEST_SCHEMAS[method].result, `${identifier(method)}Result`)
@@ -77,6 +85,7 @@ const catalog = stable({
   baselineCommit: "99660ab3c7b861c916e467581fa9b8723504d66b",
   methodSet: "core-stable-subset",
   methods: CLIENT_METHODS,
+  muniuMethods: MUNIU_METHODS,
   serverRequests: SERVER_REQUEST_METHODS,
   notifications: SERVER_NOTIFICATION_METHODS
 });

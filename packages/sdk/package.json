@@ -1,5 +1,5 @@
 {
-  "name": "@mn/app-server",
+  "name": "@mn/sdk",
   "version": "0.1.1",
   "private": true,
   "license": "Apache-2.0",
@@ -8,10 +8,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    }
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" }
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -19,14 +16,13 @@
     "test": "tsc -p tsconfig.test.json && node --test dist-test/test/**/*.test.js"
   },
   "dependencies": {
-    "@mn/agent-kernel": "0.1.1",
-    "@mn/agent-protocol": "0.1.1",
-    "@mn/agent-session": "0.1.1",
-    "@mn/agent-tools": "0.1.1",
     "@mn/app-server-protocol": "0.1.1",
     "ws": "8.21.3"
   },
   "devDependencies": {
+    "@mn/agent-kernel": "0.1.1",
+    "@mn/agent-session": "0.1.1",
+    "@mn/app-server": "0.1.1",
     "@types/ws": "8.18.1"
   }
 }

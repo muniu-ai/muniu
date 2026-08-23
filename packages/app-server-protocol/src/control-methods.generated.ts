@@ -1,0 +1,904 @@
+// SPDX-License-Identifier: Apache-2.0
+
+export const MUNIU_CONTROL_OPERATIONS = [
+  {
+    "operationId": "get__v1_agent_sessions",
+    "path": "/v1/agent-sessions",
+    "verb": "get",
+    "method": "muniu/run/agentSessions/get"
+  },
+  {
+    "operationId": "post__v1_agent_sessions",
+    "path": "/v1/agent-sessions",
+    "verb": "post",
+    "method": "muniu/run/agentSessions/post"
+  },
+  {
+    "operationId": "get__v1_agent_sessions_id_",
+    "path": "/v1/agent-sessions/{id}",
+    "verb": "get",
+    "method": "muniu/run/agentSessions/byId/get"
+  },
+  {
+    "operationId": "post__v1_agent_sessions_id_approvals_approvalId_",
+    "path": "/v1/agent-sessions/{id}/approvals/{approvalId}",
+    "verb": "post",
+    "method": "muniu/approval/agentSessions/byId/approvals/byApprovalId/post"
+  },
+  {
+    "operationId": "post__v1_agent_sessions_id_cancel",
+    "path": "/v1/agent-sessions/{id}/cancel",
+    "verb": "post",
+    "method": "muniu/run/agentSessions/byId/cancel/post"
+  },
+  {
+    "operationId": "post__v1_agent_sessions_id_close",
+    "path": "/v1/agent-sessions/{id}/close",
+    "verb": "post",
+    "method": "muniu/run/agentSessions/byId/close/post"
+  },
+  {
+    "operationId": "get__v1_agent_sessions_id_events",
+    "path": "/v1/agent-sessions/{id}/events",
+    "verb": "get",
+    "method": "muniu/run/agentSessions/byId/events/get"
+  },
+  {
+    "operationId": "post__v1_agent_sessions_id_messages",
+    "path": "/v1/agent-sessions/{id}/messages",
+    "verb": "post",
+    "method": "muniu/run/agentSessions/byId/messages/post"
+  },
+  {
+    "operationId": "get__v1_apps",
+    "path": "/v1/apps",
+    "verb": "get",
+    "method": "muniu/extension/apps/get"
+  },
+  {
+    "operationId": "get__v1_artifacts_store",
+    "path": "/v1/artifacts/store",
+    "verb": "get",
+    "method": "muniu/artifact/artifacts/store/get"
+  },
+  {
+    "operationId": "post__v1_artifacts_store_cleanup",
+    "path": "/v1/artifacts/store/cleanup",
+    "verb": "post",
+    "method": "muniu/artifact/artifacts/store/cleanup/post"
+  },
+  {
+    "operationId": "get__v1_audit_events",
+    "path": "/v1/audit-events",
+    "verb": "get",
+    "method": "muniu/evidence/auditEvents/get"
+  },
+  {
+    "operationId": "get__v1_capabilities",
+    "path": "/v1/capabilities",
+    "verb": "get",
+    "method": "muniu/config/capabilities/get"
+  },
+  {
+    "operationId": "post__v1_deep_links_import",
+    "path": "/v1/deep-links/import",
+    "verb": "post",
+    "method": "muniu/config/deepLinks/import/post"
+  },
+  {
+    "operationId": "post__v1_deep_links_preview",
+    "path": "/v1/deep-links/preview",
+    "verb": "post",
+    "method": "muniu/config/deepLinks/preview/post"
+  },
+  {
+    "operationId": "get__v1_eval_assets",
+    "path": "/v1/eval-assets",
+    "verb": "get",
+    "method": "muniu/evidence/evalAssets/get"
+  },
+  {
+    "operationId": "post__v1_eval_assets",
+    "path": "/v1/eval-assets",
+    "verb": "post",
+    "method": "muniu/evidence/evalAssets/post"
+  },
+  {
+    "operationId": "get__v1_eval_assets_id_",
+    "path": "/v1/eval-assets/{id}",
+    "verb": "get",
+    "method": "muniu/evidence/evalAssets/byId/get"
+  },
+  {
+    "operationId": "get__v1_harness_profiles",
+    "path": "/v1/harness-profiles",
+    "verb": "get",
+    "method": "muniu/config/harnessProfiles/get"
+  },
+  {
+    "operationId": "get__v1_learning_proposals",
+    "path": "/v1/learning-proposals",
+    "verb": "get",
+    "method": "muniu/evidence/learningProposals/get"
+  },
+  {
+    "operationId": "post__v1_learning_proposals",
+    "path": "/v1/learning-proposals",
+    "verb": "post",
+    "method": "muniu/evidence/learningProposals/post"
+  },
+  {
+    "operationId": "get__v1_learning_proposals_id_",
+    "path": "/v1/learning-proposals/{id}",
+    "verb": "get",
+    "method": "muniu/evidence/learningProposals/byId/get"
+  },
+  {
+    "operationId": "post__v1_learning_proposals_id_canary",
+    "path": "/v1/learning-proposals/{id}/canary",
+    "verb": "post",
+    "method": "muniu/evidence/learningProposals/byId/canary/post"
+  },
+  {
+    "operationId": "post__v1_learning_proposals_id_promote",
+    "path": "/v1/learning-proposals/{id}/promote",
+    "verb": "post",
+    "method": "muniu/evidence/learningProposals/byId/promote/post"
+  },
+  {
+    "operationId": "post__v1_learning_proposals_id_review",
+    "path": "/v1/learning-proposals/{id}/review",
+    "verb": "post",
+    "method": "muniu/evidence/learningProposals/byId/review/post"
+  },
+  {
+    "operationId": "post__v1_learning_proposals_id_rollback",
+    "path": "/v1/learning-proposals/{id}/rollback",
+    "verb": "post",
+    "method": "muniu/evidence/learningProposals/byId/rollback/post"
+  },
+  {
+    "operationId": "post__v1_learning_proposals_id_submit",
+    "path": "/v1/learning-proposals/{id}/submit",
+    "verb": "post",
+    "method": "muniu/evidence/learningProposals/byId/submit/post"
+  },
+  {
+    "operationId": "get__v1_maturity_report",
+    "path": "/v1/maturity-report",
+    "verb": "get",
+    "method": "muniu/evidence/maturityReport/get"
+  },
+  {
+    "operationId": "post__v1_maturity_report",
+    "path": "/v1/maturity-report",
+    "verb": "post",
+    "method": "muniu/evidence/maturityReport/post"
+  },
+  {
+    "operationId": "get__v1_mcp_servers",
+    "path": "/v1/mcp/servers",
+    "verb": "get",
+    "method": "muniu/extension/mcp/servers/get"
+  },
+  {
+    "operationId": "post__v1_mcp_servers",
+    "path": "/v1/mcp/servers",
+    "verb": "post",
+    "method": "muniu/extension/mcp/servers/post"
+  },
+  {
+    "operationId": "delete__v1_mcp_servers_id_",
+    "path": "/v1/mcp/servers/{id}",
+    "verb": "delete",
+    "method": "muniu/extension/mcp/servers/byId/delete"
+  },
+  {
+    "operationId": "get__v1_mcp_servers_id_",
+    "path": "/v1/mcp/servers/{id}",
+    "verb": "get",
+    "method": "muniu/extension/mcp/servers/byId/get"
+  },
+  {
+    "operationId": "patch__v1_mcp_servers_id_",
+    "path": "/v1/mcp/servers/{id}",
+    "verb": "patch",
+    "method": "muniu/extension/mcp/servers/byId/patch"
+  },
+  {
+    "operationId": "post__v1_mcp_servers_id_project",
+    "path": "/v1/mcp/servers/{id}/project",
+    "verb": "post",
+    "method": "muniu/extension/mcp/servers/byId/project/post"
+  },
+  {
+    "operationId": "post__v1_projects",
+    "path": "/v1/projects",
+    "verb": "post",
+    "method": "muniu/project/projects/post"
+  },
+  {
+    "operationId": "get__v1_projects_id_",
+    "path": "/v1/projects/{id}",
+    "verb": "get",
+    "method": "muniu/project/projects/byId/get"
+  },
+  {
+    "operationId": "get__v1_projects_id_effective_governance",
+    "path": "/v1/projects/{id}/effective-governance",
+    "verb": "get",
+    "method": "muniu/project/projects/byId/effectiveGovernance/get"
+  },
+  {
+    "operationId": "post__v1_projects_id_index",
+    "path": "/v1/projects/{id}/index",
+    "verb": "post",
+    "method": "muniu/project/projects/byId/index/post"
+  },
+  {
+    "operationId": "get__v1_projects_id_policy_explain",
+    "path": "/v1/projects/{id}/policy/explain",
+    "verb": "get",
+    "method": "muniu/project/projects/byId/policy/explain/get"
+  },
+  {
+    "operationId": "get__v1_projects_id_standards_lock",
+    "path": "/v1/projects/{id}/standards-lock",
+    "verb": "get",
+    "method": "muniu/project/projects/byId/standardsLock/get"
+  },
+  {
+    "operationId": "get__v1_prompts_presets",
+    "path": "/v1/prompts/presets",
+    "verb": "get",
+    "method": "muniu/config/prompts/presets/get"
+  },
+  {
+    "operationId": "post__v1_prompts_presets",
+    "path": "/v1/prompts/presets",
+    "verb": "post",
+    "method": "muniu/config/prompts/presets/post"
+  },
+  {
+    "operationId": "delete__v1_prompts_presets_id_",
+    "path": "/v1/prompts/presets/{id}",
+    "verb": "delete",
+    "method": "muniu/config/prompts/presets/byId/delete"
+  },
+  {
+    "operationId": "get__v1_prompts_presets_id_",
+    "path": "/v1/prompts/presets/{id}",
+    "verb": "get",
+    "method": "muniu/config/prompts/presets/byId/get"
+  },
+  {
+    "operationId": "patch__v1_prompts_presets_id_",
+    "path": "/v1/prompts/presets/{id}",
+    "verb": "patch",
+    "method": "muniu/config/prompts/presets/byId/patch"
+  },
+  {
+    "operationId": "post__v1_prompts_presets_id_activate",
+    "path": "/v1/prompts/presets/{id}/activate",
+    "verb": "post",
+    "method": "muniu/config/prompts/presets/byId/activate/post"
+  },
+  {
+    "operationId": "get__v1_provider_usage_requests_id_",
+    "path": "/v1/provider-usage/requests/{id}",
+    "verb": "get",
+    "method": "muniu/provider/providerUsage/requests/byId/get"
+  },
+  {
+    "operationId": "post__v1_provider_usage_requests_id_reconcile",
+    "path": "/v1/provider-usage/requests/{id}/reconcile",
+    "verb": "post",
+    "method": "muniu/provider/providerUsage/requests/byId/reconcile/post"
+  },
+  {
+    "operationId": "get__v1_providers",
+    "path": "/v1/providers",
+    "verb": "get",
+    "method": "muniu/provider/providers/get"
+  },
+  {
+    "operationId": "post__v1_providers",
+    "path": "/v1/providers",
+    "verb": "post",
+    "method": "muniu/provider/providers/post"
+  },
+  {
+    "operationId": "delete__v1_providers_id_",
+    "path": "/v1/providers/{id}",
+    "verb": "delete",
+    "method": "muniu/provider/providers/byId/delete"
+  },
+  {
+    "operationId": "get__v1_providers_id_",
+    "path": "/v1/providers/{id}",
+    "verb": "get",
+    "method": "muniu/provider/providers/byId/get"
+  },
+  {
+    "operationId": "patch__v1_providers_id_",
+    "path": "/v1/providers/{id}",
+    "verb": "patch",
+    "method": "muniu/provider/providers/byId/patch"
+  },
+  {
+    "operationId": "post__v1_providers_id_duplicate",
+    "path": "/v1/providers/{id}/duplicate",
+    "verb": "post",
+    "method": "muniu/provider/providers/byId/duplicate/post"
+  },
+  {
+    "operationId": "post__v1_providers_id_enable",
+    "path": "/v1/providers/{id}/enable",
+    "verb": "post",
+    "method": "muniu/provider/providers/byId/enable/post"
+  },
+  {
+    "operationId": "get__v1_providers_id_model_catalog_audit",
+    "path": "/v1/providers/{id}/model-catalog/audit",
+    "verb": "get",
+    "method": "muniu/modelCatalog/providers/byId/modelCatalog/audit/get"
+  },
+  {
+    "operationId": "post__v1_providers_id_model_catalog_sync",
+    "path": "/v1/providers/{id}/model-catalog/sync",
+    "verb": "post",
+    "method": "muniu/modelCatalog/providers/byId/modelCatalog/sync/post"
+  },
+  {
+    "operationId": "post__v1_providers_id_restore",
+    "path": "/v1/providers/{id}/restore",
+    "verb": "post",
+    "method": "muniu/provider/providers/byId/restore/post"
+  },
+  {
+    "operationId": "post__v1_providers_id_test_endpoint",
+    "path": "/v1/providers/{id}/test-endpoint",
+    "verb": "post",
+    "method": "muniu/provider/providers/byId/testEndpoint/post"
+  },
+  {
+    "operationId": "get__v1_providers_export",
+    "path": "/v1/providers/export",
+    "verb": "get",
+    "method": "muniu/provider/providers/export/get"
+  },
+  {
+    "operationId": "post__v1_providers_import",
+    "path": "/v1/providers/import",
+    "verb": "post",
+    "method": "muniu/provider/providers/import/post"
+  },
+  {
+    "operationId": "post__v1_providers_model_catalog_sync_due",
+    "path": "/v1/providers/model-catalog/sync-due",
+    "verb": "post",
+    "method": "muniu/modelCatalog/providers/modelCatalog/syncDue/post"
+  },
+  {
+    "operationId": "post__v1_proxy_apps_app_restore",
+    "path": "/v1/proxy/apps/{app}/restore",
+    "verb": "post",
+    "method": "muniu/diagnostics/proxy/apps/byApp/restore/post"
+  },
+  {
+    "operationId": "post__v1_proxy_apps_app_takeover",
+    "path": "/v1/proxy/apps/{app}/takeover",
+    "verb": "post",
+    "method": "muniu/diagnostics/proxy/apps/byApp/takeover/post"
+  },
+  {
+    "operationId": "get__v1_proxy_health",
+    "path": "/v1/proxy/health",
+    "verb": "get",
+    "method": "muniu/diagnostics/proxy/health/get"
+  },
+  {
+    "operationId": "post__v1_proxy_health_reset",
+    "path": "/v1/proxy/health/reset",
+    "verb": "post",
+    "method": "muniu/diagnostics/proxy/health/reset/post"
+  },
+  {
+    "operationId": "get__v1_proxy_logs",
+    "path": "/v1/proxy/logs",
+    "verb": "get",
+    "method": "muniu/diagnostics/proxy/logs/get"
+  },
+  {
+    "operationId": "post__v1_proxy_start",
+    "path": "/v1/proxy/start",
+    "verb": "post",
+    "method": "muniu/diagnostics/proxy/start/post"
+  },
+  {
+    "operationId": "get__v1_proxy_status",
+    "path": "/v1/proxy/status",
+    "verb": "get",
+    "method": "muniu/diagnostics/proxy/status/get"
+  },
+  {
+    "operationId": "post__v1_proxy_stop",
+    "path": "/v1/proxy/stop",
+    "verb": "post",
+    "method": "muniu/diagnostics/proxy/stop/post"
+  },
+  {
+    "operationId": "get__v1_run_jobs_queue",
+    "path": "/v1/run-jobs/queue",
+    "verb": "get",
+    "method": "muniu/runJob/runJobs/queue/get"
+  },
+  {
+    "operationId": "get__v1_run_jobs_queue_id_",
+    "path": "/v1/run-jobs/queue/{id}",
+    "verb": "get",
+    "method": "muniu/runJob/runJobs/queue/byId/get"
+  },
+  {
+    "operationId": "post__v1_run_jobs_queue_id_artifacts",
+    "path": "/v1/run-jobs/queue/{id}/artifacts",
+    "verb": "post",
+    "method": "muniu/artifact/runJobs/queue/byId/artifacts/post"
+  },
+  {
+    "operationId": "post__v1_run_jobs_queue_id_builtin_executions",
+    "path": "/v1/run-jobs/queue/{id}/builtin-executions",
+    "verb": "post",
+    "method": "muniu/runJob/runJobs/queue/byId/builtinExecutions/post"
+  },
+  {
+    "operationId": "post__v1_run_jobs_queue_id_builtin_executions_executionId_cancel",
+    "path": "/v1/run-jobs/queue/{id}/builtin-executions/{executionId}/cancel",
+    "verb": "post",
+    "method": "muniu/runJob/runJobs/queue/byId/builtinExecutions/byExecutionId/cancel/post"
+  },
+  {
+    "operationId": "post__v1_run_jobs_queue_id_builtin_executions_executionId_poll",
+    "path": "/v1/run-jobs/queue/{id}/builtin-executions/{executionId}/poll",
+    "verb": "post",
+    "method": "muniu/runJob/runJobs/queue/byId/builtinExecutions/byExecutionId/poll/post"
+  },
+  {
+    "operationId": "post__v1_run_jobs_queue_id_builtin_executions_executionId_tool_results",
+    "path": "/v1/run-jobs/queue/{id}/builtin-executions/{executionId}/tool-results",
+    "verb": "post",
+    "method": "muniu/runJob/runJobs/queue/byId/builtinExecutions/byExecutionId/toolResults/post"
+  },
+  {
+    "operationId": "post__v1_run_jobs_queue_id_events",
+    "path": "/v1/run-jobs/queue/{id}/events",
+    "verb": "post",
+    "method": "muniu/runJob/runJobs/queue/byId/events/post"
+  },
+  {
+    "operationId": "post__v1_run_jobs_queue_id_finish",
+    "path": "/v1/run-jobs/queue/{id}/finish",
+    "verb": "post",
+    "method": "muniu/runJob/runJobs/queue/byId/finish/post"
+  },
+  {
+    "operationId": "post__v1_run_jobs_queue_id_heartbeat",
+    "path": "/v1/run-jobs/queue/{id}/heartbeat",
+    "verb": "post",
+    "method": "muniu/runJob/runJobs/queue/byId/heartbeat/post"
+  },
+  {
+    "operationId": "post__v1_run_jobs_queue_id_measurements",
+    "path": "/v1/run-jobs/queue/{id}/measurements",
+    "verb": "post",
+    "method": "muniu/runJob/runJobs/queue/byId/measurements/post"
+  },
+  {
+    "operationId": "post__v1_run_jobs_queue_id_release",
+    "path": "/v1/run-jobs/queue/{id}/release",
+    "verb": "post",
+    "method": "muniu/runJob/runJobs/queue/byId/release/post"
+  },
+  {
+    "operationId": "post__v1_run_jobs_queue_id_resume_diff",
+    "path": "/v1/run-jobs/queue/{id}/resume-diff",
+    "verb": "post",
+    "method": "muniu/runJob/runJobs/queue/byId/resumeDiff/post"
+  },
+  {
+    "operationId": "post__v1_run_jobs_queue_id_sandbox_runtime_proof",
+    "path": "/v1/run-jobs/queue/{id}/sandbox-runtime-proof",
+    "verb": "post",
+    "method": "muniu/runJob/runJobs/queue/byId/sandboxRuntimeProof/post"
+  },
+  {
+    "operationId": "post__v1_run_jobs_queue_id_source_snapshot",
+    "path": "/v1/run-jobs/queue/{id}/source-snapshot",
+    "verb": "post",
+    "method": "muniu/runJob/runJobs/queue/byId/sourceSnapshot/post"
+  },
+  {
+    "operationId": "post__v1_run_jobs_queue_id_update",
+    "path": "/v1/run-jobs/queue/{id}/update",
+    "verb": "post",
+    "method": "muniu/runJob/runJobs/queue/byId/update/post"
+  },
+  {
+    "operationId": "post__v1_run_jobs_queue_id_usage_receipts",
+    "path": "/v1/run-jobs/queue/{id}/usage-receipts",
+    "verb": "post",
+    "method": "muniu/runJob/runJobs/queue/byId/usageReceipts/post"
+  },
+  {
+    "operationId": "post__v1_run_jobs_queue_claim",
+    "path": "/v1/run-jobs/queue/claim",
+    "verb": "post",
+    "method": "muniu/runJob/runJobs/queue/claim/post"
+  },
+  {
+    "operationId": "get__v1_run_jobs_workers",
+    "path": "/v1/run-jobs/workers",
+    "verb": "get",
+    "method": "muniu/runJob/runJobs/workers/get"
+  },
+  {
+    "operationId": "post__v1_run_jobs_workers_heartbeat",
+    "path": "/v1/run-jobs/workers/heartbeat",
+    "verb": "post",
+    "method": "muniu/runJob/runJobs/workers/heartbeat/post"
+  },
+  {
+    "operationId": "get__v1_runs_id_",
+    "path": "/v1/runs/{id}",
+    "verb": "get",
+    "method": "muniu/run/runs/byId/get"
+  },
+  {
+    "operationId": "post__v1_runs_id_approve",
+    "path": "/v1/runs/{id}/approve",
+    "verb": "post",
+    "method": "muniu/approval/runs/byId/approve/post"
+  },
+  {
+    "operationId": "get__v1_runs_id_artifacts",
+    "path": "/v1/runs/{id}/artifacts",
+    "verb": "get",
+    "method": "muniu/artifact/runs/byId/artifacts/get"
+  },
+  {
+    "operationId": "get__v1_runs_id_artifacts_artifactId_",
+    "path": "/v1/runs/{id}/artifacts/{artifactId}",
+    "verb": "get",
+    "method": "muniu/artifact/runs/byId/artifacts/byArtifactId/get"
+  },
+  {
+    "operationId": "get__v1_runs_id_artifacts_archive",
+    "path": "/v1/runs/{id}/artifacts/archive",
+    "verb": "get",
+    "method": "muniu/artifact/runs/byId/artifacts/archive/get"
+  },
+  {
+    "operationId": "post__v1_runs_id_cancel",
+    "path": "/v1/runs/{id}/cancel",
+    "verb": "post",
+    "method": "muniu/run/runs/byId/cancel/post"
+  },
+  {
+    "operationId": "get__v1_runs_id_events",
+    "path": "/v1/runs/{id}/events",
+    "verb": "get",
+    "method": "muniu/run/runs/byId/events/get"
+  },
+  {
+    "operationId": "get__v1_runs_id_events_stream",
+    "path": "/v1/runs/{id}/events/stream",
+    "verb": "get",
+    "method": "muniu/run/runs/byId/events/stream/get"
+  },
+  {
+    "operationId": "post__v1_runs_id_resume",
+    "path": "/v1/runs/{id}/resume",
+    "verb": "post",
+    "method": "muniu/run/runs/byId/resume/post"
+  },
+  {
+    "operationId": "post__v1_runs_id_workspaces_cleanup",
+    "path": "/v1/runs/{id}/workspaces/cleanup",
+    "verb": "post",
+    "method": "muniu/run/runs/byId/workspaces/cleanup/post"
+  },
+  {
+    "operationId": "get__v1_runtime",
+    "path": "/v1/runtime",
+    "verb": "get",
+    "method": "muniu/extension/runtime/get"
+  },
+  {
+    "operationId": "get__v1_runtime_plugins",
+    "path": "/v1/runtime/plugins",
+    "verb": "get",
+    "method": "muniu/extension/runtime/plugins/get"
+  },
+  {
+    "operationId": "post__v1_runtime_plugins_reload",
+    "path": "/v1/runtime/plugins/reload",
+    "verb": "post",
+    "method": "muniu/extension/runtime/plugins/reload/post"
+  },
+  {
+    "operationId": "get__v1_runtime_profiles",
+    "path": "/v1/runtime/profiles",
+    "verb": "get",
+    "method": "muniu/extension/runtime/profiles/get"
+  },
+  {
+    "operationId": "get__v1_sessions",
+    "path": "/v1/sessions",
+    "verb": "get",
+    "method": "muniu/run/sessions/get"
+  },
+  {
+    "operationId": "get__v1_sessions_id_",
+    "path": "/v1/sessions/{id}",
+    "verb": "get",
+    "method": "muniu/run/sessions/byId/get"
+  },
+  {
+    "operationId": "get__v1_sessions_id_export",
+    "path": "/v1/sessions/{id}/export",
+    "verb": "get",
+    "method": "muniu/run/sessions/byId/export/get"
+  },
+  {
+    "operationId": "get__v1_skills",
+    "path": "/v1/skills",
+    "verb": "get",
+    "method": "muniu/skillRegistry/skills/get"
+  },
+  {
+    "operationId": "post__v1_skills",
+    "path": "/v1/skills",
+    "verb": "post",
+    "method": "muniu/skillRegistry/skills/post"
+  },
+  {
+    "operationId": "delete__v1_skills_id_",
+    "path": "/v1/skills/{id}",
+    "verb": "delete",
+    "method": "muniu/skillRegistry/skills/byId/delete"
+  },
+  {
+    "operationId": "get__v1_skills_id_",
+    "path": "/v1/skills/{id}",
+    "verb": "get",
+    "method": "muniu/skillRegistry/skills/byId/get"
+  },
+  {
+    "operationId": "patch__v1_skills_id_",
+    "path": "/v1/skills/{id}",
+    "verb": "patch",
+    "method": "muniu/skillRegistry/skills/byId/patch"
+  },
+  {
+    "operationId": "post__v1_skills_id_install",
+    "path": "/v1/skills/{id}/install",
+    "verb": "post",
+    "method": "muniu/skillRegistry/skills/byId/install/post"
+  },
+  {
+    "operationId": "post__v1_skills_id_uninstall",
+    "path": "/v1/skills/{id}/uninstall",
+    "verb": "post",
+    "method": "muniu/skillRegistry/skills/byId/uninstall/post"
+  },
+  {
+    "operationId": "get__v1_skills_discover",
+    "path": "/v1/skills/discover",
+    "verb": "get",
+    "method": "muniu/skillRegistry/skills/discover/get"
+  },
+  {
+    "operationId": "get__v1_skills_registry_profiles",
+    "path": "/v1/skills/registry/profiles",
+    "verb": "get",
+    "method": "muniu/skillRegistry/skills/registry/profiles/get"
+  },
+  {
+    "operationId": "post__v1_skills_registry_profiles",
+    "path": "/v1/skills/registry/profiles",
+    "verb": "post",
+    "method": "muniu/skillRegistry/skills/registry/profiles/post"
+  },
+  {
+    "operationId": "delete__v1_skills_registry_profiles_id_",
+    "path": "/v1/skills/registry/profiles/{id}",
+    "verb": "delete",
+    "method": "muniu/skillRegistry/skills/registry/profiles/byId/delete"
+  },
+  {
+    "operationId": "get__v1_skills_registry_profiles_id_",
+    "path": "/v1/skills/registry/profiles/{id}",
+    "verb": "get",
+    "method": "muniu/skillRegistry/skills/registry/profiles/byId/get"
+  },
+  {
+    "operationId": "patch__v1_skills_registry_profiles_id_",
+    "path": "/v1/skills/registry/profiles/{id}",
+    "verb": "patch",
+    "method": "muniu/skillRegistry/skills/registry/profiles/byId/patch"
+  },
+  {
+    "operationId": "post__v1_skills_registry_profiles_id_sync",
+    "path": "/v1/skills/registry/profiles/{id}/sync",
+    "verb": "post",
+    "method": "muniu/skillRegistry/skills/registry/profiles/byId/sync/post"
+  },
+  {
+    "operationId": "post__v1_skills_registry_sync",
+    "path": "/v1/skills/registry/sync",
+    "verb": "post",
+    "method": "muniu/skillRegistry/skills/registry/sync/post"
+  },
+  {
+    "operationId": "get__v1_spec_sets",
+    "path": "/v1/spec-sets",
+    "verb": "get",
+    "method": "muniu/policy/specSets/get"
+  },
+  {
+    "operationId": "post__v1_spec_sets",
+    "path": "/v1/spec-sets",
+    "verb": "post",
+    "method": "muniu/policy/specSets/post"
+  },
+  {
+    "operationId": "get__v1_spec_sets_id_",
+    "path": "/v1/spec-sets/{id}",
+    "verb": "get",
+    "method": "muniu/policy/specSets/byId/get"
+  },
+  {
+    "operationId": "post__v1_spec_sets_id_revisions",
+    "path": "/v1/spec-sets/{id}/revisions",
+    "verb": "post",
+    "method": "muniu/policy/specSets/byId/revisions/post"
+  },
+  {
+    "operationId": "get__v1_spec_sets_id_revisions_revision_",
+    "path": "/v1/spec-sets/{id}/revisions/{revision}",
+    "verb": "get",
+    "method": "muniu/policy/specSets/byId/revisions/byRevision/get"
+  },
+  {
+    "operationId": "post__v1_spec_sets_id_revisions_revision_approve",
+    "path": "/v1/spec-sets/{id}/revisions/{revision}/approve",
+    "verb": "post",
+    "method": "muniu/approval/specSets/byId/revisions/byRevision/approve/post"
+  },
+  {
+    "operationId": "get__v1_standard_packs",
+    "path": "/v1/standard-packs",
+    "verb": "get",
+    "method": "muniu/policy/standardPacks/get"
+  },
+  {
+    "operationId": "post__v1_standard_packs_activate",
+    "path": "/v1/standard-packs/activate",
+    "verb": "post",
+    "method": "muniu/policy/standardPacks/activate/post"
+  },
+  {
+    "operationId": "post__v1_standard_packs_diff",
+    "path": "/v1/standard-packs/diff",
+    "verb": "post",
+    "method": "muniu/policy/standardPacks/diff/post"
+  },
+  {
+    "operationId": "post__v1_standard_packs_import",
+    "path": "/v1/standard-packs/import",
+    "verb": "post",
+    "method": "muniu/policy/standardPacks/import/post"
+  },
+  {
+    "operationId": "post__v1_standard_packs_validate",
+    "path": "/v1/standard-packs/validate",
+    "verb": "post",
+    "method": "muniu/policy/standardPacks/validate/post"
+  },
+  {
+    "operationId": "get__v1_system_desktop",
+    "path": "/v1/system/desktop",
+    "verb": "get",
+    "method": "muniu/diagnostics/system/desktop/get"
+  },
+  {
+    "operationId": "get__v1_system_diagnostics",
+    "path": "/v1/system/diagnostics",
+    "verb": "get",
+    "method": "muniu/diagnostics/system/diagnostics/get"
+  },
+  {
+    "operationId": "get__v1_system_doctor",
+    "path": "/v1/system/doctor",
+    "verb": "get",
+    "method": "muniu/diagnostics/system/doctor/get"
+  },
+  {
+    "operationId": "post__v1_system_env_cleanup",
+    "path": "/v1/system/env-cleanup",
+    "verb": "post",
+    "method": "muniu/diagnostics/system/envCleanup/post"
+  },
+  {
+    "operationId": "post__v1_tasks",
+    "path": "/v1/tasks",
+    "verb": "post",
+    "method": "muniu/task/tasks/post"
+  },
+  {
+    "operationId": "get__v1_tasks_id_",
+    "path": "/v1/tasks/{id}",
+    "verb": "get",
+    "method": "muniu/task/tasks/byId/get"
+  },
+  {
+    "operationId": "post__v1_tasks_id_runs",
+    "path": "/v1/tasks/{id}/runs",
+    "verb": "post",
+    "method": "muniu/task/tasks/byId/runs/post"
+  },
+  {
+    "operationId": "get__v1_trace_graphs",
+    "path": "/v1/trace-graphs",
+    "verb": "get",
+    "method": "muniu/evidence/traceGraphs/get"
+  },
+  {
+    "operationId": "post__v1_trace_graphs",
+    "path": "/v1/trace-graphs",
+    "verb": "post",
+    "method": "muniu/evidence/traceGraphs/post"
+  },
+  {
+    "operationId": "get__v1_trace_graphs_id_",
+    "path": "/v1/trace-graphs/{id}",
+    "verb": "get",
+    "method": "muniu/evidence/traceGraphs/byId/get"
+  },
+  {
+    "operationId": "get__v1_usage_models",
+    "path": "/v1/usage/models",
+    "verb": "get",
+    "method": "muniu/provider/usage/models/get"
+  },
+  {
+    "operationId": "get__v1_usage_requests",
+    "path": "/v1/usage/requests",
+    "verb": "get",
+    "method": "muniu/provider/usage/requests/get"
+  },
+  {
+    "operationId": "get__v1_usage_summary",
+    "path": "/v1/usage/summary",
+    "verb": "get",
+    "method": "muniu/provider/usage/summary/get"
+  },
+  {
+    "operationId": "get__v1_waivers",
+    "path": "/v1/waivers",
+    "verb": "get",
+    "method": "muniu/policy/waivers/get"
+  },
+  {
+    "operationId": "post__v1_waivers",
+    "path": "/v1/waivers",
+    "verb": "post",
+    "method": "muniu/policy/waivers/post"
+  },
+  {
+    "operationId": "get__v1_workflows",
+    "path": "/v1/workflows",
+    "verb": "get",
+    "method": "muniu/config/workflows/get"
+  }
+] as const;

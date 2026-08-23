@@ -10,6 +10,8 @@ import {
   SERVER_REQUEST_METHODS,
   SERVER_REQUEST_SCHEMAS,
   JsonRpcRequestSchema,
+  MUNIU_METHODS,
+  MuniuControlResultSchema,
   RequestIdSchema,
   type ClientMethod,
   type JsonRpcError,
@@ -17,7 +19,11 @@ import {
   type JsonRpcResponse,
   type MethodParams,
   type MethodResult,
+  type MuniuControlParams,
+  type MuniuControlResult,
+  type MuniuMethod,
   type ParsedClientRequest,
+  type ParsedMuniuRequest,
   type RequestId,
   type ServerInfoSchema,
   type ServerNotificationMethod,
@@ -25,6 +31,7 @@ import {
   type ServerRequestMethod,
   type ServerRequestParams,
   type ServerRequestResult,
+  isMuniuMethod,
   parseClientRequest
 } from "@mn/app-server-protocol";
 import type { z } from "zod";
@@ -52,6 +59,12 @@ export type AppServerHandlers = {
   ) => MethodResult<M> | Promise<MethodResult<M>>;
 };
 
+export type MuniuControlHandler = (
+  method: MuniuMethod,
+  params: MuniuControlParams,
+  context: RequestContext
+) => MuniuControlResult | Promise<MuniuControlResult>;
+
 export class RpcFault extends Error {
   constructor(
     readonly code: number,
@@ -67,6 +80,7 @@ export interface AppServerConnectionOptions extends Omit<OutboundQueueOptions, "
   serverInfo: z.infer<typeof ServerInfoSchema>;
   instructionSources: readonly string[];
   handlers: AppServerHandlers;
+  controlHandler?: MuniuControlHandler;
   notificationLog: NotificationLog;
   write(message: JsonRpcMessage): Promise<void>;
   close(reason: QueueCloseReason): void;
@@ -209,7 +223,7 @@ export class AppServerConnection {
       this.#sendError(id, -32002, "Server not initialized");
       return;
     }
-    let request: ParsedClientRequest;
+    let request: ParsedClientRequest | ParsedMuniuRequest;
     try {
       request = parseClientRequest(envelope.data);
     } catch (error) {
@@ -221,16 +235,32 @@ export class AppServerConnection {
       this.#sendError(id, -32600, "Already initialized");
       return;
     }
-    const handler = this.#options.handlers[request.method] as (
-      params: MethodParams<typeof request.method>,
+    const context = {
+      clientInfo: this.#clientInfo!,
+      signal: this.#abortController.signal
+    };
+    if (isMuniuMethod(request.method)) {
+      if (this.#options.controlHandler === undefined) {
+        this.#sendError(id, -32601, "Method not found");
+        return;
+      }
+      try {
+        const result = await this.#options.controlHandler(request.method, request.params as MuniuControlParams, context);
+        this.#queue.enqueue({ id, result: MuniuControlResultSchema.parse(result) });
+      } catch (error) {
+        if (error instanceof RpcFault) this.#sendError(id, error.code, error.message, error.data);
+        else this.#sendError(id, -32603, "Internal error");
+      }
+      return;
+    }
+    const clientRequest = request as ParsedClientRequest<OrdinaryClientMethod>;
+    const handler = this.#options.handlers[clientRequest.method] as (
+      params: MethodParams<typeof clientRequest.method>,
       context: RequestContext
     ) => unknown;
     try {
-      const result = await handler(request.params, {
-        clientInfo: this.#clientInfo!,
-        signal: this.#abortController.signal
-      });
-      const schema = METHOD_SCHEMAS[request.method].result as z.ZodTypeAny;
+      const result = await handler(clientRequest.params, context);
+      const schema = METHOD_SCHEMAS[clientRequest.method].result as z.ZodTypeAny;
       this.#queue.enqueue({ id, result: schema.parse(result) });
     } catch (error) {
       if (error instanceof RpcFault) this.#sendError(id, error.code, error.message, error.data);
@@ -259,7 +289,10 @@ export class AppServerConnection {
         serverInfo: this.#options.serverInfo,
         protocolVersion: "2",
         capabilities: {
-          methods: [...CLIENT_METHODS],
+          methods: [
+            ...CLIENT_METHODS,
+            ...(this.#options.controlHandler === undefined ? [] : MUNIU_METHODS)
+          ],
           notifications: [...SERVER_NOTIFICATION_METHODS],
           serverRequests: [...SERVER_REQUEST_METHODS]
         },
