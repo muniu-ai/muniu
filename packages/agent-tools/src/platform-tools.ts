@@ -190,7 +190,12 @@ export function createPlatformBridgeTools(adapters: PlatformToolAdapters): reado
       name: "subagent_spawn",
       description: "Spawn a governed child agent with inherited limits.",
       risk: "side-effecting",
-      parameters: strict({ objective: { type: "string" }, role: { type: "string" } }, ["objective"]),
+      parameters: strict({
+        objective: { type: "string" },
+        role: { type: "string" },
+        tokenBudget: { type: "integer" },
+        input: {}
+      }, ["objective"]),
       handler: adapters.subagents?.spawn
     },
     {

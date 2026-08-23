@@ -10,3 +10,4 @@ export * from "./context-manager.js";
 export * from "./thread-manager.js";
 export * from "./turn-runner.js";
 export * from "./item-projector.js";
+export * from "./multi-agent.js";
