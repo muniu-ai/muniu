@@ -6,3 +6,7 @@ export * from "./lifecycle-scope.js";
 export * from "./react-driver.js";
 export * from "./system-prompt.js";
 export * from "./tool-step.js";
+export * from "./context-manager.js";
+export * from "./thread-manager.js";
+export * from "./turn-runner.js";
+export * from "./item-projector.js";

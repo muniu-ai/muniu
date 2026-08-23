@@ -32,6 +32,7 @@ export const AGENT_EVENT_V3_TYPES = Object.freeze([
   "thread/unarchived",
   "thread/tombstoned",
   "thread/goal-updated",
+  "thread/goal-cleared",
   "turn/started",
   "turn/steered",
   "turn/progress",

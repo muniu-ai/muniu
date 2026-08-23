@@ -13,3 +13,4 @@ export * from "./session.js";
 export * from "./types.js";
 export * from "./thread-v3.js";
 export * from "./migration-v3.js";
+export * from "./event-v3-store.js";
