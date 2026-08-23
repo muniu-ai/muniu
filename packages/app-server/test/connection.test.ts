@@ -203,3 +203,71 @@ test("round-trips typed server requests to client handlers", async () => {
 
   assert.deepEqual(await response, { success: true, contentItems: [] });
 });
+
+test("binds authenticated identity, enforces method authorization and replays from a cursor", async () => {
+  const messages: JsonRpcMessage[] = [];
+  const contexts: unknown[] = [];
+  const log = new InMemoryNotificationLog();
+  await log.append({ method: "warning", params: { message: "old" } });
+  await log.append({ method: "warning", params: { message: "resume" } });
+  const server = new AppServerConnection({
+    serverInfo: { name: "muniu", version: "0.2.0" },
+    instructionSources: [],
+    handlers: { ...handlers(),
+      "thread/read": async (_params, context) => {
+        contexts.push(context.identity);
+        return { thread: {} as never };
+      }
+    },
+    identity: {
+      tenantId: "tenant-a",
+      subject: "user-a",
+      roles: ["auditor"],
+      permissionProfile: "read-only",
+      sandbox: { mode: "read-only" }
+    },
+    authorizeRequest: (method) => method === "thread/read",
+    resumeCursor: "1",
+    notificationLog: log,
+    write: async (message) => { messages.push(message); },
+    close: () => undefined
+  });
+  await initialize(server);
+  await server.receive({ id: 2, method: "thread/archive", params: { threadId: "thread-1" } });
+  await server.receive({ id: 3, method: "thread/read", params: { threadId: "thread-1" } });
+  await server.idle();
+
+  assert.equal(messages.some((message) => "method" in message && message.method === "warning"), true);
+  assert.deepEqual(messages.find((message) => "id" in message && message.id === 2), {
+    id: 2,
+    error: { code: -32003, message: "Request is not authorized" }
+  });
+  assert.deepEqual(contexts, [{
+    tenantId: "tenant-a",
+    subject: "user-a",
+    roles: ["auditor"],
+    permissionProfile: "read-only",
+    sandbox: { mode: "read-only" }
+  }]);
+});
+
+test("a connection without a resume cursor receives only live notifications", async () => {
+  const messages: JsonRpcMessage[] = [];
+  const log = new InMemoryNotificationLog();
+  await log.append({ method: "warning", params: { message: "historical" } });
+  const server = new AppServerConnection({
+    serverInfo: { name: "muniu", version: "0.2.0" },
+    instructionSources: [],
+    handlers: handlers(),
+    notificationLog: log,
+    write: async (message) => { messages.push(message); },
+    close: () => undefined
+  });
+  await initialize(server);
+  await log.append({ method: "warning", params: { message: "live" } });
+  await server.idle();
+  assert.deepEqual(messages.filter((message) => "method" in message && message.method === "warning"), [{
+    method: "warning",
+    params: { message: "live" }
+  }]);
+});

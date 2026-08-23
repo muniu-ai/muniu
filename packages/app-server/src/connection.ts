@@ -50,6 +50,18 @@ type OrdinaryClientMethod = Exclude<ClientMethod, "initialize">;
 export interface RequestContext {
   clientInfo: z.infer<typeof InitializeParamsSchema>["clientInfo"];
   signal: AbortSignal;
+  identity?: ConnectionIdentity;
+}
+
+export interface ConnectionIdentity {
+  readonly tenantId: string;
+  readonly subject: string;
+  readonly roles: readonly string[];
+  readonly permissionProfile: string;
+  readonly sandbox: Readonly<Record<string, import("@mn/app-server-protocol").JsonValue>>;
+  readonly projectIds?: readonly string[];
+  readonly principalType?: "human" | "worker";
+  readonly scopes?: readonly string[];
 }
 
 export type AppServerHandlers = {
@@ -81,6 +93,12 @@ export interface AppServerConnectionOptions extends Omit<OutboundQueueOptions, "
   instructionSources: readonly string[];
   handlers: AppServerHandlers;
   controlHandler?: MuniuControlHandler;
+  identity?: ConnectionIdentity;
+  authorizeRequest?: (
+    method: Exclude<ClientMethod, "initialize"> | MuniuMethod,
+    context: RequestContext
+  ) => boolean | Promise<boolean>;
+  resumeCursor?: string;
   notificationLog: NotificationLog;
   write(message: JsonRpcMessage): Promise<void>;
   close(reason: QueueCloseReason): void;
@@ -106,12 +124,17 @@ export class AppServerConnection {
   #suppressedNotifications = new Set<string>();
   #nextServerRequestId = 1;
   #inbound = Promise.resolve();
+  #notificationSubscription: (() => void) | undefined;
+  readonly #seenCursors = new Set<string>();
+  readonly #seenCursorOrder: string[] = [];
 
   constructor(options: AppServerConnectionOptions) {
     this.#options = options;
     this.#queue = new BoundedOutboundQueue({
       write: options.write,
       close: (reason) => {
+        this.#notificationSubscription?.();
+        this.#notificationSubscription = undefined;
         this.#state = "closed";
         this.#abortController.abort(reason.reason);
         this.#rejectPending(new RpcFault(-32000, "Connection closed"));
@@ -149,7 +172,7 @@ export class AppServerConnection {
       params: ServerNotificationParams<M>;
     };
     const { cursor } = await this.#options.notificationLog.append(notification);
-    if (!this.#suppressedNotifications.has(method)) this.#queue.enqueue(notification, cursor);
+    this.#deliverPersisted({ cursor, notification });
   }
 
   requestClient<M extends ServerRequestMethod>(
@@ -186,6 +209,8 @@ export class AppServerConnection {
   }
 
   close(): void {
+    this.#notificationSubscription?.();
+    this.#notificationSubscription = undefined;
     this.#queue.close();
   }
 
@@ -197,7 +222,7 @@ export class AppServerConnection {
     const record = value as Record<string, unknown>;
     if (Object.hasOwn(record, "method")) {
       if (Object.hasOwn(record, "id")) await this.#processRequest(value);
-      else this.#processNotification(record);
+      else await this.#processNotification(record);
       return;
     }
     if (Object.hasOwn(record, "id") && (Object.hasOwn(record, "result") || Object.hasOwn(record, "error"))) {
@@ -237,8 +262,14 @@ export class AppServerConnection {
     }
     const context = {
       clientInfo: this.#clientInfo!,
-      signal: this.#abortController.signal
+      signal: this.#abortController.signal,
+      ...(this.#options.identity === undefined ? {} : { identity: this.#options.identity })
     };
+    if (this.#options.authorizeRequest !== undefined
+      && !await this.#options.authorizeRequest(request.method, context)) {
+      this.#sendError(id, -32003, "Request is not authorized");
+      return;
+    }
     if (isMuniuMethod(request.method)) {
       if (this.#options.controlHandler === undefined) {
         this.#sendError(id, -32601, "Method not found");
@@ -308,9 +339,43 @@ export class AppServerConnection {
     });
   }
 
-  #processNotification(record: Record<string, unknown>): void {
+  async #processNotification(record: Record<string, unknown>): Promise<void> {
     if (record.method === "initialized" && this.#state === "awaitingInitialized" && record.params === undefined) {
       this.#state = "ready";
+      await this.#resumeNotifications();
+    }
+  }
+
+  async #resumeNotifications(): Promise<void> {
+    let cursor = this.#options.resumeCursor;
+    if (cursor !== undefined && this.#options.notificationLog.readAfter) {
+      const entries = await this.#options.notificationLog.readAfter(cursor);
+      for (const entry of entries) {
+        this.#deliverPersisted(entry);
+        cursor = entry.cursor;
+      }
+    }
+    if (this.#options.notificationLog.subscribeAfter) {
+      const subscription = await this.#options.notificationLog.subscribeAfter(cursor, (entry) => {
+        this.#deliverPersisted(entry);
+      });
+      this.#notificationSubscription = subscription ?? undefined;
+    }
+  }
+
+  #deliverPersisted(entry: {
+    readonly cursor: string;
+    readonly notification: { readonly method: ServerNotificationMethod; readonly params: unknown };
+  }): void {
+    if (this.#seenCursors.has(entry.cursor)) return;
+    this.#seenCursors.add(entry.cursor);
+    this.#seenCursorOrder.push(entry.cursor);
+    if (this.#seenCursorOrder.length > 10_000) {
+      const oldest = this.#seenCursorOrder.shift();
+      if (oldest !== undefined) this.#seenCursors.delete(oldest);
+    }
+    if (!this.#suppressedNotifications.has(entry.notification.method)) {
+      this.#queue.enqueue(entry.notification as JsonRpcMessage, entry.cursor);
     }
   }
 
