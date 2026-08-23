@@ -6,6 +6,7 @@ import {
   type AgentEventV3,
   type EffectCommitmentV1,
   type JsonValue,
+  type ProtectedJsonNodeV1,
   type ProtectedJsonViewV1,
   type ProtectedTextV1
 } from "@mn/agent-protocol";
@@ -36,6 +37,8 @@ export interface ThreadGoalProjectionV3 {
   readonly tokenBudget?: number;
   readonly tokensUsed: number;
   readonly timeUsedSeconds: number;
+  readonly createdAt: string;
+  readonly updatedAt: string;
 }
 
 export interface ThreadTurnProjectionV3 {
@@ -65,6 +68,8 @@ export interface ThreadProjectionV3 {
   readonly forkedFromTurnId?: string;
   readonly status: ThreadStatusV3;
   readonly source: string;
+  readonly cwd: string;
+  readonly name?: string;
   readonly providerId: string;
   readonly modelId: string;
   readonly permissionProfile: string;
@@ -158,7 +163,13 @@ function turnTerminalStatus(event: AgentEventV3): TurnStatusV3 {
   return "failed";
 }
 
-function projectGoal(event: AgentEventV3): ThreadGoalProjectionV3 {
+function protectedObjectString(root: ProtectedJsonNodeV1, key: string, fallback: string): string {
+  if (root.type !== "object") return fallback;
+  const entry = root.entries.find((candidate) => candidate.key.text === key);
+  return entry?.value.type === "string" ? entry.value.value.text : fallback;
+}
+
+function projectGoal(event: AgentEventV3, existing?: ThreadGoalProjectionV3): ThreadGoalProjectionV3 {
   const status = event.publicControls.status;
   const tokenBudget = event.publicControls.tokenBudget;
   const tokensUsed = event.publicControls.tokensUsed;
@@ -175,7 +186,9 @@ function projectGoal(event: AgentEventV3): ThreadGoalProjectionV3 {
     status: status as ThreadGoalProjectionV3["status"],
     ...(tokenBudget === undefined ? {} : { tokenBudget }),
     tokensUsed,
-    timeUsedSeconds
+    timeUsedSeconds,
+    createdAt: existing?.createdAt ?? event.occurredAt,
+    updatedAt: event.occurredAt
   };
 }
 
@@ -188,6 +201,8 @@ export function projectThreadV3(events: readonly AgentEventV3[]): ThreadProjecti
   const initialAssociations = object(created.publicControls.associations ?? {}, "V3 thread associations");
   let status: ThreadStatusV3 = "idle";
   let source = stringControl(created.publicControls, "source", "unknown");
+  const cwd = protectedObjectString(created.protectedContent.root, "cwd", ".");
+  let name = optionalString(created.publicControls, "name");
   let providerId = stringControl(created.publicControls, "providerId", "unbound");
   let modelId = stringControl(created.publicControls, "modelId", "unbound");
   let permissionProfile = stringControl(created.publicControls, "permissionProfile", "migrated-v0.1");
@@ -207,6 +222,7 @@ export function projectThreadV3(events: readonly AgentEventV3[]): ThreadProjecti
     switch (event.type) {
       case "thread/updated": {
         source = stringControl(event.publicControls, "source", source);
+        name = optionalString(event.publicControls, "name") ?? name;
         providerId = stringControl(event.publicControls, "providerId", providerId);
         modelId = stringControl(event.publicControls, "modelId", modelId);
         permissionProfile = stringControl(event.publicControls, "permissionProfile", permissionProfile);
@@ -231,7 +247,8 @@ export function projectThreadV3(events: readonly AgentEventV3[]): ThreadProjecti
         tombstoned = true;
         status = "idle";
         break;
-      case "thread/goal-updated": goal = projectGoal(event); break;
+      case "thread/goal-updated": goal = projectGoal(event, goal); break;
+      case "thread/goal-cleared": goal = undefined; break;
       case "turn/started": {
         if (!event.turnId || turns.has(event.turnId)) throw new TypeError("V3 turn start is invalid");
         const ordinal = event.publicControls.ordinal;
@@ -311,6 +328,8 @@ export function projectThreadV3(events: readonly AgentEventV3[]): ThreadProjecti
     ...(forkedFromTurnId === undefined ? {} : { forkedFromTurnId }),
     status,
     source,
+    cwd,
+    ...(name === undefined ? {} : { name }),
     providerId,
     modelId,
     permissionProfile,

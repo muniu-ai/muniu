@@ -78,6 +78,7 @@ test("projects thread, turn, item, fork, archive, and tombstone state", () => {
 
   const projection = projectThreadV3([created, turn, item, archived, tombstoned]);
   assert.equal(projection.threadId, "thread-projection");
+  assert.equal(projection.cwd, "/workspace/project");
   assert.equal(projection.status, "idle");
   assert.equal(projection.archived, true);
   assert.equal(projection.tombstoned, true);
