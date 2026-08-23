@@ -6,4 +6,4 @@ metadata:
 spec:
   type: {{ .Values.service.type }}
   selector: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: api }
-  ports: [{ name: http, port: {{ .Values.service.port }}, targetPort: http }]
+  ports: [{ name: https, port: {{ .Values.service.port }}, targetPort: https }]

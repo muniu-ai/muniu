@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import { existsSync, lstatSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { controlRequestForHttp } from "../packages/app-server-protocol/dist/index.js";
+import { MuniuClient, WebSocketRpcChannel } from "../packages/sdk/dist/index.js";
 
 const rootDir = process.cwd();
 const appPath = path.join(
@@ -22,6 +24,7 @@ const keychainPath = path.join(home, "mniu-verification.keychain-db");
 const keychainPassword = randomUUID();
 let output = "";
 let keychainAccount = "";
+let rpcClient;
 
 if (listenerPid()) {
   throw new Error("port 7318 is already in use; packaged app verification requires an isolated daemon");
@@ -64,12 +67,16 @@ try {
 
   const daemonPid = childDaemonPid(app.pid);
   if (!daemonPid) throw new Error(`managed daemon is not a child of desktop PID ${app.pid}`);
+  const descriptor = JSON.parse(readFileSync(path.join(home, ".muniu", "app-server.json"), "utf8"));
+  const channel = await WebSocketRpcChannel.connect(descriptor.url, descriptor.token);
+  rpcClient = new MuniuClient({
+    channel,
+    clientInfo: { name: "packaged-macos-verifier", version: "0.2.0" }
+  });
+  await rpcClient.connect();
 
   const keychainSecret = `sk-mniu-packaged-${randomUUID()}`;
-  const providerResponse = await fetch("http://127.0.0.1:7318/v1/providers", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
+  const provider = await control("POST", "/v1/providers", {
       app: "codex",
       name: "Packaged Keychain Verification",
       kind: "openai_compatible",
@@ -77,12 +84,7 @@ try {
       baseUrl: "http://127.0.0.1:9/v1",
       defaultModel: "verification-model",
       apiKey: keychainSecret
-    })
   });
-  if (providerResponse.status !== 201) {
-    throw new Error(`packaged provider creation failed: ${providerResponse.status} ${await providerResponse.text()}`);
-  }
-  const provider = await providerResponse.json();
   if (provider.apiKeyRef?.type !== "keychain" || !provider.apiKeyRef.ref?.startsWith("keychain:")) {
     throw new Error(`packaged provider did not use Keychain: ${JSON.stringify(provider)}`);
   }
@@ -120,12 +122,7 @@ try {
     throw new Error("packaged desktop exited while handling muniu:// deep link");
   }
 
-  const deleteResponse = await fetch(`http://127.0.0.1:7318/v1/providers/${provider.id}`, {
-    method: "DELETE"
-  });
-  if (deleteResponse.status !== 204) {
-    throw new Error(`packaged provider deletion failed: ${deleteResponse.status} ${await deleteResponse.text()}`);
-  }
+  await control("DELETE", `/v1/providers/${provider.id}`);
   if (keychainItemExists(keychainAccount)) {
     throw new Error("packaged provider deletion left its Keychain secret behind");
   }
@@ -142,6 +139,7 @@ try {
   if (app.exitCode === null && app.signalCode === null) app.kill("SIGKILL");
   throw new Error(`${error instanceof Error ? error.message : String(error)}\n${output}`);
 } finally {
+  await rpcClient?.close().catch(() => undefined);
   if (keychainAccount) {
     try {
       execFileSync("/usr/bin/security", [
@@ -162,6 +160,12 @@ try {
     // The temporary keychain may already be gone after an early failure.
   }
   rmSync(home, { recursive: true, force: true });
+}
+
+async function control(method, requestPath, body) {
+  if (!rpcClient) throw new Error("packaged app-server client is unavailable");
+  const request = controlRequestForHttp(method, requestPath, body);
+  return rpcClient.callControl(request.method, request.params);
 }
 
 function assertArchitectures(filePath, expected) {

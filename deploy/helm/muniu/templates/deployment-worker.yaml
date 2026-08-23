@@ -37,11 +37,15 @@ spec:
             - {{ .Values.worker.claimTtlMs | quote }}
           securityContext: {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           env:
-            - { name: MN_API_URL, value: "http://{{ include "muniu.fullname" . }}:{{ .Values.service.port }}" }
+            - { name: MN_API_URL, value: "https://{{ include "muniu.fullname" . }}:{{ .Values.service.port }}" }
+            - { name: MN_APP_SERVER_URL, value: "wss://{{ include "muniu.fullname" . }}:{{ .Values.service.port }}/app-server" }
             - name: MN_WORKER_INSTANCE_ID
               valueFrom: { fieldRef: { fieldPath: metadata.name } }
             - name: MN_API_TOKEN
               valueFrom: { secretKeyRef: { name: {{ .Values.worker.authExistingSecret }}, key: {{ .Values.worker.authTokenKey }} } }
+            - name: MN_APP_SERVER_TOKEN
+              valueFrom: { secretKeyRef: { name: {{ .Values.worker.authExistingSecret }}, key: {{ .Values.worker.authTokenKey }} } }
+            - { name: NODE_EXTRA_CA_CERTS, value: /etc/muniu/api-ca/tls.crt }
             - { name: MN_WORKER_PROVIDERS, value: "builtin" }
             - { name: MN_WORKER_TOOLS, value: {{ required "worker.tools is required" (join "," .Values.worker.tools) | quote }} }
             - { name: MN_ENTERPRISE_SANDBOX_IMAGE, value: {{ .Values.sandbox.image | quote }} }
@@ -54,9 +58,14 @@ spec:
           volumeMounts:
             - { name: tmp, mountPath: /tmp }
             - { name: sandbox-workspaces, mountPath: {{ .Values.sandbox.sharedWorkspace.mountPath | quote }} }
+            - { name: api-ca, mountPath: /etc/muniu/api-ca, readOnly: true }
           resources: {{- toYaml .Values.worker.resources | nindent 12 }}
       volumes:
         - { name: tmp, emptyDir: {} }
+        - name: api-ca
+          secret:
+            secretName: {{ required "api.tls.existingSecret is required" .Values.api.tls.existingSecret }}
+            items: [{ key: {{ .Values.api.tls.certKey }}, path: tls.crt }]
         - name: sandbox-workspaces
           persistentVolumeClaim: { claimName: {{ include "muniu.sharedWorkspaceClaimName" . }} }
 {{- end }}

@@ -11,7 +11,6 @@
 | POST | `/v1/agent-sessions/:id/approvals/:approvalId` | `apps/api/src/agentSessionRoutes.ts` |
 | POST | `/v1/agent-sessions/:id/cancel` | `apps/api/src/agentSessionRoutes.ts` |
 | POST | `/v1/agent-sessions/:id/close` | `apps/api/src/agentSessionRoutes.ts` |
-| GET | `/v1/agent-sessions/:id/events` | `apps/api/src/agentSessionRoutes.ts` |
 | POST | `/v1/agent-sessions/:id/messages` | `apps/api/src/agentSessionRoutes.ts` |
 | GET | `/v1/apps` | `apps/api/src/server.ts` |
 | GET | `/v1/artifacts/store` | `apps/api/src/server.ts` |
@@ -103,7 +102,6 @@
 | GET | `/v1/runs/:id/artifacts/archive` | `apps/api/src/server.ts` |
 | POST | `/v1/runs/:id/cancel` | `apps/api/src/server.ts` |
 | GET | `/v1/runs/:id/events` | `apps/api/src/server.ts` |
-| GET | `/v1/runs/:id/events/stream` | `apps/api/src/server.ts` |
 | POST | `/v1/runs/:id/resume` | `apps/api/src/server.ts` |
 | POST | `/v1/runs/:id/workspaces/cleanup` | `apps/api/src/server.ts` |
 | GET | `/v1/runtime` | `apps/api/src/server.ts` |

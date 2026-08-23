@@ -98,6 +98,7 @@ test("core app-server handlers expose fork, archive, tombstone and injected capa
       permissionProfile: "read-only",
       sandbox: { mode: "read-only" }
     },
+    enforceSecurityDefaults: true,
     models: async () => [{
       id: "gpt-5",
       model: "gpt-5",
@@ -113,8 +114,19 @@ test("core app-server handlers expose fork, archive, tombstone and injected capa
     clientInfo: { name: "sdk-test", version: "0.2.0" },
     signal: new AbortController().signal
   };
-  const parent = await handlers["thread/start"]({}, context);
-  const child = await handlers["thread/fork"]({ threadId: parent.thread.id }, context);
+  const parent = await handlers["thread/start"]({
+    approvalPolicy: "on-request",
+    sandbox: "danger-full-access"
+  }, context);
+  assert.equal(parent.thread.muniu.permissionProfile, "read-only");
+  assert.deepEqual(parent.thread.muniu.sandbox, { mode: "read-only" });
+  const child = await handlers["thread/fork"]({
+    threadId: parent.thread.id,
+    approvalPolicy: "on-request",
+    sandbox: "danger-full-access"
+  }, context);
+  assert.equal(child.thread.muniu.permissionProfile, "read-only");
+  assert.deepEqual(child.thread.muniu.sandbox, { mode: "read-only" });
   assert.equal(child.thread.parentThreadId, parent.thread.id);
   assert.equal((await handlers["model/list"]({}, context)).data[0]?.id, "gpt-5");
   await handlers["thread/archive"]({ threadId: child.thread.id }, context);

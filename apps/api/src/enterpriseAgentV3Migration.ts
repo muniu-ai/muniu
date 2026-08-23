@@ -19,10 +19,8 @@ import {
   type JsonValue
 } from "@mn/agent-protocol";
 
-import {
-  S3ArtifactStoreError,
-  type S3CompatibleArtifactStore
-} from "./artifactRemoteStore.js";
+import type { S3CompatibleArtifactStore } from "./artifactRemoteStore.js";
+import { storeEnterpriseAgentEventV3Object } from "./enterpriseAgentV3ObjectStore.js";
 
 export interface EnterpriseLegacyThreadV3 {
   readonly tenantId: string;
@@ -252,17 +250,6 @@ interface LegacyEnvelope {
   readonly runtimePayload: unknown;
 }
 
-function objectKey(prefix: string, entry: EnterpriseStoredEventV3): string {
-  const tenantScope = sha256(entry.tenantId).slice(0, 32);
-  return [
-    prefix,
-    "agent-events-v3",
-    tenantScope,
-    entry.threadId,
-    `${String(entry.event.sequence).padStart(12, "0")}-${entry.event.digest}.json`
-  ].filter(Boolean).join("/");
-}
-
 export class PostgresS3AgentV3MigrationBackend implements EnterpriseAgentV3MigrationBackend {
   private readonly prefix: string;
 
@@ -348,42 +335,13 @@ export class PostgresS3AgentV3MigrationBackend implements EnterpriseAgentV3Migra
   }
 
   async storeEvent(input: EnterpriseStoredEventV3): Promise<EnterpriseStoredEventV3> {
-    const key = objectKey(this.prefix, input);
-    const bytes = Buffer.from(JSON.stringify({ schemaVersion: 3, event: input.event }), "utf8");
-    try {
-      const stored = await this.options.objectStore.putObject(key, bytes, {
-        contentType: "application/vnd.muniu.agent-event-v3+json",
-        ifNoneMatch: "*",
-        ...(this.options.kmsKeyId
-          ? { serverSideEncryption: "aws:kms" as const, kmsKeyId: this.options.kmsKeyId }
-          : {}),
-        metadata: {
-          tenantScope: sha256(input.tenantId).slice(0, 32),
-          thread: input.threadId,
-          sequence: String(input.event.sequence),
-          digest: input.event.digest
-        }
-      });
-      return Object.freeze({
-        ...input,
-        objectKey: stored.key,
-        objectSha256: stored.sha256,
-        objectBytes: stored.bytes
-      });
-    } catch (error: unknown) {
-      if (!(error instanceof S3ArtifactStoreError)
-        || error.statusCode !== 409 && error.statusCode !== 412) throw error;
-      const existing = await this.options.objectStore.getObject(key);
-      if (!existing || !existing.equals(bytes)) {
-        throw new Error("existing enterprise V3 object conflicts with the migration event", { cause: error });
-      }
-      return Object.freeze({
-        ...input,
-        objectKey: key,
-        objectSha256: sha256(bytes),
-        objectBytes: bytes.byteLength
-      });
-    }
+    const stored = await storeEnterpriseAgentEventV3Object({
+      store: this.options.objectStore,
+      input,
+      prefix: this.prefix,
+      ...(this.options.kmsKeyId === undefined ? {} : { kmsKeyId: this.options.kmsKeyId })
+    });
+    return Object.freeze({ ...input, ...stored });
   }
 
   async activate(input: EnterpriseAgentV3MigrationActivation): Promise<void> {
@@ -520,10 +478,11 @@ export class PostgresS3AgentV3MigrationBackend implements EnterpriseAgentV3Migra
       CREATE TABLE IF NOT EXISTS mn_agent_threads_v3 (
         tenant_id text NOT NULL,
         thread_id text NOT NULL,
-        migration_id text NOT NULL REFERENCES mn_agent_migrations_v3(migration_id) ON DELETE RESTRICT,
+        owner_subject text,
+        migration_id text REFERENCES mn_agent_migrations_v3(migration_id) ON DELETE RESTRICT,
         last_sequence bigint NOT NULL CHECK (last_sequence >= 0),
         last_digest char(64) NOT NULL,
-        source_header_digest char(64) NOT NULL,
+        source_header_digest char(64),
         created_at timestamptz NOT NULL,
         updated_at timestamptz NOT NULL,
         PRIMARY KEY (tenant_id,thread_id)

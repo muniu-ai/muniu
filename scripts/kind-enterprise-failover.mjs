@@ -6,6 +6,8 @@ import { resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { Client } from "pg";
 import { digestSpecRevision } from "../packages/specs/dist/index.js";
+import { controlRequestForHttp } from "../packages/app-server-protocol/dist/index.js";
+import { MuniuClient, RpcResponseError, WebSocketRpcChannel } from "../packages/sdk/dist/index.js";
 
 const mode = process.argv[2];
 const statePath = resolve(process.env.MN_KIND_FAILOVER_STATE ?? "/tmp/muniu-kind-failover.json");
@@ -13,24 +15,30 @@ const workerTokenPath = resolve(
   process.env.MN_KIND_WORKER_TOKEN_FILE ?? "/tmp/muniu-kind-worker-token"
 );
 const apiUrl = (process.env.MN_KIND_API_URL ?? "http://127.0.0.1:57318").replace(/\/+$/u, "");
+const appServerUrl = `${apiUrl.replace(/^http/u, "ws")}/app-server`;
 const fixtureUrl = (process.env.MN_KIND_FIXTURE_URL ?? "http://127.0.0.1:58080").replace(/\/+$/u, "");
 const postgresUrl = process.env.MN_KIND_POSTGRES_URL ??
   "postgresql://mn:mn-kind-only@127.0.0.1:55433/muniu";
 const tenantId = "tenant-kind-failover";
 const fixtureRoot = resolve("examples/microservice-repo");
 
-if (mode === "bootstrap") {
-  await bootstrap();
-} else if (mode === "capture") {
-  await captureOwner();
-} else if (mode === "verify") {
-  await verify();
-} else if (mode === "post-restart") {
-  await postRestart();
-} else {
-  throw new Error(
-    "usage: node scripts/kind-enterprise-failover.mjs bootstrap|capture|verify|post-restart"
-  );
+const rpcClients = new Map();
+try {
+  if (mode === "bootstrap") {
+    await bootstrap();
+  } else if (mode === "capture") {
+    await captureOwner();
+  } else if (mode === "verify") {
+    await verify();
+  } else if (mode === "post-restart") {
+    await postRestart();
+  } else {
+    throw new Error(
+      "usage: node scripts/kind-enterprise-failover.mjs bootstrap|capture|verify|post-restart"
+    );
+  }
+} finally {
+  await Promise.allSettled([...rpcClients.values()].map((client) => client.close()));
 }
 
 async function bootstrap() {
@@ -43,7 +51,7 @@ async function bootstrap() {
     undefined,
     [403]
   );
-  assert.equal(deniedCapabilities.error, "role is not authorized for this operation");
+  assert.equal(deniedCapabilities.error, "Request is not authorized");
   const capabilities = await api(adminToken, "GET", "/v1/capabilities");
   const workflow = capabilities.workflows.find((item) => item.id === "governed-increment-v1");
   const harness = capabilities.harnessProfiles.find((item) => item.id === "enterprise");
@@ -352,19 +360,30 @@ async function issueToken(role, projectId, sub, options = {}) {
 }
 
 async function api(token, method, path, body, expected = [200]) {
-  const response = await fetch(`${apiUrl}${path}`, {
-    method,
-    headers: {
-      authorization: `Bearer ${token}`,
-      ...(body === undefined ? {} : { "content-type": "application/json" })
-    },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    signal: AbortSignal.timeout(30_000)
-  });
-  if (!expected.includes(response.status)) {
-    throw new Error(`${method} ${path} returned ${response.status}: ${await response.text()}`);
+  const request = controlRequestForHttp(method, path, body);
+  try {
+    const client = await rpcClient(token);
+    return await client.callControl(request.method, request.params, AbortSignal.timeout(30_000));
+  } catch (error) {
+    if (expected.some((status) => status >= 400) && error instanceof RpcResponseError) {
+      return error.data?.body ?? { error: error.message };
+    }
+    throw error;
   }
-  return response.json();
+}
+
+async function rpcClient(token) {
+  const existing = rpcClients.get(token);
+  if (existing) return existing;
+  const channel = await WebSocketRpcChannel.connect(appServerUrl, token);
+  const client = new MuniuClient({
+    channel,
+    clientInfo: { name: "kind-enterprise-failover", version: "0.2.0" },
+    approvalHandler: async () => ({ decision: "decline" })
+  });
+  await client.connect();
+  rpcClients.set(token, client);
+  return client;
 }
 
 async function apiBytes(token, path) {

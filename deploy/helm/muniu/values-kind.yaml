@@ -5,6 +5,8 @@ image:
 
 api:
   replicas: 1
+  tls:
+    existingSecret: muniu-kind-fixture-tls
   trustedCa:
     existingSecret: muniu-kind-fixture-tls
     key: tls.crt

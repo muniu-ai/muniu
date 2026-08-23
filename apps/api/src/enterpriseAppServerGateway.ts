@@ -20,9 +20,29 @@ import {
   type MuniuMethod,
   type ServerNotificationMethod
 } from "@mn/app-server-protocol";
+import {
+  createAgentEventV3,
+  verifyAgentEventV3Chain,
+  type AgentEventV3,
+  type NewAgentEventV3,
+  type SessionId
+} from "@mn/agent-protocol";
+import {
+  AgentThreadV3NotFoundError,
+  projectThreadV3,
+  type AgentEventV3ContinuationInput,
+  type AgentEventV3Store,
+  type ThreadProjectionV3
+} from "@mn/agent-session";
 import type { RequestContext } from "@mn/core";
 import type { Pool, PoolClient } from "pg";
 
+import type { S3CompatibleArtifactStore } from "./artifactRemoteStore.js";
+import {
+  loadEnterpriseAgentEventV3Object,
+  storeEnterpriseAgentEventV3Object,
+  type EnterpriseAgentEventV3ObjectReference
+} from "./enterpriseAgentV3ObjectStore.js";
 import { EnterpriseJwtAuthenticator, principalAllows, type EnterpriseAuthOptions } from "./enterpriseAuth.js";
 import { enterpriseRouteAllows } from "./enterpriseSurface.js";
 
@@ -38,7 +58,7 @@ const COMPATIBLE_ROUTE = new Map<Exclude<ClientMethod, "initialize">, { verb: st
   ["thread/archive", { verb: "POST", path: "/v1/agent-sessions/{id}/close" }],
   ["thread/unarchive", { verb: "POST", path: "/v1/agent-sessions/{id}/messages" }],
   ["thread/delete", { verb: "POST", path: "/v1/agent-sessions/{id}/close" }],
-  ["thread/unsubscribe", { verb: "GET", path: "/v1/agent-sessions/{id}/events" }],
+  ["thread/unsubscribe", { verb: "GET", path: "/v1/agent-sessions/{id}" }],
   ["thread/name/set", { verb: "POST", path: "/v1/agent-sessions/{id}/messages" }],
   ["thread/goal/set", { verb: "POST", path: "/v1/agent-sessions/{id}/messages" }],
   ["thread/goal/get", { verb: "GET", path: "/v1/agent-sessions/{id}" }],
@@ -79,7 +99,7 @@ export function connectionIdentity(context: RequestContext): ConnectionIdentity 
   });
 }
 
-function requestContext(identity: ConnectionIdentity): RequestContext {
+export function requestContextForConnectionIdentity(identity: ConnectionIdentity): RequestContext {
   return {
     tenantId: identity.tenantId,
     actorId: identity.subject,
@@ -99,7 +119,7 @@ export function enterpriseRpcMethodAllows(identity: ConnectionIdentity, method: 
   if (!route) return false;
   const verb = "verb" in route ? route.verb.toUpperCase() : "GET";
   const path = "path" in route ? route.path : "/";
-  return enterpriseRouteAllows(verb, path) && principalAllows(requestContext(identity), verb, path);
+  return enterpriseRouteAllows(verb, path) && principalAllows(requestContextForConnectionIdentity(identity), verb, path);
 }
 
 export class PostgresConnectionLeaseStore implements ConnectionLeaseStore {
@@ -178,6 +198,282 @@ export class PostgresConnectionLeaseStore implements ConnectionLeaseStore {
   }
 }
 
+interface PostgresAgentEventV3StoreOptions {
+  readonly tenantId: string;
+  readonly subject: string;
+  readonly pool: Pool;
+  readonly objectStore: S3CompatibleArtifactStore;
+  readonly objectPrefix?: string;
+  readonly kmsKeyId?: string;
+}
+
+interface AgentEventV3ReferenceRow {
+  readonly thread_id: string;
+  readonly sequence: string;
+  readonly event_digest: string;
+  readonly object_key: string;
+  readonly object_sha256: string;
+  readonly object_bytes: string;
+}
+
+export class PostgresAgentEventV3Store implements AgentEventV3Store {
+  readonly #ready: Promise<void>;
+
+  constructor(private readonly options: PostgresAgentEventV3StoreOptions) {
+    if (!options.tenantId.trim()) throw new TypeError("V3 event tenant must not be empty");
+    if (!options.subject.trim()) throw new TypeError("V3 event subject must not be empty");
+    this.#ready = this.#migrate();
+  }
+
+  async create(initial: NewAgentEventV3): Promise<ThreadProjectionV3> {
+    await this.#ready;
+    const event = createAgentEventV3(initial);
+    if (event.sequence !== 0 || event.type !== "thread/created") {
+      throw new TypeError("V3 thread creation requires the initial creation event");
+    }
+    const projection = projectThreadV3([event]);
+    const stored = await this.#storeEvent(event);
+    await this.#transaction(async (client) => {
+      const thread = await client.query(`
+        INSERT INTO mn_agent_threads_v3
+          (tenant_id,thread_id,owner_subject,migration_id,last_sequence,last_digest,
+           source_header_digest,created_at,updated_at)
+        VALUES ($1,$2,$3,NULL,0,$4,NULL,$5::timestamptz,$5::timestamptz)
+        ON CONFLICT DO NOTHING RETURNING thread_id
+      `, [
+        this.options.tenantId,
+        event.threadId,
+        this.options.subject,
+        event.digest,
+        event.occurredAt
+      ]);
+      if (thread.rowCount !== 1) throw new Error("V3 thread already exists");
+      await this.#insertEvent(client, event, stored);
+    });
+    return projection;
+  }
+
+  async append(threadId: SessionId, input: AgentEventV3ContinuationInput): Promise<AgentEventV3> {
+    await this.#ready;
+    return this.#transaction(async (client) => {
+      const tail = await client.query<{ last_sequence: string; last_digest: string }>(`
+        SELECT last_sequence::text,last_digest FROM mn_agent_threads_v3
+        WHERE tenant_id=$1 AND thread_id=$2
+          AND (owner_subject=$3 OR owner_subject IS NULL)
+        FOR UPDATE
+      `, [this.options.tenantId, threadId, this.options.subject]);
+      if (!tail.rows[0]) throw new AgentThreadV3NotFoundError();
+      const events = await this.#readWith(client, threadId);
+      const previous = events.at(-1);
+      if (!previous
+        || previous.sequence !== Number(tail.rows[0].last_sequence)
+        || previous.digest !== tail.rows[0].last_digest) {
+        throw new Error("enterprise V3 thread tail does not match its event index");
+      }
+      const event = createAgentEventV3({
+        ...input,
+        threadId,
+        sequence: previous.sequence + 1,
+        causationId: previous.eventId,
+        previousDigest: previous.digest
+      });
+      projectThreadV3([...events, event]);
+      const stored = await this.#storeEvent(event);
+      await this.#insertEvent(client, event, stored);
+      const updated = await client.query(`
+        UPDATE mn_agent_threads_v3
+        SET last_sequence=$3,last_digest=$4,updated_at=$5::timestamptz
+        WHERE tenant_id=$1 AND thread_id=$2 AND last_sequence=$6 AND last_digest=$7
+      `, [
+        this.options.tenantId,
+        threadId,
+        event.sequence,
+        event.digest,
+        event.occurredAt,
+        previous.sequence,
+        previous.digest
+      ]);
+      if (updated.rowCount !== 1) throw new Error("V3 event append conflicted");
+      return event;
+    });
+  }
+
+  async read(threadId: SessionId): Promise<readonly AgentEventV3[]> {
+    await this.#ready;
+    return this.#readWith(this.options.pool, threadId);
+  }
+
+  async list(): Promise<readonly ThreadProjectionV3[]> {
+    await this.#ready;
+    const result = await this.options.pool.query<AgentEventV3ReferenceRow>(`
+      SELECT thread_id,sequence::text,event_digest,object_key,object_sha256,object_bytes::text
+      FROM mn_agent_events_v3 AS event
+      WHERE tenant_id=$1
+        AND EXISTS (
+          SELECT 1 FROM mn_agent_threads_v3 AS thread
+          WHERE thread.tenant_id=event.tenant_id AND thread.thread_id=event.thread_id
+            AND (thread.owner_subject=$2 OR thread.owner_subject IS NULL)
+        )
+      ORDER BY thread_id,sequence
+    `, [this.options.tenantId, this.options.subject]);
+    const grouped = new Map<string, AgentEventV3ReferenceRow[]>();
+    for (const row of result.rows) {
+      const rows = grouped.get(row.thread_id) ?? [];
+      rows.push(row);
+      grouped.set(row.thread_id, rows);
+    }
+    const projections: ThreadProjectionV3[] = [];
+    for (const rows of grouped.values()) {
+      const events = await this.#loadRows(rows);
+      projections.push(projectThreadV3(events));
+    }
+    return Object.freeze(projections.sort((left, right) => left.createdAt.localeCompare(right.createdAt)));
+  }
+
+  async #readWith(
+    queryable: Pick<Pool, "query"> | Pick<PoolClient, "query">,
+    threadId: SessionId
+  ): Promise<readonly AgentEventV3[]> {
+    const authorized = await queryable.query(`
+      SELECT 1 FROM mn_agent_threads_v3
+      WHERE tenant_id=$1 AND thread_id=$2
+        AND (owner_subject=$3 OR owner_subject IS NULL)
+    `, [this.options.tenantId, threadId, this.options.subject]);
+    if (authorized.rowCount !== 1) throw new AgentThreadV3NotFoundError();
+    const result = await queryable.query<AgentEventV3ReferenceRow>(`
+      SELECT thread_id,sequence::text,event_digest,object_key,object_sha256,object_bytes::text
+      FROM mn_agent_events_v3
+      WHERE tenant_id=$1 AND thread_id=$2 ORDER BY sequence
+    `, [this.options.tenantId, threadId]);
+    if (result.rows.length === 0) throw new AgentThreadV3NotFoundError();
+    const events = await this.#loadRows(result.rows);
+    if (events.some((event) => event.threadId !== threadId)) throw new TypeError("stored V3 event thread does not match its index");
+    verifyAgentEventV3Chain(events);
+    return events;
+  }
+
+  async #loadRows(rows: readonly AgentEventV3ReferenceRow[]): Promise<readonly AgentEventV3[]> {
+    const events: AgentEventV3[] = [];
+    for (const row of rows) {
+      const sequence = Number(row.sequence);
+      const objectBytes = Number(row.object_bytes);
+      if (!Number.isSafeInteger(sequence) || sequence < 0
+        || !Number.isSafeInteger(objectBytes) || objectBytes < 1) {
+        throw new TypeError("enterprise V3 event index contains invalid numeric fields");
+      }
+      events.push(await loadEnterpriseAgentEventV3Object(this.options.objectStore, {
+        threadId: row.thread_id,
+        sequence,
+        eventDigest: row.event_digest,
+        objectKey: row.object_key,
+        objectSha256: row.object_sha256,
+        objectBytes
+      }));
+    }
+    verifyAgentEventV3Chain(events);
+    return Object.freeze(events);
+  }
+
+  async #storeEvent(event: AgentEventV3): Promise<EnterpriseAgentEventV3ObjectReference> {
+    const stored = await storeEnterpriseAgentEventV3Object({
+      store: this.options.objectStore,
+      input: { tenantId: this.options.tenantId, threadId: event.threadId, event },
+      ...(this.options.objectPrefix === undefined ? {} : { prefix: this.options.objectPrefix }),
+      ...(this.options.kmsKeyId === undefined ? {} : { kmsKeyId: this.options.kmsKeyId })
+    });
+    return { threadId: event.threadId, sequence: event.sequence, eventDigest: event.digest, ...stored };
+  }
+
+  async #insertEvent(
+    client: Pick<PoolClient, "query">,
+    event: AgentEventV3,
+    stored: EnterpriseAgentEventV3ObjectReference
+  ): Promise<void> {
+    const result = await client.query(`
+      INSERT INTO mn_agent_events_v3
+        (tenant_id,thread_id,sequence,event_id,event_digest,source_event_digest,
+         object_key,object_sha256,object_bytes,migration_id,created_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL,$10::timestamptz)
+      ON CONFLICT DO NOTHING RETURNING sequence
+    `, [
+      this.options.tenantId,
+      event.threadId,
+      event.sequence,
+      event.eventId,
+      event.digest,
+      event.source?.eventDigest ?? null,
+      stored.objectKey,
+      stored.objectSha256,
+      stored.objectBytes,
+      event.occurredAt
+    ]);
+    if (result.rowCount !== 1) throw new Error("V3 event append conflicted");
+  }
+
+  async #migrate(): Promise<void> {
+    await this.options.pool.query(`
+      CREATE TABLE IF NOT EXISTS mn_agent_migrations_v3 (
+        migration_id text PRIMARY KEY,
+        status text NOT NULL CHECK (status IN ('applying','applied','rolled_back')),
+        manifest jsonb NOT NULL,
+        created_at timestamptz NOT NULL,
+        updated_at timestamptz NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS mn_agent_threads_v3 (
+        tenant_id text NOT NULL,
+        thread_id text NOT NULL,
+        owner_subject text,
+        migration_id text REFERENCES mn_agent_migrations_v3(migration_id) ON DELETE RESTRICT,
+        last_sequence bigint NOT NULL CHECK (last_sequence >= 0),
+        last_digest char(64) NOT NULL,
+        source_header_digest char(64),
+        created_at timestamptz NOT NULL,
+        updated_at timestamptz NOT NULL,
+        PRIMARY KEY (tenant_id,thread_id)
+      );
+      CREATE TABLE IF NOT EXISTS mn_agent_events_v3 (
+        tenant_id text NOT NULL,
+        thread_id text NOT NULL,
+        sequence bigint NOT NULL CHECK (sequence >= 0),
+        event_id text NOT NULL,
+        event_digest char(64) NOT NULL,
+        source_event_digest char(64),
+        object_key text NOT NULL,
+        object_sha256 char(64) NOT NULL,
+        object_bytes bigint NOT NULL CHECK (object_bytes > 0),
+        migration_id text REFERENCES mn_agent_migrations_v3(migration_id) ON DELETE RESTRICT,
+        created_at timestamptz NOT NULL,
+        PRIMARY KEY (tenant_id,thread_id,sequence),
+        UNIQUE (tenant_id,thread_id,event_id),
+        FOREIGN KEY (tenant_id,thread_id)
+          REFERENCES mn_agent_threads_v3(tenant_id,thread_id) ON DELETE RESTRICT
+      );
+      CREATE INDEX IF NOT EXISTS mn_agent_events_v3_tenant_thread_idx
+        ON mn_agent_events_v3 (tenant_id,thread_id,sequence);
+      ALTER TABLE mn_agent_threads_v3 ALTER COLUMN migration_id DROP NOT NULL;
+      ALTER TABLE mn_agent_threads_v3 ALTER COLUMN source_header_digest DROP NOT NULL;
+      ALTER TABLE mn_agent_threads_v3 ADD COLUMN IF NOT EXISTS owner_subject text;
+      CREATE INDEX IF NOT EXISTS mn_agent_threads_v3_owner_idx
+        ON mn_agent_threads_v3 (tenant_id,owner_subject,updated_at DESC,thread_id);
+    `);
+  }
+
+  async #transaction<T>(operation: (client: PoolClient) => Promise<T>): Promise<T> {
+    const client = await this.options.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await operation(client);
+      await client.query("COMMIT");
+      return result;
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+}
+
 function cursor(value: string | undefined): number {
   if (value === undefined) return 0;
   const parsed = Number(value);
@@ -204,6 +500,7 @@ export class PostgresNotificationLog implements NotificationLog {
 
   constructor(
     private readonly tenantId: string,
+    private readonly subject: string,
     private readonly pool: Pool,
     options: {
       readonly pollIntervalMs?: number;
@@ -211,6 +508,7 @@ export class PostgresNotificationLog implements NotificationLog {
     } = {}
   ) {
     if (!tenantId.trim()) throw new TypeError("notification tenant must not be empty");
+    if (!subject.trim()) throw new TypeError("notification subject must not be empty");
     this.#pollIntervalMs = options.pollIntervalMs ?? 250;
     if (!Number.isSafeInteger(this.#pollIntervalMs) || this.#pollIntervalMs < 25) {
       throw new TypeError("notification poll interval must be at least 25 ms");
@@ -222,9 +520,9 @@ export class PostgresNotificationLog implements NotificationLog {
   async append(notification: PersistedNotification): Promise<{ cursor: string }> {
     await this.#ready;
     const result = await this.pool.query<{ sequence: string }>(`
-      INSERT INTO mn_app_server_notifications (tenant_id,notification)
-      VALUES ($1,$2::jsonb) RETURNING sequence::text
-    `, [this.tenantId, JSON.stringify(notification)]);
+      INSERT INTO mn_app_server_notifications (tenant_id,subject_id,notification)
+      VALUES ($1,$2,$3::jsonb) RETURNING sequence::text
+    `, [this.tenantId, this.subject, JSON.stringify(notification)]);
     const sequence = result.rows[0]?.sequence;
     if (!sequence) throw new Error("notification append returned no cursor");
     return { cursor: sequence };
@@ -234,8 +532,8 @@ export class PostgresNotificationLog implements NotificationLog {
     await this.#ready;
     const result = await this.pool.query<{ sequence: string; notification: unknown }>(`
       SELECT sequence::text,notification FROM mn_app_server_notifications
-      WHERE tenant_id=$1 AND sequence>$2 ORDER BY sequence LIMIT 10000
-    `, [this.tenantId, cursor(value)]);
+      WHERE tenant_id=$1 AND subject_id=$2 AND sequence>$3 ORDER BY sequence LIMIT 10000
+    `, [this.tenantId, this.subject, cursor(value)]);
     return Object.freeze(result.rows.map((row) => ({
       cursor: row.sequence,
       notification: persistedNotification(row.notification)
@@ -278,19 +576,20 @@ export class PostgresNotificationLog implements NotificationLog {
       CREATE TABLE IF NOT EXISTS mn_app_server_notifications (
         sequence bigserial PRIMARY KEY,
         tenant_id text NOT NULL,
+        subject_id text NOT NULL,
         notification jsonb NOT NULL,
         created_at timestamptz NOT NULL DEFAULT now()
       );
       CREATE INDEX IF NOT EXISTS mn_app_server_notification_tenant_idx
-        ON mn_app_server_notifications (tenant_id,sequence);
+        ON mn_app_server_notifications (tenant_id,subject_id,sequence);
     `);
   }
 
   async #latestCursor(): Promise<string> {
     const result = await this.pool.query<{ sequence: string }>(`
       SELECT coalesce(max(sequence),0)::text AS sequence
-      FROM mn_app_server_notifications WHERE tenant_id=$1
-    `, [this.tenantId]);
+      FROM mn_app_server_notifications WHERE tenant_id=$1 AND subject_id=$2
+    `, [this.tenantId, this.subject]);
     return result.rows[0]?.sequence ?? "0";
   }
 }
@@ -300,7 +599,8 @@ export function createEnterpriseAppServerGateway(options: {
   readonly origins: readonly string[];
   readonly pool: Pool;
   readonly createConnectionOptions: (
-    identity: ConnectionIdentity
+    identity: ConnectionIdentity,
+    notify: Parameters<EnterpriseAppServerGatewayOptions["createConnectionOptions"]>[1]
   ) => Omit<
     ReturnType<EnterpriseAppServerGatewayOptions["createConnectionOptions"]>,
     "notificationLog"
@@ -317,11 +617,11 @@ export function createEnterpriseAppServerGateway(options: {
     ),
     authorize: enterpriseRpcMethodAllows,
     leases: new PostgresConnectionLeaseStore(options.pool, options.maxConnectionsPerSubject),
-    createConnectionOptions: (identity) => {
-      const base = options.createConnectionOptions(identity);
+    createConnectionOptions: (identity, notify) => {
+      const base = options.createConnectionOptions(identity, notify);
       return {
         ...base,
-        notificationLog: new PostgresNotificationLog(identity.tenantId, options.pool)
+        notificationLog: new PostgresNotificationLog(identity.tenantId, identity.subject, options.pool)
       };
     },
     ...(options.leaseTtlMs === undefined ? {} : { leaseTtlMs: options.leaseTtlMs }),

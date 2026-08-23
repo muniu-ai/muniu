@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { access, readFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -356,10 +357,25 @@ async function cleanupCompose() {
 
 async function executeApiFlowHook() {
   const hook = process.env.MN_ENTERPRISE_API_E2E_COMMAND;
+  const tlsRoot = await mkdtemp(join(tmpdir(), "muniu-enterprise-e2e-tls-"));
+  const tlsCert = join(tlsRoot, "tls.crt");
+  const tlsKey = join(tlsRoot, "tls.key");
+  await command("openssl", [
+    "req", "-x509", "-newkey", "rsa:2048", "-sha256", "-nodes", "-days", "1",
+    "-subj", "/CN=localhost",
+    "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1",
+    "-keyout", tlsKey,
+    "-out", tlsCert
+  ], { capture: true });
   const env = {
       MN_RUNTIME_PROFILE: "enterprise",
       MN_API_HOST: "0.0.0.0",
       MN_API_PORT: "17318",
+      MN_ENTERPRISE_API_URL: "https://127.0.0.1:17318",
+      MN_APP_SERVER_URL: "wss://127.0.0.1:17318/app-server",
+      MN_TLS_CERT_FILE: tlsCert,
+      MN_TLS_KEY_FILE: tlsKey,
+      NODE_EXTRA_CA_CERTS: tlsCert,
       MN_ENTERPRISE_PROXY_HOST: "127.0.0.1",
       MN_ENTERPRISE_PROXY_PORT: "17319",
       MN_ENTERPRISE_PROXY_PUBLIC_BASE_URL: "http://127.0.0.1:17319",
@@ -397,15 +413,19 @@ async function executeApiFlowHook() {
       MN_ENTERPRISE_TOKEN_URL: "http://127.0.0.1:59080/token",
       MN_ENTERPRISE_CORS_ORIGIN: "http://127.0.0.1:4173"
   };
-  if (hook) {
-    step("running the configured API enterprise-flow override");
-    await command(hook, [], { shell: true, env });
-    return;
+  try {
+    if (hook) {
+      step("running the configured API enterprise-flow override");
+      await command(hook, [], { shell: true, env });
+      return;
+    }
+    step("running the built-in API enterprise flow");
+    await command(process.execPath, [join(workspaceRoot, "scripts/enterprise-api-flow.mjs")], {
+      env
+    });
+  } finally {
+    await rm(tlsRoot, { recursive: true, force: true });
   }
-  step("running the built-in API enterprise flow");
-  await command(process.execPath, [join(workspaceRoot, "scripts/enterprise-api-flow.mjs")], {
-    env
-  });
 }
 
 let composeAttempted = false;

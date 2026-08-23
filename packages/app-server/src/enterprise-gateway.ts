@@ -2,9 +2,14 @@
 
 import { randomUUID } from "node:crypto";
 import type { Server as HttpServer, IncomingMessage } from "node:http";
+import type { Server as HttpsServer } from "node:https";
 import type { TLSSocket } from "node:tls";
 
-import type { JsonRpcMessage } from "@mn/app-server-protocol";
+import type {
+  JsonRpcMessage,
+  ServerNotificationMethod,
+  ServerNotificationParams
+} from "@mn/app-server-protocol";
 import { WebSocketServer, type WebSocket } from "ws";
 
 import {
@@ -90,7 +95,8 @@ export interface EnterpriseAppServerGatewayOptions {
   ) => boolean | Promise<boolean>;
   readonly leases: ConnectionLeaseStore;
   readonly createConnectionOptions: (
-    identity: ConnectionIdentity
+    identity: ConnectionIdentity,
+    notify: <M extends ServerNotificationMethod>(method: M, params: ServerNotificationParams<M>) => Promise<void>
   ) => Omit<AppServerConnectionOptions, "write" | "close" | "identity" | "authorizeRequest" | "resumeCursor">;
   readonly leaseTtlMs?: number;
   readonly maxRequestsPerMinute?: number;
@@ -186,8 +192,12 @@ export class EnterpriseAppServerGateway {
     };
     let server: AppServerConnection;
     try {
+      const connectionOptions = this.#options.createConnectionOptions(
+        identity,
+        (method, params) => server.notify(method, params)
+      );
       server = new AppServerConnection({
-        ...this.#options.createConnectionOptions(identity),
+        ...connectionOptions,
         identity,
         authorizeRequest: (method) => this.#options.authorize(identity, method),
         ...(metadata.resumeCursor === undefined ? {} : { resumeCursor: metadata.resumeCursor }),
@@ -247,6 +257,17 @@ function socketIsSecure(request: IncomingMessage): boolean {
   return Boolean((request.socket as TLSSocket).encrypted);
 }
 
+function websocketAuthorization(request: IncomingMessage): string | undefined {
+  if (typeof request.headers.authorization === "string") return request.headers.authorization;
+  const protocols = request.headers["sec-websocket-protocol"];
+  const values = (Array.isArray(protocols) ? protocols : [protocols ?? ""])
+    .flatMap((value) => value.split(","))
+    .map((value) => value.trim());
+  const encoded = values.find((value) => value.startsWith("muniu.bearer."))
+    ?.slice("muniu.bearer.".length);
+  return encoded ? `Bearer ${encoded}` : undefined;
+}
+
 function sendWebSocket(socket: WebSocket, message: unknown): Promise<void> {
   return new Promise((resolve, reject) => {
     const text = JSON.stringify(message);
@@ -259,7 +280,7 @@ function sendWebSocket(socket: WebSocket, message: unknown): Promise<void> {
 }
 
 export function attachEnterpriseWebSocketGateway(options: {
-  readonly server: HttpServer;
+  readonly server: HttpServer | HttpsServer;
   readonly gateway: EnterpriseAppServerGateway;
   readonly path?: string;
 }): { close(): Promise<void> } {
@@ -277,7 +298,7 @@ export function attachEnterpriseWebSocketGateway(options: {
       close: () => websocket?.close()
     };
     void options.gateway.accept({
-      authorization: typeof request.headers.authorization === "string" ? request.headers.authorization : undefined,
+      authorization: websocketAuthorization(request),
       origin: typeof request.headers.origin === "string" ? request.headers.origin : undefined,
       secure: socketIsSecure(request),
       remoteAddress: request.socket.remoteAddress,

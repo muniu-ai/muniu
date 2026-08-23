@@ -3164,31 +3164,18 @@ function sandboxWorkspaceUri(
 
 async function watchRun(runId?: string): Promise<void> {
   if (!runId) throw new Error("Missing run id.");
-  const targetApiUrl = await resolveApiUrl();
-  const response = await fetch(`${targetApiUrl}/v1/runs/${runId}/events/stream`, {
-    headers: apiRequestHeaders()
-  });
-  if (!response.ok || !response.body) {
-    const events = await fetchJson(`/v1/runs/${runId}/events`);
-    console.log(JSON.stringify(events, null, 2));
-    return;
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
+  const terminal = new Set(["completed", "failed", "cancelled"]);
+  let emitted = 0;
   while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const frames = buffer.split("\n\n");
-    buffer = frames.pop() ?? "";
-    for (const frame of frames) {
-      const dataLine = frame.split("\n").find((line) => line.startsWith("data: "));
-      if (dataLine) {
-        console.log(dataLine.slice("data: ".length));
-      }
-    }
+    const snapshot = await fetchJson<{ events?: readonly unknown[] }>(
+      `/v1/runs/${encodeURIComponent(runId)}/events`
+    );
+    const events = snapshot.events ?? [];
+    for (const event of events.slice(emitted)) console.log(JSON.stringify(event));
+    emitted = events.length;
+    const run = await fetchJson<{ status?: string }>(`/v1/runs/${encodeURIComponent(runId)}`);
+    if (run.status && terminal.has(run.status)) return;
+    await new Promise((resolve) => setTimeout(resolve, 500));
   }
 }
 

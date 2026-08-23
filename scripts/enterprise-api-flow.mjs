@@ -15,6 +15,12 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { controlRequestForHttp } from "../packages/app-server-protocol/dist/index.js";
+import {
+  MuniuClient,
+  RpcResponseError,
+  WebSocketRpcChannel
+} from "../packages/sdk/dist/index.js";
 
 const workspaceRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const sourceFixtureRoot = join(workspaceRoot, "examples/microservice-repo");
@@ -43,8 +49,9 @@ const otlpStatusUrl =
   process.env.MN_ENTERPRISE_OTEL_STATUS_URL ?? "http://127.0.0.1:59080/otlp/status";
 const apiPort = Number.parseInt(process.env.MN_API_PORT ?? "17318", 10);
 const apiUrl = (
-  process.env.MN_ENTERPRISE_API_URL ?? `http://127.0.0.1:${apiPort}`
+  process.env.MN_ENTERPRISE_API_URL ?? `https://127.0.0.1:${apiPort}`
 ).replace(/\/+$/u, "");
+const appServerUrl = process.env.MN_APP_SERVER_URL ?? `${apiUrl.replace(/^http/u, "ws")}/app-server`;
 const providerProxyUrl = process.env.MN_ENTERPRISE_PROXY_PUBLIC_BASE_URL
   ?.replace(/\/+$/u, "");
 const targetExistingApi = Boolean(process.env.MN_ENTERPRISE_API_URL);
@@ -63,6 +70,7 @@ let interruptedSignal;
 let providerUpstream;
 let providerUpstreamBaseUrl;
 let providerUpstreamRequestCount = 0;
+const rpcClients = new Map();
 
 function step(message) {
   console.log(`\n[enterprise-api-flow] ${message}`);
@@ -181,7 +189,9 @@ async function runProductWorkerEntry({ token, ownerId, workspaces }) {
     env: {
       ...process.env,
       MN_API_URL: apiUrl,
-      MN_API_TOKEN: token
+      MN_API_TOKEN: token,
+      MN_APP_SERVER_URL: appServerUrl,
+      MN_APP_SERVER_TOKEN: token
     },
     stdio: ["ignore", "pipe", "pipe"]
   });
@@ -605,6 +615,7 @@ async function inspectDockerImageDigest(reference) {
 }
 
 async function stopApi() {
+  await closeRpcClients();
   const child = apiProcess;
   if (!child || child.exitCode !== null || child.signalCode !== null) return;
   child.kill("SIGTERM");
@@ -690,25 +701,46 @@ async function issueToken(role, projectId, actor, options = {}) {
 }
 
 async function apiRequest(token, method, path, options = {}) {
-  const response = await fetch(`${apiUrl}${path}`, {
-    method,
-    headers: {
-      authorization: `Bearer ${token}`,
-      origin,
-      ...(options.body === undefined ? {} : { "content-type": "application/json" })
-    },
-    ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
-    signal: AbortSignal.timeout(options.timeoutMs ?? 30_000)
-  });
   const expected = options.expected ?? [200];
-  if (!expected.includes(response.status)) {
+  const request = controlRequestForHttp(method, path, options.body);
+  try {
+    return await (await rpcClient(token)).callControl(
+      request.method,
+      request.params,
+      AbortSignal.timeout(options.timeoutMs ?? 30_000)
+    );
+  } catch (error) {
+    const status = error instanceof RpcResponseError
+      ? Number(error.data?.httpStatus ?? (error.code === -32003 ? 403 : 0))
+      : 0;
+    if (error instanceof RpcResponseError && expected.includes(status)) {
+      return error.data?.body ?? { error: error.message };
+    }
     throw new Error(
-      `${method} ${path} returned ${response.status}, expected ${expected.join("/")}: ` +
-      (await responseDetail(response))
+      `${method} ${path} failed, expected ${expected.join("/")}: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error }
     );
   }
-  if (response.status === 204) return undefined;
-  return response.json();
+}
+
+async function rpcClient(token) {
+  const existing = rpcClients.get(token);
+  if (existing) return existing;
+  const channel = await WebSocketRpcChannel.connect(appServerUrl, token);
+  const client = new MuniuClient({
+    channel,
+    clientInfo: { name: "enterprise-api-flow", version: "0.2.0" },
+    approvalHandler: async () => ({ decision: "decline" })
+  });
+  await client.connect();
+  rpcClients.set(token, client);
+  return client;
+}
+
+async function closeRpcClients() {
+  const clients = [...rpcClients.values()];
+  rpcClients.clear();
+  await Promise.allSettled(clients.map((client) => client.close()));
 }
 
 function draftFromApproved(approved, specs) {
@@ -2852,6 +2884,7 @@ try {
     )
   );
 } finally {
+  await closeRpcClients();
   await stopApi().catch((error) => {
     console.warn(`[enterprise-api-flow] API cleanup warning: ${error.message}`);
   });

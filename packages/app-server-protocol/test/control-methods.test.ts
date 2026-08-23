@@ -17,7 +17,7 @@ test("maps every legacy control operation to one unique namespaced RPC method", 
     new URL("../../schema/legacy-openapi-operations.json", import.meta.url),
     "utf8"
   )) as Array<{ operationId: string }>;
-  assert.equal(fixture.length, 150);
+  assert.equal(fixture.length, 148);
   assert.equal(MUNIU_CONTROL_OPERATIONS.length, fixture.length);
   assert.equal(new Set(MUNIU_METHODS).size, fixture.length);
   assert.deepEqual(

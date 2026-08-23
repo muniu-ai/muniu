@@ -8,12 +8,13 @@ import { InMemoryAgentEventV3Store } from "@mn/agent-session";
 import {
   AppServerConnection,
   InMemoryNotificationLog,
+  RpcFault,
   createCoreAppServerHandlers,
   createMuniuControlHandler
 } from "@mn/app-server";
 import type { JsonRpcMessage } from "@mn/app-server-protocol";
 
-import { MuniuClient, type RpcChannel } from "../src/index.js";
+import { MuniuClient, RpcResponseError, type RpcChannel } from "../src/index.js";
 
 class LoopbackChannel implements RpcChannel {
   readonly #listeners = new Set<(message: unknown) => void>();
@@ -75,6 +76,12 @@ test("SDK drives thread lifecycle, streamed items, control services and approval
     controlHandler: createMuniuControlHandler({
       invoke(invocation) {
         controlCalls.push(invocation.operationId);
+        if (invocation.operationId === "get__v1_capabilities") {
+          throw new RpcFault(-32000, "control denied", {
+            httpStatus: 403,
+            body: { error: "control denied" }
+          });
+        }
         return { accepted: true };
       }
     }),
@@ -102,6 +109,15 @@ test("SDK drives thread lifecycle, streamed items, control services and approval
     accepted: true
   });
   assert.deepEqual(controlCalls, ["post__v1_tasks"]);
+  await assert.rejects(
+    () => client.config.call("muniu/config/capabilities/get"),
+    (error: unknown) => error instanceof RpcResponseError
+      && error.code === -32000
+      && error.data !== null
+      && typeof error.data === "object"
+      && !Array.isArray(error.data)
+      && error.data.httpStatus === 403
+  );
 
   const approval = server.requestClient("item/commandExecution/requestApproval", {
     threadId: thread.id,

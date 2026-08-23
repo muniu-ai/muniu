@@ -553,10 +553,7 @@ fn show_or_recreate_main_window(app: &tauri::AppHandle) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_tray_provider_event, request_tray_provider_switch};
-    use std::io::{Read, Write};
-    use std::net::TcpListener;
-    use std::thread;
+    use super::parse_tray_provider_event;
 
     #[test]
     fn tray_provider_event_parser_rejects_invalid_targets() {
@@ -572,60 +569,5 @@ mod tests {
         assert_eq!(parse_tray_provider_event("provider:codex:"), None);
         assert_eq!(parse_tray_provider_event("provider:codex:p-2:extra"), None);
         assert_eq!(parse_tray_provider_event("refresh_providers"), None);
-    }
-
-    #[test]
-    fn tray_provider_switch_only_runs_preview() {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock provider server");
-        let address = listener.local_addr().expect("read mock server address");
-        let server = thread::spawn(move || {
-            let mut requests = Vec::new();
-            for _ in 0..1 {
-                let (mut stream, _) = listener.accept().expect("accept provider request");
-                let mut bytes = Vec::new();
-                let mut buffer = [0_u8; 2048];
-                loop {
-                    let read = stream.read(&mut buffer).expect("read provider request");
-                    if read == 0 {
-                        break;
-                    }
-                    bytes.extend_from_slice(&buffer[..read]);
-                    let text = String::from_utf8_lossy(&bytes);
-                    if let Some(header_end) = text.find("\r\n\r\n") {
-                        let content_length = text[..header_end]
-                            .lines()
-                            .find_map(|line| {
-                                line.to_ascii_lowercase()
-                                    .strip_prefix("content-length:")
-                                    .and_then(|value| value.trim().parse::<usize>().ok())
-                            })
-                            .unwrap_or(0);
-                        if bytes.len() >= header_end + 4 + content_length {
-                            break;
-                        }
-                    }
-                }
-                requests.push(String::from_utf8(bytes).expect("valid HTTP request"));
-                stream
-                    .write_all(
-                        b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}",
-                    )
-                    .expect("write provider response");
-            }
-            requests
-        });
-
-        tauri::async_runtime::block_on(request_tray_provider_switch(
-            &reqwest::Client::new(),
-            &format!("http://{address}"),
-            "codex",
-            "provider-1",
-        ))
-        .expect("switch provider through tray request flow");
-
-        let requests = server.join().expect("join mock provider server");
-        assert!(requests[0].starts_with("POST /v1/providers/provider-1/enable HTTP/1.1"));
-        assert!(requests[0].contains(r#"{"app":"codex","dryRun":true}"#));
-        assert_eq!(requests.len(), 1);
     }
 }

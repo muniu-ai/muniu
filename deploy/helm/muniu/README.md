@@ -4,6 +4,12 @@ This chart deploys production API replicas, a pre-install migration Job,
 Service/Ingress, HPA, PDB, default-deny NetworkPolicies, and non-root,
 read-only containers. PostgreSQL, S3, OIDC, OTLP and Vault/KMS are external
 standard adapters configured through values and existing Secrets.
+`api.tls.existingSecret` is mandatory and must contain the keys selected by
+`api.tls.certKey` and `api.tls.privateKeyKey`. The API serves HTTPS and the
+app-server v2 endpoint at `/app-server`; Workers connect through WSS and mount
+the certificate as a trust anchor. Ingress controllers must use HTTPS for the
+upstream Service, preserve WebSocket upgrades, and terminate only public-edge
+TLS when configured to do so.
 For an internal model endpoint signed by a private CA, configure
 `api.trustedCa.existingSecret` and `api.trustedCa.key`, then point
 `NODE_EXTRA_CA_CERTS` at `<api.trustedCa.mountPath>/ca.crt` through `extraEnv`.

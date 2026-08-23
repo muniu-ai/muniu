@@ -53,13 +53,6 @@ paths:
         "200":
           description: Successful response
       x-muniu-source: apps/api/src/agentSessionRoutes.ts
-  /v1/agent-sessions/{id}/events:
-    get:
-      operationId: get__v1_agent_sessions_id_events
-      responses:
-        "200":
-          description: Successful response
-      x-muniu-source: apps/api/src/agentSessionRoutes.ts
   /v1/agent-sessions/{id}/messages:
     post:
       operationId: post__v1_agent_sessions_id_messages
@@ -681,13 +674,6 @@ paths:
   /v1/runs/{id}/events:
     get:
       operationId: get__v1_runs_id_events
-      responses:
-        "200":
-          description: Successful response
-      x-muniu-source: apps/api/src/server.ts
-  /v1/runs/{id}/events/stream:
-    get:
-      operationId: get__v1_runs_id_events_stream
       responses:
         "200":
           description: Successful response

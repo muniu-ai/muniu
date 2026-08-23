@@ -10,6 +10,9 @@ data:
   MN_RUNTIME_PROFILE: enterprise
   MN_API_HOST: {{ .Values.api.host | quote }}
   MN_API_PORT: {{ .Values.api.port | quote }}
+  MN_TLS_CERT_FILE: {{ printf "%s/%s" .Values.api.tls.mountPath "tls.crt" | quote }}
+  MN_TLS_KEY_FILE: {{ printf "%s/%s" .Values.api.tls.mountPath "tls.key" | quote }}
+  MN_APP_SERVER_PATH: /app-server
   MN_WORKSPACE_ROOT: /tmp/muniu-worktrees
   MN_CORS_ALLOWLIST: {{ required "corsAllowlist is required" (join "," .Values.corsAllowlist) | quote }}
   MN_ENTERPRISE_PROJECT_ROOTS: {{ join "," .Values.enterpriseProjectRoots | quote }}
