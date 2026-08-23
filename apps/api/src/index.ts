@@ -71,12 +71,25 @@ const enterpriseProxyPublicBaseUrl = process.env.MN_ENTERPRISE_PROXY_PUBLIC_BASE
 const enterpriseBuiltinInstanceId = process.env.MN_API_INSTANCE_ID;
 const enterpriseAgentAttachmentKeySecret = process.env.MN_AGENT_ATTACHMENT_KEY_SECRET;
 const localAppServerPort = Number(process.env.MN_APP_SERVER_PORT ?? port + 1);
+const enterpriseHttps = runtimeProfile === "enterprise"
+  ? {
+      cert: await readFile(requiredEnvironment("MN_TLS_CERT_FILE")),
+      key: await readFile(requiredEnvironment("MN_TLS_KEY_FILE"))
+    }
+  : undefined;
 
 const app = buildServer({
   useMockExecutors,
   workspaceRoot,
   runtimeProfile,
   bindHost: host,
+  legacyControlApi: false,
+  ...(enterpriseHttps === undefined ? {} : {
+    https: enterpriseHttps,
+    enterpriseAppServer: {
+      path: process.env.MN_APP_SERVER_PATH ?? "/app-server"
+    }
+  }),
   ...(runtimeProfile === "local" ? {
     localAppServer: {
       host: "127.0.0.1",
@@ -158,7 +171,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 function requiredEnvironment(name: string): string {
   const value = process.env[name];
   if (!value?.trim() || value !== value.trim() || /[\0\r\n]/u.test(value)) {
-    throw new Error(`${name} is required for the Kubernetes sandbox runtime`);
+    throw new Error(`${name} is required`);
   }
   return value;
 }

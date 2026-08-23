@@ -5,7 +5,7 @@ import path from "node:path";
 import type { Readable, Writable } from "node:stream";
 
 import { ThreadManager, type TurnExecutionResult } from "@mn/agent-kernel";
-import { JsonlAgentEventV3Store } from "@mn/agent-session";
+import { JsonlAgentEventV3Store, type AgentEventV3Store } from "@mn/agent-session";
 import {
   AppServerConnection,
   JsonlNotificationLog,
@@ -60,6 +60,7 @@ export interface LocalAppServerRuntimeOptions {
     }[];
   }>;
   readonly onInternalError?: (error: unknown, method: string) => void;
+  readonly controlDispatcher?: ControlOperationDispatcher;
 }
 
 export type EmbeddedAppServerRuntimeOptions = Omit<
@@ -67,26 +68,54 @@ export type EmbeddedAppServerRuntimeOptions = Omit<
   "host" | "port" | "token" | "connectionFile"
 >;
 
-export function createFastifyControlDispatcher(app: FastifyInstance): ControlOperationDispatcher {
+export interface PreparedFastifyControlInvocation {
+  readonly headers?: Readonly<Record<string, string>>;
+  release(): void | Promise<void>;
+}
+
+export function createFastifyControlDispatcher(
+  app: FastifyInstance,
+  options: {
+    readonly prepare?: () => PreparedFastifyControlInvocation | Promise<PreparedFastifyControlInvocation>;
+  } = {}
+): ControlOperationDispatcher {
   return {
     async invoke(invocation) {
       const method = invocation.verb.toUpperCase() as "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
       const hasBody = invocation.params.body !== undefined;
-      const response = await app.inject({
-        method,
-        url: requestUrl(invocation.pathTemplate, invocation.params.path, invocation.params.query),
-        ...(hasBody ? { payload: JSON.stringify(invocation.params.body) } : {}),
-        ...(!hasBody && invocation.params.idempotencyKey === undefined ? {} : {
+      const prepared = await options.prepare?.();
+      let response;
+      try {
+        response = await app.inject({
+          method,
+          url: requestUrl(invocation.pathTemplate, invocation.params.path, invocation.params.query),
+          ...(hasBody ? { payload: JSON.stringify(invocation.params.body) } : {}),
           headers: {
+            ...prepared?.headers,
             ...(hasBody ? { "content-type": "application/json" } : {}),
             ...(invocation.params.idempotencyKey === undefined
               ? {}
               : { "idempotency-key": invocation.params.idempotencyKey })
           }
-        })
-      });
+        });
+      } finally {
+        await prepared?.release();
+      }
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw new RpcFault(-32000, `Control operation failed (${response.statusCode})`);
+        let body: JsonValue = response.body;
+        try {
+          body = JSON.parse(response.body) as JsonValue;
+        } catch {
+          // Preserve bounded text errors when an internal route does not return JSON.
+        }
+        const message = body !== null && typeof body === "object" && !Array.isArray(body)
+          && typeof body.error === "string"
+          ? body.error
+          : `Control operation failed (${response.statusCode})`;
+        throw new RpcFault(-32000, message, {
+          httpStatus: response.statusCode,
+          body
+        });
       }
       if (!response.body) return null;
       try {
@@ -98,7 +127,7 @@ export function createFastifyControlDispatcher(app: FastifyInstance): ControlOpe
   };
 }
 
-function promptFromInput(input: readonly {
+export function promptFromAppServerInput(input: readonly {
   readonly type: string;
   readonly text?: string;
   readonly path?: string;
@@ -120,6 +149,51 @@ function promptFromInput(input: readonly {
   const prompt = parts.join("\n").trim();
   if (!prompt) throw new RpcFault(-32602, "Turn input must contain text");
   return prompt;
+}
+
+export function createAppServerThreadManager(options: {
+  readonly store: AgentEventV3Store;
+  readonly execute: LocalAppServerRuntimeOptions["execute"];
+}): ThreadManager {
+  let threads!: ThreadManager;
+  threads = new ThreadManager({
+    store: options.store,
+    executor: {
+      async execute(input) {
+        const thread = await threads.readThread(input.threadId);
+        const result = await options.execute({
+          threadId: input.threadId,
+          turnId: input.turnId,
+          cwd: thread.cwd,
+          providerId: thread.providerId,
+          modelId: thread.modelId,
+          prompt: promptFromAppServerInput(input.input),
+          input: input.input,
+          ...(input.outputSchema === undefined ? {} : { outputSchema: input.outputSchema as JsonValue }),
+          signal: input.signal
+        });
+        for (const attachment of result.attachments ?? []) {
+          await input.recordItem({
+            kind: "attachment",
+            content: attachment,
+            publicControls: attachment
+          });
+        }
+        await input.recordItem({
+          kind: "agentMessage",
+          status: result.status === "failed" ? "failed" : "completed",
+          content: { text: result.summary }
+        });
+        return {
+          status: result.status,
+          ...(result.tokenUsage === undefined ? {} : { tokenUsage: result.tokenUsage }),
+          ...(result.structuredOutput === undefined ? {} : { structuredOutput: result.structuredOutput }),
+          ...(result.status === "failed" ? { error: result.summary } : {})
+        };
+      }
+    }
+  });
+  return threads;
 }
 
 function requestUrl(
@@ -187,42 +261,9 @@ async function removeOwnedConnectionFile(filePath: string, token: string): Promi
 }
 
 function createRuntimeConnectionFactory(options: EmbeddedAppServerRuntimeOptions): TransportConnectionFactory {
-  const threads = new ThreadManager({
+  const threads = createAppServerThreadManager({
     store: new JsonlAgentEventV3Store(path.join(options.rootDir, "threads-v3")),
-    executor: {
-      async execute(input) {
-        const thread = await threads.readThread(input.threadId);
-        const result = await options.execute({
-          threadId: input.threadId,
-          turnId: input.turnId,
-          cwd: thread.cwd,
-          providerId: thread.providerId,
-          modelId: thread.modelId,
-          prompt: promptFromInput(input.input),
-          input: input.input,
-          ...(input.outputSchema === undefined ? {} : { outputSchema: input.outputSchema as JsonValue }),
-          signal: input.signal
-        });
-        for (const attachment of result.attachments ?? []) {
-          await input.recordItem({
-            kind: "attachment",
-            content: attachment,
-            publicControls: attachment
-          });
-        }
-        await input.recordItem({
-          kind: "agentMessage",
-          status: result.status === "failed" ? "failed" : "completed",
-          content: { text: result.summary }
-        });
-        return {
-          status: result.status,
-          ...(result.tokenUsage === undefined ? {} : { tokenUsage: result.tokenUsage }),
-          ...(result.structuredOutput === undefined ? {} : { structuredOutput: result.structuredOutput }),
-          ...(result.status === "failed" ? { error: result.summary } : {})
-        };
-      }
-    }
+    execute: options.execute
   });
   const notifications = new JsonlNotificationLog(path.join(options.rootDir, "notifications.jsonl"));
   return (peer): TransportConnection => {
@@ -242,7 +283,9 @@ function createRuntimeConnectionFactory(options: EmbeddedAppServerRuntimeOptions
       serverInfo: { name: "muniu", version: "0.2.0" },
       instructionSources: ["AGENTS.md"],
       handlers,
-      controlHandler: createMuniuControlHandler(createFastifyControlDispatcher(options.app)),
+      controlHandler: createMuniuControlHandler(
+        options.controlDispatcher ?? createFastifyControlDispatcher(options.app)
+      ),
       notificationLog: notifications,
       write: (message) => peer.send(message),
       close: () => peer.close(),

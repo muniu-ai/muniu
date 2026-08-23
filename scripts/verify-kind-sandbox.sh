@@ -107,7 +107,11 @@ stop_port_forward() {
 wait_for_http() {
   local url="$1"
   local deadline=$((SECONDS + 60))
-  until curl --fail --silent --show-error "${url}" >/dev/null 2>&1; do
+  local curl_args=(--fail --silent --show-error)
+  if [[ "${url}" == https://* ]]; then
+    curl_args+=(--cacert "${fixture_state_dir}/tls.crt")
+  fi
+  until curl "${curl_args[@]}" "${url}" >/dev/null 2>&1; do
     if (( SECONDS >= deadline )); then
       echo "Timed out waiting for ${url}" >&2
       return 1
@@ -138,7 +142,8 @@ wait_for_ready_replicas() {
 run_failover_controller() {
   local phase="$1"
   docker run --rm --network host \
-    --env MN_KIND_API_URL=http://127.0.0.1:57318 \
+    --env MN_KIND_API_URL=https://127.0.0.1:57318 \
+    --env NODE_EXTRA_CA_CERTS=/state/tls.crt \
     --env MN_KIND_FIXTURE_URL=http://127.0.0.1:58080 \
     --env MN_KIND_POSTGRES_URL=postgresql://mn:mn-kind-only@127.0.0.1:55433/muniu \
     --env MN_KIND_FAILOVER_STATE=/state/failover.json \
@@ -252,7 +257,7 @@ fixture_state_dir="$(mktemp -d)"
 chmod 0777 "${fixture_state_dir}"
 openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 3650 \
   -subj "/CN=muniu-kind-fixture" \
-  -addext "subjectAltName=DNS:muniu-kind-fixture,DNS:muniu-kind-fixture.muniu-kind.svc,DNS:localhost,IP:127.0.0.1" \
+  -addext "subjectAltName=DNS:muniu,DNS:muniu.muniu-kind.svc,DNS:muniu-kind-fixture,DNS:muniu-kind-fixture.muniu-kind.svc,DNS:localhost,IP:127.0.0.1" \
   -addext "basicConstraints=critical,CA:TRUE" \
   -addext "keyUsage=critical,digitalSignature,keyEncipherment,keyCertSign" \
   -keyout "${fixture_state_dir}/tls.key" \
@@ -303,7 +308,7 @@ start_port_forward service/muniu 57318:80 "${fixture_state_dir}/api-port-forward
 api_port_forward_pid="${last_port_forward_pid}"
 start_port_forward service/muniu-kind-fixture 58080:8080 "${fixture_state_dir}/fixture-port-forward.log"
 start_port_forward service/muniu-kind-postgres 55433:5432 "${fixture_state_dir}/postgres-port-forward.log"
-wait_for_http http://127.0.0.1:57318/healthz
+wait_for_http https://127.0.0.1:57318/healthz
 wait_for_http http://127.0.0.1:58080/health
 
 run_failover_controller bootstrap
@@ -351,7 +356,7 @@ wait_for_ready_replicas muniu-api 2
 stop_port_forward "${api_port_forward_pid}"
 start_port_forward service/muniu 57318:80 "${fixture_state_dir}/api-port-forward-after-owner-loss.log"
 api_port_forward_pid="${last_port_forward_pid}"
-wait_for_http http://127.0.0.1:57318/healthz
+wait_for_http https://127.0.0.1:57318/healthz
 run_failover_controller verify || {
   diagnose_enterprise
   exit 1
@@ -369,7 +374,7 @@ wait_for_ready_replicas muniu-worker 2
 stop_port_forward "${api_port_forward_pid}"
 start_port_forward service/muniu 57318:80 "${fixture_state_dir}/api-port-forward-after-postgres-restart.log"
 api_port_forward_pid="${last_port_forward_pid}"
-wait_for_http http://127.0.0.1:57318/healthz
+wait_for_http https://127.0.0.1:57318/healthz
 run_failover_controller post-restart || {
   diagnose_enterprise
   exit 1

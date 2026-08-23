@@ -14,6 +14,7 @@ async function main(): Promise<void> {
   const app = buildServer({
     useMockExecutors,
     workspaceRoot,
+    legacyControlApi: false,
     localAppServer: {
       host: "127.0.0.1",
       port: appServerPort,

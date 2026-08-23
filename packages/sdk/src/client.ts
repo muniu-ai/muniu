@@ -61,6 +61,17 @@ interface PendingRequest {
   readonly removeAbort?: () => void;
 }
 
+export class RpcResponseError extends Error {
+  constructor(
+    readonly code: number,
+    message: string,
+    readonly data?: JsonValue
+  ) {
+    super(message);
+    this.name = "RpcResponseError";
+  }
+}
+
 class EventQueue<T> implements AsyncIterable<T> {
   readonly #values: T[] = [];
   readonly #waiting: Array<(value: IteratorResult<T>) => void> = [];
@@ -309,7 +320,11 @@ export class MuniuClient {
       this.#pending.delete(data.id);
       pending.removeAbort?.();
       if ("error" in data) {
-        pending.reject(new Error(`${data.error.code}: ${data.error.message}`));
+        pending.reject(new RpcResponseError(
+          data.error.code,
+          data.error.message,
+          data.error.data
+        ));
         return;
       }
       try {

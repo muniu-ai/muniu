@@ -36,12 +36,6 @@
     "method": "muniu/run/agentSessions/byId/close/post"
   },
   {
-    "operationId": "get__v1_agent_sessions_id_events",
-    "path": "/v1/agent-sessions/{id}/events",
-    "verb": "get",
-    "method": "muniu/run/agentSessions/byId/events/get"
-  },
-  {
     "operationId": "post__v1_agent_sessions_id_messages",
     "path": "/v1/agent-sessions/{id}/messages",
     "verb": "post",
@@ -586,12 +580,6 @@
     "path": "/v1/runs/{id}/events",
     "verb": "get",
     "method": "muniu/run/runs/byId/events/get"
-  },
-  {
-    "operationId": "get__v1_runs_id_events_stream",
-    "path": "/v1/runs/{id}/events/stream",
-    "verb": "get",
-    "method": "muniu/run/runs/byId/events/stream/get"
   },
   {
     "operationId": "post__v1_runs_id_resume",

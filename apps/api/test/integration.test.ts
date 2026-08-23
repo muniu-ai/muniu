@@ -859,7 +859,7 @@ test("api supports queue-only runs and claimed external worker updates", async (
   );
 });
 
-test("api streams background run events and cancels active jobs", async (t) => {
+test("api records background run events and cancels active jobs", async (t) => {
   const projectRoot = await mkdtemp(join(tmpdir(), "mn-api-cancel-project-"));
   const workspaceRoot = await mkdtemp(join(tmpdir(), "mn-api-cancel-worktrees-"));
   const mniuRoot = await mkdtemp(join(tmpdir(), "mn-api-cancel-mniu-"));
@@ -883,10 +883,6 @@ test("api streams background run events and cancels active jobs", async (t) => {
   t.after(async () => {
     await app.close();
   });
-  await app.listen({ host: "127.0.0.1", port: 0 });
-  const address = app.server.address() as AddressInfo;
-  const baseUrl = `http://127.0.0.1:${address.port}`;
-
   const projectResponse = await app.inject({
     method: "POST",
     url: "/v1/projects",
@@ -928,14 +924,6 @@ test("api streams background run events and cancels active jobs", async (t) => {
   assert.equal(runResponse.statusCode, 201);
   const run = runResponse.json();
 
-  const streamResponse = await fetch(`${baseUrl}/v1/runs/${run.id}/events/stream`);
-  assert.equal(streamResponse.status, 200);
-  assert.match(streamResponse.headers.get("content-type") ?? "", /text\/event-stream/);
-  assert.ok(streamResponse.body);
-  const reader = streamResponse.body.getReader();
-  const firstEvents = await readSseUntil(reader, "Running candidates");
-  assert.match(firstEvents, /Run queued|Preparing run/);
-
   const cancelResponse = await app.inject({
     method: "POST",
     url: `/v1/runs/${run.id}/cancel`,
@@ -943,10 +931,6 @@ test("api streams background run events and cancels active jobs", async (t) => {
   });
   assert.equal(cancelResponse.statusCode, 200);
   assert.equal(cancelResponse.json().status, "cancelled");
-
-  const cancelEvents = await readSseUntil(reader, "Run cancelled");
-  assert.match(cancelEvents, /Run cancellation requested/);
-  await reader.cancel();
 
   const cancelledRun = await waitForRunStatus(app, run.id, "cancelled");
   assert.equal(cancelledRun.status, "cancelled");
@@ -7420,22 +7404,6 @@ async function waitForProviderModel(
   throw new Error(
     `Timed out waiting for provider ${providerId} to include model ${modelId}; last=${lastModelIds}`
   );
-}
-
-async function readSseUntil(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  needle: string
-): Promise<string> {
-  const decoder = new TextDecoder();
-  const startedAt = Date.now();
-  let text = "";
-  while (Date.now() - startedAt < 10_000) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    text += decoder.decode(value, { stream: true });
-    if (text.includes(needle)) return text;
-  }
-  throw new Error(`Timed out waiting for SSE frame containing ${needle}. Received:\n${text}`);
 }
 
 async function waitForArtifactIndex(

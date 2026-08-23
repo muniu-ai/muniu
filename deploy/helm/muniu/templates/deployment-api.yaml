@@ -21,7 +21,7 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args: ["apps/api/dist/index.js"]
           securityContext: {{- toYaml .Values.containerSecurityContext | nindent 12 }}
-          ports: [{ name: http, containerPort: {{ .Values.api.port }} }]
+          ports: [{ name: https, containerPort: {{ .Values.api.port }} }]
           envFrom: [{ configMapRef: { name: {{ include "muniu.fullname" . }} } }]
           env:
             - { name: HOME, value: /opt/muniu }
@@ -42,12 +42,13 @@ spec:
             - { name: tmp, mountPath: /tmp }
             - { name: state, mountPath: /opt/muniu/.muniu }
             - { name: trust, mountPath: /etc/muniu/trust, readOnly: true }
+            - { name: api-tls, mountPath: {{ .Values.api.tls.mountPath | quote }}, readOnly: true }
             - { name: sandbox-workspaces, mountPath: {{ .Values.sandbox.sharedWorkspace.mountPath | quote }} }
             {{- if .Values.api.trustedCa.existingSecret }}
             - { name: api-trusted-ca, mountPath: {{ .Values.api.trustedCa.mountPath | quote }}, readOnly: true }
             {{- end }}
-          readinessProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 5 }
-          livenessProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 10 }
+          readinessProbe: { httpGet: { path: /healthz, port: https, scheme: HTTPS }, periodSeconds: 5 }
+          livenessProbe: { httpGet: { path: /healthz, port: https, scheme: HTTPS }, periodSeconds: 10 }
           resources: {{- toYaml .Values.api.resources | nindent 12 }}
       volumes:
         - { name: tmp, emptyDir: {} }
@@ -56,6 +57,12 @@ spec:
           secret:
             secretName: {{ .Values.standardPackTrust.existingSecret }}
             items: [{ key: {{ .Values.standardPackTrust.key }}, path: trust.json }]
+        - name: api-tls
+          secret:
+            secretName: {{ required "api.tls.existingSecret is required" .Values.api.tls.existingSecret }}
+            items:
+              - { key: {{ .Values.api.tls.certKey }}, path: tls.crt }
+              - { key: {{ .Values.api.tls.privateKeyKey }}, path: tls.key }
         - name: sandbox-workspaces
           persistentVolumeClaim: { claimName: {{ include "muniu.sharedWorkspaceClaimName" . }} }
         {{- if .Values.api.trustedCa.existingSecret }}

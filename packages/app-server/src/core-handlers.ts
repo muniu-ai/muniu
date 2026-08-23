@@ -46,6 +46,8 @@ export interface CoreHandlerDefaults {
 export interface CoreAppServerHandlerOptions {
   readonly threads: ThreadManager;
   readonly defaults: CoreHandlerDefaults;
+  /** Prevents client parameters from widening connection-bound permission and sandbox policy. */
+  readonly enforceSecurityDefaults?: boolean;
   readonly notify?: Notify;
   readonly compact?: ContextCompactionInput["summarize"];
   readonly models?: () => Promise<MethodResult<"model/list">["data"]>;
@@ -403,8 +405,10 @@ export function createCoreAppServerHandlers(options: CoreAppServerHandlerOptions
         cwd: params.cwd ?? options.defaults.cwd,
         providerId: params.modelProvider ?? options.defaults.providerId,
         modelId: params.model ?? options.defaults.modelId,
-        permissionProfile: params.approvalPolicy ?? options.defaults.permissionProfile,
-        sandbox: params.sandbox === undefined || params.sandbox === null
+        permissionProfile: options.enforceSecurityDefaults
+          ? options.defaults.permissionProfile
+          : params.approvalPolicy ?? options.defaults.permissionProfile,
+        sandbox: options.enforceSecurityDefaults || params.sandbox === undefined || params.sandbox === null
           ? options.defaults.sandbox
           : { mode: params.sandbox },
         source: params.threadSource ?? "appServer",
@@ -428,8 +432,16 @@ export function createCoreAppServerHandlers(options: CoreAppServerHandlerOptions
         ...(params.cwd === undefined || params.cwd === null ? {} : { cwd: params.cwd }),
         ...(params.modelProvider === undefined || params.modelProvider === null ? {} : { providerId: params.modelProvider }),
         ...(params.model === undefined || params.model === null ? {} : { modelId: params.model }),
-        ...(params.approvalPolicy === undefined || params.approvalPolicy === null ? {} : { permissionProfile: params.approvalPolicy }),
-        ...(params.sandbox === undefined || params.sandbox === null ? {} : { sandbox: { mode: params.sandbox } })
+        ...(options.enforceSecurityDefaults
+          ? { permissionProfile: options.defaults.permissionProfile }
+          : params.approvalPolicy === undefined || params.approvalPolicy === null
+            ? {}
+            : { permissionProfile: params.approvalPolicy }),
+        ...(options.enforceSecurityDefaults
+          ? { sandbox: options.defaults.sandbox }
+          : params.sandbox === undefined || params.sandbox === null
+            ? {}
+            : { sandbox: { mode: params.sandbox } })
       });
       const result = runtimeResult(thread, options.defaults);
       await notify?.("thread/started", { thread: result.thread });

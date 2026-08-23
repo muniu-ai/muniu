@@ -83,7 +83,7 @@ async function operationFixture() {
 
 const operations = await operationFixture();
 const mapping = operations.map((operation) => ({ ...operation, method: methodFor(operation) }));
-if (operations.length !== 150) throw new Error(`Expected 150 control operations, received ${operations.length}`);
+if (operations.length !== 148) throw new Error(`Expected 148 control operations, received ${operations.length}`);
 if (new Set(mapping.map((entry) => entry.operationId)).size !== mapping.length) throw new Error("Duplicate OpenAPI operationId");
 if (new Set(mapping.map((entry) => entry.method)).size !== mapping.length) throw new Error("Duplicate muniu RPC method");
 

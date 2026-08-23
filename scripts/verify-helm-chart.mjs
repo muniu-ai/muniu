@@ -58,6 +58,12 @@ for (const required of [
   "name: muniu-sandbox-workspaces",
   "name: MN_KUBERNETES_RUNTIME_CLASS",
   "name: MN_WORKER_TOOLS",
+  "name: MN_APP_SERVER_URL",
+  "wss://muniu:80/app-server",
+  "name: MN_APP_SERVER_TOKEN",
+  "name: api-tls",
+  "scheme: HTTPS",
+  "name: https",
   "name: muniu-sandbox-default-deny",
   "name: muniu-kubernetes-api-egress",
   "name: muniu-worker-api-egress"
@@ -91,6 +97,11 @@ if (!/name: muniu-candidate[\s\S]*?automountServiceAccountToken: false/u.test(pr
 }
 if (/\bhostPath\s*:/u.test(production)) {
   throw new Error("production chart must not render hostPath volumes");
+}
+if (!production.includes("MN_TLS_CERT_FILE: \"/etc/muniu/api-tls/tls.crt\"")
+  || !production.includes("MN_TLS_KEY_FILE: \"/etc/muniu/api-tls/tls.key\"")
+  || !production.includes("MN_APP_SERVER_PATH: /app-server")) {
+  throw new Error("production API does not require the TLS app-server listener");
 }
 
 const invalidDriver = helm([

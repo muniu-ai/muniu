@@ -17,6 +17,11 @@ api:
   replicas: 2
   host: 0.0.0.0
   port: 7318
+  tls:
+    existingSecret: muniu-api-tls
+    certKey: tls.crt
+    privateKeyKey: tls.key
+    mountPath: /etc/muniu/api-tls
   trustedCa:
     existingSecret: ""
     key: ca.crt
@@ -53,7 +58,8 @@ service:
 ingress:
   enabled: false
   className: ""
-  annotations: {}
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: HTTPS
   hosts:
     - host: muniu.example.com
       paths:

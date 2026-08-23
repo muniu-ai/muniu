@@ -15,8 +15,16 @@ import {
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+import type { SecureContextOptions } from "node:tls";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import { z } from "zod";
+import type { ThreadManager } from "@mn/agent-kernel";
+import {
+  attachEnterpriseWebSocketGateway,
+  createCoreAppServerHandlers,
+  createMuniuControlHandler,
+  type AppServerHandlers
+} from "@mn/app-server";
 import {
   cleanupShellEnvConflicts,
   inspectLocalConfig,
@@ -133,8 +141,15 @@ import { createProductionAgentRuntimeFactory } from "./agentRuntimeFactory.js";
 import { registerAgentSessionRoutes } from "./agentSessionRoutes.js";
 import { createEnterpriseAgentSessionStore } from "./enterpriseAgentSessionStore.js";
 import {
+  createAppServerThreadManager,
+  createFastifyControlDispatcher,
   startLocalAppServerRuntime
 } from "./localAppServerRuntime.js";
+import {
+  PostgresAgentEventV3Store,
+  createEnterpriseAppServerGateway,
+  requestContextForConnectionIdentity
+} from "./enterpriseAppServerGateway.js";
 import { EnterpriseBuiltinAgentBroker } from "./enterpriseBuiltinAgentBroker.js";
 import { EnterpriseBuiltinAgentPersistence } from "./enterpriseBuiltinAgentPersistence.js";
 import { registerEnterpriseBuiltinAgentRoutes } from "./enterpriseBuiltinAgentRoutes.js";
@@ -359,6 +374,16 @@ export interface DiagnosticLogCollectionSummary {
 
 export interface BuildServerOptions {
   logger?: boolean;
+  https?: Pick<SecureContextOptions, "cert" | "key">;
+  /** Enables the authenticated enterprise WSS app-server on the API listener. */
+  enterpriseAppServer?: false | Readonly<{
+    path?: string;
+    maxConnectionsPerSubject?: number;
+    leaseTtlMs?: number;
+    maxRequestsPerMinute?: number;
+  }>;
+  /** Test-only bridge for the v0.1 REST control surface. Production entrypoints disable it. */
+  legacyControlApi?: boolean;
   store?: MemoryStore;
   apiStatePath?: string;
   localStore?: FileLocalStore;
@@ -1526,8 +1551,10 @@ function redactDiagnosticText(input: string): string {
 }
 
 export function buildServer(options: BuildServerOptions = {}) {
-  const app = Fastify({ logger: options.logger ?? true });
-  const activeRunEventStreams = new Set<() => void>();
+  const app = Fastify({
+    logger: options.logger ?? true,
+    ...(options.https === undefined ? {} : { https: options.https })
+  });
   const runtimeProfile = options.runtimeProfile ?? "local";
   const homeDir = options.homeDir ?? process.env.HOME ?? process.cwd();
   const mniuRoot =
@@ -1889,6 +1916,12 @@ export function buildServer(options: BuildServerOptions = {}) {
   if (runtimeProfile === "enterprise" && options.localAppServer) {
     throw new Error("Enterprise profile cannot start the plaintext local app-server listener");
   }
+  if (options.enterpriseAppServer && runtimeProfile !== "enterprise") {
+    throw new Error("Enterprise app-server requires the enterprise runtime profile");
+  }
+  if (options.enterpriseAppServer && options.https === undefined) {
+    throw new Error("Enterprise app-server requires a TLS API listener");
+  }
   let agentSessionService = runtimeProfile === "local"
     ? options.agentSessionService
     : undefined;
@@ -1901,6 +1934,9 @@ export function buildServer(options: BuildServerOptions = {}) {
   );
   let getAgentSessionService:
     | ((request?: FastifyRequest) => Promise<LocalMockAgentSessionService>)
+    | undefined;
+  let getEnterpriseAgentSessionService:
+    | ((context: RequestContext) => Promise<LocalMockAgentSessionService>)
     | undefined;
   const specRepository =
     options.specRepository ??
@@ -2129,22 +2165,7 @@ export function buildServer(options: BuildServerOptions = {}) {
     };
   } else if (enterprisePostgres && artifactRemoteStore?.type === "s3" && artifactRemoteStore.s3Client) {
     const enterpriseSessionObjectStore = artifactRemoteStore.s3Client;
-    getAgentSessionService = async (request): Promise<LocalMockAgentSessionService> => {
-      if (!request) {
-        throw new AgentSessionServiceError(
-          409,
-          "TENANT_CONTEXT_REQUIRED",
-          "enterprise Agent session execution requires an authenticated tenant context"
-        );
-      }
-      const context = requestContexts.get(request);
-      if (!context) {
-        throw new AgentSessionServiceError(
-          401,
-          "TENANT_CONTEXT_REQUIRED",
-          "enterprise Agent session execution requires an authenticated tenant context"
-        );
-      }
+    getEnterpriseAgentSessionService = async (context): Promise<LocalMockAgentSessionService> => {
       const existing = enterpriseAgentSessionServices.get(context.tenantId);
       if (existing) return existing;
       const runtimeFactory = createProductionAgentRuntimeFactory({
@@ -2227,6 +2248,24 @@ export function buildServer(options: BuildServerOptions = {}) {
       enterpriseAgentSessionServices.set(context.tenantId, service);
       return service;
     };
+    getAgentSessionService = async (request): Promise<LocalMockAgentSessionService> => {
+      if (!request) {
+        throw new AgentSessionServiceError(
+          409,
+          "TENANT_CONTEXT_REQUIRED",
+          "enterprise Agent session execution requires an authenticated tenant context"
+        );
+      }
+      const context = requestContexts.get(request);
+      if (!context) {
+        throw new AgentSessionServiceError(
+          401,
+          "TENANT_CONTEXT_REQUIRED",
+          "enterprise Agent session execution requires an authenticated tenant context"
+        );
+      }
+      return getEnterpriseAgentSessionService!(context);
+    };
   }
   const useMockExecutors = options.useMockExecutors ?? false;
   const runJobLeases = new RunJobLeaseManager({
@@ -2244,6 +2283,8 @@ export function buildServer(options: BuildServerOptions = {}) {
   let providerModelCatalogSyncSchedulerRunning = false;
   let proxyServer: LocalProxyServer | undefined;
   let localAppServerRuntime: Awaited<ReturnType<typeof startLocalAppServerRuntime>> | undefined;
+  let enterpriseAppServerRuntime: { close(): Promise<void> } | undefined;
+  const enterpriseThreadManagers = new Map<string, ThreadManager>();
   const internalProxyBootstrapToken = randomUUID();
   const enterpriseProxy = runtimeProfile === "enterprise"
     ? options.enterpriseProxy
@@ -2253,6 +2294,16 @@ export function buildServer(options: BuildServerOptions = {}) {
     { controller: AbortController; done: Promise<void>; lease: RunJobLease }
   >();
   const requestContexts = new WeakMap<object, RequestContext>();
+  const internalAppServerHeader = "x-mn-internal-app-server";
+  const internalAppServerContexts = new Map<string, RequestContext>();
+  const prepareInternalAppServerInvocation = (context: RequestContext) => {
+    const token = randomUUID();
+    internalAppServerContexts.set(token, { ...context, traceId: randomUUID() });
+    return {
+      headers: { [internalAppServerHeader]: token },
+      release: () => { internalAppServerContexts.delete(token); }
+    };
+  };
   const requestSpans = new WeakMap<object, HttpServerSpan>();
   const requestDomainAuditPlans = new WeakMap<object, readonly DomainAuditPlan[]>();
   const requestDomainAuditEventIds = new WeakMap<object, readonly string[]>();
@@ -2500,6 +2551,28 @@ export function buildServer(options: BuildServerOptions = {}) {
         "traceparent",
         `00-${telemetrySpan.traceId}-${telemetrySpan.spanId}-01`
       );
+    }
+    const internalToken = request.headers[internalAppServerHeader];
+    const internalContext = typeof internalToken === "string"
+      ? internalAppServerContexts.get(internalToken)
+      : undefined;
+    if (internalContext) {
+      internalAppServerContexts.delete(internalToken as string);
+      requestContexts.set(request, internalContext);
+      return;
+    }
+    if (
+      options.legacyControlApi === false &&
+      pathname.startsWith("/v1/") &&
+      !isExternalContentTransport(request.method, pathname)
+    ) {
+      return reply.code(426).send({
+        error: "app-server protocol v2 is required",
+        protocolVersion: "2",
+        appServerPath: options.enterpriseAppServer
+          ? options.enterpriseAppServer.path ?? "/app-server"
+          : "local connection metadata"
+      });
     }
     const origin = typeof request.headers.origin === "string"
       ? request.headers.origin
@@ -2778,9 +2851,6 @@ export function buildServer(options: BuildServerOptions = {}) {
   app.addHook("onReady", async () => {
     await startCordisRuntime();
   });
-  app.addHook("preClose", async () => {
-    for (const close of [...activeRunEventStreams]) close();
-  });
   app.addHook("onClose", async () => {
     if (providerModelCatalogSyncSchedulerTimer) {
       clearInterval(providerModelCatalogSyncSchedulerTimer);
@@ -2791,6 +2861,8 @@ export function buildServer(options: BuildServerOptions = {}) {
     }
     await Promise.allSettled([...activeRunJobs.values()].map((job) => job.done));
     activeRunJobs.clear();
+    await enterpriseAppServerRuntime?.close();
+    enterpriseAppServerRuntime = undefined;
     await localAppServerRuntime?.close();
     localAppServerRuntime = undefined;
     await enterpriseBuiltinAgentBroker.dispose();
@@ -2799,6 +2871,7 @@ export function buildServer(options: BuildServerOptions = {}) {
       [...enterpriseAgentSessionServices.values()].map((service) => service.dispose())
     );
     enterpriseAgentSessionServices.clear();
+    enterpriseThreadManagers.clear();
     await cordisRuntime?.dispose();
     cordisRuntime = undefined;
     await proxyServer?.stop();
@@ -2830,6 +2903,9 @@ export function buildServer(options: BuildServerOptions = {}) {
       localAppServerRuntime = await startLocalAppServerRuntime({
         app,
         rootDir: join(mniuRoot, "app-server"),
+        controlDispatcher: createFastifyControlDispatcher(app, {
+          prepare: () => prepareInternalAppServerInvocation(localRequestContext(randomUUID()))
+        }),
         host: localAppServer.host,
         port: localAppServer.port,
         ...(localAppServer.token === undefined ? {} : { token: localAppServer.token }),
@@ -2859,6 +2935,129 @@ export function buildServer(options: BuildServerOptions = {}) {
         }
       });
       app.log.info({ url: localAppServerRuntime.url }, "local app-server listener ready");
+    });
+  }
+
+  const enterpriseAppServer = options.enterpriseAppServer || undefined;
+  if (enterpriseAppServer) {
+    if (!options.auth || !enterprisePostgres || !enterpriseProjectRoots?.length || !getEnterpriseAgentSessionService) {
+      throw new Error("Enterprise app-server dependencies are unavailable");
+    }
+    if (artifactRemoteStore?.type !== "s3" || !artifactRemoteStore.s3Client) {
+      throw new Error("Enterprise app-server requires the S3-compatible V3 event store");
+    }
+    const enterpriseThreadObjectStore = artifactRemoteStore;
+    const enterpriseThreadS3 = artifactRemoteStore.s3Client;
+    const gateway = createEnterpriseAppServerGateway({
+      auth: options.auth,
+      origins: [...corsAllowlist],
+      pool: enterprisePostgres.pool,
+      ...(enterpriseAppServer.maxConnectionsPerSubject === undefined
+        ? {}
+        : { maxConnectionsPerSubject: enterpriseAppServer.maxConnectionsPerSubject }),
+      ...(enterpriseAppServer.leaseTtlMs === undefined
+        ? {}
+        : { leaseTtlMs: enterpriseAppServer.leaseTtlMs }),
+      ...(enterpriseAppServer.maxRequestsPerMinute === undefined
+        ? {}
+        : { maxRequestsPerMinute: enterpriseAppServer.maxRequestsPerMinute }),
+      createConnectionOptions: (identity, notify) => {
+        const identityContext = requestContextForConnectionIdentity(identity);
+        const threadManagerKey = `${identity.tenantId}\0${identity.subject}`;
+        let threads = enterpriseThreadManagers.get(threadManagerKey);
+        if (!threads) {
+          threads = createAppServerThreadManager({
+            store: new PostgresAgentEventV3Store({
+              tenantId: identity.tenantId,
+              subject: identity.subject,
+              pool: enterprisePostgres.pool,
+              objectStore: enterpriseThreadS3,
+              ...(enterpriseThreadObjectStore.prefix === undefined
+                ? {}
+                : { objectPrefix: enterpriseThreadObjectStore.prefix }),
+              ...(process.env.MN_AGENT_SESSION_KMS_KEY_ID === undefined
+                ? {}
+                : { kmsKeyId: process.env.MN_AGENT_SESSION_KMS_KEY_ID })
+            }),
+            execute: async (input) => {
+              const service = await getEnterpriseAgentSessionService!(identityContext);
+              const result = await service.executeInteractiveThread({
+                threadId: input.threadId,
+                cwd: input.cwd,
+                prompt: input.prompt,
+                input: input.input as InteractiveThreadExecutionInput["input"],
+                ...(input.outputSchema === undefined ? {} : { outputSchema: input.outputSchema }),
+                providerId: input.providerId,
+                modelId: input.modelId,
+                signal: input.signal
+              });
+              return {
+                status: result.reason === "completed"
+                  ? "completed"
+                  : result.reason === "error" ? "failed" : "interrupted",
+                summary: result.summary,
+                ...(result.structuredOutput === undefined ? {} : { structuredOutput: result.structuredOutput }),
+                ...(result.attachments === undefined ? {} : { attachments: result.attachments })
+              };
+            }
+          });
+          enterpriseThreadManagers.set(threadManagerKey, threads);
+        }
+        const defaults = {
+          cwd: enterpriseProjectRoots[0] as string,
+          providerId: "default",
+          modelId: "default",
+          permissionProfile: identity.permissionProfile,
+          sandbox: identity.sandbox,
+          approvalPolicy: identity.permissionProfile === "read-only" ? "never" as const : "on-request" as const,
+          instructionSources: ["AGENTS.md"]
+        };
+        const coreHandlers = createCoreAppServerHandlers({
+          threads,
+          defaults,
+          enforceSecurityDefaults: true,
+          notify
+        });
+        const handlers: AppServerHandlers = {
+          ...coreHandlers,
+          "thread/start": async (params, context) => coreHandlers["thread/start"]({
+            ...params,
+            cwd: await resolveEnterpriseProjectRoot(
+              params.cwd ?? defaults.cwd,
+              enterpriseProjectRoots
+            )
+          }, context),
+          "thread/fork": async (params, context) => coreHandlers["thread/fork"]({
+            ...params,
+            ...(params.cwd === undefined || params.cwd === null
+              ? {}
+              : { cwd: await resolveEnterpriseProjectRoot(params.cwd, enterpriseProjectRoots) })
+          }, context)
+        };
+        const controlDispatcher = createFastifyControlDispatcher(app, {
+          prepare: () => prepareInternalAppServerInvocation(identityContext)
+        });
+        return {
+          serverInfo: { name: "muniu", version: "0.2.0" },
+          instructionSources: ["AGENTS.md"],
+          handlers,
+          controlHandler: createMuniuControlHandler(controlDispatcher),
+          onInternalError: (error, method) => {
+            app.log.error({
+              method,
+              error: error instanceof Error ? error.message : "unknown error"
+            }, "enterprise app-server request failed");
+          }
+        };
+      }
+    });
+    app.addHook("onListen", async () => {
+      enterpriseAppServerRuntime = attachEnterpriseWebSocketGateway({
+        server: app.server,
+        gateway,
+        path: enterpriseAppServer.path ?? "/app-server"
+      });
+      app.log.info({ path: enterpriseAppServer.path ?? "/app-server" }, "enterprise app-server WSS ready");
     });
   }
 
@@ -7006,59 +7205,6 @@ export function buildServer(options: BuildServerOptions = {}) {
     return { events: store.events.get(id) ?? [] };
   });
 
-  app.get("/v1/runs/:id/events/stream", async (request, reply) => {
-    const { id } = request.params as { id: string };
-    const run = store.runs.get(id);
-    if (!run) return reply.code(404).send({ error: "run not found" });
-
-    reply.hijack();
-    reply.raw.writeHead(200, {
-      "content-type": "text/event-stream; charset=utf-8",
-      "cache-control": "no-cache, no-transform",
-      connection: "keep-alive",
-      "access-control-allow-origin":
-        runtimeProfile === "enterprise"
-          ? (typeof request.headers.origin === "string"
-              ? request.headers.origin
-              : "null")
-          : "*"
-    });
-
-    let closed = false;
-    let unsubscribe = () => {};
-    const close = () => {
-      if (closed) return;
-      closed = true;
-      unsubscribe();
-      clearInterval(keepAlive);
-      activeRunEventStreams.delete(close);
-      reply.raw.end();
-    };
-    const write = (event: RunEvent) => {
-      if (closed) return;
-      writeSseEvent(reply.raw, event);
-      const current = store.runs.get(id);
-      if (current && isTerminalRunStatus(current.status)) {
-        setImmediate(close);
-      }
-    };
-    const keepAlive = setInterval(() => {
-      if (!closed) reply.raw.write(": keep-alive\n\n");
-    }, 15_000);
-
-    unsubscribe = store.subscribeEvents(id, write);
-    activeRunEventStreams.add(close);
-    request.raw.on("close", close);
-
-    for (const event of store.events.get(id) ?? []) {
-      write(event);
-    }
-    const current = store.runs.get(id);
-    if (current && isTerminalRunStatus(current.status)) {
-      setImmediate(close);
-    }
-  });
-
   app.post("/v1/runs/:id/approve", async (request, reply) => {
     const { id } = request.params as { id: string };
     const context = requestContexts.get(request) ?? localRequestContext(request.id);
@@ -8305,6 +8451,16 @@ function isLoopbackHost(host: string): boolean {
     normalized === "localhost" ||
     normalized === "::1" ||
     /^127(?:\.\d{1,3}){3}$/u.test(normalized)
+  );
+}
+
+function isExternalContentTransport(method: string, pathname: string): boolean {
+  if (method === "GET" && /^\/v1\/runs\/[^/]+\/artifacts\/(?:archive|[^/]+)$/u.test(pathname)) {
+    return true;
+  }
+  return method === "POST" && (
+    /^\/v1\/run-jobs\/queue\/[^/]+\/source-snapshot$/u.test(pathname) ||
+    /^\/v1\/run-jobs\/queue\/[^/]+\/resume-diff$/u.test(pathname)
   );
 }
 
@@ -12129,14 +12285,6 @@ function withTaskRunBindings(
     tenantId: run.tenantId ?? task.tenantId ?? project.tenantId ?? LOCAL_TENANT_ID,
     workflowRef: run.workflowRef ?? resolveTaskWorkflowRef(task)
   };
-}
-
-function writeSseEvent(
-  stream: { write(chunk: string): unknown },
-  event: RunEvent
-): void {
-  stream.write(`event: ${event.type}\n`);
-  stream.write(`data: ${JSON.stringify(event)}\n\n`);
 }
 
 async function probeBinary(

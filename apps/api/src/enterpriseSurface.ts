@@ -113,7 +113,7 @@ const ENTERPRISE_ROUTE_RULES: readonly EnterpriseRouteRule[] = Object.freeze([
   {
     methods: getPost,
     pathname: new RegExp(
-      `^/v1/agent-sessions/${resourceId}(?:/(?:messages|events|cancel|close))?$`,
+      `^/v1/agent-sessions/${resourceId}(?:/(?:messages|cancel|close))?$`,
       "u"
     )
   },
