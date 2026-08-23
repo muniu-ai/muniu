@@ -130,7 +130,6 @@ function verifyLegacyThread(thread: EnterpriseLegacyThreadV3): 1 | 2 {
 }
 
 function prepareEnterpriseMigration(source: readonly EnterpriseLegacyThreadV3[]): PreparedEnterpriseMigration {
-  if (source.length === 0) throw new Error("enterprise legacy Agent session store is empty");
   const ordered = [...source].sort((left, right) =>
     left.tenantId.localeCompare(right.tenantId) || left.threadId.localeCompare(right.threadId)
   );
@@ -258,6 +257,19 @@ export class PostgresS3AgentV3MigrationBackend implements EnterpriseAgentV3Migra
   }
 
   async loadLegacyThreads(): Promise<readonly EnterpriseLegacyThreadV3[]> {
+    const relations = await this.options.pool.query<{
+      sessions: string | null;
+      events: string | null;
+    }>(`
+      SELECT
+        to_regclass('mn_agent_sessions')::text AS sessions,
+        to_regclass('mn_agent_session_events')::text AS events
+    `);
+    const relation = relations.rows[0];
+    if (!relation?.sessions && !relation?.events) return Object.freeze([]);
+    if (!relation.sessions || !relation.events) {
+      throw new Error("enterprise legacy Agent session schema is incomplete");
+    }
     const sessions = await this.options.pool.query<{
       tenant_id: string;
       session_id: string;
@@ -349,9 +361,24 @@ export class PostgresS3AgentV3MigrationBackend implements EnterpriseAgentV3Migra
     const client = await this.options.pool.connect();
     try {
       await client.query("BEGIN");
-      await client.query("LOCK TABLE mn_agent_sessions IN ACCESS EXCLUSIVE MODE");
-      await client.query("LOCK TABLE mn_agent_session_events IN ACCESS EXCLUSIVE MODE");
-      await this.verifyLegacyRelationalSnapshot(client, input);
+      const relations = await client.query<{
+        sessions: string | null;
+        events: string | null;
+      }>(`
+        SELECT
+          to_regclass('mn_agent_sessions')::text AS sessions,
+          to_regclass('mn_agent_session_events')::text AS events
+      `);
+      const relation = relations.rows[0];
+      if (relation?.sessions && relation.events) {
+        await client.query("LOCK TABLE mn_agent_sessions IN ACCESS EXCLUSIVE MODE");
+        await client.query("LOCK TABLE mn_agent_session_events IN ACCESS EXCLUSIVE MODE");
+        await this.verifyLegacyRelationalSnapshot(client, input);
+      } else if (relation?.sessions || relation?.events) {
+        throw new Error("enterprise legacy Agent session schema is incomplete");
+      } else if (input.threadCount !== 0 || input.eventCount !== 0) {
+        throw new Error("enterprise legacy Agent session schema changed during migration preflight");
+      }
       const existing = await client.query<{ manifest: EnterpriseAgentV3MigrationActivation; status: string }>(`
         SELECT manifest,status FROM mn_agent_migrations_v3 WHERE migration_id=$1
       `, [input.migrationId]);

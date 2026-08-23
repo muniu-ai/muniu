@@ -19,6 +19,7 @@ const fakeSecretsFixture = fileURLToPath(
 
 const agentWorkspaces = [
   "agent-protocol",
+  "mcp-runtime",
   "agent-session",
   "agent-llm",
   "agent-tools",
@@ -130,9 +131,10 @@ test("workflow scan fails closed for invalid YAML and escaping local actions", (
   assert.match(failures[1], /\.\/\.\.\/outside\/action/u);
 });
 
-test("agent coverage policy requires the serial six-package root gate in the node job", () => {
+test("agent coverage policy requires the serial seven-package root gate in the node job", () => {
   const command = [
     "npm run test:coverage -w @mn/agent-protocol",
+    "npm run test:coverage -w @mn/mcp-runtime",
     "npm run test:coverage -w @mn/agent-session",
     "npm run test:coverage -w @mn/agent-llm",
     "npm run test:coverage -w @mn/agent-tools",
@@ -164,7 +166,7 @@ test("agent coverage policy requires the serial six-package root gate in the nod
     ].join("\n")
   });
   assert.equal(failures.length, 2);
-  assert.match(failures[0], /serially run all six agent package coverage suites/u);
+  assert.match(failures[0], /serially run all seven agent package coverage suites/u);
   assert.match(failures[1], /node job.*test:coverage:agent/u);
 });
 

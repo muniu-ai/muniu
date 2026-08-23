@@ -24,8 +24,8 @@
 
 ```mermaid
 flowchart TD
-  user["User / Automation"] --> cli["apps/cli"]
-  cli -- "HTTP" --> api["apps/api"]
+  user["User / Automation"] --> client["CLI / Desktop / SDK"]
+  client -- "app-server v2" --> api["apps/api / app-server"]
   api --> store["Task Store"]
   api --> worker["apps/worker"]
   worker --> host["Embedded Agent Host"]
@@ -40,8 +40,8 @@ flowchart TD
 
 ### 2.1 组件
 
-- `apps/api`：项目、任务、run、candidate、gate、artifact、policy 的中心化 HTTP API。
-- `apps/cli`：开发者入口，负责初始化、注册项目、创建任务、触发 run、查看门禁。
+- `apps/api`：app-server、企业 WSS gateway、项目、任务、run、candidate、gate、artifact 与 policy 控制面。
+- `apps/cli`：使用 `@mn/sdk` 的开发者入口，并提供 stdio、Unix socket 和回环 WebSocket app-server 启动命令。
 - `apps/worker`：执行编排器，负责候选分配、worktree 准备、executor 调用、gate 聚合。
 - `packages/core`：领域模型、状态机、策略、上下文生成、门禁工具。
 - `packages/specs`：SpecSet/SpecRevision、严格校验、legacy wrapper 与 Spec Kit 适配。
@@ -50,6 +50,9 @@ flowchart TD
 - `packages/loop`：七阶段 governed workflow、有界 repair、checkpoint/resume 与审批。
 - `packages/evidence`：Eval Asset、Trace Graph、drift、Learning Proposal 与成熟度。
 - `packages/agent-*`：闭合协议、append-only 会话、LLM 流、工具授权、Kernel 与 Host 的内嵌 Agent 运行时。
+- `packages/app-server-protocol`：严格 Zod schema、生成 JSON Schema、方法目录和 Codex 稳定子集 fixture。
+- `packages/app-server`：握手、双向 JSON-RPC、通知日志、背压、传输、核心 handler 和企业 gateway。
+- `packages/sdk`：Node.js 与浏览器的类型化 app-server 客户端。
 - `packages/executors`：可选 Claude Code/Codex CLI legacy 适配器和 Mock executor。
 - `packages/verifier`：候选评分、候选对比、LLM verifier 扩展点。
 - `packages/connectors`：Git 仓库索引、服务发现、契约发现，后续扩展 GitHub/GitLab/Slack/Feishu。
@@ -118,7 +121,7 @@ stateDiagram-v2
 
 每个 candidate 绑定一个 provider 和一个工作区：
 
-- `provider` 为 `claude` 或 `codex`。
+- `provider` 与 `model` 绑定到已启用的目录项；`builtin` 支持 OpenAI、Anthropic 和兼容 Provider。
 - `worktreePath` 是隔离目录。
 - `result` 保存 stdout、stderr、summary、artifact。
 - `gates` 保存候选级门禁。
@@ -127,9 +130,13 @@ stateDiagram-v2
 - CLI `mn provider add` 可通过 `--replay-tool-calls`、`--tool-readonly`、`--tool-idempotent` 和 `--tool-side-effect` 创建带工具级 replay policy 的 provider。
 - Proxy request log 会携带 tool-call replay metadata，包括工具名、effect 和 replaySafe；桌面 Observability 的 Proxy Logs 行会显示工具 replay 摘要。
 
-## 4. Public API
+## 4. 平台接口
 
-### 4.1 HTTP API
+### 4.1 app-server 与内部 adapter
+
+公开控制协议为 app-server v2。连接先完成 `initialize` / `initialized`，再使用 `thread/*`、`turn/*` 和 `muniu/*` 方法；全部 notification 先写入 `AgentEventV3`，再按 cursor 投递。固定兼容方法与字段见 [v0.2.0 兼容矩阵](compatibility-v0.2.md)。
+
+以下 Fastify route 只供 `muniu/*` handler 在进程内调用，不是公开 HTTP 控制 API。外部 `/v1/*` 控制请求返回 protocol mismatch；HTTP 只保留 health、readiness、metrics、OAuth callback 和受控内容端点。
 
 ```text
 GET    /healthz
@@ -435,12 +442,25 @@ v1 已有事件模型：
 - `npm run typecheck` 通过。
 - `npm test` 通过。
 - Docker Compose enterprise E2E 完成 approved Spec → Governance/Harness → cross-service Gate/repair → owner approval → evidence/audit/learning。
-- 内嵌 Agent 的协议、会话、模型、工具、Kernel、Host 与 REST/SSE 测试通过；可选 legacy adapter 保持编译通过。
+- 内嵌 Agent 的协议、会话、模型、工具、Kernel、Host 与 app-server 测试通过；可选 legacy executor 保持编译通过。
 - 文档能让新工程师独立理解系统边界和实现路径。
 
 ## 12. 发布计划
 
-v0.1.1 开源发布制品固定为源码包 `muniu-v0.1.1.tar.gz`、SPDX SBOM `muniu-v0.1.1.spdx.json`、npm/Cargo 许可证清单、第三方声明、vendor 来源摘要、`SHA256SUMS` 和 GitHub artifact attestation，以及 `ghcr.io/muniu-ai/muniu:v0.1.1` 的 `linux/amd64` / `linux/arm64` API/Worker 镜像；镜像同时携带 BuildKit 最大级别 provenance 与 SBOM。macOS Desktop 只完成构建验证，不作为 v0.1.1 公开制品发布。v0.1.1 不发布或启用桌面运行时 updater，也不生成 updater archive、manifest 或 `latest.json`；unsigned universal APP/ZIP/DMG 与 `packaging/homebrew/Casks/mniu.rb` 仅保留为后续签名桌面发布的本地验证工程。`npm run verify:release` 在普通 CI 与 tag 流程中校验版本、标签、工作流和文档边界；`npm run verify:mac-release` 校验桌面构建边界以及本地 cask、DMG 和中文发布文档，`npm run verify:mac-packaged-app` 验证 DMG 内容、双架构 daemon、隔离 Keychain CRUD、进程生命周期与 `mniu://` 处理。Tauri panic hook 会把 Rust panic 追加到 `~/Library/Logs/dev.muniu.desktop/panic.log`，并保护性替换疑似 secret/token/password。API `GET /v1/system/diagnostics` 会收集受限且脱敏的木牛日志、专属 app 日志和相关 DiagnosticReports；桌面 Settings/Doctor 与 CLI `mn diagnostics export` 均可导出诊断包。Developer ID 签名、Apple 公证、Gatekeeper、真实 updater 下载/安装、packaged crash 写入与双架构干净机验收仍属于后续生产化范围。
+v0.2.0 开源发布制品包括：
+
+- 源码包 `muniu-v0.2.0.tar.gz` 和生产依赖 SPDX SBOM `muniu-v0.2.0.spdx.json`；
+- npm/Cargo 许可证清单、第三方声明、vendor 来源摘要和 `SHA256SUMS`；
+- GitHub artifact attestation；
+- `ghcr.io/muniu-ai/muniu:v0.2.0` 的 `linux/amd64` / `linux/arm64` API/Worker 镜像，以及镜像 provenance 与 SBOM。
+
+macOS Desktop 只完成构建验证，不作为 v0.2.0 公开制品发布。v0.2.0 不发布或启用桌面运行时 updater，也不生成 updater archive、manifest 或 `latest.json`。unsigned universal APP/ZIP/DMG 与 `packaging/homebrew/Casks/mniu.rb` 只保留为后续签名桌面发布的本地验证工程。
+
+`npm run verify:release` 校验版本、标签、app-server 兼容矩阵、V3 迁移边界、工作流和文档。`verify:app-server-schema`、`verify:rpc-coverage`、`verify:migration-v3` 与 SDK/Gateway/Desktop E2E 是发布必需门。
+
+`npm run verify:mac-release` 校验桌面构建边界以及本地 cask、DMG 和中文发布文档。`npm run verify:mac-packaged-app` 验证 DMG 内容、双架构 daemon、隔离 Keychain CRUD、进程生命周期与 `mniu://` 处理。
+
+Tauri panic hook 把 Rust panic 追加到 `~/Library/Logs/dev.muniu.desktop/panic.log`，并替换疑似 secret/token/password。诊断数据通过 `muniu/diagnostics/*` RPC 收集和导出；HTTP 不再公开控制接口。Developer ID 签名、Apple 公证、Gatekeeper、真实 updater 下载/安装、packaged crash 写入与双架构干净机验收仍属于后续生产化范围。
 
 发布流水线失败时不得移动已发布标签。维护者只能从 `main` 手动触发 `release` 工作流并填写已经存在的版本标签；工作流固定检出 `refs/tags/<tag>`，再次校验 tag 与仓库版本后重建制品。SPDX 文件只描述生产依赖，开发依赖继续由固定的 npm/Cargo 许可证清单覆盖，从而避免文档工具的 peer 约束污染运行时 SBOM。
 

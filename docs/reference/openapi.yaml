@@ -1,9 +1,9 @@
 openapi: 3.1.0
 info:
-  title: Muniu API
-  version: 0.1.1
-servers:
-  - url: http://127.0.0.1:7318
+  title: Muniu internal control adapter
+  version: 0.2.0
+  description: Implementation mapping consumed by muniu/* RPC handlers; not a
+    public HTTP control API.
 paths:
   /healthz:
     get:
@@ -35,6 +35,13 @@ paths:
   /v1/agent-sessions/{id}/approvals/{approvalId}:
     post:
       operationId: post__v1_agent_sessions_id_approvals_approvalId_
+      responses:
+        "200":
+          description: Successful response
+      x-muniu-source: apps/api/src/agentSessionRoutes.ts
+  /v1/agent-sessions/{id}/attachments:
+    post:
+      operationId: post__v1_agent_sessions_id_attachments
       responses:
         "200":
           description: Successful response

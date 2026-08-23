@@ -46,6 +46,38 @@ class MemoryObjectStore {
 }
 
 test(
+  "PostgreSQL migration initializes V3 tables when no legacy Agent tables exist",
+  { skip: !connectionString },
+  async (t) => {
+    const admin = new Pool({ connectionString, max: 1 });
+    const schema = `mn_v3_empty_${randomUUID().replaceAll("-", "")}`;
+    await admin.query(`CREATE SCHEMA ${schema}`);
+    const pool = new Pool({ connectionString, max: 1, options: `-c search_path=${schema}` });
+    t.after(async () => {
+      await pool.end();
+      await admin.query(`DROP SCHEMA ${schema} CASCADE`);
+      await admin.end();
+    });
+
+    const job = new EnterpriseAgentV3MigrationJob(new PostgresS3AgentV3MigrationBackend({
+      pool,
+      objectStore: new MemoryObjectStore() as unknown as S3CompatibleArtifactStore,
+      objectPrefix: "migration-empty-test"
+    }));
+    const applied = await job.apply();
+    assert.equal(applied.threadCount, 0);
+    assert.equal(applied.eventCount, 0);
+    const counts = await pool.query<{ migrations: string; events: string; threads: string }>(`
+      SELECT
+        (SELECT count(*)::text FROM mn_agent_migrations_v3) AS migrations,
+        (SELECT count(*)::text FROM mn_agent_events_v3) AS events,
+        (SELECT count(*)::text FROM mn_agent_threads_v3) AS threads
+    `);
+    assert.deepEqual(counts.rows, [{ migrations: "1", events: "0", threads: "0" }]);
+  }
+);
+
+test(
   "PostgreSQL and S3 migration atomically activates V3 indexes and keeps rollback facts",
   { skip: !connectionString },
   async (t) => {

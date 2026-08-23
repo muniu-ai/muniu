@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Muniu v0.1.x is a Developer Preview. Only the latest released v0.1 patch is
+Muniu v0.2.x is a Developer Preview. Only the latest released v0.2 patch is
 eligible for security fixes. Source snapshots and unreleased branches receive
 no security support commitment.
 
@@ -46,7 +46,7 @@ response or remediation SLA for the Developer Preview.
 AgentHost cancellation is cooperative. Disposal refuses new runs, aborts every
 active run, and retains model adapters, tools, and session writers until those
 runs settle. An adapter or tool that does not observe its supplied AbortSignal
-can therefore delay disposal indefinitely; v0.1 does not forcibly terminate
+can therefore delay disposal indefinitely; v0.2 does not forcibly terminate
 in-process third-party code.
 
 Builtin Agent session headers and JSONL events persist only the fixed protected
@@ -77,7 +77,7 @@ recovery can append that unknown result; it must not close away the pending
 effect. Missing policy bindings or run/candidate metadata fail closed before
 the handler is invoked.
 
-In v0.1 the governance and Harness policy digests supplied to this gate are
+In v0.2 the governance and Harness policy digests supplied to this gate are
 synchronously snapshotted caller inputs. Their keyed commitment provides an
 opaque correlation for the current process; it is not evidence that the
 control plane authenticated the policy provenance. Control-plane provenance
@@ -133,7 +133,7 @@ the same event inode, or turn a path replacement into an out-of-workspace
 append. This is a Developer Preview boundary, not protection against a
 malicious process already running as the same operating-system user.
 
-Signed and notarized desktop binaries are not published in v0.1.1. The desktop
+Signed and notarized desktop binaries are not published in v0.2.0. The desktop
 updater remains disabled until a separately reviewed signed release channel
 exists.
 

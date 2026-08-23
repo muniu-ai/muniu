@@ -1,6 +1,6 @@
 {
   "name": "@mn/config-manager",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
   "license": "Apache-2.0",
   "repository": "https://github.com/muniu-ai/muniu",
@@ -20,7 +20,7 @@
   },
   "dependencies": {
     "@iarna/toml": "^2.2.5",
-    "@mn/provider-catalog": "0.1.1",
+    "@mn/provider-catalog": "0.2.0",
     "toml-eslint-parser": "^1.0.3"
   }
 }

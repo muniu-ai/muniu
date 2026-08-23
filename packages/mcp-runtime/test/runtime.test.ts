@@ -5,11 +5,19 @@ import { createServer } from "node:http";
 import test from "node:test";
 
 import {
+  DefaultMcpTransportFactory,
   McpRuntime,
   type McpConnection,
   type McpConnectionInput,
   type McpTransportFactory
 } from "../src/index.js";
+
+function httpInput(url = "https://mcp.example.test/rpc"): McpConnectionInput {
+  return {
+    config: { name: "http-test", transport: "streamableHttp", url, required: true },
+    secretEnv: {}
+  };
+}
 
 class FakeConnection implements McpConnection {
   readonly calls: Array<{ method: string; params: unknown }> = [];
@@ -271,4 +279,87 @@ test("default Streamable HTTP transport accepts SSE and sends vault OAuth only i
   });
   assert.deepEqual(authorizations, ["Bearer live-token", "Bearer live-token", "Bearer live-token"]);
   await runtime.dispose();
+});
+
+test("default transports fail closed on unsafe endpoints and unavailable stdio commands", async () => {
+  const fetchImplementation = (async () => new Response("{}")) as typeof globalThis.fetch;
+  const factory = new DefaultMcpTransportFactory({
+    allowedStdioCommands: ["/definitely/missing/mcp-server"],
+    fetch: fetchImplementation
+  });
+
+  await assert.rejects(
+    () => factory.connect(httpInput("http://mcp.example.test/rpc")),
+    /HTTPS or loopback HTTP/iu
+  );
+  await assert.rejects(
+    () => factory.connect(httpInput("https://user:password@mcp.example.test/rpc#secret")),
+    /credentials or fragment/iu
+  );
+  await assert.rejects(
+    () => factory.connect({
+      config: { name: "stdio-denied", transport: "stdio", command: "denied", args: [], required: true },
+      secretEnv: {}
+    }),
+    /allowlisted/iu
+  );
+  await assert.rejects(
+    () => factory.connect({
+      config: {
+        name: "stdio-missing",
+        transport: "stdio",
+        command: "/definitely/missing/mcp-server",
+        args: [],
+        required: true
+      },
+      secretEnv: {}
+    }),
+    /failed to start/iu
+  );
+});
+
+test("Streamable HTTP transport rejects status, framing and JSON-RPC failures", async () => {
+  const cases: Array<{ response: Response; error: RegExp }> = [
+    { response: new Response("unavailable", { status: 503 }), error: /request failed/iu },
+    {
+      response: new Response("", {
+        status: 200,
+        headers: { "content-length": String(16 * 1024 * 1024 + 1) }
+      }),
+      error: /frame limit/iu
+    },
+    {
+      response: new Response("event: ping\n\n", {
+        status: 200,
+        headers: { "content-type": "text/event-stream" }
+      }),
+      error: /no response/iu
+    },
+    {
+      response: Response.json({ jsonrpc: "2.0", id: 2, result: {} }),
+      error: /invalid JSON-RPC response/iu
+    },
+    {
+      response: Response.json({ jsonrpc: "2.0", id: 1, error: { code: -32_000, message: "private" } }),
+      error: /request failed/iu
+    }
+  ];
+
+  for (const entry of cases) {
+    const factory = new DefaultMcpTransportFactory({
+      allowedStdioCommands: [],
+      fetch: (async () => entry.response) as typeof globalThis.fetch
+    });
+    const connection = await factory.connect(httpInput());
+    await assert.rejects(() => connection.request("tools/list", {}), entry.error);
+  }
+
+  const factory = new DefaultMcpTransportFactory({
+    allowedStdioCommands: [],
+    fetch: (async () => Response.json({ jsonrpc: "2.0", id: 1, result: {} })) as typeof globalThis.fetch
+  });
+  const closed = await factory.connect(httpInput());
+  await closed.close();
+  await assert.rejects(() => closed.request("tools/list", {}), /closed/iu);
+  await assert.rejects(() => closed.notify("notifications/initialized", {}), /closed/iu);
 });

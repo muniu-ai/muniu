@@ -1,11 +1,14 @@
 image:
   repository: ghcr.io/muniu-ai/muniu
-  tag: 0.1.1
+  tag: 0.2.0
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
+
+migration:
+  appServerV3Mode: apply
 
 serviceAccount:
   create: true
@@ -145,7 +148,7 @@ standardPackTrust:
 
 sandbox:
   driver: kubernetes
-  image: ghcr.io/muniu-ai/muniu-sandbox:0.1.1
+  image: ghcr.io/muniu-ai/muniu-sandbox:0.2.0
   imageDigest: ""
   attestationExistingSecret: muniu-sandbox-attestation
   attestationKey: key

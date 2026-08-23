@@ -65,6 +65,7 @@ const deepSeekHarnessApprovedCommits = new Set([
 ]);
 const agentCoverageCommand = [
   "npm run test:coverage -w @mn/agent-protocol",
+  "npm run test:coverage -w @mn/mcp-runtime",
   "npm run test:coverage -w @mn/agent-session",
   "npm run test:coverage -w @mn/agent-llm",
   "npm run test:coverage -w @mn/agent-tools",
@@ -73,6 +74,7 @@ const agentCoverageCommand = [
 ].join(" && ");
 const agentWorkspaces = [
   "agent-protocol",
+  "mcp-runtime",
   "agent-session",
   "agent-llm",
   "agent-tools",
@@ -130,7 +132,7 @@ export function findUnpinnedWorkflowActions(files) {
 export function validateAgentCoverageGate({ rootPackage, workspacePackages, ciWorkflow }) {
   const failures = [];
   if (rootPackage?.scripts?.["test:coverage:agent"] !== agentCoverageCommand) {
-    failures.push("test:coverage:agent must serially run all six agent package coverage suites");
+    failures.push("test:coverage:agent must serially run all seven agent package coverage suites");
   }
   for (const workspace of agentWorkspaces) {
     if (workspacePackages?.[workspace]?.scripts?.["test:coverage"] !== agentPackageCoverageCommand) {

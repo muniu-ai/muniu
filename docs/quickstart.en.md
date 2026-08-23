@@ -5,7 +5,7 @@ Install Node.js 22.19.x, npm 11.10.1, and Git, then run:
 ```bash
 npm ci
 npm run build
-npm run dev:api
+node apps/cli/dist/index.js app-server --transport ws --port 0
 ```
 
 In another terminal:
@@ -18,4 +18,6 @@ node apps/cli/dist/index.js agent run \
   --prompt "Add one focused test to this repository" --cwd .
 ```
 
-The command creates an isolated session and binds model, tools, approvals, commands, Gates, and evidence to one execution record. It does not discover Claude/Codex CLI by default. Local state lives in `~/.muniu`.
+The app-server listens on loopback and writes connection metadata to `~/.muniu/app-server.json`. `agent run` uses the TypeScript SDK to create Thread/Turn/Item facts and binds model, tools, approvals, commands, Gates, and evidence to one chain. It does not discover Claude/Codex CLI by default.
+
+Read the [v0.2.0 migration guide](migration-v0.2.md) before upgrading existing state.

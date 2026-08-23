@@ -81,7 +81,9 @@ export function resolveApiUrl(): string {
 }
 
 export function configureApiUrl(apiUrl: string): void {
-  configuredApiUrl = apiUrl.trim().replace(/\/+$/, "") || defaultApiUrl;
+  const nextApiUrl = apiUrl.trim().replace(/\/+$/, "") || defaultApiUrl;
+  if (nextApiUrl === configuredApiUrl) return;
+  configuredApiUrl = nextApiUrl;
   void resetDesktopAppServerClient();
 }
 

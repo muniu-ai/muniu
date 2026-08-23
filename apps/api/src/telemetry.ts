@@ -90,7 +90,7 @@ export class OtlpHttpTelemetry {
           attributes: [attribute("service.name", this.serviceName)]
         },
         scopeSpans: [{
-          scope: { name: "@mn/api", version: "0.1.1" },
+          scope: { name: "@mn/api", version: "0.2.0" },
           spans: [{
             traceId: span.traceId,
             spanId: span.spanId,

@@ -1,6 +1,6 @@
 {
   "name": "muniu",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
   "license": "Apache-2.0",
   "repository": "https://github.com/muniu-ai/muniu",
@@ -49,6 +49,9 @@
     "verify:app-server-schema": "npm run verify:schema -w @mn/app-server-protocol",
     "verify:rpc-coverage": "npm run verify:control-methods -w @mn/app-server-protocol",
     "verify:migration-v3": "npm run verify:migration-v3 -w @mn/agent-protocol && npm run verify:migration-v3 -w @mn/agent-session && npm run verify:migration-v3 -w @mn/api && npm run verify:migration-v3 -w @mn/cli",
+    "verify:sdk-e2e": "npm run test:e2e -w @mn/sdk",
+    "verify:gateway-e2e": "npm run test:e2e -w @mn/app-server && npm run test:gateway-e2e -w @mn/api",
+    "verify:desktop-e2e": "npm run verify:thread-workspace-ui -w @mn/desktop-mac",
     "verify:licenses": "node scripts/generate-npm-license-inventory.mjs --check && node scripts/verify-third-party-licenses.mjs",
     "generate:npm-license-inventory": "node scripts/generate-npm-license-inventory.mjs",
     "generate:cargo-license-inventory": "node scripts/generate-cargo-license-inventory.mjs",

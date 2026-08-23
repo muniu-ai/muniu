@@ -7,10 +7,12 @@ mn - enterprise AI coding agent control plane
 
 Commands:
   mn init
+  mn app-server [--transport stdio|unix|ws] [--socket path] [--port 0] [--root ~/.muniu]
   mn agent run --provider <id> --model <id> --prompt "..." [--cwd .]
   mn agent chat --provider <id> --model <id> [--prompt "..."] [--cwd .]
   mn agent resume <session-id> --prompt "..."
   mn agent sessions [--limit 100]
+  mn migrate app-server-v3 [--root ~/.muniu/agent-service] [--dry-run|--apply|--rollback]
   mn plugin list
   mn plugin install <local-path|name@x.y.z>
   mn plugin remove <id|specifier>

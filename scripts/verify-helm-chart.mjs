@@ -49,6 +49,8 @@ if (production.includes("            - --mock\n")) {
 }
 for (const required of [
   "name: muniu-migrate",
+  "apps/api/dist/migrateAppServerV3.js",
+  "name: MN_APP_SERVER_V3_MIGRATION_MODE",
   'helm.sh/hook-weight: "-10"',
   "serviceAccountName: muniu-migrate",
   "name: muniu-candidate",

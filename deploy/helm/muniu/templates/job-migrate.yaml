@@ -1,3 +1,4 @@
+{{- if not (has .Values.migration.appServerV3Mode (list "dry-run" "apply" "rollback")) }}{{- fail "migration.appServerV3Mode must be dry-run, apply or rollback" }}{{- end }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -26,13 +27,28 @@ spec:
       serviceAccountName: {{ include "muniu.fullname" . }}-migrate
       automountServiceAccountToken: false
       securityContext: {{- toYaml .Values.securityContext | nindent 8 }}
-      containers:
-        - name: migrate
+      initContainers:
+        - name: migrate-control-state
           image: {{ include "muniu.image" . }}
           args: ["apps/api/dist/migrate.js"]
           securityContext: {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           env:
             - name: MN_POSTGRES_URL
               valueFrom: { secretKeyRef: { name: {{ .Values.postgres.existingSecret }}, key: {{ .Values.postgres.urlKey }} } }
+          volumeMounts: [{ name: tmp, mountPath: /tmp }]
+      containers:
+        - name: migrate-app-server-v3
+          image: {{ include "muniu.image" . }}
+          args: ["apps/api/dist/migrateAppServerV3.js"]
+          securityContext: {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          envFrom: [{ configMapRef: { name: {{ include "muniu.fullname" . }} } }]
+          env:
+            - { name: MN_APP_SERVER_V3_MIGRATION_MODE, value: {{ .Values.migration.appServerV3Mode | quote }} }
+            - name: MN_POSTGRES_URL
+              valueFrom: { secretKeyRef: { name: {{ .Values.postgres.existingSecret }}, key: {{ .Values.postgres.urlKey }} } }
+            - name: MN_ARTIFACT_S3_ACCESS_KEY_ID
+              valueFrom: { secretKeyRef: { name: {{ .Values.s3.existingSecret }}, key: {{ .Values.s3.accessKeyIdKey }} } }
+            - name: MN_ARTIFACT_S3_SECRET_ACCESS_KEY
+              valueFrom: { secretKeyRef: { name: {{ .Values.s3.existingSecret }}, key: {{ .Values.s3.secretAccessKeyKey }} } }
           volumeMounts: [{ name: tmp, mountPath: /tmp }]
       volumes: [{ name: tmp, emptyDir: {} }]

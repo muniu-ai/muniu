@@ -26,6 +26,12 @@ export const MUNIU_CONTROL_OPERATIONS = [
     "method": "muniu/approval/agentSessions/byId/approvals/byApprovalId/post"
   },
   {
+    "operationId": "post__v1_agent_sessions_id_attachments",
+    "path": "/v1/agent-sessions/{id}/attachments",
+    "verb": "post",
+    "method": "muniu/artifact/agentSessions/byId/attachments/post"
+  },
+  {
     "operationId": "post__v1_agent_sessions_id_cancel",
     "path": "/v1/agent-sessions/{id}/cancel",
     "verb": "post",

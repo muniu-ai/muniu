@@ -1,7 +1,13 @@
-# `@mn/app-server`
+# @mn/app-server
 
-Private app-server connection and local transport runtime for Muniu.
+JSON-RPC connection lifecycle, transports, handlers, notification persistence and enterprise gateway.
 
-The connection requires `initialize`, then the `initialized` notification. It validates requests and responses with `@mn/app-server-protocol`, persists notifications before delivery, and bounds each frame and pending queue to 16 MiB. The pending queue also has a 1,024-message limit.
+## Commands
 
-Local transports support stdio JSONL, owner-only Unix sockets, and loopback WebSocket listeners with random bearer tokens. Enterprise WSS authentication and routing are owned by the gateway package.
+```bash
+npm run build -w @mn/app-server
+npm run typecheck -w @mn/app-server
+npm run test -w @mn/app-server
+```
+
+This package is private and versioned with the Muniu monorepo.

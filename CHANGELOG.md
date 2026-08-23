@@ -6,6 +6,37 @@ during the Developer Preview.
 
 ## Unreleased
 
+## 0.2.0 - 2026-08-23
+
+### Added
+
+- JSON-RPC app-server v2 protocol, stdio/Unix socket/WebSocket transports, an
+  OIDC-authenticated enterprise WSS gateway, and the private TypeScript SDK.
+- Durable `AgentEventV3` Thread/Turn/Item facts, context compaction, structured
+  output, attachments, resumable approvals, MCP runtime, and multi-agent graphs.
+- SQLite and PostgreSQL/S3 migration tools with immutable archives, digest
+  mapping, dry-run, atomic activation, and write-protected rollback.
+- Desktop thread timeline, approval center, execution inspectors, sub-agent
+  graph, evidence export, and reconnect recovery verification.
+
+### Changed
+
+- CLI, Worker coordination, and Desktop control traffic now use `@mn/sdk` and
+  one app-server capability contract.
+- OpenAI Codex compatibility is pinned to commit
+  `99660ab3c7b861c916e467581fa9b8723504d66b` and limited to the declared stable
+  method and field subset.
+
+### Removed
+
+- Public control REST/SSE routes, legacy control DTOs, and silent compatibility
+  for v0.1 clients. HTTP remains only for operations and controlled content.
+
+### Migration
+
+- Stop all writers and follow `docs/migration-v0.2.md`. After the first V3
+  write, rollback requires restoring PostgreSQL, S3, and local state together.
+
 ## 0.1.1 - 2026-08-20
 
 ### Added
