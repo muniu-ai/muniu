@@ -12577,6 +12577,7 @@
       "muniu/run/agentSessions/post",
       "muniu/run/agentSessions/byId/get",
       "muniu/approval/agentSessions/byId/approvals/byApprovalId/post",
+      "muniu/artifact/agentSessions/byId/attachments/post",
       "muniu/run/agentSessions/byId/cancel/post",
       "muniu/run/agentSessions/byId/close/post",
       "muniu/run/agentSessions/byId/messages/post",

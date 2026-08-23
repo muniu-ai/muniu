@@ -1,6 +1,6 @@
 # Contributing to Muniu
 
-Thank you for helping improve Muniu. v0.1.x is a Developer Preview, so public
+Thank you for helping improve Muniu. v0.2.x is a Developer Preview, so public
 interfaces may change with an explicit changelog entry.
 
 ## Before contributing

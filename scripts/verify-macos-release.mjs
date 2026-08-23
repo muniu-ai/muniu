@@ -28,6 +28,8 @@ const signingPreflightPath = path.join(rootDir, "scripts/preflight-macos-signing
 const daemonSidecarScriptPath = path.join(rootDir, "scripts/build-daemon-sidecar.mjs");
 const packagedAppVerifierPath = path.join(rootDir, "scripts/verify-packaged-macos-app.mjs");
 const apiSidecarPath = path.join(rootDir, "apps/api/src/sidecar.ts");
+const desktopApiPath = path.join(rootDir, "apps/desktop-mac/src/api.ts");
+const desktopAppServerPath = path.join(rootDir, "apps/desktop-mac/src/app-server.ts");
 
 function readJson(filePath) {
   return JSON.parse(readFileSync(filePath, "utf8"));
@@ -69,6 +71,9 @@ const signingPreflight = readFileSync(signingPreflightPath, "utf8");
 const daemonSidecarScript = readFileSync(daemonSidecarScriptPath, "utf8");
 const packagedAppVerifier = readFileSync(packagedAppVerifierPath, "utf8");
 const apiSidecar = readFileSync(apiSidecarPath, "utf8");
+const desktopApi = readFileSync(desktopApiPath, "utf8");
+const desktopAppServer = readFileSync(desktopAppServerPath, "utf8");
+const desktopAppSource = readFileSync(path.join(rootDir, "apps/desktop-mac/src/App.tsx"), "utf8");
 const requiredTauriIcons = [
   tauriIconSourcePath,
   path.join(tauriIconDir, "icon.png"),
@@ -101,13 +106,13 @@ assertIncludes(cask, 'sha256 "00000000000000000000000000000000000000000000000000
 assertMatch(cask, /url "https:\/\/github\.com\/[^"]+\/releases\/download\/v#\{version\}\/Muniu_#\{version\}_universal\.dmg"/, "Homebrew cask URL");
 
 if (tauriConfig.bundle?.createUpdaterArtifacts !== false) {
-  throw new Error("Tauri bundle.createUpdaterArtifacts must be false for v0.1.x");
+  throw new Error("Tauri bundle.createUpdaterArtifacts must be false for v0.2.x");
 }
 if (tauriConfig.plugins?.updater !== undefined) {
-  throw new Error("Tauri plugins.updater must be absent for v0.1.x");
+  throw new Error("Tauri plugins.updater must be absent for v0.2.x");
 }
 if (desktopPackage.dependencies?.["@tauri-apps/plugin-updater"] !== undefined) {
-  throw new Error("desktop updater JS dependency must be absent for v0.1.x");
+  throw new Error("desktop updater JS dependency must be absent for v0.2.x");
 }
 assertIncludes(desktopPackage.dependencies?.["@tauri-apps/plugin-process"] ?? "", "^2.", "desktop process JS dependency");
 assertIncludes(desktopPackage.scripts?.["tauri:build"] ?? "", "scripts/build-macos-release.mjs", "desktop release script");
@@ -127,7 +132,7 @@ assertIncludes(macReleaseScript, "MNIU_MACOS_NOTARIZE=1 requires MNIU_MACOS_SIGN
 assertIncludes(macReleaseScript, "notarytool", "macOS headless release script");
 assertIncludes(macReleaseScript, "stapler", "macOS headless release script");
 for (const unexpected of ["updaterArchive", "generate-macos-updater-manifest", "TAURI_SIGNING_PRIVATE_KEY"]) {
-  assertExcludes(macReleaseScript, unexpected, "macOS v0.1 release script");
+  assertExcludes(macReleaseScript, unexpected, "macOS v0.2 release script");
 }
 assertIncludes(macReleaseScript, "ditto", "macOS ZIP release script");
 assertIncludes(macReleaseScript, "CFBundleExecutable", "macOS artifact executable lookup");
@@ -152,10 +157,15 @@ assertIncludes(tauriLib, "MN_RUNTIME_BASE_PATH", "desktop managed daemon runtime
 assertIncludes(tauriLib, "MN_RUNTIME_PROFILE_PATH", "desktop managed daemon runtime profile");
 assertIncludes(tauriLib, "ExitRequested", "desktop managed daemon early shutdown");
 assertIncludes(tauriLib, "tray-provider-preview", "desktop tray provider preview event");
-assertIncludes(tauriLib, '"dryRun": true', "desktop tray provider preview request");
-assertIncludes(tauriLib, "refresh_tray_providers", "desktop dynamic tray providers");
+assertIncludes(desktopApi, "controlRequestForHttp", "desktop control RPC adapter");
+assertIncludes(desktopApi, ".callControl(request.method, request.params)", "desktop control RPC dispatch");
+assertIncludes(desktopApi, "dryRun = true", "desktop provider preview request");
+assertIncludes(desktopAppServer, "MuniuClient", "desktop app-server client");
+assertIncludes(tauriLib, "fn update_tray_state", "desktop dynamic tray providers");
+assertIncludes(desktopAppSource, 'invoke("update_tray_state"', "desktop dynamic tray refresh");
 assertIncludes(tauriLib, '"toggle_proxy"', "desktop tray proxy control");
-assertIncludes(tauriLib, '"tray-proxy-changed"', "desktop tray proxy status event");
+assertIncludes(tauriLib, '"tray-proxy-toggle-requested"', "desktop tray proxy request event");
+assertIncludes(desktopAppSource, '"tray-proxy-changed"', "desktop tray proxy status event");
 assertIncludes(tauriConfig.bundle?.externalBin?.join(",") ?? "", "binaries/mn-api", "Tauri daemon externalBin");
 assertIncludes(
   JSON.stringify(tauriConfig.bundle?.resources ?? {}),
@@ -247,9 +257,8 @@ if (tauriCapabilities.permissions.some((permission) => JSON.stringify(permission
 if (!tauriCapabilities.permissions.includes("process:allow-restart")) {
   throw new Error("default desktop capability must allow process restart");
 }
-const desktopAppSource = readFileSync(path.join(rootDir, "apps/desktop-mac/src/App.tsx"), "utf8");
 for (const unexpected of ["@tauri-apps/plugin-updater", "checkForUpdate", "downloadAndInstall", "prepareDesktopUpdate", "updateBusy", "updateMessage", "检查更新"]) {
-  assertExcludes(desktopAppSource, unexpected, "desktop v0.1 runtime");
+  assertExcludes(desktopAppSource, unexpected, "desktop v0.2 runtime");
 }
 for (const schemaPath of tauriGeneratedSchemaPaths) {
   const schema = readFileSync(schemaPath, "utf8");
@@ -262,7 +271,7 @@ execFileSync("ruby", ["-c", caskPath], { stdio: "inherit" });
 for (const expected of [
   "# macOS 发布指南",
   "Homebrew cask",
-  "v0.1.1 Developer Preview 不包含运行时自动更新器",
+  "v0.2.0 Developer Preview 不包含运行时自动更新器",
   "Apple Developer 签名",
   "Apple 公证",
   "安装",
@@ -286,7 +295,7 @@ for (const expected of [
   "Developer ID Application",
   "notarytool store-credentials",
   "preflight:mac-signing",
-  "v0.1.1 Developer Preview 不包含运行时自动更新器",
+  "v0.2.0 Developer Preview 不包含运行时自动更新器",
   "codesign --verify",
   "stapler validate",
   "spctl --assess",
@@ -306,8 +315,8 @@ assertExcludes(signingPreflight, "TAURI_SIGNING_PRIVATE_KEY", "macOS signing pre
 assertExcludes(packagedAppVerifier, "updater", "packaged app verifier");
 
 for (const [document, label] of [
-  [readme, "README v0.1 release scope"],
-  [technicalDesign, "technical design v0.1 release scope"],
+  [readme, "README v0.2 release scope"],
+  [technicalDesign, "technical design v0.2 release scope"],
 ]) {
   for (const obsoleteClaim of [
     "版本化 updater archive",
@@ -318,8 +327,8 @@ for (const [document, label] of [
     assertExcludes(document, obsoleteClaim, label);
   }
 }
-assertIncludes(readme, "v0.1.1 does not publish or enable a desktop runtime updater", "README v0.1 release scope");
-assertIncludes(technicalDesign, "v0.1.1 不发布或启用桌面运行时 updater", "technical design v0.1 release scope");
+assertIncludes(readme, "No signing, notarization, or updater release", "README v0.2 release scope");
+assertIncludes(technicalDesign, "v0.2.0 不发布或启用桌面运行时 updater", "technical design v0.2 release scope");
 
 const fakePublicPreflight = spawnSync(
   process.execPath,

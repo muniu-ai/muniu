@@ -85,7 +85,16 @@ export function validateReleaseContract(input, options = {}) {
   }
 
   const ciWorkflow = input.ciWorkflow ?? "";
-  requireText(failures, ciWorkflow, "npm run verify:release", "ordinary CI release contract gate");
+  const ciRequirements = [
+    ["npm run verify:release", "release contract gate"],
+    ["npm run verify:rpc-coverage", "RPC coverage gate"],
+    ["npm run verify:sdk-e2e", "SDK E2E gate"],
+    ["npm run verify:gateway-e2e", "gateway E2E gate"],
+    ["npm run verify:desktop-e2e", "Desktop E2E gate"]
+  ];
+  for (const [expected, label] of ciRequirements) {
+    requireText(failures, ciWorkflow, expected, `ordinary CI ${label}`);
+  }
 
   const workflow = input.releaseWorkflow ?? "";
   if (!/tags:\s*\[\s*["']v\*["']\s*\]/u.test(workflow)) {
@@ -103,6 +112,10 @@ export function validateReleaseContract(input, options = {}) {
     ["MN_TEST_POSTGRES_URL:", "PostgreSQL integration environment"],
     ["apps/api/dist-test/test/*Postgres.test.js", "PostgreSQL integration suites"],
     ['npm run verify:release -- --tag "${RELEASE_TAG}"', "tag/version contract gate"],
+    ["npm run verify:rpc-coverage", "RPC coverage gate"],
+    ["npm run verify:sdk-e2e", "SDK E2E gate"],
+    ["npm run verify:gateway-e2e", "gateway E2E gate"],
+    ["npm run verify:desktop-e2e", "Desktop E2E gate"],
     ["git archive --format=tar.gz", "source archive"],
     ["npm sbom --sbom-format spdx --omit=dev", "production dependency SBOM"],
     ["THIRD_PARTY_NPM_LICENSES.json", "npm license inventory"],
@@ -133,6 +146,26 @@ export function validateReleaseContract(input, options = {}) {
   }
   if (/node22-macos-(?:arm64|x64)\.tar\.gz/u.test(technicalDesign)) {
     failures.push(`technical design must not claim macOS portable archives are public v${String(version)} artifacts`);
+  }
+
+  const compatibilityMatrix = input.compatibilityMatrix ?? "";
+  for (const expected of [
+    "99660ab3c7b861c916e467581fa9b8723504d66b",
+    "app-server-v2",
+    "core-stable-subset",
+    "不宣称完整 Codex app-server 兼容"
+  ]) {
+    requireText(failures, compatibilityMatrix, expected, "compatibility matrix");
+  }
+
+  const migrationGuide = input.migrationGuide ?? "";
+  for (const expected of [
+    "mn migrate app-server-v3 --dry-run",
+    "mn migrate app-server-v3 --apply",
+    "首次 V3 写入",
+    "恢复整套备份"
+  ]) {
+    requireText(failures, migrationGuide, expected, "migration guide");
   }
 
   return failures;

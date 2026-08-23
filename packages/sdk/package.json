@@ -1,6 +1,6 @@
 {
   "name": "@mn/sdk",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
   "license": "Apache-2.0",
   "repository": "https://github.com/muniu-ai/muniu",
@@ -8,22 +8,29 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
-    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
-    "./browser": { "types": "./dist/browser.d.ts", "import": "./dist/browser.js" }
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./browser": {
+      "types": "./dist/browser.d.ts",
+      "import": "./dist/browser.js"
+    }
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsc -p tsconfig.test.json && node --test dist-test/test/**/*.test.js"
+    "test": "tsc -p tsconfig.test.json && node --test dist-test/test/**/*.test.js",
+    "test:e2e": "tsc -p tsconfig.test.json && node --test dist-test/test/client.test.js dist-test/test/browser.test.js"
   },
   "dependencies": {
-    "@mn/app-server-protocol": "0.1.1",
+    "@mn/app-server-protocol": "0.2.0",
     "ws": "8.21.3"
   },
   "devDependencies": {
-    "@mn/agent-kernel": "0.1.1",
-    "@mn/agent-session": "0.1.1",
-    "@mn/app-server": "0.1.1",
+    "@mn/agent-kernel": "0.2.0",
+    "@mn/agent-session": "0.2.0",
+    "@mn/app-server": "0.2.0",
     "@types/ws": "8.18.1"
   }
 }

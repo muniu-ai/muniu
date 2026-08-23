@@ -104,6 +104,22 @@ test("enterprise migration dry-run is read-only and apply activates only after i
   assert.deepEqual(backend.writes.map((entry) => entry.event.source?.schemaVersion), [2, 2]);
 });
 
+test("enterprise migration initializes an auditable empty V3 store on a fresh install", async () => {
+  const backend = new MemoryMigrationBackend([]);
+  const job = new EnterpriseAgentV3MigrationJob(backend);
+
+  const dryRun = await job.inspect();
+  assert.equal(dryRun.threadCount, 0);
+  assert.equal(dryRun.eventCount, 0);
+
+  const applied = await job.apply();
+  assert.equal(applied.mode, "applied");
+  assert.equal(applied.oldRootDigest, dryRun.oldRootDigest);
+  assert.equal(applied.newRootDigest, dryRun.newRootDigest);
+  assert.equal(backend.writes.length, 0);
+  assert.equal(backend.activation?.threads.length, 0);
+});
+
 test("enterprise rollback refuses a target with any post-migration V3 write", async () => {
   const backend = new MemoryMigrationBackend([sourceThread()]);
   const job = new EnterpriseAgentV3MigrationJob(backend);

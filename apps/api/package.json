@@ -1,6 +1,6 @@
 {
   "name": "@mn/api",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
   "license": "Apache-2.0",
   "repository": "https://github.com/muniu-ai/muniu",
@@ -8,15 +8,25 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
-    "./server": { "types": "./dist/server.d.ts", "import": "./dist/server.js" },
-    "./agent-session-service": { "types": "./dist/agentSessionService.d.ts", "import": "./dist/agentSessionService.js" },
-    "./app-server-runtime": { "types": "./dist/localAppServerRuntime.d.ts", "import": "./dist/localAppServerRuntime.js" }
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js"
+    },
+    "./agent-session-service": {
+      "types": "./dist/agentSessionService.d.ts",
+      "import": "./dist/agentSessionService.js"
+    },
+    "./app-server-runtime": {
+      "types": "./dist/localAppServerRuntime.d.ts",
+      "import": "./dist/localAppServerRuntime.js"
+    }
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsc -p tsconfig.test.json && node --test dist-test/test/**/*.test.js",
     "test:coverage:agent-session": "tsc -p tsconfig.test.json && node --test --experimental-test-coverage --test-coverage-include=dist-test/src/agentSession*.js --test-coverage-include=dist-test/src/agentApprovalCoordinator*.js --test-coverage-include=dist-test/src/agentRuntimeFactory*.js --test-coverage-lines=70 --test-coverage-functions=70 --test-coverage-branches=70 dist-test/test/agentSessionRoutes.test.js dist-test/test/agentRuntimeFactory.test.js dist-test/test/agentProductionSession.test.js",
+    "test:gateway-e2e": "tsc -p tsconfig.test.json && node --test dist-test/test/appServerCutover.test.js dist-test/test/enterpriseAppServerGateway.test.js dist-test/test/localAppServerRuntime.test.js",
     "verify:migration-v3": "tsc -p tsconfig.test.json && node --test dist-test/test/enterpriseAgentV3Migration.test.js",
     "migrate:app-server-v3": "node dist/migrateAppServerV3.js",
     "dev": "npm run build && node dist/index.js",
@@ -24,36 +34,36 @@
   },
   "dependencies": {
     "@kubernetes/client-node": "1.4.0",
-    "@mn/agent-llm": "0.1.1",
-    "@mn/agent-host": "0.1.1",
-    "@mn/agent-protocol": "0.1.1",
-    "@mn/agent-session": "0.1.1",
-    "@mn/agent-tools": "0.1.1",
-    "@mn/app-server": "0.1.1",
-    "@mn/app-server-protocol": "0.1.1",
-    "@mn/config-manager": "0.1.1",
-    "@mn/connectors": "0.1.1",
-    "@mn/core": "0.1.1",
-    "@mn/evidence": "0.1.1",
-    "@mn/executors": "0.1.1",
-    "@mn/extensions": "0.1.1",
-    "@mn/governance": "0.1.1",
-    "@mn/harness": "0.1.1",
-    "@mn/local-proxy": "0.1.1",
-    "@mn/loop": "0.1.1",
-    "@mn/provider-catalog": "0.1.1",
-    "@mn/runtime": "0.1.1",
-    "@mn/specs": "0.1.1",
-    "@mn/store": "0.1.1",
-    "@mn/usage": "0.1.1",
-    "@mn/worker": "0.1.1",
+    "@mn/agent-llm": "0.2.0",
+    "@mn/agent-host": "0.2.0",
+    "@mn/agent-protocol": "0.2.0",
+    "@mn/agent-session": "0.2.0",
+    "@mn/agent-tools": "0.2.0",
+    "@mn/app-server": "0.2.0",
+    "@mn/app-server-protocol": "0.2.0",
+    "@mn/config-manager": "0.2.0",
+    "@mn/connectors": "0.2.0",
+    "@mn/core": "0.2.0",
+    "@mn/evidence": "0.2.0",
+    "@mn/executors": "0.2.0",
+    "@mn/extensions": "0.2.0",
+    "@mn/governance": "0.2.0",
+    "@mn/harness": "0.2.0",
+    "@mn/local-proxy": "0.2.0",
+    "@mn/loop": "0.2.0",
+    "@mn/provider-catalog": "0.2.0",
+    "@mn/runtime": "0.2.0",
+    "@mn/specs": "0.2.0",
+    "@mn/store": "0.2.0",
+    "@mn/usage": "0.2.0",
+    "@mn/worker": "0.2.0",
     "@napi-rs/image": "1.14.0",
     "fastify": "^5.12.0",
     "pg": "^8.22.0",
     "zod": "^3.24.1"
   },
   "devDependencies": {
-    "@mn/sdk": "0.1.1",
+    "@mn/sdk": "0.2.0",
     "@types/pg": "^8.20.0"
   }
 }

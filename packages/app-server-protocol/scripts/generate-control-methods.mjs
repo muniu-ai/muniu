@@ -15,7 +15,7 @@ const generatedPath = path.join(packageDirectory, "src/control-methods.generated
 const DOMAIN_RULES = [
   ["modelCatalog", /\/model-catalog(?:\/|$)/u],
   ["approval", /\/(?:approvals|approve)(?:\/|$)/u],
-  ["artifact", /\/artifacts(?:\/|$)/u],
+  ["artifact", /\/(?:artifacts|attachments)(?:\/|$)/u],
   ["runJob", /^\/v1\/run-jobs(?:\/|$)/u],
   ["project", /^\/v1\/projects(?:\/|$)/u],
   ["task", /^\/v1\/tasks(?:\/|$)/u],
@@ -83,7 +83,7 @@ async function operationFixture() {
 
 const operations = await operationFixture();
 const mapping = operations.map((operation) => ({ ...operation, method: methodFor(operation) }));
-if (operations.length !== 148) throw new Error(`Expected 148 control operations, received ${operations.length}`);
+if (operations.length !== 149) throw new Error(`Expected 149 control operations, received ${operations.length}`);
 if (new Set(mapping.map((entry) => entry.operationId)).size !== mapping.length) throw new Error("Duplicate OpenAPI operationId");
 if (new Set(mapping.map((entry) => entry.method)).size !== mapping.length) throw new Error("Duplicate muniu RPC method");
 

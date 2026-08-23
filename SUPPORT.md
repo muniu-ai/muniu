@@ -1,6 +1,6 @@
 # Support
 
-Muniu v0.1.x is a community-supported Developer Preview with no warranty,
+Muniu v0.2.x is a community-supported Developer Preview with no warranty,
 service-level agreement, or guaranteed response time.
 
 - Use GitHub Discussions for usage questions when enabled.

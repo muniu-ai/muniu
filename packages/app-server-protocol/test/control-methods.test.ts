@@ -17,7 +17,7 @@ test("maps every legacy control operation to one unique namespaced RPC method", 
     new URL("../../schema/legacy-openapi-operations.json", import.meta.url),
     "utf8"
   )) as Array<{ operationId: string }>;
-  assert.equal(fixture.length, 148);
+  assert.equal(fixture.length, 149);
   assert.equal(MUNIU_CONTROL_OPERATIONS.length, fixture.length);
   assert.equal(new Set(MUNIU_METHODS).size, fixture.length);
   assert.deepEqual(
@@ -25,6 +25,12 @@ test("maps every legacy control operation to one unique namespaced RPC method", 
     fixture.map((entry) => entry.operationId)
   );
   assert.ok(MUNIU_METHODS.every((method) => /^muniu\/(?:project|task|run|runJob|evidence|artifact|provider|modelCatalog|policy|approval|extension|skillRegistry|config|diagnostics)\//u.test(method)));
+});
+
+test("control RPC maps Agent attachment upload into the artifact domain", () => {
+  assert.ok(MUNIU_CONTROL_OPERATIONS.some((operation) =>
+    operation.operationId === "post__v1_agent_sessions_id_attachments"
+    && operation.method === "muniu/artifact/agentSessions/byId/attachments/post"));
 });
 
 test("resolves legacy HTTP paths to typed control RPC calls without static-route shadowing", () => {

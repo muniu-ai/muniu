@@ -1,7 +1,13 @@
-# `@mn/app-server-protocol`
+# @mn/app-server-protocol
 
-Private Zod schemas and inferred TypeScript types for Muniu's selected Codex app-server v2 stable subset.
+Strict app-server v2 schemas, generated JSON Schema and Muniu RPC catalog.
 
-`src/` is the source of truth. `npm run generate:schema -w @mn/app-server-protocol` deterministically writes the JSON Schema bundle and method catalog under `schema/`; `verify:schema` rejects drift. The compatibility baseline is OpenAI Codex commit `99660ab3c7b861c916e467581fa9b8723504d66b`.
+## Commands
 
-The package does not claim complete Codex app-server compatibility and does not expose experimental upstream methods or fields.
+```bash
+npm run build -w @mn/app-server-protocol
+npm run typecheck -w @mn/app-server-protocol
+npm run test -w @mn/app-server-protocol
+```
+
+This package is private and versioned with the Muniu monorepo.

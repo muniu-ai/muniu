@@ -2,6 +2,9 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
+import { isTauri } from "@tauri-apps/api/core";
+import { save as showSaveDialog } from "@tauri-apps/plugin-dialog";
+import { writeFile as writeTauriFile } from "@tauri-apps/plugin-fs";
 import type { JsonValue, Thread, ThreadItem, UserInput } from "@mn/app-server-protocol";
 
 import {
@@ -185,6 +188,43 @@ export function ThreadWorkspace() {
     setThread(await handle.read());
   }
 
+  async function exportEvidence(): Promise<void> {
+    if (!thread || evidence.length === 0) throw new Error("没有可导出的证据检查点");
+    const filename = `muniu-thread-${thread.id}-evidence.json`;
+    const payload = `${JSON.stringify({
+      schemaVersion: 1,
+      kind: "muniu-thread-evidence-export",
+      threadId: thread.id,
+      evidence: evidence.map(({ turnId, item }) => {
+        if (item.type !== "evidenceCheckpoint") throw new Error("证据投影类型无效");
+        return {
+          turnId,
+          itemId: item.id,
+          evidenceId: item.evidenceId,
+          digest: item.digest,
+          status: item.status
+        };
+      })
+    }, null, 2)}\n`;
+    if (isTauri()) {
+      const target = await showSaveDialog({
+        defaultPath: filename,
+        filters: [{ name: "JSON", extensions: ["json"] }]
+      });
+      if (target) await writeTauriFile(target, new TextEncoder().encode(payload));
+      return;
+    }
+    const url = URL.createObjectURL(new Blob([payload], { type: "application/json" }));
+    try {
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      link.click();
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+
   return (
     <section className="panel thread-workspace" id="threads" aria-label="Agent 线程工作区">
       <div className="panel-heading">
@@ -277,7 +317,11 @@ export function ThreadWorkspace() {
           <ThreadInspector title="子 Agent 图" empty="暂无子 Agent">
             {subAgents.map(({ item }) => <div className="thread-graph-node" key={item.id}>{thread?.id} → {itemSummary(item)}</div>)}
           </ThreadInspector>
-          <ThreadInspector title="证据" empty="暂无证据检查点">
+          <ThreadInspector
+            title="证据"
+            empty="暂无证据检查点"
+            action={<button className="text-button" type="button" disabled={evidence.length === 0} onClick={() => void perform(exportEvidence)}>导出证据</button>}
+          >
             {evidence.map(({ item }) => <pre key={item.id}>{itemSummary(item)}</pre>)}
           </ThreadInspector>
         </aside>
@@ -286,7 +330,10 @@ export function ThreadWorkspace() {
   );
 }
 
-function ThreadInspector({ title, empty, children }: { title: string; empty: string; children: ReactNode }) {
+function ThreadInspector({ title, empty, action, children }: { title: string; empty: string; action?: ReactNode; children: ReactNode }) {
   const content = Array.isArray(children) ? children.length > 0 : Boolean(children);
-  return <section className="thread-inspector-section"><h4>{title}</h4>{content ? children : <p>{empty}</p>}</section>;
+  return <section className="thread-inspector-section">
+    <header className="thread-inspector-heading"><h4>{title}</h4>{action}</header>
+    {content ? children : <p>{empty}</p>}
+  </section>;
 }

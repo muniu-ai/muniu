@@ -99,7 +99,10 @@ jobs:
       - run: npm run verify:release
       - run: npm run build
       - run: npm run verify:app-server-schema
+      - run: npm run verify:rpc-coverage
       - run: npm run verify:migration-v3
+      - run: npm run verify:sdk-e2e
+      - run: npm run verify:gateway-e2e
       - run: npm run typecheck
       - run: npm run docs:check
       - run: npm run docs:links
@@ -151,9 +154,11 @@ jobs:
       - name: Install pinned npm
         run: npm install --global npm@${NPM_VERSION}
       - run: npm ci
+      - run: npm run build
       - run: npm run verify:mac-release
       - run: npm run typecheck:desktop
       - run: npm run build:desktop
+      - run: npm run verify:desktop-e2e
       - name: Build and smoke-test ignored desktop sidecars
         run: npm run build:daemon-sidecar
       - run: cargo check --locked

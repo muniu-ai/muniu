@@ -45,7 +45,9 @@ const input = {
   chart: parseYaml(await readFile(path.join(rootDir, "deploy/helm/muniu/Chart.yaml"), "utf8")),
   ciWorkflow: await readFile(path.join(rootDir, ".github/workflows/ci.yml"), "utf8"),
   releaseWorkflow: await readFile(path.join(rootDir, ".github/workflows/release.yml"), "utf8"),
-  technicalDesign: await readFile(path.join(rootDir, "docs/TECHNICAL_DESIGN.md"), "utf8")
+  technicalDesign: await readFile(path.join(rootDir, "docs/TECHNICAL_DESIGN.md"), "utf8"),
+  compatibilityMatrix: await readFile(path.join(rootDir, "docs/compatibility-v0.2.md"), "utf8"),
+  migrationGuide: await readFile(path.join(rootDir, "docs/migration-v0.2.md"), "utf8")
 };
 
 const failures = validateReleaseContract(input, options);

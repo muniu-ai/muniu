@@ -2,39 +2,39 @@
 
 [English](README.md) · [文档](docs/index.md) · [安全](SECURITY.zh-CN.md) · [贡献](CONTRIBUTING.zh-CN.md)
 
-Muniu 是一个开源、证据优先的编码 Agent 控制平面，把工程任务变成可追踪闭环：
+Muniu 是一个开源、证据优先的编码 Agent 平台。它以 TypeScript agent kernel 执行交互线程，并把工程任务纳入可验证的受治理执行链：
 
 ```text
-task → run → candidate → gate → evidence
+Thread → Turn → Item
+             │
+             └→ task → run → candidate → gate → evidence
 ```
 
-默认运行时是内嵌 `builtin` Agent。Claude Code 与 Codex CLI 仅作为显式兼容运行时，默认工程运行不依赖它们。
+v0.2.0 使用 JSON-RPC app-server 统一 CLI、Desktop、Worker 协调器和嵌入式客户端。Claude Code 与 Codex CLI 只作为显式兼容 target；默认运行不依赖它们。
 
-> v0.1.1 是开发者预览版。生产可用性以状态矩阵和测试事实为准，不能仅根据 API 或配置项推断。
+> v0.2.0 是 Developer Preview，也是一次性协议切换。旧控制 REST/SSE 客户端不能连接此版本，升级前必须执行 V3 迁移。
 
-## 完成度
+## 状态
 
-| 能力 | 状态 | 说明 |
+| 能力 | 状态 | 边界 |
 | --- | --- | --- |
-| task/run/candidate/Gate/evidence | 已实现 | 本地持久化与治理检查点 |
-| builtin Agent | 已实现 | 必须绑定有效 provider/model |
-| 工作区工具 | 已实现 | 边界、策略、审批、超时、审计 |
-| Gate 修复循环 | 已实现 | 有界结构化反馈 |
-| Agent 会话恢复 | 已实现 | 企业 S3 保存 runtime overlay |
-| Cordis Context/effect/事件 | 已实现 | 固定来源和逐文件哈希 |
-| 本地/npm 动态插件 | 实验性 | 与宿主等权，不是安全沙箱 |
-| Claude/Codex CLI | 兼容能力 | 必须显式选择 |
-| PostgreSQL/S3 企业会话 | 实验性 | 租户 CAS 和篡改检测 |
-| 多副本运行队列 | 已实现 | PostgreSQL 权威存储 |
-| Helm API/Worker 部署 | 实验性 | 共享 PVC、最小 RBAC 与独立副本 |
-| Kubernetes 候选沙箱 Pod | 实验性 | CAS 源码、运行时校验、权威 Gate Pod 与 Kind 故障注入 |
-| 企业 builtin 模型/工具中继 | 实验性 | PostgreSQL generation/mailbox/审批；Kind 多副本恢复 |
-| macOS Desktop 构建 | 已实现 | 不承诺 v0.1 签名、公证、自动更新 |
-| 发布/SBOM/provenance | 发布工作流 | 正式 tag 时生成 |
+| app-server v2 与 `@mn/sdk` | 已实现 | 固定 Codex 稳定子集；SDK 保持 private |
+| `AgentEventV3` 与 Thread 投影 | 已实现 | notification 先持久化再投递 |
+| Spec/Governance/Harness/Loop/Evidence | 已实现 | 集中策略仍是执行权威 |
+| Provider/Model 绑定 | 已实现 | OpenAI、Anthropic 与兼容 Provider |
+| 文件、patch、shell、PTY、MCP 与扩展工具 | 已实现 | 全部经过 effect commitment、sandbox 与审批 |
+| 上下文压缩与 CAS spill | 已实现 | 失败时中断，不静默截断 |
+| 插件、skill 与 MCP runtime | 已实现 | 命令插件与 HMR 是宿主等权可信代码 |
+| 持久化多 Agent 图 | 已实现 | 默认最多 6 个 Agent、4 个并发、深度 1 |
+| SQLite 与 PostgreSQL/S3 迁移 | 已实现 | 首次 V3 写入后只能恢复整套备份 |
+| 企业 WSS gateway | 实验性 | TLS、OIDC/JWKS、租户隔离、RBAC 与恢复 cursor |
+| Kubernetes 候选 sandbox Pod | 实验性 | 独立 Pod、最小 RBAC、默认拒绝网络 |
+| macOS Desktop | 构建验证 | 不包含签名、公证或自动更新发布 |
+| SBOM、许可证与 provenance | 发布工作流 | tag 时生成并证明 |
 
-v0.1.1 不发布或启用桌面运行时 updater；签名、公证和自动更新制品不属于本次发布。
+木牛只实现 [Codex app-server v2 的声明子集](docs/compatibility-v0.2.md)，不嵌入 Codex Rust 内核，也不宣称完整 Codex app-server 兼容。
 
-## 五分钟开始
+## 本地启动
 
 需要 Node.js `22.19.x`、npm `11.10.1` 和 Git：
 
@@ -43,10 +43,10 @@ git clone https://github.com/muniu-ai/muniu.git
 cd muniu
 npm ci
 npm run build
-npm run dev:api
+node apps/cli/dist/index.js app-server --transport ws --port 0
 ```
 
-另开终端：
+服务端只监听回环地址，并把连接地址和随机 bearer token 写入权限为 `0600` 的 `~/.muniu/app-server.json`。另开终端初始化配置并检查环境：
 
 ```bash
 node apps/cli/dist/index.js init
@@ -58,9 +58,20 @@ node apps/cli/dist/index.js agent run \
   --cwd .
 ```
 
-请先用 `mn provider add` 或 Desktop 设置页创建 provider。provider/model 缺失、禁用或不支持 Agent 时，builtin 会失败关闭。
+请先用 `mn provider add` 或 Desktop 设置页创建 Provider。Provider/Model 缺失、禁用或不支持 Agent 时，builtin Agent 会失败关闭。
 
-## V2 策略
+本地 app-server 还支持 stdio JSONL 与 owner-only Unix socket：
+
+```bash
+mn app-server --transport stdio
+mn app-server --transport unix --socket ~/.muniu/app-server.sock
+```
+
+接入、握手、SDK 和恢复语义见 [app-server v2 接入](docs/app-server.md)。
+
+## 策略与扩展
+
+执行策略绑定 runtime、Provider、Model、sandbox、Gate 和审批要求：
 
 ```json
 {
@@ -78,45 +89,30 @@ node apps/cli/dist/index.js agent run \
 }
 ```
 
-旧 `providers: ["claude", "codex"]` 保留一个版本的读取兼容，并按原顺序确定性转换为 V2；响应和新快照只输出 V2。
-
-## Agent、Profile、插件
-
-```bash
-mn agent run --provider ID --model ID --prompt "..." [--cwd .]
-mn agent chat --provider ID --model ID [--prompt "..."] [--cwd .]
-mn agent resume SESSION_ID --prompt "..."
-mn agent sessions [--limit 100]
-
-mn profile inspect
-mn profile validate --file config/runtime/profiles/local.yml
-mn plugin list
-mn plugin install ./my-plugin.mjs
-mn plugin install @scope/my-plugin@1.2.3
-mn plugin reload
-mn plugin remove PLUGIN_ID
-```
-
-配置顺序固定为：
+运行时配置顺序固定为：
 
 ```text
 基础 bundle → 部署 profile → ~/.muniu 用户 patch → CLI patch
 ```
 
-内置 profile 为 `local`、`enterprise-api`、`enterprise-worker`、`desktop`。插件安装记录精确版本和完整性值。
+内置 profile 为 `local`、`enterprise-api`、`enterprise-worker` 和 `desktop`。插件 manifest 记录精确版本、完整性、入口、skill、MCP、hook、tool、配置 schema 和所需 capability。
 
-动态插件是与宿主进程等权的可信代码，可以访问宿主可见的凭据、文件、网络和进程能力。Muniu 不宣称插件安全沙箱隔离；生产环境应由管理员逐个固定、审查和安装。
+动态插件、JavaScript 配置和明确启用的 HMR 可以访问宿主可见的凭据、文件、网络和进程能力。它们属于宿主等权可信代码，不是 sandbox；生产环境必须由管理员固定版本、审查来源并记录配置变更。
 
-## 兼容迁移
+## v0.2.0 迁移
 
-- `~/.mniu` 自动迁移为 `~/.muniu`。
-- API 快照 V1/V2 在写入版本备份后迁移至 V3。
-- 迁移可重复；未知版本和损坏快照不会被覆盖。
-- `muniu://` 是正式深链，`mniu://` 保留一个版本的兼容别名。
+迁移必须停写，并按 preflight、全量备份、旧链校验、转换、逐记录映射校验、新链校验和原子切换执行：
+
+```bash
+mn migrate app-server-v3 --dry-run
+mn migrate app-server-v3 --apply
+```
+
+旧 SQLite/API state、JSONL 和 S3 prefix 会进入只读归档。首次 V3 写入前可执行受摘要校验保护的 rollback；产生 V3 写入后只能停机并恢复 PostgreSQL、S3 与本地状态的整套备份。详见 [v0.2.0 迁移指南](docs/migration-v0.2.md)。
 
 ## 企业部署
 
-`deploy/helm/muniu` 包含 API/Worker 多副本、迁移 Job、Service、Ingress、HPA、PDB、ServiceAccount 和 NetworkPolicy。Worker 默认关闭；启用后的非 fixture Worker 默认声明 `builtin`，mock 只用于确定性验收。生产 values 只引用外部 PostgreSQL、S3、OIDC/JWKS、OTLP、KMS/Vault，不绑定云厂商。
+`deploy/helm/muniu` 包含 API/Worker、V3 migration Job、WSS gateway、Service、Ingress、HPA、PDB、ServiceAccount 和 NetworkPolicy。生产 values 引用外部 PostgreSQL、S3、OIDC/JWKS、OTLP 与 KMS/Vault：
 
 ```bash
 helm upgrade --install muniu deploy/helm/muniu \
@@ -124,48 +120,44 @@ helm upgrade --install muniu deploy/helm/muniu \
   -f values.production.yaml
 ```
 
-每个候选任务从 S3 支撑的内容寻址源码快照物化到独立 Pod。候选 Pod 不获得 ServiceAccount token、`hostPath`、sidecar、Secret、特权或网络访问。API 会独立解析并验证该 Pod，再在第二个由 API 创建的不可变 Pod 中重放 Gate。`RuntimeClass` 为必填项，也是集群管理员落实 PID 等运行时限制的信任边界。
+企业入口只接受 WSS。OIDC 身份在升级前验证，tenant、subject、RBAC 和 permission profile 固定到连接。候选任务从 S3 内容寻址快照物化到独立 Pod；候选 Pod 不获得模型凭据、对象存储凭据、ServiceAccount token、`hostPath`、sidecar、特权或默认网络访问。
 
-`worker.fixtureMode=true` 使用确定性的验收执行器。非 fixture Worker 默认使用 `builtin`：模型流和 Provider 凭据留在 API，读取、搜索、补丁、写入、进程和 Git 工具通过 PostgreSQL 活跃 claim 交给 Worker，并只在同一个已检查的候选 Pod 中执行。候选 Pod 不获得模型凭据、对象存储凭据或 Kubernetes token，也不开放托管模型网络。Claude/Codex CLI 仍是显式兼容运行时，企业非 fixture Worker 不会默认依赖它们。
+Worker 的 claim、generation、工具 mailbox、审批和恢复状态由 PostgreSQL 管理。owner 丢失时，旧 generation 保留为不可变历史，未确认工具不会重放；恢复后的模型必须生成新的工具调用和审批。
 
-builtin execution generation、owner lease、工具 mailbox 与运行绑定的审批决定由 PostgreSQL 管理，因此 start/poll/result 和运行绑定的 `on-risk` 审批可以落到不同 API 副本；独立 `/v1/agent-sessions` 审批仍属于服务该会话的 API 进程。API 优雅退出会释放 owner。owner 丢失时，旧 generation 保留为不可变历史，未确认工具不会重放：旧审批以 `interrupted/deny` 关闭，恢复同一受保护会话后，模型必须产生新的工具调用和审批。唯一租户 scope 的 Provider 非敏感目录由 PostgreSQL 恢复到替换副本；旧的无 scope Provider 保持本地兼容，密钥仍必须由环境变量或 Vault/KMS 提供。
-
-Kind + Calico 发布门禁会启动两个 API、两个 Worker，删除正在等待工具审批的精确 owner Pod，验证 generation/会话恢复与新审批，导出完成证据，再重启 PostgreSQL 并确认结果仍可读取。该路径仍标记为实验性，因为仓库验收环境不等同生产可用性或强隔离认证。
-
-## 门禁
+## 发布门
 
 ```bash
 npm ci
-npm run build
-npm run typecheck
 npm test
-npm run test:coverage:agent
-npm run verify:oss-baseline
-npm run verify:enterprise-fixture
-npm run verify:helm
-npm run verify:kind
-npm audit --omit=dev
+npm run typecheck
+npm run verify:app-server-schema
+npm run verify:rpc-coverage
+npm run verify:migration-v3
+npm run verify:sdk-e2e
+npm run verify:gateway-e2e
+npm run verify:desktop-e2e
 npm run typecheck:desktop
 npm run build:desktop
+npm run verify:enterprise-fixture
+npm run verify:helm
+npm audit --omit=dev
 ```
 
-`verify:kind` 需要 Docker、Kind、kubectl、Helm、buildx 和 curl；它覆盖源码物化、Pod 执行、token 缺失、Kubernetes API 网络拒绝、多副本 owner 丢失、PostgreSQL 重启、证据导出和租约清理。
+`npm run verify:kind` 需要 Docker、Kind、kubectl、Helm、buildx 和 curl。它覆盖候选 Pod、网络隔离、多副本 owner 丢失、PostgreSQL 重启、证据导出和租约清理。
 
-## Cordis 来源
+## 来源与许可证
 
-Cordis、cosmokit、schemastery、loader、include、group、hmr、timer、logger-console 固定来自 DeepSeek Harness 提交 `99f6f02fecdb7dff40c3fbc9470f5907c29f74ca`。MIT 许可证、包名、逐文件哈希和 provenance 保留在 `vendor/` 与 `docs/upstream-provenance/`；这些包不单独发布。
+OpenAI Codex 兼容分析固定到提交 `99660ab3c7b861c916e467581fa9b8723504d66b`，记录在 `docs/upstream-provenance/openai-codex.yaml`。Cordis 来源固定到 DeepSeek Harness 提交 `99f6f02fecdb7dff40c3fbc9470f5907c29f74ca`，逐文件哈希和 MIT 声明保留在 `vendor/` 与 `docs/upstream-provenance/`。
+
+木牛新代码使用 Apache-2.0；vendored Cordis 保留 MIT。参见 `LICENSE`、`NOTICE` 和 `THIRD_PARTY_LICENSES.md`。
 
 ## 文档
 
-- [快速开始](docs/quickstart.md) · [English](docs/quickstart.en.md)
+- [app-server v2 接入](docs/app-server.md)
+- [v0.2.0 兼容矩阵](docs/compatibility-v0.2.md)
+- [v0.2.0 迁移指南](docs/migration-v0.2.md)
 - [架构](docs/architecture.md) · [English](docs/architecture.en.md)
 - [插件开发](docs/plugin-authoring.md) · [English](docs/plugin-authoring.en.md)
 - [企业运维](docs/enterprise-operations.md)
-- [故障排查](docs/troubleshooting.md)
-- [v0.1 迁移](docs/migration-v0.1.md)
 - [安全](SECURITY.zh-CN.md) · [English](SECURITY.md)
 - [贡献](CONTRIBUTING.zh-CN.md) · [English](CONTRIBUTING.md)
-
-## 许可证
-
-Muniu 使用 Apache-2.0；vendored Cordis 保留 MIT。参见 `LICENSE`、`NOTICE`、`THIRD_PARTY_LICENSES.md`。

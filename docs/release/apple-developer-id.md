@@ -2,7 +2,7 @@
 
 本手册用于木牛的 macOS 直接分发，即通过 DMG、ZIP、GitHub Release、官网或 Homebrew 提供安装包。它不涉及 Mac App Store 上架。
 
-v0.1.1 Developer Preview 不包含运行时自动更新器，因此本手册只管理 Apple 代码签名和公证凭据。
+v0.2.0 Developer Preview 不包含运行时自动更新器，因此本手册只管理 Apple 代码签名和公证凭据。
 
 ## 是否现在必须办理
 
@@ -112,7 +112,7 @@ npm run release:mac
 
 ```bash
 APP="apps/desktop-mac/src-tauri/target/universal-apple-darwin/release/bundle/macos/木牛.app"
-DMG="apps/desktop-mac/src-tauri/target/universal-apple-darwin/release/bundle/dmg/Muniu_0.1.1_universal.dmg"
+DMG="apps/desktop-mac/src-tauri/target/universal-apple-darwin/release/bundle/dmg/Muniu_0.2.0_universal.dmg"
 
 codesign --verify --deep --strict --verbose=2 "$APP"
 xcrun stapler validate "$APP"
@@ -136,7 +136,7 @@ lipo -archs "$APP/Contents/MacOS/mniu-desktop"
 - `0 valid identities found`：证书没有安装、证书下缺少私钥、证书过期，或当前 Keychain 未解锁。
 - `The signature of the binary is invalid`：检查嵌套二进制是否全部签名，并确认未在签名后修改 app 内容。
 - notarization 返回 `Invalid`：用 `xcrun notarytool log <submission-id> --keychain-profile mniu-notary` 查看 Apple 日志。
-- `spctl` 拒绝但公证成功：确认最终用户拿到的是 staple 之后重新生成的 ZIP/DMG。
+- `spctl` 拒绝但公证成功：确认最终用户下载的是 staple 之后重新生成的 ZIP/DMG。
 
 ## 官方资料
 

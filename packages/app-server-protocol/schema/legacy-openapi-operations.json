@@ -20,6 +20,11 @@
     "verb": "post"
   },
   {
+    "operationId": "post__v1_agent_sessions_id_attachments",
+    "path": "/v1/agent-sessions/{id}/attachments",
+    "verb": "post"
+  },
+  {
     "operationId": "post__v1_agent_sessions_id_cancel",
     "path": "/v1/agent-sessions/{id}/cancel",
     "verb": "post"

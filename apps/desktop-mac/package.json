@@ -1,6 +1,6 @@
 {
   "name": "@mn/desktop-mac",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
   "license": "Apache-2.0",
   "repository": "https://github.com/muniu-ai/muniu",
@@ -13,6 +13,7 @@
     "verify:extensions-ui": "node scripts/verify-extensions-ui.mjs",
     "verify:observability-ui": "node scripts/verify-observability-ui.mjs",
     "verify:task-fusion-ui": "node scripts/verify-task-fusion-ui.mjs",
+    "verify:thread-workspace-ui": "node scripts/verify-thread-workspace-ui.mjs",
     "verify:settings-ui": "node scripts/verify-settings-ui.mjs",
     "verify:close-behavior-source": "node scripts/verify-close-behavior-source.mjs",
     "tauri": "tauri",
@@ -29,8 +30,8 @@
     "vite": "^8.1.3"
   },
   "dependencies": {
-    "@mn/app-server-protocol": "0.1.1",
-    "@mn/sdk": "0.1.1",
+    "@mn/app-server-protocol": "0.2.0",
+    "@mn/sdk": "0.2.0",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-autostart": "^2.5.1",
     "@tauri-apps/plugin-deep-link": "^2.4.9",
