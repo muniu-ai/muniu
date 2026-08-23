@@ -50,4 +50,39 @@ schemaFixtures:
     - upstreamPath: codex-rs/app-server-protocol/schema/json/codex_app_server_protocol.v2.schemas.json
       sha256: f7f448fce148b1ad47d5d7ea3d05a56f14c21a2b7dc64580966b56cc97389514
 
-adaptations: []
+adaptations:
+  - upstreamPath: codex-rs/app-server-protocol/src/rpc.rs
+    localPath: packages/app-server-protocol/src/rpc.ts
+    upstreamCommit: 99660ab3c7b861c916e467581fa9b8723504d66b
+    mode: adapted
+    summary: Retains the id, request, notification, response, and error envelope while enforcing the selected Muniu stable subset with Zod.
+  - upstreamPath: codex-rs/app-server-protocol/src/protocol/v2/thread.rs
+    localPath: packages/app-server-protocol/src/methods.ts
+    upstreamCommit: 99660ab3c7b861c916e467581fa9b8723504d66b
+    mode: adapted
+    summary: Re-expresses stable app-server request and response fields as strict Zod schemas and omits experimental fields.
+  - upstreamPath: codex-rs/app-server-protocol/src/protocol/v2/item.rs
+    localPath: packages/app-server-protocol/src/entities.ts
+    upstreamCommit: 99660ab3c7b861c916e467581fa9b8723504d66b
+    mode: adapted
+    summary: Adapts Thread, Turn, and Item projection types while excluding raw hidden reasoning and adding namespaced Muniu metadata.
+  - upstreamPath: codex-rs/app-server-protocol/src/protocol/common.rs
+    localPath: packages/app-server-protocol/src/server-messages.ts
+    upstreamCommit: 99660ab3c7b861c916e467581fa9b8723504d66b
+    mode: adapted
+    summary: Adapts the selected server request and notification method catalog to strict runtime schemas.
+  - upstreamPath: codex-rs/app-server-protocol/schema/json/codex_app_server_protocol.v2.schemas.json
+    localPath: packages/app-server-protocol/schema/codex-core-stable-shapes.json
+    upstreamCommit: 99660ab3c7b861c916e467581fa9b8723504d66b
+    mode: adapted
+    summary: Records the stable top-level parameter and result fields used by the compatibility golden test, plus the Muniu initialize extension.
+  - upstreamPath: codex-rs/app-server/src/message_processor.rs
+    localPath: packages/app-server/src/connection.ts
+    upstreamCommit: 99660ab3c7b861c916e467581fa9b8723504d66b
+    mode: adapted
+    summary: Reimplements initialize gating and bidirectional dispatch for the Muniu TypeScript kernel without importing the Codex Rust runtime.
+  - upstreamPath: codex-rs/app-server/src/transport.rs
+    localPath: packages/app-server/src/transports.ts
+    upstreamCommit: 99660ab3c7b861c916e467581fa9b8723504d66b
+    mode: adapted
+    summary: Reimplements bounded local app-server framing for stdio, owner-only Unix sockets, and authenticated loopback WebSockets.

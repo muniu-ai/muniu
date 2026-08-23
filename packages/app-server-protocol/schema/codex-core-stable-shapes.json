@@ -1,0 +1,122 @@
+{
+  "baselineCommit": "99660ab3c7b861c916e467581fa9b8723504d66b",
+  "sourceSchemaSha256": "f7f448fce148b1ad47d5d7ea3d05a56f14c21a2b7dc64580966b56cc97389514",
+  "methods": {
+    "initialize": {
+      "params": { "properties": ["capabilities", "clientInfo"], "required": ["clientInfo"] },
+      "result": { "properties": ["capabilities", "instructionSources", "muniu", "protocolVersion", "serverInfo"], "required": ["capabilities", "instructionSources", "muniu", "protocolVersion", "serverInfo"] }
+    },
+    "thread/start": {
+      "params": { "properties": ["approvalPolicy", "approvalsReviewer", "baseInstructions", "config", "cwd", "developerInstructions", "ephemeral", "model", "modelProvider", "personality", "sandbox", "serviceName", "serviceTier", "sessionStartSource", "threadSource"], "required": [] },
+      "result": { "properties": ["approvalPolicy", "approvalsReviewer", "cwd", "instructionSources", "model", "modelProvider", "reasoningEffort", "sandbox", "serviceTier", "thread"], "required": ["approvalPolicy", "approvalsReviewer", "cwd", "model", "modelProvider", "sandbox", "thread"] }
+    },
+    "thread/resume": {
+      "params": { "properties": ["approvalPolicy", "approvalsReviewer", "baseInstructions", "config", "cwd", "developerInstructions", "model", "modelProvider", "personality", "sandbox", "serviceTier", "threadId"], "required": ["threadId"] },
+      "result": { "properties": ["approvalPolicy", "approvalsReviewer", "cwd", "instructionSources", "model", "modelProvider", "reasoningEffort", "sandbox", "serviceTier", "thread"], "required": ["approvalPolicy", "approvalsReviewer", "cwd", "model", "modelProvider", "sandbox", "thread"] }
+    },
+    "thread/fork": {
+      "params": { "properties": ["approvalPolicy", "approvalsReviewer", "baseInstructions", "config", "cwd", "developerInstructions", "ephemeral", "lastTurnId", "model", "modelProvider", "sandbox", "serviceTier", "threadId", "threadSource"], "required": ["threadId"] },
+      "result": { "properties": ["approvalPolicy", "approvalsReviewer", "cwd", "instructionSources", "model", "modelProvider", "reasoningEffort", "sandbox", "serviceTier", "thread"], "required": ["approvalPolicy", "approvalsReviewer", "cwd", "model", "modelProvider", "sandbox", "thread"] }
+    },
+    "thread/list": {
+      "params": { "properties": ["archived", "cursor", "cwd", "limit", "modelProviders", "searchTerm", "sectionId", "sortDirection", "sortKey", "sourceKinds", "useStateDbOnly"], "required": [] },
+      "result": { "properties": ["backwardsCursor", "data", "nextCursor"], "required": ["data"] }
+    },
+    "thread/loaded/list": {
+      "params": { "properties": ["cursor", "limit"], "required": [] },
+      "result": { "properties": ["data", "nextCursor"], "required": ["data"] }
+    },
+    "thread/read": {
+      "params": { "properties": ["includeTurns", "threadId"], "required": ["threadId"] },
+      "result": { "properties": ["thread"], "required": ["thread"] }
+    },
+    "thread/archive": {
+      "params": { "properties": ["threadId"], "required": ["threadId"] },
+      "result": { "properties": [], "required": [] }
+    },
+    "thread/unarchive": {
+      "params": { "properties": ["threadId"], "required": ["threadId"] },
+      "result": { "properties": ["thread"], "required": ["thread"] }
+    },
+    "thread/delete": {
+      "params": { "properties": ["threadId"], "required": ["threadId"] },
+      "result": { "properties": [], "required": [] }
+    },
+    "thread/unsubscribe": {
+      "params": { "properties": ["threadId"], "required": ["threadId"] },
+      "result": { "properties": ["status"], "required": ["status"] }
+    },
+    "thread/name/set": {
+      "params": { "properties": ["name", "threadId"], "required": ["name", "threadId"] },
+      "result": { "properties": [], "required": [] }
+    },
+    "thread/goal/set": {
+      "params": { "properties": ["objective", "status", "threadId", "tokenBudget"], "required": ["threadId"] },
+      "result": { "properties": ["goal"], "required": ["goal"] }
+    },
+    "thread/goal/get": {
+      "params": { "properties": ["threadId"], "required": ["threadId"] },
+      "result": { "properties": ["goal"], "required": [] }
+    },
+    "thread/goal/clear": {
+      "params": { "properties": ["threadId"], "required": ["threadId"] },
+      "result": { "properties": ["cleared"], "required": ["cleared"] }
+    },
+    "thread/compact/start": {
+      "params": { "properties": ["threadId"], "required": ["threadId"] },
+      "result": { "properties": [], "required": [] }
+    },
+    "turn/start": {
+      "params": { "properties": ["approvalPolicy", "approvalsReviewer", "clientUserMessageId", "cwd", "effort", "input", "model", "outputSchema", "personality", "sandboxPolicy", "serviceTier", "summary", "threadId"], "required": ["input", "threadId"] },
+      "result": { "properties": ["turn"], "required": ["turn"] }
+    },
+    "turn/steer": {
+      "params": { "properties": ["clientUserMessageId", "expectedTurnId", "input", "threadId"], "required": ["expectedTurnId", "input", "threadId"] },
+      "result": { "properties": ["turnId"], "required": ["turnId"] }
+    },
+    "turn/interrupt": {
+      "params": { "properties": ["threadId", "turnId"], "required": ["threadId", "turnId"] },
+      "result": { "properties": [], "required": [] }
+    },
+    "review/start": {
+      "params": { "properties": ["delivery", "target", "threadId"], "required": ["target", "threadId"] },
+      "result": { "properties": ["reviewThreadId", "turn"], "required": ["reviewThreadId", "turn"] }
+    },
+    "model/list": {
+      "params": { "properties": ["cursor", "includeHidden", "limit"], "required": [] },
+      "result": { "properties": ["data", "nextCursor"], "required": ["data"] }
+    },
+    "skills/list": {
+      "params": { "properties": ["cwds", "forceReload"], "required": [] },
+      "result": { "properties": ["data"], "required": ["data"] }
+    },
+    "skills/extraRoots/set": {
+      "params": { "properties": ["extraRoots"], "required": ["extraRoots"] },
+      "result": { "properties": [], "required": [] }
+    },
+    "hooks/list": {
+      "params": { "properties": ["cwds"], "required": [] },
+      "result": { "properties": ["data"], "required": ["data"] }
+    },
+    "config/read": {
+      "params": { "properties": ["cwd", "includeLayers"], "required": [] },
+      "result": { "properties": ["config", "layers", "origins"], "required": ["config", "origins"] }
+    },
+    "config/mcpServer/reload": {
+      "params": { "properties": [], "required": [] },
+      "result": { "properties": [], "required": [] }
+    },
+    "mcpServerStatus/list": {
+      "params": { "properties": ["cursor", "detail", "limit", "threadId"], "required": [] },
+      "result": { "properties": ["data", "nextCursor"], "required": ["data"] }
+    },
+    "mcpServer/resource/read": {
+      "params": { "properties": ["connectorId", "originCallId", "server", "threadId", "uri"], "required": ["server", "uri"] },
+      "result": { "properties": ["contents", "originCallId"], "required": ["contents"] }
+    },
+    "mcpServer/tool/call": {
+      "params": { "properties": ["_meta", "arguments", "server", "threadId", "tool"], "required": ["server", "threadId", "tool"] },
+      "result": { "properties": ["_meta", "content", "isError", "structuredContent"], "required": ["content"] }
+    }
+  }
+}
