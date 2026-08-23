@@ -1,0 +1,53 @@
+schemaVersion: 1
+upstream:
+  name: OpenAI Codex
+  repository: https://github.com/openai/codex
+  commit: 99660ab3c7b861c916e467581fa9b8723504d66b
+  license: Apache-2.0
+  copyright: Copyright 2025 OpenAI
+
+compatibility:
+  protocol: app-server-v2
+  methodSet: core-stable-subset
+  implementation: clean-room-typescript-boundary
+  importedRustKernel: false
+  claim: Selected stable methods and fields only; this is not complete Codex app-server compatibility.
+
+references:
+  - https://developers.openai.com/blog/codex-as-a-platform
+  - https://developers.openai.com/codex/app-server
+
+scope:
+  reviewedComponents:
+    - codex-rs/app-server-protocol
+    - codex-rs/app-server
+    - codex-rs/core
+    - codex-rs/state
+    - codex-rs/mcp-server
+    - codex-rs/skills
+  targetWorkspaces:
+    - packages/app-server-protocol
+    - packages/app-server
+    - packages/sdk
+  copiedSource: false
+  excluded:
+    - Codex Rust agent kernel
+    - OpenAI account and login flows
+    - telemetry, anonymous identifiers, and feedback upload
+    - experimental app-server methods and fields
+
+schemaFixtures:
+  aggregateSha256: 9c5dd3c3282b57a21776418df204e244211a3e59fd7e317f7a3bebff1ea076ac
+  files:
+    - upstreamPath: codex-rs/app-server-protocol/src/rpc.rs
+      sha256: 78c516097c55b665e375807be6dcdceba232805c9ae9fa48420b0a537f0df705
+    - upstreamPath: codex-rs/app-server-protocol/src/protocol/v2/thread.rs
+      sha256: 27b068150d650ec6da10cd811cd176a72dd7844d701ff351989f4423032a0e07
+    - upstreamPath: codex-rs/app-server-protocol/src/protocol/v2/turn.rs
+      sha256: 3d76c3154f5d092eb2460fa77f1e8befdf4255447afb741724658afbf30a7704
+    - upstreamPath: codex-rs/app-server-protocol/src/protocol/v2/item.rs
+      sha256: 95dd99bac8a2abdcc4ff9b7f92ea798e937bb3494c9764656f31513ff60488bb
+    - upstreamPath: codex-rs/app-server-protocol/schema/json/codex_app_server_protocol.v2.schemas.json
+      sha256: f7f448fce148b1ad47d5d7ea3d05a56f14c21a2b7dc64580966b56cc97389514
+
+adaptations: []

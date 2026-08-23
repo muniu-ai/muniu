@@ -21,4 +21,5 @@ Muniu v0.1.1 的文档以代码和测试事实为准。根 README 只负责定�
 - [技术设计](TECHNICAL_DESIGN.md)
 - [ADR](https://github.com/muniu-ai/muniu/tree/main/docs/adr)
 - [历史计划](https://github.com/muniu-ai/muniu/tree/main/docs/plans)
-- [上游来源](upstream-provenance/deepseek-harness.yaml)
+- [DeepSeek Harness 上游来源](upstream-provenance/deepseek-harness.yaml)
+- [OpenAI Codex 兼容基线](upstream-provenance/openai-codex.yaml)
