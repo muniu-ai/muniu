@@ -24,6 +24,8 @@
     "@mn/agent-protocol": "0.1.1",
     "@mn/agent-session": "0.1.1",
     "@mn/agent-tools": "0.1.1",
+    "@mn/app-server": "0.1.1",
+    "@mn/app-server-protocol": "0.1.1",
     "@mn/config-manager": "0.1.1",
     "@mn/connectors": "0.1.1",
     "@mn/core": "0.1.1",
