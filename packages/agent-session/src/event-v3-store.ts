@@ -227,9 +227,19 @@ export class JsonlAgentEventV3Store implements AgentEventV3Store {
     return event as AgentEventV3;
   }
 
-  async read(threadId: SessionId): Promise<readonly AgentEventV3[]> {
+  read(threadId: SessionId): Promise<readonly AgentEventV3[]> {
     assertThreadId(threadId);
-    await this.#tails.get(threadId);
+    const previous = this.#tails.get(threadId) ?? Promise.resolve();
+    const operation = previous.then(() => this.#readSerial(threadId));
+    const tail = operation.then(() => undefined, () => undefined);
+    this.#tails.set(threadId, tail);
+    void tail.then(() => {
+      if (this.#tails.get(threadId) === tail) this.#tails.delete(threadId);
+    });
+    return operation;
+  }
+
+  async #readSerial(threadId: SessionId): Promise<readonly AgentEventV3[]> {
     const threadsRoot = await this.#ensureRoot();
     const directory = await this.#threadDirectory(threadsRoot, threadId);
     const lease = await acquireOsWriterLock(`v3-thread-path:${directory}`);

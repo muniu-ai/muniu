@@ -7,6 +7,11 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "exports": {
+    "./server": { "types": "./dist/server.d.ts", "import": "./dist/server.js" },
+    "./agent-session-service": { "types": "./dist/agentSessionService.d.ts", "import": "./dist/agentSessionService.js" },
+    "./app-server-runtime": { "types": "./dist/localAppServerRuntime.d.ts", "import": "./dist/localAppServerRuntime.js" }
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -48,6 +53,7 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@mn/sdk": "0.1.1",
     "@types/pg": "^8.20.0"
   }
 }

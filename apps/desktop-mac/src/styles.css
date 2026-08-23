@@ -350,6 +350,189 @@ button {
   padding: 16px;
 }
 
+.thread-workspace {
+  display: grid;
+  gap: 14px;
+}
+
+.thread-create-grid,
+.thread-context-grid,
+.thread-goal-row {
+  display: grid;
+  gap: 10px;
+}
+
+.thread-create-grid {
+  grid-template-columns: 0.7fr 0.9fr 1.4fr;
+}
+
+.thread-layout {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.55fr) minmax(360px, 1.5fr) minmax(220px, 0.75fr);
+  gap: 12px;
+  min-height: 520px;
+}
+
+.thread-list,
+.thread-main,
+.thread-inspector {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fbfcfa;
+}
+
+.thread-list,
+.thread-inspector {
+  padding: 8px;
+  overflow: auto;
+}
+
+.thread-list-item {
+  display: grid;
+  width: 100%;
+  gap: 4px;
+  margin-bottom: 6px;
+  padding: 10px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+
+.thread-list-item:hover,
+.thread-list-item.selected {
+  border-color: var(--border-strong);
+  background: var(--surface-soft);
+}
+
+.thread-list-item span,
+.thread-list-item small,
+.thread-empty,
+.thread-inspector-section p {
+  color: var(--muted);
+}
+
+.thread-main {
+  display: grid;
+  grid-template-rows: auto minmax(220px, 1fr) auto;
+  overflow: hidden;
+}
+
+.thread-goal-row {
+  grid-template-columns: 1fr 120px auto;
+  align-items: end;
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.thread-timeline {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  padding: 10px;
+  overflow: auto;
+}
+
+.thread-item {
+  padding: 10px;
+  border-left: 3px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.thread-item-agentMessage,
+.thread-item-plan {
+  border-left-color: var(--green);
+}
+
+.thread-item-commandExecution,
+.thread-item-fileChange {
+  border-left-color: var(--orange);
+}
+
+.thread-item header {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.thread-item pre,
+.thread-inspector pre {
+  margin: 8px 0 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.thread-composer {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.thread-composer > textarea {
+  min-height: 88px;
+  padding: 10px;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font: inherit;
+}
+
+.thread-context-grid {
+  grid-template-columns: 1fr 110px 1fr;
+}
+
+.thread-inspector {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
+
+.thread-inspector-section {
+  padding: 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+}
+
+.thread-inspector-section h4 {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+
+.thread-inspector-item,
+.thread-graph-node {
+  display: grid;
+  gap: 6px;
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.thread-approval-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.thread-approval-actions .text-button {
+  min-width: 0;
+  min-height: 32px;
+  flex: 1;
+}
+
+.thread-error {
+  padding: 10px;
+  border-radius: 7px;
+  background: var(--red-soft);
+  color: var(--red);
+}
+
 .panel-heading {
   justify-content: space-between;
   gap: 12px;
@@ -2320,7 +2503,7 @@ button {
   }
 
   .nav-list {
-    grid-template-columns: repeat(7, minmax(0, 1fr));
+    grid-template-columns: repeat(8, minmax(0, 1fr));
   }
 
   .nav-item {
@@ -2340,7 +2523,8 @@ button {
   .task-fusion-layout,
   .observability-metrics,
   .observability-grid,
-  .extension-grid {
+  .extension-grid,
+  .thread-layout {
     grid-template-columns: 1fr;
   }
 }
@@ -2395,6 +2579,12 @@ button {
   .extension-row,
   .model-catalog-row,
   .source-row {
+    grid-template-columns: 1fr;
+  }
+
+  .thread-create-grid,
+  .thread-context-grid,
+  .thread-goal-row {
     grid-template-columns: 1fr;
   }
 

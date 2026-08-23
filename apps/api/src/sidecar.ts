@@ -10,7 +10,19 @@ async function main(): Promise<void> {
   const host = process.env.MN_API_HOST ?? "127.0.0.1";
   const useMockExecutors = process.env.MN_USE_MOCK_EXECUTORS === "1";
   const workspaceRoot = process.env.MN_WORKSPACE_ROOT;
-  const app = buildServer({ useMockExecutors, workspaceRoot });
+  const appServerPort = Number(process.env.MN_APP_SERVER_PORT ?? port + 1);
+  const app = buildServer({
+    useMockExecutors,
+    workspaceRoot,
+    localAppServer: {
+      host: "127.0.0.1",
+      port: appServerPort,
+      ...(process.env.MN_APP_SERVER_TOKEN ? { token: process.env.MN_APP_SERVER_TOKEN } : {}),
+      ...(process.env.MN_APP_SERVER_CONNECTION_FILE
+        ? { connectionFile: process.env.MN_APP_SERVER_CONNECTION_FILE }
+        : {})
+    }
+  });
   await app.listen({ port, host });
 
   let closing = false;

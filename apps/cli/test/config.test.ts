@@ -54,7 +54,7 @@ test("doctor uses apiUrl from .mn/config.json when MN_API_URL is not set", async
 
   const result = await execFileAsync(
     process.execPath,
-    [join(process.cwd(), "dist-test", "src", "index.js"), "doctor"],
+    [join(process.cwd(), "dist-test", "test", "cli-test-entry.js"), "doctor"],
     {
       cwd,
       env,
@@ -125,7 +125,7 @@ test("doctor env-cleanup posts dry-run and confirmed requests", async (t) => {
     ...process.env,
     MN_API_URL: `http://127.0.0.1:${address.port}`
   };
-  const cliPath = join(process.cwd(), "dist-test", "src", "index.js");
+  const cliPath = join(process.cwd(), "dist-test", "test", "cli-test-entry.js");
 
   const dryRun = await execFileAsync(
     process.execPath,
@@ -211,7 +211,7 @@ test("diagnostics export calls configured API and writes output file", async (t)
   const result = await execFileAsync(
     process.execPath,
     [
-      join(process.cwd(), "dist-test", "src", "index.js"),
+      join(process.cwd(), "dist-test", "test", "cli-test-entry.js"),
       "diagnostics",
       "export",
       "--out",
@@ -273,7 +273,7 @@ test("provider list calls configured API with app filter", async (t) => {
   const result = await execFileAsync(
     process.execPath,
     [
-      join(process.cwd(), "dist-test", "src", "index.js"),
+      join(process.cwd(), "dist-test", "test", "cli-test-entry.js"),
       "provider",
       "list",
       "--app",
@@ -323,7 +323,7 @@ test("provider restore previews by default and confirms with --yes", async (t) =
     join(cwd, ".mn", "config.json"),
     `${JSON.stringify({ apiUrl: `http://127.0.0.1:${address.port}` }, null, 2)}\n`
   );
-  const entry = join(process.cwd(), "dist-test", "src", "index.js");
+  const entry = join(process.cwd(), "dist-test", "test", "cli-test-entry.js");
   const env = { ...process.env };
   delete env.MN_API_URL;
 
@@ -385,7 +385,7 @@ test("provider add posts tool replay policy flags", async (t) => {
   const result = await execFileAsync(
     process.execPath,
     [
-      join(process.cwd(), "dist-test", "src", "index.js"),
+      join(process.cwd(), "dist-test", "test", "cli-test-entry.js"),
       "provider",
       "add",
       "--preset",
@@ -463,7 +463,7 @@ test("provider export calls configured API and writes output file", async (t) =>
   const result = await execFileAsync(
     process.execPath,
     [
-      join(process.cwd(), "dist-test", "src", "index.js"),
+      join(process.cwd(), "dist-test", "test", "cli-test-entry.js"),
       "provider",
       "export",
       "--app",
@@ -549,7 +549,7 @@ test("provider import defaults to dry-run and --yes confirms import", async (t) 
   await execFileAsync(
     process.execPath,
     [
-      join(process.cwd(), "dist-test", "src", "index.js"),
+      join(process.cwd(), "dist-test", "test", "cli-test-entry.js"),
       "provider",
       "import",
       "--file",
@@ -564,7 +564,7 @@ test("provider import defaults to dry-run and --yes confirms import", async (t) 
   await execFileAsync(
     process.execPath,
     [
-      join(process.cwd(), "dist-test", "src", "index.js"),
+      join(process.cwd(), "dist-test", "test", "cli-test-entry.js"),
       "provider",
       "import",
       "--file",
@@ -692,7 +692,7 @@ test("provider model-catalog sync and audit call configured API", async (t) => {
   await execFileAsync(
     process.execPath,
     [
-      join(process.cwd(), "dist-test", "src", "index.js"),
+      join(process.cwd(), "dist-test", "test", "cli-test-entry.js"),
       "provider",
       "model-catalog",
       "sync",
@@ -709,7 +709,7 @@ test("provider model-catalog sync and audit call configured API", async (t) => {
   await execFileAsync(
     process.execPath,
     [
-      join(process.cwd(), "dist-test", "src", "index.js"),
+      join(process.cwd(), "dist-test", "test", "cli-test-entry.js"),
       "provider",
       "model-catalog",
       "sync",
@@ -734,7 +734,7 @@ test("provider model-catalog sync and audit call configured API", async (t) => {
   await execFileAsync(
     process.execPath,
     [
-      join(process.cwd(), "dist-test", "src", "index.js"),
+      join(process.cwd(), "dist-test", "test", "cli-test-entry.js"),
       "provider",
       "model-catalog",
       "audit",
@@ -751,7 +751,7 @@ test("provider model-catalog sync and audit call configured API", async (t) => {
   await execFileAsync(
     process.execPath,
     [
-      join(process.cwd(), "dist-test", "src", "index.js"),
+      join(process.cwd(), "dist-test", "test", "cli-test-entry.js"),
       "provider",
       "model-catalog",
       "sync-due",
@@ -847,7 +847,7 @@ test("proxy status calls configured API", async (t) => {
 
   const result = await execFileAsync(
     process.execPath,
-    [join(process.cwd(), "dist-test", "src", "index.js"), "proxy", "status"],
+    [join(process.cwd(), "dist-test", "test", "cli-test-entry.js"), "proxy", "status"],
     {
       cwd,
       env,
@@ -897,7 +897,7 @@ test("proxy health calls configured API with app filter", async (t) => {
   const result = await execFileAsync(
     process.execPath,
     [
-      join(process.cwd(), "dist-test", "src", "index.js"),
+      join(process.cwd(), "dist-test", "test", "cli-test-entry.js"),
       "proxy",
       "health",
       "--app",
@@ -955,7 +955,7 @@ test("proxy health-reset calls configured API with provider and app", async (t) 
   const result = await execFileAsync(
     process.execPath,
     [
-      join(process.cwd(), "dist-test", "src", "index.js"),
+      join(process.cwd(), "dist-test", "test", "cli-test-entry.js"),
       "proxy",
       "health-reset",
       "--app",
@@ -1023,7 +1023,7 @@ test("usage summary calls configured API with filters", async (t) => {
   const result = await execFileAsync(
     process.execPath,
     [
-      join(process.cwd(), "dist-test", "src", "index.js"),
+      join(process.cwd(), "dist-test", "test", "cli-test-entry.js"),
       "usage",
       "summary",
       "--app",
@@ -1115,7 +1115,7 @@ test("session list and show call configured API with filters", async (t) => {
   const listResult = await execFileAsync(
     process.execPath,
     [
-      join(process.cwd(), "dist-test", "src", "index.js"),
+      join(process.cwd(), "dist-test", "test", "cli-test-entry.js"),
       "session",
       "list",
       "--app",
@@ -1141,7 +1141,7 @@ test("session list and show call configured API with filters", async (t) => {
   const showResult = await execFileAsync(
     process.execPath,
     [
-      join(process.cwd(), "dist-test", "src", "index.js"),
+      join(process.cwd(), "dist-test", "test", "cli-test-entry.js"),
       "session",
       "show",
       "codex:abc",
@@ -1162,7 +1162,7 @@ test("session list and show call configured API with filters", async (t) => {
   const exportResult = await execFileAsync(
     process.execPath,
     [
-      join(process.cwd(), "dist-test", "src", "index.js"),
+      join(process.cwd(), "dist-test", "test", "cli-test-entry.js"),
       "session",
       "export",
       "codex:abc",
@@ -1241,7 +1241,7 @@ test("run artifacts calls configured API", async (t) => {
   const result = await execFileAsync(
     process.execPath,
     [
-      join(process.cwd(), "dist-test", "src", "index.js"),
+      join(process.cwd(), "dist-test", "test", "cli-test-entry.js"),
       "run",
       "artifacts",
       "run-1",
@@ -1307,7 +1307,7 @@ test("run artifact downloads configured API content", async (t) => {
   const result = await execFileAsync(
     process.execPath,
     [
-      join(process.cwd(), "dist-test", "src", "index.js"),
+      join(process.cwd(), "dist-test", "test", "cli-test-entry.js"),
       "run",
       "artifact",
       "run-1",
@@ -1369,7 +1369,7 @@ test("run artifacts-download saves configured API archive", async (t) => {
   const result = await execFileAsync(
     process.execPath,
     [
-      join(process.cwd(), "dist-test", "src", "index.js"),
+      join(process.cwd(), "dist-test", "test", "cli-test-entry.js"),
       "run",
       "artifacts-download",
       "run-1",
@@ -1440,7 +1440,7 @@ test("run cleanup posts configured API when confirmed", async (t) => {
   const result = await execFileAsync(
     process.execPath,
     [
-      join(process.cwd(), "dist-test", "src", "index.js"),
+      join(process.cwd(), "dist-test", "test", "cli-test-entry.js"),
       "run",
       "cleanup",
       "run-1",
@@ -1506,7 +1506,7 @@ test("artifact-store summary and cleanup call configured API", async (t) => {
 
   const env = { ...process.env };
   delete env.MN_API_URL;
-  const cliPath = join(process.cwd(), "dist-test", "src", "index.js");
+  const cliPath = join(process.cwd(), "dist-test", "test", "cli-test-entry.js");
 
   const summary = await execFileAsync(
     process.execPath,
@@ -1616,7 +1616,7 @@ test("run resume posts configured API and prints replacement run", async (t) => 
   const result = await execFileAsync(
     process.execPath,
     [
-      join(process.cwd(), "dist-test", "src", "index.js"),
+      join(process.cwd(), "dist-test", "test", "cli-test-entry.js"),
       "run",
       "resume",
       "run-1"
@@ -1672,7 +1672,7 @@ test("mcp list calls configured API with app filter", async (t) => {
   const result = await execFileAsync(
     process.execPath,
     [
-      join(process.cwd(), "dist-test", "src", "index.js"),
+      join(process.cwd(), "dist-test", "test", "cli-test-entry.js"),
       "mcp",
       "list",
       "--app",
@@ -1730,7 +1730,7 @@ test("prompt activate posts app home and dry-run payload", async (t) => {
   const result = await execFileAsync(
     process.execPath,
     [
-      join(process.cwd(), "dist-test", "src", "index.js"),
+      join(process.cwd(), "dist-test", "test", "cli-test-entry.js"),
       "prompt",
       "activate",
       "prompt-1",
@@ -1794,7 +1794,7 @@ test("skill install posts app mode home and dry-run payload", async (t) => {
   const result = await execFileAsync(
     process.execPath,
     [
-      join(process.cwd(), "dist-test", "src", "index.js"),
+      join(process.cwd(), "dist-test", "test", "cli-test-entry.js"),
       "skill",
       "install",
       "skill-1",
@@ -1860,7 +1860,7 @@ test("skill registry-sync posts signed registry options", async (t) => {
   const result = await execFileAsync(
     process.execPath,
     [
-      join(process.cwd(), "dist-test", "src", "index.js"),
+      join(process.cwd(), "dist-test", "test", "cli-test-entry.js"),
       "skill",
       "registry-sync",
       "--url",
@@ -1969,7 +1969,7 @@ test("skill registry-profile manages trusted registry profiles", async (t) => {
   const env = { ...process.env };
   delete env.MN_API_URL;
   env.MN_API_TOKEN = "enterprise-cli-token";
-  const cli = join(process.cwd(), "dist-test", "src", "index.js");
+  const cli = join(process.cwd(), "dist-test", "test", "cli-test-entry.js");
 
   const add = await execFileAsync(
     process.execPath,
@@ -2094,7 +2094,7 @@ test("run posts queue priority when requested", async (t) => {
   const result = await execFileAsync(
     process.execPath,
     [
-      join(process.cwd(), "dist-test", "src", "index.js"),
+      join(process.cwd(), "dist-test", "test", "cli-test-entry.js"),
       "run",
       "--task",
       "task-priority",
@@ -2272,7 +2272,7 @@ test("run worker claims a queued job and finishes it", async (t) => {
   const result = await execFileAsync(
     process.execPath,
     [
-      join(process.cwd(), "dist-test", "src", "index.js"),
+      join(process.cwd(), "dist-test", "test", "cli-test-entry.js"),
       "run",
       "worker",
       "--once",
@@ -2359,7 +2359,7 @@ test("enterprise worker registers and claims with machine JWT capabilities", asy
   const result = await execFileAsync(
     process.execPath,
     [
-      join(process.cwd(), "dist-test", "src", "index.js"),
+      join(process.cwd(), "dist-test", "test", "cli-test-entry.js"),
       "run",
       "worker",
       "--enterprise",
@@ -2407,7 +2407,7 @@ test("enterprise worker fails closed before heartbeat for an external CLI compat
     execFileAsync(
       process.execPath,
       [
-        join(process.cwd(), "dist-test", "src", "index.js"),
+        join(process.cwd(), "dist-test", "test", "cli-test-entry.js"),
         "run",
         "worker",
         "--enterprise",
@@ -2496,7 +2496,7 @@ test("run workers lists worker fleet state", async (t) => {
   const result = await execFileAsync(
     process.execPath,
     [
-      join(process.cwd(), "dist-test", "src", "index.js"),
+      join(process.cwd(), "dist-test", "test", "cli-test-entry.js"),
       "run",
       "workers",
       "--state",

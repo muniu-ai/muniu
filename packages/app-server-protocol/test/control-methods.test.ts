@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   MUNIU_CONTROL_OPERATIONS,
   MUNIU_METHODS,
+  controlRequestForHttp,
   controlOperationForMethod,
   parseClientRequest
 } from "../src/index.js";
@@ -24,6 +25,36 @@ test("maps every legacy control operation to one unique namespaced RPC method", 
     fixture.map((entry) => entry.operationId)
   );
   assert.ok(MUNIU_METHODS.every((method) => /^muniu\/(?:project|task|run|runJob|evidence|artifact|provider|modelCatalog|policy|approval|extension|skillRegistry|config|diagnostics)\//u.test(method)));
+});
+
+test("resolves legacy HTTP paths to typed control RPC calls without static-route shadowing", () => {
+  assert.deepEqual(controlRequestForHttp("GET", "/v1/providers/export?app=codex"), {
+    method: "muniu/provider/providers/export/get",
+    params: { query: { app: "codex" } }
+  });
+  assert.deepEqual(controlRequestForHttp(
+    "POST",
+    "/v1/agent-sessions/session%2D1/approvals/approval%2D1",
+    { decision: "accept" },
+    "request-1"
+  ), {
+    method: "muniu/approval/agentSessions/byId/approvals/byApprovalId/post",
+    params: {
+      path: { id: "session-1", approvalId: "approval-1" },
+      body: { decision: "accept" },
+      idempotencyKey: "request-1"
+    }
+  });
+  assert.deepEqual(controlRequestForHttp(
+    "POST",
+    "/v1/artifacts/store/cleanup",
+    { keepLatestRuns: 1, maxAgeDays: undefined, nested: { omitted: undefined } }
+  ), {
+    method: "muniu/artifact/artifacts/store/cleanup/post",
+    params: { body: { keepLatestRuns: 1, nested: {} } }
+  });
+  assert.throws(() => controlRequestForHttp("GET", "/healthz"), /control operation/iu);
+  assert.throws(() => controlRequestForHttp("GET", "/v1/providers/%E0%A4%A"), /encoded/iu);
 });
 
 test("parses strict control envelopes and retains the old operation identity", () => {

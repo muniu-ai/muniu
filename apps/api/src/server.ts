@@ -15,7 +15,7 @@ import {
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import { z } from "zod";
 import {
   cleanupShellEnvConflicts,
@@ -122,7 +122,8 @@ import {
 } from "./agentApprovalCoordinator.js";
 import {
   AgentSessionServiceError,
-  LocalMockAgentSessionService
+  LocalMockAgentSessionService,
+  type InteractiveThreadExecutionInput
 } from "./agentSessionService.js";
 import {
   EnterpriseAgentObjectStore,
@@ -131,6 +132,9 @@ import {
 import { createProductionAgentRuntimeFactory } from "./agentRuntimeFactory.js";
 import { registerAgentSessionRoutes } from "./agentSessionRoutes.js";
 import { createEnterpriseAgentSessionStore } from "./enterpriseAgentSessionStore.js";
+import {
+  startLocalAppServerRuntime
+} from "./localAppServerRuntime.js";
 import { EnterpriseBuiltinAgentBroker } from "./enterpriseBuiltinAgentBroker.js";
 import { EnterpriseBuiltinAgentPersistence } from "./enterpriseBuiltinAgentPersistence.js";
 import { registerEnterpriseBuiltinAgentRoutes } from "./enterpriseBuiltinAgentRoutes.js";
@@ -245,6 +249,7 @@ import {
 } from "./sandboxAttestation.js";
 import { RunScopedCas, type RunScopedCasObjectRef } from "./runScopedCas.js";
 import { sourceSnapshotRefFromPayload } from "./sourceSnapshotBinding.js";
+
 import {
   createGateArtifactHandleRecord,
   findIdempotentGateArtifactRecord,
@@ -303,6 +308,17 @@ import {
   type ProviderUsageEvidenceTrustProfile
 } from "./providerUsageEvidenceTrust.js";
 
+const LOCAL_AGENT_SESSION_SERVICE_RESOLVER = Symbol("muniu.localAgentSessionServiceResolver");
+
+export async function resolveLocalAgentSessionService(app: FastifyInstance): Promise<LocalMockAgentSessionService> {
+  const resolver = (app as FastifyInstance & {
+    [LOCAL_AGENT_SESSION_SERVICE_RESOLVER]?: () => Promise<LocalMockAgentSessionService | undefined>;
+  })[LOCAL_AGENT_SESSION_SERVICE_RESOLVER];
+  const service = await resolver?.();
+  if (!service) throw new Error("local Agent session service is unavailable");
+  return service;
+}
+
 const execFileAsync = promisify(execFile);
 
 export type ArtifactRemoteStoreType = "filesystem" | "s3" | "gcs";
@@ -342,6 +358,7 @@ export interface DiagnosticLogCollectionSummary {
 }
 
 export interface BuildServerOptions {
+  logger?: boolean;
   store?: MemoryStore;
   apiStatePath?: string;
   localStore?: FileLocalStore;
@@ -378,6 +395,12 @@ export interface BuildServerOptions {
   runtimeProfilePath?: string;
   runtimeCliPatchPath?: string;
   runtimeHmr?: boolean;
+  localAppServer?: false | Readonly<{
+    host: string;
+    port: number;
+    token?: string;
+    connectionFile?: string;
+  }>;
   /** Internal governed provider proxy started with the enterprise API. */
   enterpriseProxy?: {
     readonly host: string;
@@ -1503,7 +1526,7 @@ function redactDiagnosticText(input: string): string {
 }
 
 export function buildServer(options: BuildServerOptions = {}) {
-  const app = Fastify({ logger: true });
+  const app = Fastify({ logger: options.logger ?? true });
   const activeRunEventStreams = new Set<() => void>();
   const runtimeProfile = options.runtimeProfile ?? "local";
   const homeDir = options.homeDir ?? process.env.HOME ?? process.cwd();
@@ -1863,6 +1886,9 @@ export function buildServer(options: BuildServerOptions = {}) {
   if (runtimeProfile === "enterprise" && options.agentSessionService) {
     throw new Error("Enterprise Agent sessions cannot replace the enforced PostgreSQL/S3 backend");
   }
+  if (runtimeProfile === "enterprise" && options.localAppServer) {
+    throw new Error("Enterprise profile cannot start the plaintext local app-server listener");
+  }
   let agentSessionService = runtimeProfile === "local"
     ? options.agentSessionService
     : undefined;
@@ -2217,6 +2243,7 @@ export function buildServer(options: BuildServerOptions = {}) {
     | undefined;
   let providerModelCatalogSyncSchedulerRunning = false;
   let proxyServer: LocalProxyServer | undefined;
+  let localAppServerRuntime: Awaited<ReturnType<typeof startLocalAppServerRuntime>> | undefined;
   const internalProxyBootstrapToken = randomUUID();
   const enterpriseProxy = runtimeProfile === "enterprise"
     ? options.enterpriseProxy
@@ -2764,6 +2791,8 @@ export function buildServer(options: BuildServerOptions = {}) {
     }
     await Promise.allSettled([...activeRunJobs.values()].map((job) => job.done));
     activeRunJobs.clear();
+    await localAppServerRuntime?.close();
+    localAppServerRuntime = undefined;
     await enterpriseBuiltinAgentBroker.dispose();
     await agentSessionService?.dispose();
     await Promise.allSettled(
@@ -2790,6 +2819,46 @@ export function buildServer(options: BuildServerOptions = {}) {
       if (result.statusCode !== 200) {
         throw new Error(`enterprise provider proxy bootstrap failed (${result.statusCode})`);
       }
+    });
+  }
+
+  const localAppServer = options.localAppServer || undefined;
+  if (localAppServer) {
+    app.addHook("onListen", async () => {
+      if (!getAgentSessionService) throw new Error("local app-server Agent runtime is unavailable");
+      const service = await getAgentSessionService();
+      localAppServerRuntime = await startLocalAppServerRuntime({
+        app,
+        rootDir: join(mniuRoot, "app-server"),
+        host: localAppServer.host,
+        port: localAppServer.port,
+        ...(localAppServer.token === undefined ? {} : { token: localAppServer.token }),
+        connectionFile: localAppServer.connectionFile ?? join(mniuRoot, "app-server.json"),
+        execute: async (input) => {
+          const result = await service.executeInteractiveThread({
+            threadId: input.threadId,
+            cwd: input.cwd,
+            prompt: input.prompt,
+            input: input.input as InteractiveThreadExecutionInput["input"],
+            ...(input.outputSchema === undefined ? {} : { outputSchema: input.outputSchema }),
+            providerId: input.providerId,
+            modelId: input.modelId,
+            signal: input.signal
+          });
+          return {
+            status: result.reason === "completed"
+              ? "completed"
+              : result.reason === "error" ? "failed" : "interrupted",
+            summary: result.summary,
+            ...(result.structuredOutput === undefined ? {} : { structuredOutput: result.structuredOutput }),
+            ...(result.attachments === undefined ? {} : { attachments: result.attachments })
+          };
+        },
+        onInternalError: (error, method) => {
+          app.log.error({ method, error: error instanceof Error ? error.message : "unknown error" }, "app-server request failed");
+        }
+      });
+      app.log.info({ url: localAppServerRuntime.url }, "local app-server listener ready");
     });
   }
 
@@ -7480,6 +7549,12 @@ export function buildServer(options: BuildServerOptions = {}) {
     };
   });
 
+  if (getAgentSessionService) {
+    Object.defineProperty(app, LOCAL_AGENT_SESSION_SERVICE_RESOLVER, {
+      value: () => getAgentSessionService?.(),
+      enumerable: false
+    });
+  }
   return app;
 
   async function persistRunArtifactsSafely(run: RunRecord): Promise<void> {

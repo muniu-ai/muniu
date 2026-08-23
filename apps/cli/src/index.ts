@@ -52,6 +52,8 @@ import {
 } from "@mn/worker";
 import { parse as parseYaml } from "yaml";
 import { agentCommand } from "./agent-commands.js";
+import { appServerCommand } from "./app-server-command.js";
+import { closeCliAppServerClient, requestControlJson } from "./app-server-client.js";
 import { runEnterpriseBuiltinAgentCandidate as runRemoteEnterpriseBuiltinAgentCandidate } from "./enterprise-builtin-runner.js";
 import { migrationCommand } from "./migration-commands.js";
 import { pluginCommand, profileCommand } from "./runtime-commands.js";
@@ -351,6 +353,11 @@ async function main(): Promise<void> {
 
   if (command === "agent") {
     await agentCommand(subcommand, args);
+    return;
+  }
+
+  if (command === "app-server") {
+    await appServerCommand([subcommand, ...args].filter((value): value is string => value !== undefined));
     return;
   }
 
@@ -3651,6 +3658,7 @@ async function writeConfig(config: MnConfig): Promise<void> {
 }
 
 async function fetchJson<T = unknown>(path: string): Promise<T> {
+  if (path.startsWith("/v1/")) return requestControlJson<T>(path);
   const targetApiUrl = await resolveApiUrl();
   const response = await fetch(`${targetApiUrl}${path}`, {
     headers: apiRequestHeaders()
@@ -3662,6 +3670,7 @@ async function fetchJson<T = unknown>(path: string): Promise<T> {
 }
 
 async function postJson<T = unknown>(path: string, body: unknown): Promise<T> {
+  if (path.startsWith("/v1/")) return requestControlJson<T>(path, { method: "POST", body });
   const targetApiUrl = await resolveApiUrl();
   const response = await fetch(`${targetApiUrl}${path}`, {
     method: "POST",
@@ -3717,6 +3726,10 @@ async function postBytes(
 }
 
 async function deleteJson(path: string): Promise<void> {
+  if (path.startsWith("/v1/")) {
+    await requestControlJson(path, { method: "DELETE" });
+    return;
+  }
   const targetApiUrl = await resolveApiUrl();
   const response = await fetch(`${targetApiUrl}${path}`, {
     method: "DELETE",
@@ -3942,6 +3955,7 @@ function printHelp(): void {
 
 Commands:
   mn init
+  mn app-server [--transport stdio|unix|ws] [--socket path] [--port 0] [--root ~/.muniu]
   mn agent run --provider <id> --model <id> --prompt "..." [--cwd .]
   mn agent chat --provider <id> --model <id> [--prompt "..."] [--cwd .]
   mn agent resume <session-id> --prompt "..."
@@ -4042,4 +4056,4 @@ main().catch((error: unknown) => {
   const cause = nestedErrorCauseSummary(error);
   console.error(cause ? `${message}\nCaused by: ${cause}` : message);
   process.exitCode = 1;
-});
+}).finally(() => closeCliAppServerClient());

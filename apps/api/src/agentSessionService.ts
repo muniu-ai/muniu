@@ -198,6 +198,30 @@ export interface EmbeddedCandidateExecutionOutput {
   readonly summary: string;
   readonly steps: number;
   readonly toolCalls: number;
+  readonly structuredOutput?: JsonValue;
+  readonly attachments?: readonly {
+    readonly name: string;
+    readonly mimeType: string;
+    readonly uri: string;
+    readonly digest: string;
+  }[];
+}
+
+export interface InteractiveThreadExecutionInput {
+  readonly threadId: string;
+  readonly cwd: string;
+  readonly prompt: string;
+  readonly input?: readonly {
+    readonly type: "text" | "image" | "localImage" | "audio" | "localAudio" | "skill" | "mention";
+    readonly text?: string;
+    readonly url?: string;
+    readonly path?: string;
+    readonly name?: string;
+  }[];
+  readonly outputSchema?: JsonValue;
+  readonly providerId: string;
+  readonly modelId: string;
+  readonly signal?: AbortSignal;
 }
 
 interface JournalReservation {
@@ -1194,6 +1218,116 @@ export class LocalMockAgentSessionService {
       input.signal?.removeEventListener("abort", abort);
       if (this.active.get(input.sessionId) === controller) this.active.delete(input.sessionId);
     }
+  }
+
+  async executeInteractiveThread(
+    input: InteractiveThreadExecutionInput
+  ): Promise<EmbeddedCandidateExecutionOutput> {
+    await this.ready;
+    safeControlId(input.threadId, "thread identifier");
+    const host = this.host;
+    if (!host) throw new Error("agent host is unavailable");
+    let existing = false;
+    try {
+      await this.store.open(SessionId(input.threadId));
+      existing = true;
+    } catch (error: unknown) {
+      if (!(error instanceof AgentSessionNotFoundError)) throw error;
+    }
+    const interactive = await this.prepareInteractiveInput(input);
+    const prompt = input.outputSchema === undefined
+      ? interactive.prompt
+      : `${interactive.prompt}\n\nReturn only JSON matching this schema:\n${JSON.stringify(input.outputSchema)}`;
+    const shared = {
+      prompt,
+      ...(interactive.userContent.length === 0 ? {} : { userContent: interactive.userContent }),
+      ...(interactive.imageInputs.length === 0 ? {} : { imageInputs: interactive.imageInputs }),
+      provider: input.providerId,
+      model: input.modelId,
+      ...(input.signal === undefined ? {} : { signal: input.signal })
+    };
+    const result = existing
+      ? await host.resume({ sessionId: SessionId(input.threadId), ...shared })
+      : await host.run({
+          sessionId: SessionId(input.threadId),
+          cwd: input.cwd,
+          labels: { source: "app-server" },
+          ...shared
+        });
+    const summary = embeddedRunSummary(
+      result.session,
+      `Interactive Agent ${result.reason} after ${result.steps} steps and ${result.toolCalls} tool calls.`
+    );
+    let structuredOutput: JsonValue | undefined;
+    if (input.outputSchema !== undefined) {
+      try {
+        structuredOutput = JSON.parse(summary) as JsonValue;
+      } catch (error: unknown) {
+        throw new Error("interactive Agent did not return valid structured JSON", { cause: error });
+      }
+    }
+    return Object.freeze({
+      reason: result.reason,
+      summary,
+      steps: result.steps,
+      toolCalls: result.toolCalls,
+      ...(structuredOutput === undefined ? {} : { structuredOutput }),
+      ...(interactive.attachments.length === 0 ? {} : { attachments: interactive.attachments })
+    });
+  }
+
+  private async prepareInteractiveInput(input: InteractiveThreadExecutionInput): Promise<{
+    readonly prompt: string;
+    readonly userContent: readonly ContentBlock[];
+    readonly imageInputs: readonly ModelImageInput[];
+    readonly attachments: readonly { readonly name: string; readonly mimeType: string; readonly uri: string; readonly digest: string }[];
+  }> {
+    const userContent: ContentBlock[] = [];
+    const imageInputs: ModelImageInput[] = [];
+    const attachments: Array<{ name: string; mimeType: string; uri: string; digest: string }> = [];
+    if (input.prompt.trim()) userContent.push({ type: "text", text: input.prompt });
+    for (const item of input.input ?? []) {
+      if (item.type === "text" || item.type === "mention" || item.type === "skill") continue;
+      if (item.type !== "image") {
+        throw new Error(`interactive attachment type is unsupported: ${item.type}`);
+      }
+      const match = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/]+={0,2})$/u.exec(item.url ?? "");
+      if (!match) throw new Error("interactive images must use a PNG, JPEG, or WebP data URL");
+      const contentType = match[1] as AgentAttachmentDescriptorV1["contentType"];
+      const encoded = match[2]!;
+      const bytes = Buffer.from(encoded, "base64");
+      if (bytes.toString("base64").replace(/=+$/u, "") !== encoded.replace(/=+$/u, "")) {
+        throw new Error("interactive image data URL has invalid base64");
+      }
+      const descriptor = await this.attachmentStore.put({
+        sessionId: input.threadId,
+        contentType,
+        bytes
+      });
+      userContent.push({
+        type: "image",
+        attachmentId: descriptor.attachmentId,
+        contentType: descriptor.contentType,
+        sha256: descriptor.sha256,
+        byteLength: descriptor.byteLength,
+        width: descriptor.width,
+        height: descriptor.height
+      });
+      imageInputs.push({
+        attachmentId: descriptor.attachmentId,
+        contentType: descriptor.contentType,
+        sha256: descriptor.sha256,
+        byteLength: descriptor.byteLength,
+        dataBase64: bytes.toString("base64")
+      });
+      attachments.push({
+        name: item.name ?? descriptor.attachmentId,
+        mimeType: descriptor.contentType,
+        uri: `attachment://${descriptor.attachmentId}`,
+        digest: descriptor.sha256
+      });
+    }
+    return { prompt: input.prompt, userContent, imageInputs, attachments };
   }
 
   eventsAfter(sessionId: string, after: number): Promise<readonly AgentSessionEvent[]> {

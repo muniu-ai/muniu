@@ -146,7 +146,14 @@ function snapshotAgentHostRunInput(input: AgentHostRunInput): AgentHostRunInputS
   const imageInputs = input.imageInputs === undefined
     ? undefined
     : snapshotBoundedJsonValue(input.imageInputs) as unknown as ModelImageInput[];
-  const creation = snapshotCreateAgentSessionOptions({ sessionId, cwd, labels });
+  const creation = snapshotCreateAgentSessionOptions({
+    sessionId,
+    cwd,
+    labels,
+    ...(userContent?.some((block) => block.type === "image") || imageInputs?.length
+      ? { schemaVersion: 2 as const }
+      : {})
+  });
   const fixedEffectPolicyBinding = effectPolicyBinding === undefined
     ? undefined
     : snapshotEffectPolicyBindingV1(effectPolicyBinding);

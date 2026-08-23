@@ -3,7 +3,9 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { Transformer } from "@napi-rs/image";
 
+import { createSafeRandomPublicControlIdV1 } from "@mn/agent-protocol";
 import type { ProviderRecord } from "@mn/provider-catalog";
 
 import { createProductionAgentRuntimeFactory } from "../src/agentRuntimeFactory.js";
@@ -106,6 +108,64 @@ test("production Agent service validates and runs the durable provider/model bin
         ?.payload?.publicControls?.terminal?.cost?.estimatedCostPicoUsd,
       "7000000"
     );
+  } finally {
+    await service.dispose();
+  }
+});
+
+test("interactive thread normalizes image attachments and structured output", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "muniu-agent-interactive-"));
+  let requestBody: unknown;
+  const image = await Transformer.fromRgbaPixels(Buffer.from([10, 20, 30, 255]), 1, 1).png();
+  const imageProvider = {
+    ...provider(),
+    modelCatalog: [{
+      ...provider().modelCatalog[0]!,
+      inputModalities: ["text", "image"] as const
+    }]
+  };
+  const factory = createProductionAgentRuntimeFactory({
+    providerSource: { getProvider: async () => imageProvider },
+    resolveStoredSecret: async () => "synthetic-secret",
+    fetch: async (request, init) => {
+      const captured = request instanceof Request ? request : new Request(request, init);
+      requestBody = await captured.clone().json();
+      return new Response([
+        `data: ${JSON.stringify({ choices: [{ delta: { content: '{"result":"ok"}' }, finish_reason: "stop" }] })}`,
+        "",
+        "data: [DONE]",
+        ""
+      ].join("\n"), {
+        status: 200,
+        headers: { "content-type": "text/event-stream" }
+      });
+    }
+  });
+  const service = new LocalMockAgentSessionService(root, {
+    mode: "production",
+    runtimeFactory: factory
+  });
+  try {
+    const result = await service.executeInteractiveThread({
+      threadId: createSafeRandomPublicControlIdV1("thread"),
+      cwd: root,
+      prompt: "inspect the image",
+      input: [
+        { type: "text", text: "inspect the image" },
+        { type: "image", name: "pixel.png", url: `data:image/png;base64,${image.toString("base64")}` }
+      ],
+      outputSchema: {
+        type: "object",
+        properties: { result: { type: "string" } },
+        required: ["result"]
+      },
+      providerId: imageProvider.id,
+      modelId: imageProvider.defaultModel
+    });
+    assert.deepEqual(result.structuredOutput, { result: "ok" });
+    assert.equal(result.attachments?.[0]?.name, "pixel.png");
+    assert.match(result.attachments?.[0]?.digest ?? "", /^[a-f0-9]{64}$/u);
+    assert.match(JSON.stringify(requestBody), /data:image\/png;base64,/u);
   } finally {
     await service.dispose();
   }
