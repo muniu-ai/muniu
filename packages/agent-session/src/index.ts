@@ -11,3 +11,5 @@ export * from "./recovery.js";
 export * from "./remote-store.js";
 export * from "./session.js";
 export * from "./types.js";
+export * from "./thread-v3.js";
+export * from "./migration-v3.js";

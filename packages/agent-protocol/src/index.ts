@@ -3,6 +3,7 @@
 export * from "./canonical.js";
 export * from "./events.js";
 export * from "./events-v2.js";
+export * from "./events-v3.js";
 export * from "./effect-commitment.js";
 export * from "./freeze.js";
 export * from "./ids.js";

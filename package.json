@@ -47,6 +47,7 @@
     "verify:oss-baseline": "node scripts/verify-open-source-baseline.mjs",
     "verify:codex-provenance": "node scripts/verify-openai-codex-provenance.mjs",
     "verify:app-server-schema": "npm run verify:schema -w @mn/app-server-protocol",
+    "verify:migration-v3": "npm run verify:migration-v3 -w @mn/agent-protocol && npm run verify:migration-v3 -w @mn/agent-session && npm run verify:migration-v3 -w @mn/api && npm run verify:migration-v3 -w @mn/cli",
     "verify:licenses": "node scripts/generate-npm-license-inventory.mjs --check && node scripts/verify-third-party-licenses.mjs",
     "generate:npm-license-inventory": "node scripts/generate-npm-license-inventory.mjs",
     "generate:cargo-license-inventory": "node scripts/generate-cargo-license-inventory.mjs",

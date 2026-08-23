@@ -53,6 +53,7 @@ import {
 import { parse as parseYaml } from "yaml";
 import { agentCommand } from "./agent-commands.js";
 import { runEnterpriseBuiltinAgentCandidate as runRemoteEnterpriseBuiltinAgentCandidate } from "./enterprise-builtin-runner.js";
+import { migrationCommand } from "./migration-commands.js";
 import { pluginCommand, profileCommand } from "./runtime-commands.js";
 import { SerializedWorkerPostQueue } from "./serialized-worker-posts.js";
 
@@ -350,6 +351,11 @@ async function main(): Promise<void> {
 
   if (command === "agent") {
     await agentCommand(subcommand, args);
+    return;
+  }
+
+  if (command === "migrate") {
+    await migrationCommand(subcommand, args);
     return;
   }
 
@@ -3940,6 +3946,7 @@ Commands:
   mn agent chat --provider <id> --model <id> [--prompt "..."] [--cwd .]
   mn agent resume <session-id> --prompt "..."
   mn agent sessions [--limit 100]
+  mn migrate app-server-v3 [--root ~/.muniu/agent-service] [--dry-run|--apply|--rollback]
   mn plugin list
   mn plugin install <local-path|name@x.y.z>
   mn plugin remove <id|specifier>
