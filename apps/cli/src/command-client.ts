@@ -2,6 +2,8 @@
 
 import { readFile } from "node:fs/promises";
 
+import { requestControlJson } from "./app-server-client.js";
+
 const DEFAULT_API_URL = "http://127.0.0.1:7318";
 
 export class CliApiError extends Error {
@@ -33,6 +35,9 @@ export async function requestJson<T>(
   path: string,
   options: { method?: "GET" | "POST"; body?: unknown } = {}
 ): Promise<T> {
+  if (path.startsWith("/v1/")) {
+    return requestControlJson(path, options);
+  }
   const response = await fetch(`${await apiUrl()}${path}`, {
     method: options.method ?? "GET",
     headers: {

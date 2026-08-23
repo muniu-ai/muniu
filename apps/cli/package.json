@@ -20,12 +20,19 @@
   "dependencies": {
     "@mn/agent-protocol": "0.1.1",
     "@mn/agent-session": "0.1.1",
+    "@mn/api": "0.1.1",
+    "@mn/app-server": "0.1.1",
+    "@mn/app-server-protocol": "0.1.1",
     "@mn/core": "^0.1.1",
     "@mn/executors": "^0.1.1",
     "@mn/harness": "^0.1.1",
     "@mn/loop": "^0.1.1",
     "@mn/specs": "^0.1.1",
+    "@mn/sdk": "0.1.1",
     "@mn/worker": "^0.1.1",
     "yaml": "^2.4.2"
+  },
+  "devDependencies": {
+    "@mn/agent-kernel": "0.1.1"
   }
 }

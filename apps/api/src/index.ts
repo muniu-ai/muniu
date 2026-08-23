@@ -70,12 +70,23 @@ const enterpriseProxyHost = process.env.MN_ENTERPRISE_PROXY_HOST ?? "0.0.0.0";
 const enterpriseProxyPublicBaseUrl = process.env.MN_ENTERPRISE_PROXY_PUBLIC_BASE_URL;
 const enterpriseBuiltinInstanceId = process.env.MN_API_INSTANCE_ID;
 const enterpriseAgentAttachmentKeySecret = process.env.MN_AGENT_ATTACHMENT_KEY_SECRET;
+const localAppServerPort = Number(process.env.MN_APP_SERVER_PORT ?? port + 1);
 
 const app = buildServer({
   useMockExecutors,
   workspaceRoot,
   runtimeProfile,
   bindHost: host,
+  ...(runtimeProfile === "local" ? {
+    localAppServer: {
+      host: "127.0.0.1",
+      port: localAppServerPort,
+      ...(process.env.MN_APP_SERVER_TOKEN ? { token: process.env.MN_APP_SERVER_TOKEN } : {}),
+      ...(process.env.MN_APP_SERVER_CONNECTION_FILE
+        ? { connectionFile: process.env.MN_APP_SERVER_CONNECTION_FILE }
+        : {})
+    }
+  } : {}),
   ...(auth ? { auth } : {}),
   ...(corsAllowlist.length > 0 ? { corsAllowlist } : {}),
   ...(runtimeProfile === "enterprise" && enterpriseProjectRoots.length > 0

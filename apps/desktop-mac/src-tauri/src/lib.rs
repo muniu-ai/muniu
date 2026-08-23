@@ -4,6 +4,8 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 use tauri::{Emitter, Manager};
 use tauri_plugin_shell::{process::CommandChild, process::CommandEvent, ShellExt};
 
@@ -18,6 +20,15 @@ struct DesktopRuntimeStatus {
     window_label: &'static str,
 }
 
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AppServerConnectionDescriptor {
+    schema_version: u8,
+    url: String,
+    token: String,
+    pid: Option<u32>,
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 struct DesktopSettings {
@@ -28,27 +39,12 @@ struct DesktopSettings {
     api_url: String,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct TrayProvider {
     id: String,
     name: String,
     enabled: bool,
-}
-
-#[derive(Deserialize)]
-struct TrayProviderList {
-    providers: Vec<TrayProvider>,
-}
-
-#[derive(Deserialize)]
-struct TrayProxyRuntime {
-    running: bool,
-}
-
-#[derive(Deserialize)]
-struct TrayProxyStatus {
-    runtime: TrayProxyRuntime,
 }
 
 impl Default for DesktopSettings {
@@ -106,6 +102,63 @@ fn enter_lightweight_mode(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn update_tray_state(
+    app: tauri::AppHandle,
+    claude: Vec<TrayProvider>,
+    codex: Vec<TrayProvider>,
+    proxy_running: bool,
+) -> Result<(), String> {
+    let menu = tray_menu(&app, &claude, &codex, proxy_running)
+        .map_err(|error| error.to_string())?;
+    let tray = app
+        .tray_by_id("main")
+        .ok_or_else(|| "main tray is missing".to_string())?;
+    tray.set_menu(Some(menu)).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn read_app_server_connection() -> Result<AppServerConnectionDescriptor, String> {
+    let path = muniu_root_path()?.join("app-server.json");
+    let metadata = fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err("app-server connection file is unsafe".to_string());
+    }
+    #[cfg(unix)]
+    {
+        if metadata.mode() & 0o077 != 0 {
+            return Err("app-server connection file permissions are unsafe".to_string());
+        }
+        if metadata.uid() != unsafe { libc::geteuid() } {
+            return Err("app-server connection file owner is invalid".to_string());
+        }
+    }
+    let raw = fs::read_to_string(&path).map_err(|error| error.to_string())?;
+    let descriptor = serde_json::from_str::<AppServerConnectionDescriptor>(&raw)
+        .map_err(|_| "app-server connection file is invalid".to_string())?;
+    if descriptor.schema_version != 1
+        || descriptor.token.len() < 32
+        || descriptor.token.len() > 512
+        || !descriptor
+            .token
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    {
+        return Err("app-server connection descriptor is invalid".to_string());
+    }
+    let url = url::Url::parse(&descriptor.url)
+        .map_err(|_| "app-server connection URL is invalid".to_string())?;
+    let loopback = url
+        .host_str()
+        .and_then(|host| host.parse::<std::net::IpAddr>().ok())
+        .is_some_and(|host| host.is_loopback())
+        || url.host_str() == Some("localhost");
+    if url.scheme() != "ws" || !loopback {
+        return Err("local app-server connection must use loopback WebSocket".to_string());
+    }
+    Ok(descriptor)
+}
+
 pub fn run() {
     install_panic_log_hook();
 
@@ -125,17 +178,15 @@ pub fn run() {
             let daemon = spawn_managed_daemon(app.handle())?;
             app.manage(ManagedDaemon(Mutex::new(daemon)));
             build_tray(app)?;
-            let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                let _ = refresh_tray_providers(&handle).await;
-            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             desktop_runtime_status,
             read_desktop_settings,
             write_desktop_settings,
-            enter_lightweight_mode
+            enter_lightweight_mode,
+            read_app_server_connection,
+            update_tray_state
         ])
         .build(tauri::generate_context!())
         .expect("error while building 木牛 desktop");
@@ -301,32 +352,21 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
                     }
                 }
                 "refresh_providers" => {
-                    let handle = app.clone();
-                    tauri::async_runtime::spawn(async move {
-                        let _ = refresh_tray_providers(&handle).await;
-                    });
+                    let _ = show_or_recreate_main_window(app);
+                    let _ = app.emit("tray-refresh-requested", ());
                 }
                 "toggle_proxy" => {
-                    let handle = app.clone();
-                    tauri::async_runtime::spawn(async move {
-                        if let Err(error) = toggle_tray_proxy(&handle).await {
-                            let _ = handle.emit("tray-action-error", error);
-                        }
-                    });
+                    let _ = show_or_recreate_main_window(app);
+                    let _ = app.emit("tray-proxy-toggle-requested", ());
                 }
                 "quit" => app.exit(0),
                 _ => {
                     if let Some((app_id, provider_id)) = parse_tray_provider_event(event_id) {
-                        let app_id = app_id.to_string();
-                        let provider_id = provider_id.to_string();
-                        let handle = app.clone();
-                        tauri::async_runtime::spawn(async move {
-                            if let Err(error) =
-                                switch_tray_provider(&handle, &app_id, &provider_id).await
-                            {
-                                let _ = handle.emit("tray-provider-error", error);
-                            }
-                        });
+                        let _ = show_or_recreate_main_window(app);
+                        let _ = app.emit(
+                            "tray-provider-preview",
+                            serde_json::json!({ "app": app_id, "providerId": provider_id }),
+                        );
                     }
                 }
             }
@@ -417,96 +457,6 @@ fn tray_menu(
     )
 }
 
-async fn refresh_tray_providers(app: &tauri::AppHandle) -> Result<(), String> {
-    let api_url = desktop_api_url();
-    let client = reqwest::Client::new();
-    let claude = fetch_tray_providers(&client, &api_url, "claude")
-        .await
-        .map_err(|error| error.to_string())?;
-    let codex = fetch_tray_providers(&client, &api_url, "codex")
-        .await
-        .map_err(|error| error.to_string())?;
-    let proxy_running = fetch_tray_proxy_running(&client, &api_url)
-        .await
-        .map_err(|error| error.to_string())?;
-    let menu = tray_menu(app, &claude, &codex, proxy_running).map_err(|error| error.to_string())?;
-    let tray = app
-        .tray_by_id("main")
-        .ok_or_else(|| "main tray is missing".to_string())?;
-    tray.set_menu(Some(menu)).map_err(|error| error.to_string())
-}
-
-async fn fetch_tray_proxy_running(
-    client: &reqwest::Client,
-    api_url: &str,
-) -> Result<bool, reqwest::Error> {
-    Ok(client
-        .get(format!("{api_url}/v1/proxy/status"))
-        .send()
-        .await?
-        .error_for_status()?
-        .json::<TrayProxyStatus>()
-        .await?
-        .runtime
-        .running)
-}
-
-async fn toggle_tray_proxy(app: &tauri::AppHandle) -> Result<(), String> {
-    let api_url = desktop_api_url();
-    let client = reqwest::Client::new();
-    let running = fetch_tray_proxy_running(&client, &api_url)
-        .await
-        .map_err(|error| error.to_string())?;
-    let action = if running { "stop" } else { "start" };
-    client
-        .post(format!("{api_url}/v1/proxy/{action}"))
-        .json(&serde_json::json!({}))
-        .send()
-        .await
-        .map_err(|error| error.to_string())?
-        .error_for_status()
-        .map_err(|error| error.to_string())?;
-    refresh_tray_providers(app).await?;
-    app.emit(
-        "tray-proxy-changed",
-        serde_json::json!({ "running": !running }),
-    )
-    .map_err(|error| error.to_string())?;
-    Ok(())
-}
-
-async fn fetch_tray_providers(
-    client: &reqwest::Client,
-    api_url: &str,
-    app_id: &str,
-) -> Result<Vec<TrayProvider>, reqwest::Error> {
-    Ok(client
-        .get(format!("{api_url}/v1/providers?app={app_id}"))
-        .send()
-        .await?
-        .error_for_status()?
-        .json::<TrayProviderList>()
-        .await?
-        .providers)
-}
-
-async fn switch_tray_provider(
-    app: &tauri::AppHandle,
-    app_id: &str,
-    provider_id: &str,
-) -> Result<(), String> {
-    let api_url = desktop_api_url();
-    let client = reqwest::Client::new();
-    request_tray_provider_switch(&client, &api_url, app_id, provider_id).await?;
-    show_or_recreate_main_window(app)?;
-    app.emit(
-        "tray-provider-preview",
-        serde_json::json!({ "app": app_id, "providerId": provider_id }),
-    )
-    .map_err(|error| error.to_string())?;
-    Ok(())
-}
-
 fn parse_tray_provider_event(event_id: &str) -> Option<(&str, &str)> {
     let mut parts = event_id.split(':');
     if parts.next()? != "provider" {
@@ -520,37 +470,11 @@ fn parse_tray_provider_event(event_id: &str) -> Option<(&str, &str)> {
     Some((app_id, provider_id))
 }
 
-async fn request_tray_provider_switch(
-    client: &reqwest::Client,
-    api_url: &str,
-    app_id: &str,
-    provider_id: &str,
-) -> Result<(), String> {
-    let url = format!("{api_url}/v1/providers/{provider_id}/enable");
-    client
-        .post(&url)
-        .json(&serde_json::json!({ "app": app_id, "dryRun": true }))
-        .send()
-        .await
-        .map_err(|error| error.to_string())?
-        .error_for_status()
-        .map_err(|error| error.to_string())?;
-    Ok(())
-}
-
-fn desktop_api_url() -> String {
-    read_desktop_settings()
-        .unwrap_or_default()
-        .api_url
-        .trim_end_matches('/')
-        .to_string()
-}
-
 fn spawn_managed_daemon(
     app: &tauri::AppHandle,
 ) -> Result<Option<CommandChild>, Box<dyn std::error::Error>> {
     let settings = read_desktop_settings().unwrap_or_default();
-    let api_url = reqwest::Url::parse(&settings.api_url)?;
+    let api_url = url::Url::parse(&settings.api_url)?;
     let host = api_url.host_str().unwrap_or("127.0.0.1");
     if !matches!(host, "127.0.0.1" | "localhost" | "::1") {
         return Ok(None);

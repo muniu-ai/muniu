@@ -102,6 +102,7 @@ export interface AppServerConnectionOptions extends Omit<OutboundQueueOptions, "
   notificationLog: NotificationLog;
   write(message: JsonRpcMessage): Promise<void>;
   close(reason: QueueCloseReason): void;
+  onInternalError?: (error: unknown, method: Exclude<ClientMethod, "initialize"> | MuniuMethod) => void;
   serverRequestTimeoutMs?: number;
 }
 
@@ -280,7 +281,10 @@ export class AppServerConnection {
         this.#queue.enqueue({ id, result: MuniuControlResultSchema.parse(result) });
       } catch (error) {
         if (error instanceof RpcFault) this.#sendError(id, error.code, error.message, error.data);
-        else this.#sendError(id, -32603, "Internal error");
+        else {
+          this.#options.onInternalError?.(error, request.method);
+          this.#sendError(id, -32603, "Internal error");
+        }
       }
       return;
     }
@@ -295,7 +299,10 @@ export class AppServerConnection {
       this.#queue.enqueue({ id, result: schema.parse(result) });
     } catch (error) {
       if (error instanceof RpcFault) this.#sendError(id, error.code, error.message, error.data);
-      else this.#sendError(id, -32603, "Internal error");
+      else {
+        this.#options.onInternalError?.(error, clientRequest.method);
+        this.#sendError(id, -32603, "Internal error");
+      }
     }
   }
 

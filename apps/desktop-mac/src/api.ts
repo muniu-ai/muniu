@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { controlRequestForHttp } from "@mn/app-server-protocol";
 import type {
   AgentAppId,
   ArtifactStoreCleanupSummary,
@@ -62,6 +63,7 @@ import type {
   WorkflowsDocument,
   WorkspaceCleanupSummary
 } from "./types";
+import { desktopAppServerClient, resetDesktopAppServerClient } from "./app-server";
 
 const defaultApiUrl = import.meta.env.VITE_MN_API_URL ?? "http://127.0.0.1:7318";
 let configuredApiUrl = defaultApiUrl;
@@ -80,14 +82,11 @@ export function resolveApiUrl(): string {
 
 export function configureApiUrl(apiUrl: string): void {
   configuredApiUrl = apiUrl.trim().replace(/\/+$/, "") || defaultApiUrl;
+  void resetDesktopAppServerClient();
 }
 
 export async function fetchDesktopStatus(): Promise<DesktopStatus> {
-  const response = await fetch(`${resolveApiUrl()}/v1/system/desktop`);
-  if (!response.ok) {
-    throw new Error(`${response.status} ${await response.text()}`);
-  }
-  return (await response.json()) as DesktopStatus;
+  return fetchJson<DesktopStatus>("/v1/system/desktop");
 }
 
 export async function fetchSystemDoctor(): Promise<SystemDoctorSummary> {
@@ -156,11 +155,7 @@ export async function enterDesktopLightweightMode(): Promise<boolean> {
 }
 
 export async function fetchProviders(app: AgentAppId): Promise<ProviderSummary[]> {
-  const response = await fetch(`${resolveApiUrl()}/v1/providers?app=${app}`);
-  if (!response.ok) {
-    throw new Error(`${response.status} ${await response.text()}`);
-  }
-  const body = (await response.json()) as { providers: ProviderSummary[] };
+  const body = await fetchJson<{ providers: ProviderSummary[] }>(`/v1/providers?app=${app}`);
   return body.providers;
 }
 
@@ -760,6 +755,15 @@ export async function fetchRunJobWorkers(): Promise<RunJobWorkerListSummary> {
 }
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
+  if (path.startsWith("/v1/")) {
+    const method = (init?.method ?? "GET").toUpperCase();
+    if (!["GET", "POST", "PUT", "PATCH", "DELETE"].includes(method)) {
+      throw new Error(`Unsupported control method: ${method}`);
+    }
+    const body = typeof init?.body === "string" ? JSON.parse(init.body) as unknown : init?.body;
+    const request = controlRequestForHttp(method, path, body);
+    return await (await desktopAppServerClient()).callControl(request.method, request.params) as T;
+  }
   const response = await fetch(`${resolveApiUrl()}${path}`, init);
   if (!response.ok) {
     throw new Error(`${response.status} ${await response.text()}`);
@@ -849,10 +853,7 @@ async function sendJson<T>(
 }
 
 async function sendDelete(path: string): Promise<void> {
-  const response = await fetch(`${resolveApiUrl()}${path}`, { method: "DELETE" });
-  if (!response.ok) {
-    throw new Error(`${response.status} ${await response.text()}`);
-  }
+  await fetchJson(path, { method: "DELETE" });
 }
 
 function normalizeProviderInput(input: ProviderInput): ProviderInput {

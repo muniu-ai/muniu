@@ -95,3 +95,37 @@ test("JSONL V3 store serializes concurrent appends for one thread", async () => 
   assert.equal(events[2]?.causationId, events[1]?.eventId);
   assert.equal(events[2]?.previousDigest, events[1]?.digest);
 });
+
+test("JSONL V3 store serializes reads with a following append", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "muniu-thread-store-v3-read-write-"));
+  const threadId = SessionId("thread-store-v3-read-write");
+  const store = new JsonlAgentEventV3Store(root);
+  await store.create({
+    eventId: EventId("event-store-read-write-created"),
+    threadId,
+    sequence: 0,
+    occurredAt: "2026-08-23T00:00:00.000Z",
+    type: "thread/created",
+    correlationId: threadId,
+    publicControls: {
+      source: "appServer",
+      providerId: "openai",
+      modelId: "gpt-5",
+      permissionProfile: "workspace-write",
+      sandbox: { mode: "workspace-write" }
+    },
+    protectedContent: createProtectedJsonViewV1({ cwd: "/workspace/project" })
+  });
+  const read = store.read(threadId);
+  const append = store.append(threadId, {
+    eventId: EventId("event-store-read-write-updated"),
+    occurredAt: "2026-08-23T00:00:01.000Z",
+    type: "thread/updated",
+    correlationId: threadId,
+    publicControls: { modelId: "gpt-5.1" },
+    protectedContent: createProtectedJsonViewV1(null)
+  });
+  assert.equal((await read).length, 1);
+  assert.equal((await append).sequence, 1);
+  assert.equal((await store.read(threadId)).length, 2);
+});

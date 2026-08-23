@@ -118,6 +118,13 @@ test("requires a bearer token on a loopback-only WebSocket listener", async (t) 
     socket.once("message", (data) => resolve(data.toString()));
   });
   assert.equal(echoed, '{"id":1}');
+  const browserEchoed = await new Promise<string>((resolve, reject) => {
+    const socket = new WebSocket(server.url, ["muniu.v2", `muniu.bearer.${server.token}`]);
+    socket.once("error", reject);
+    socket.once("open", () => socket.send('{"id":2}'));
+    socket.once("message", (data) => resolve(data.toString()));
+  });
+  assert.equal(browserEchoed, '{"id":2}');
 
   await assert.rejects(() => createLocalWebSocketServer({
     host: "0.0.0.0",

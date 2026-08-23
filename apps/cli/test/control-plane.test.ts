@@ -71,7 +71,7 @@ async function createCliFixture(
   delete env.MN_API_URL;
   return {
     cwd,
-    entry: join(process.cwd(), "dist-test", "src", "index.js"),
+    entry: join(process.cwd(), "dist-test", "test", "cli-test-entry.js"),
     env,
     seen
   };

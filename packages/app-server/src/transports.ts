@@ -156,6 +156,14 @@ function bearerMatches(header: string | undefined, token: string): boolean {
   return supplied.length === expected.length && timingSafeEqual(supplied, expected);
 }
 
+function protocolBearerMatches(header: string | undefined, token: string): boolean {
+  const supplied = header?.split(",").map((value) => value.trim())
+    .find((value) => value.startsWith("muniu.bearer."))
+    ?.slice("muniu.bearer.".length);
+  if (supplied === undefined) return false;
+  return bearerMatches(`Bearer ${supplied}`, token);
+}
+
 function websocketSend(socket: WebSocket, value: unknown): Promise<void> {
   return new Promise((resolve, reject) => {
     const json = JSON.stringify(value);
@@ -175,14 +183,18 @@ export async function createLocalWebSocketServer(options: {
 }): Promise<{ url: string; token: string; close(): Promise<void> }> {
   if (!isLoopbackHost(options.host)) throw new Error("Local WebSocket host must be loopback-only");
   const token = options.token ?? randomBytes(32).toString("base64url");
-  if (Buffer.byteLength(token, "utf8") < 32) throw new Error("Local WebSocket bearer token must be at least 32 bytes");
+  if (!/^[A-Za-z0-9_-]{32,512}$/u.test(token)) {
+    throw new Error("Local WebSocket bearer token must be 32-512 base64url characters");
+  }
   const httpServer = http.createServer((_request, response) => {
     response.writeHead(404).end();
   });
   const websocketServer = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES });
   const clients = new Set<WebSocket>();
   httpServer.on("upgrade", (request, socket, head) => {
-    if (!isLoopbackAddress(request.socket.remoteAddress) || !bearerMatches(request.headers.authorization, token)) {
+    if (!isLoopbackAddress(request.socket.remoteAddress)
+      || (!bearerMatches(request.headers.authorization, token)
+        && !protocolBearerMatches(request.headers["sec-websocket-protocol"], token))) {
       socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
       socket.destroy();
       return;

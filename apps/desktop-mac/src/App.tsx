@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent, ReactNode } from "react";
-import { isTauri } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
@@ -197,6 +197,7 @@ import {
   isGovernedWorkflow,
   TaskGovernanceControls
 } from "./GovernedTaskFusion";
+import { ThreadWorkspace } from "./ThreadWorkspace";
 import "./styles.css";
 
 const agentOrder: AgentAppId[] = ["claude", "codex"];
@@ -638,6 +639,13 @@ function App() {
         claude: claudeProviders,
         codex: codexProviders
       });
+      if (isTauri()) {
+        void invoke("update_tray_state", {
+          claude: claudeProviders,
+          codex: codexProviders,
+          proxyRunning: desktopStatus.proxy.status === "running"
+        }).catch(() => undefined);
+      }
       setExtensions({
         claude: claudeExtensions,
         codex: codexExtensions
@@ -2003,6 +2011,22 @@ function App() {
       listen<string>("tray-action-error", (event) => {
         setActionError(`托盘操作失败: ${event.payload}`);
       }),
+      listen("tray-refresh-requested", () => {
+        void refresh();
+      }),
+      listen("tray-proxy-toggle-requested", () => {
+        void fetchDesktopStatus()
+          .then(async (current) => {
+            if (current.proxy.status === "running") await stopLocalProxy(false);
+            else await startLocalProxy();
+            setActionMessage(`本地代理已${current.proxy.status === "running" ? "停止" : "启动"}`);
+            await refresh();
+          })
+          .catch((error: unknown) => {
+            const message = error instanceof Error ? error.message : String(error);
+            setActionError(`托盘代理操作失败: ${message}`);
+          });
+      }),
       listen<{ running: boolean }>("tray-proxy-changed", (event) => {
         setActionMessage(`本地代理已${event.payload.running ? "启动" : "停止"}`);
         void refresh();
@@ -2185,6 +2209,10 @@ function App() {
           <a className="nav-item" href="#providers">
             <Database size={18} />
             <span>供应商</span>
+          </a>
+          <a className="nav-item" href="#threads">
+            <MessageSquareText size={18} />
+            <span>线程</span>
           </a>
           <a className="nav-item" href="#extensions">
             <PlugZap size={18} />
@@ -2744,6 +2772,8 @@ function App() {
             />
           </div>
         </section>
+
+        <ThreadWorkspace />
 
         {providerEditor ? (
           <ProviderEditorDialog
