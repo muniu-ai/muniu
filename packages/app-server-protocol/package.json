@@ -1,0 +1,29 @@
+{
+  "name": "@mn/app-server-protocol",
+  "version": "0.1.1",
+  "private": true,
+  "license": "Apache-2.0",
+  "repository": "https://github.com/muniu-ai/muniu",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.test.json && node --test dist-test/test/**/*.test.js",
+    "generate:schema": "npm run build && node scripts/generate-schema.mjs",
+    "verify:schema": "npm run build && node scripts/generate-schema.mjs --check"
+  },
+  "dependencies": {
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "zod-to-json-schema": "3.24.6"
+  }
+}

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "packageLockSha256": "2ff1643e935d2df6ff60e98b93ddfcda501a80f0ad80151069e69798824c4cc0",
+  "packageLockSha256": "ddff17ecf5f05d7f88c87030942530e7b33060c96a070d6adf6b5a9ee23aea8f",
   "packages": [
     {
       "name": "@algolia/abtesting",
@@ -1443,6 +1443,13 @@
       "license": "MIT",
       "resolved": "https://registry.npmjs.org/@types/web-bluetooth/-/web-bluetooth-0.0.21.tgz",
       "integrity": "sha512-oIQLCGWtcFZy2JW77j9k8nHzAOpqMHLQejDA48XXMWH6tjCQHz5RCFz1bzsmROyL6PUm+LLnUiI4BCn221inxA=="
+    },
+    {
+      "name": "@types/ws",
+      "version": "8.18.1",
+      "license": "MIT",
+      "resolved": "https://registry.npmjs.org/@types/ws/-/ws-8.18.1.tgz",
+      "integrity": "sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg=="
     },
     {
       "name": "@ungap/structured-clone",
@@ -3711,6 +3718,13 @@
       "license": "MIT",
       "resolved": "https://registry.npmjs.org/zod/-/zod-3.25.76.tgz",
       "integrity": "sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ=="
+    },
+    {
+      "name": "zod-to-json-schema",
+      "version": "3.24.6",
+      "license": "ISC",
+      "resolved": "https://registry.npmjs.org/zod-to-json-schema/-/zod-to-json-schema-3.24.6.tgz",
+      "integrity": "sha512-h/z3PKvcTcTetyjl1fkj79MHNEjm+HpD6NXheWjzOekY7kV+lwDYnHw+ivHkijnCSMz1yJaWBD9vu/Fcmk+vEg=="
     },
     {
       "name": "zwitch",
