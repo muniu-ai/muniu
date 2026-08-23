@@ -10,7 +10,9 @@ import { dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 import { RuntimeAuditLog } from "./audit.js";
 import { digestRuntimeValue } from "./canonical.js";
+import { ContributorBus } from "./contributors.js";
 import { coreRuntimePlugin } from "./core-plugin.js";
+import { verifyRuntimePluginManifest } from "./plugin-manifest.js";
 import type {
   BootRuntimeOptions,
   RuntimeAuditEvent,
@@ -22,6 +24,7 @@ import type {
 declare module "@deepseek-ai/cordis" {
   interface Context {
     readonly muniuScope: RuntimeScopeMetadata;
+    readonly muniuContributorBus: ContributorBus;
   }
 
   interface Events {
@@ -101,6 +104,7 @@ export interface MuniuRuntime {
   readonly context: Context;
   readonly audit: RuntimeAuditLog;
   readonly snapshot: RuntimeSnapshot;
+  readonly contributors: ContributorBus;
   dispose(): Promise<void>;
 }
 
@@ -109,7 +113,9 @@ export async function bootRuntime(options: BootRuntimeOptions): Promise<MuniuRun
     scope: options.scope,
     profileId: options.profileId
   });
+  const contributors = new ContributorBus();
   const context = new Context().extend({ muniuScope: metadata });
+  context.provide("muniuContributorBus", contributors);
   const audit = new RuntimeAuditLog(metadata, options.auditSink);
   const record = (type: Parameters<RuntimeAuditLog["record"]>[0], detail?: Parameters<RuntimeAuditLog["record"]>[1]) => {
     const event = audit.record(type, detail);
@@ -119,6 +125,17 @@ export async function bootRuntime(options: BootRuntimeOptions): Promise<MuniuRun
   context.on("internal/status", (fiber) => {
     const type = lifecycleEvent(fiber.state);
     if (type) record(type, pluginIdentity(fiber));
+  }, { global: true });
+  context.on("internal/update", async function (config, _noSave, next) {
+    record("plugin.configured", {
+      ...pluginIdentity(this),
+      configDigest: digestRuntimeValue(config)
+    });
+    await contributors.emit("config.changed", {
+      plugin: pluginIdentity(this),
+      configDigest: digestRuntimeValue(config)
+    });
+    return next();
   }, { global: true });
 
   const profileLayers = options.profileLayers ?? (options.profilePath
@@ -133,6 +150,30 @@ export async function bootRuntime(options: BootRuntimeOptions): Promise<MuniuRun
   context.loader.builtins.include = Include;
   context.loader.builtins.group = Group;
   context.loader.builtins["muniu-core"] = coreRuntimePlugin;
+
+  const loadedPluginNames = new Set<string>();
+  for (const plugin of options.plugins ?? []) {
+    const verified = await verifyRuntimePluginManifest(
+      plugin.manifestPath,
+      options.hostCapabilities ?? []
+    );
+    if (loadedPluginNames.has(verified.manifest.name)) {
+      throw new Error(`runtime plugin ${verified.manifest.name} is configured more than once`);
+    }
+    loadedPluginNames.add(verified.manifest.name);
+    const config = structuredClone(plugin.config ?? {});
+    const entryId = await context.loader.create({
+      name: pathToFileURL(verified.entryPath).href,
+      config
+    });
+    await context.loader.await();
+    record("plugin.configured", {
+      pluginId: entryId,
+      pluginName: verified.manifest.name,
+      configDigest: digestRuntimeValue(config),
+      detail: verified.manifest.integrity
+    });
+  }
 
   if (options.enableHmr) {
     await context.plugin(Timer);
@@ -183,8 +224,10 @@ export async function bootRuntime(options: BootRuntimeOptions): Promise<MuniuRun
     context,
     audit,
     snapshot,
+    contributors,
     dispose() {
       disposal ??= context.fiber.dispose().finally(() => {
+        contributors.dispose();
         const unloaded = new Set(
           audit.list()
             .filter((event) => event.type === "plugin.unloaded" && event.pluginId)
