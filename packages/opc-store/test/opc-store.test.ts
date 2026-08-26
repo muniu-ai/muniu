@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from "node:assert/strict";
-import { mkdtemp, stat, symlink } from "node:fs/promises";
+import { chmod, mkdtemp, stat, symlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -15,7 +15,7 @@ import {
   PostgresOpcStore,
   SqliteOpcStore
 } from "../src/index.js";
-import type { OpcAppendStore } from "../src/index.js";
+import type { OpcAppendInput, OpcAppendStore } from "../src/index.js";
 
 const CREATED_AT = "2026-08-26T00:00:00.000Z";
 
@@ -42,6 +42,13 @@ class FakePostgresPool {
   migrations = 0;
   commits = 0;
   rollbacks = 0;
+  private rowSnapshot?: Map<string, FakePostgresRow[]>;
+  private requestSnapshot?: Map<string, {
+    request_digest: string;
+    aggregate_kind: string;
+    aggregate_id: string;
+    revision: number;
+  }>;
 
   async query(_sql: string): Promise<{ rows: never[] }> {
     this.migrations += 1;
@@ -57,15 +64,30 @@ class FakePostgresPool {
 
   private async clientQuery(sql: string, parameters: readonly unknown[]) {
     const normalized = sql.replace(/\s+/gu, " ").trim();
-    if (normalized === "BEGIN" || normalized.startsWith("SELECT set_config") || normalized.startsWith("SELECT pg_advisory")) {
+    if (normalized === "BEGIN") {
+      this.rowSnapshot = new Map([...this.rows].map(([key, rows]) => [key, rows.map((row) => ({ ...row }))]));
+      this.requestSnapshot = new Map([...this.requests].map(([key, value]) => [key, { ...value }]));
+      return { rows: [] };
+    }
+    if (normalized.startsWith("SELECT set_config") || normalized.startsWith("SELECT pg_advisory")) {
       return { rows: [] };
     }
     if (normalized === "COMMIT") {
       this.commits += 1;
+      this.rowSnapshot = undefined;
+      this.requestSnapshot = undefined;
       return { rows: [] };
     }
     if (normalized === "ROLLBACK") {
       this.rollbacks += 1;
+      if (this.rowSnapshot !== undefined && this.requestSnapshot !== undefined) {
+        this.rows.clear();
+        this.requests.clear();
+        for (const [key, rows] of this.rowSnapshot) this.rows.set(key, rows);
+        for (const [key, value] of this.requestSnapshot) this.requests.set(key, value);
+      }
+      this.rowSnapshot = undefined;
+      this.requestSnapshot = undefined;
       return { rows: [] };
     }
     if (normalized.includes("FROM opc_idempotency_requests")) {
@@ -201,17 +223,58 @@ async function exerciseAppendOnlyStore(store: OpcAppendStore): Promise<void> {
   );
 }
 
+async function exerciseAtomicBatch(store: OpcAppendStore): Promise<void> {
+  const inputs: OpcAppendInput[] = [
+    {
+      tenantId: "tenant-batch", kind: "record" as const, id: "visit-1", expectedRevision: 0,
+      requestId: "batch-record", value: { state: "writeback_pending" }, createdAt: CREATED_AT
+    },
+    {
+      tenantId: "tenant-batch", kind: "action_intent" as const, id: "action-1", expectedRevision: 0,
+      requestId: "batch-action", value: { status: "waiting_approval" }, createdAt: CREATED_AT
+    },
+    {
+      tenantId: "tenant-batch", kind: "attention_item" as const, id: "attention-1", expectedRevision: 0,
+      requestId: "batch-attention", value: { status: "pending" }, createdAt: CREATED_AT
+    }
+  ];
+  const written = await store.appendBatch(inputs);
+  assert.deepEqual(written.map((entry) => entry.kind), ["record", "action_intent", "attention_item"]);
+  assert.deepEqual(await store.appendBatch(inputs), written);
+
+  await assert.rejects(() => store.appendBatch([
+    {
+      tenantId: "tenant-batch", kind: "record", id: "must-not-exist", expectedRevision: 0,
+      requestId: "batch-rollback-first", value: { state: "draft" }, createdAt: CREATED_AT
+    },
+    {
+      tenantId: "tenant-batch", kind: "record", id: "visit-1", expectedRevision: 0,
+      requestId: "batch-rollback-conflict", value: { state: "invalid" }, createdAt: CREATED_AT
+    }
+  ]), OpcRevisionConflictError);
+  assert.equal(await store.read("tenant-batch", "record", "must-not-exist"), undefined);
+
+  await assert.rejects(() => store.appendBatch([
+    inputs[0]!,
+    { ...inputs[1]!, tenantId: "another-tenant" }
+  ]), /one tenant/u);
+}
+
 test("memory OPC store enforces append-only CAS, idempotency, and tenant scope", async () => {
   const store = new MemoryOpcStore();
   await exerciseAppendOnlyStore(store);
+  await exerciseAtomicBatch(store);
   await store.close();
 });
 
 test("SQLite OPC store survives restart without weakening tenant scope", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "muniu-opc-store-"));
+  await chmod(root, 0o755);
   const file = path.join(root, "opc.sqlite");
   const first = new SqliteOpcStore(file);
+  assert.equal((await stat(root)).mode & 0o777, 0o700);
   await exerciseAppendOnlyStore(first);
+  await exerciseAtomicBatch(first);
   await first.close();
   assert.equal((await stat(file)).mode & 0o777, 0o600);
 
@@ -254,6 +317,7 @@ test("PostgreSQL OPC store uses tenant transactions for CAS and idempotent repla
   const store = new PostgresOpcStore(pool as unknown as Pool);
   await store.migrate();
   await exerciseAppendOnlyStore(store);
+  await exerciseAtomicBatch(store);
   assert.equal(pool.migrations, 1);
   assert.ok(pool.commits > 0);
   assert.ok(pool.rollbacks >= 2);

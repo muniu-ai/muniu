@@ -244,15 +244,6 @@ async function appendRun(
     ...(input.budgetUsage === undefined ? {} : { budgetUsage: input.budgetUsage }),
     createdAt: input.createdAt
   });
-  const stored = await store.append({
-    tenantId,
-    kind: "operation_run",
-    id: run.id,
-    expectedRevision: input.expectedRevision,
-    requestId: input.requestId,
-    value: json(run),
-    createdAt: input.createdAt
-  });
   const initialEventDigest = sha256Digest({ runId: run.id, ordinal: 1 });
   const initialEvent = appendOperationEvent(undefined, {
     id: `operationEvent.${initialEventDigest}`,
@@ -264,16 +255,27 @@ async function appendRun(
     payloadRef: `operation:${run.id}`,
     createdAt: input.createdAt
   });
-  await store.append({
-    tenantId,
-    kind: "operation_event",
-    id: run.id,
-    expectedRevision: 0,
-    requestId: `operationEvent.${sha256Digest({ requestId: input.requestId })}`,
-    value: json(initialEvent),
-    createdAt: input.createdAt
-  });
-  return stored;
+  const stored = await store.appendBatch([
+    {
+      tenantId,
+      kind: "operation_run",
+      id: run.id,
+      expectedRevision: input.expectedRevision,
+      requestId: input.requestId,
+      value: json(run),
+      createdAt: input.createdAt
+    },
+    {
+      tenantId,
+      kind: "operation_event",
+      id: run.id,
+      expectedRevision: 0,
+      requestId: `operationEvent.${sha256Digest({ requestId: input.requestId })}`,
+      value: json(initialEvent),
+      createdAt: input.createdAt
+    }
+  ]);
+  return stored[0]!;
 }
 
 export function registerOpcRoutes(app: FastifyInstance, options: OpcRouteOptions): void {

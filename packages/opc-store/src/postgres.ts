@@ -15,7 +15,7 @@ import {
   aggregateKind,
   createEntry,
   identifier,
-  normalizeAppendInput,
+  normalizeAppendBatch,
   requestDigest
 } from "./shared.js";
 
@@ -118,85 +118,23 @@ export class PostgresOpcStore implements OpcAppendStore {
   }
 
   async append<T extends SpecJsonValue>(inputValue: OpcAppendInput<T>): Promise<OpcStoredEntry<T>> {
-    const input = normalizeAppendInput(inputValue);
-    const table = TABLE_BY_KIND[input.kind];
-    const semanticDigest = requestDigest(input);
-    return this.transaction(input.tenantId, async (client) => {
-      await client.query(
-        "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
-        [`${input.tenantId}\0${input.kind}\0${input.id}`]
-      );
-      const replayRequest = await client.query<{
-        request_digest: string;
-        aggregate_kind: OpcAggregateKind;
-        aggregate_id: string;
-        revision: string;
-      }>(`
-        SELECT request_digest, aggregate_kind, aggregate_id, revision
-        FROM opc_idempotency_requests
-        WHERE tenant_id = $1 AND request_id = $2
-      `, [input.tenantId, input.requestId]);
-      const replay = replayRequest.rows[0];
-      if (replay !== undefined) {
-        if (replay.request_digest !== semanticDigest) {
-          throw new OpcIdempotencyConflictError(input.requestId);
-        }
-        const replayKind = replay.aggregate_kind;
-        const replayTable = TABLE_BY_KIND[replayKind];
-        if (replayTable === undefined) throw new Error("OPC idempotency aggregate kind is invalid");
-        const stored = await client.query<EntryRow>(`
-          SELECT * FROM ${replayTable}
-          WHERE tenant_id = $1 AND aggregate_id = $2 AND revision = $3
-        `, [input.tenantId, replay.aggregate_id, replay.revision]);
-        if (stored.rows[0] === undefined) throw new Error("OPC idempotency entry is missing");
-        return fromRow<T>(replayKind, stored.rows[0]);
+    return (await this.appendBatch([inputValue]))[0]! as OpcStoredEntry<T>;
+  }
+
+  async appendBatch(inputValues: readonly OpcAppendInput[]): Promise<readonly OpcStoredEntry[]> {
+    const inputs = normalizeAppendBatch(inputValues);
+    return this.transaction(inputs[0]!.tenantId, async (client) => {
+      const locks = new Set<string>();
+      for (const input of inputs) {
+        locks.add(`aggregate\0${input.tenantId}\0${input.kind}\0${input.id}`);
+        locks.add(`request\0${input.tenantId}\0${input.requestId}`);
       }
-      const currentResult = await client.query<EntryRow>(`
-        SELECT * FROM ${table}
-        WHERE tenant_id = $1 AND aggregate_id = $2
-        ORDER BY revision DESC LIMIT 1 FOR UPDATE
-      `, [input.tenantId, input.id]);
-      const previous = currentResult.rows[0] === undefined
-        ? undefined
-        : fromRow(input.kind, currentResult.rows[0]);
-      const actualRevision = previous?.revision ?? 0;
-      if (actualRevision !== input.expectedRevision) {
-        throw new OpcRevisionConflictError(input.expectedRevision, actualRevision);
+      for (const lock of [...locks].sort()) {
+        await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [lock]);
       }
-      if (previous !== undefined && Date.parse(input.createdAt) < Date.parse(previous.createdAt)) {
-        throw new TypeError("createdAt must not precede the current revision");
-      }
-      const entry = createEntry(input, actualRevision + 1, previous);
-      await client.query(`
-        INSERT INTO ${table}
-          (tenant_id, aggregate_id, revision, request_id, value_digest,
-           previous_digest, digest, payload, created_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)
-      `, [
-        entry.tenantId,
-        entry.id,
-        entry.revision,
-        entry.requestId,
-        entry.valueDigest,
-        entry.previousDigest ?? null,
-        entry.digest,
-        JSON.stringify(entry.value),
-        entry.createdAt
-      ]);
-      await client.query(`
-        INSERT INTO opc_idempotency_requests
-          (tenant_id, request_id, request_digest, aggregate_kind, aggregate_id, revision, created_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-      `, [
-        entry.tenantId,
-        entry.requestId,
-        semanticDigest,
-        entry.kind,
-        entry.id,
-        entry.revision,
-        entry.createdAt
-      ]);
-      return entry;
+      const result: OpcStoredEntry[] = [];
+      for (const input of inputs) result.push(await this.appendWithinTransaction(client, input));
+      return Object.freeze(result);
     });
   }
 
@@ -255,6 +193,85 @@ export class PostgresOpcStore implements OpcAppendStore {
   }
 
   async close(): Promise<void> {}
+
+  private async appendWithinTransaction<T extends SpecJsonValue>(
+    client: PoolClient,
+    input: OpcAppendInput<T>
+  ): Promise<OpcStoredEntry<T>> {
+    const table = TABLE_BY_KIND[input.kind];
+    const semanticDigest = requestDigest(input);
+    const replayRequest = await client.query<{
+      request_digest: string;
+      aggregate_kind: OpcAggregateKind;
+      aggregate_id: string;
+      revision: string;
+    }>(`
+      SELECT request_digest, aggregate_kind, aggregate_id, revision
+      FROM opc_idempotency_requests
+      WHERE tenant_id = $1 AND request_id = $2
+    `, [input.tenantId, input.requestId]);
+    const replay = replayRequest.rows[0];
+    if (replay !== undefined) {
+      if (replay.request_digest !== semanticDigest) {
+        throw new OpcIdempotencyConflictError(input.requestId);
+      }
+      const replayKind = replay.aggregate_kind;
+      const replayTable = TABLE_BY_KIND[replayKind];
+      if (replayTable === undefined) throw new Error("OPC idempotency aggregate kind is invalid");
+      const stored = await client.query<EntryRow>(`
+        SELECT * FROM ${replayTable}
+        WHERE tenant_id = $1 AND aggregate_id = $2 AND revision = $3
+      `, [input.tenantId, replay.aggregate_id, replay.revision]);
+      if (stored.rows[0] === undefined) throw new Error("OPC idempotency entry is missing");
+      return fromRow<T>(replayKind, stored.rows[0]);
+    }
+    const currentResult = await client.query<EntryRow>(`
+      SELECT * FROM ${table}
+      WHERE tenant_id = $1 AND aggregate_id = $2
+      ORDER BY revision DESC LIMIT 1 FOR UPDATE
+    `, [input.tenantId, input.id]);
+    const previous = currentResult.rows[0] === undefined
+      ? undefined
+      : fromRow(input.kind, currentResult.rows[0]);
+    const actualRevision = previous?.revision ?? 0;
+    if (actualRevision !== input.expectedRevision) {
+      throw new OpcRevisionConflictError(input.expectedRevision, actualRevision);
+    }
+    if (previous !== undefined && Date.parse(input.createdAt) < Date.parse(previous.createdAt)) {
+      throw new TypeError("createdAt must not precede the current revision");
+    }
+    const entry = createEntry(input, actualRevision + 1, previous);
+    await client.query(`
+      INSERT INTO ${table}
+        (tenant_id, aggregate_id, revision, request_id, value_digest,
+         previous_digest, digest, payload, created_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)
+    `, [
+      entry.tenantId,
+      entry.id,
+      entry.revision,
+      entry.requestId,
+      entry.valueDigest,
+      entry.previousDigest ?? null,
+      entry.digest,
+      JSON.stringify(entry.value),
+      entry.createdAt
+    ]);
+    await client.query(`
+      INSERT INTO opc_idempotency_requests
+        (tenant_id, request_id, request_digest, aggregate_kind, aggregate_id, revision, created_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `, [
+      entry.tenantId,
+      entry.requestId,
+      semanticDigest,
+      entry.kind,
+      entry.id,
+      entry.revision,
+      entry.createdAt
+    ]);
+    return entry;
+  }
 
   private async transaction<T>(tenantId: string, callback: (client: PoolClient) => Promise<T>): Promise<T> {
     const client = await this.pool.connect();

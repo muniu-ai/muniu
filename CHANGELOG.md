@@ -15,11 +15,20 @@ during the Developer Preview.
   retaining the v0.2 coding Run projection for one compatibility cycle.
 - Append-only tenant-scoped OPC persistence for local SQLite and PostgreSQL
   with composite tenant keys, forced RLS, revision CAS, and idempotent replay.
+- Atomic multi-aggregate appends for Operation Runs, evidence events, visit
+  revisions, Action Intents, and Attention Items.
+- The `opc.visit-assistant@1` pilot workflow, source-traced human verification,
+  DingTalk callback protection, strong-idempotency Todo dispatch, immutable
+  effect receipts, and controlled local-to-cloud publication.
 
 ### Security
 
 - OPC decision roles are bound to the authenticated principal, and every OPC
   write derives its tenant from request authentication rather than request data.
+- Local visit content uses AES-256-GCM with tenant keys held by macOS Keychain;
+  cloud content uses per-object data keys wrapped by a tenant envelope provider.
+- Ambiguous external effects remain `unknown` and cannot be retried blindly;
+  dispatch rejects connectors that do not guarantee strong idempotency.
 
 ## 0.2.0 - 2026-08-23
 

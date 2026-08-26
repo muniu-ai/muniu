@@ -148,6 +148,7 @@ const descriptions = {
   "operations": "Governed domain runs, operation events, action authority and attention scheduling.",
   "opc": "OPC business records, commitments, settlement, publication and declarative business packs.",
   "opc-store": "Append-only tenant-scoped OPC persistence for memory, SQLite and PostgreSQL RLS.",
+  "opc-pilot": "Governed visit workflow, encrypted tenant content, approval dispatch and controlled publication.",
   "data-policy": "Credential and business-data protection.",
 };
 for (const parent of ["apps", "packages"]) {

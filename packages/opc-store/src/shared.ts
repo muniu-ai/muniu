@@ -62,6 +62,23 @@ export function normalizeAppendInput<T extends SpecJsonValue>(input: OpcAppendIn
   });
 }
 
+export function normalizeAppendBatch(
+  values: readonly OpcAppendInput[]
+): readonly OpcAppendInput[] {
+  if (!Array.isArray(values) || values.length < 1 || values.length > 256) {
+    throw new TypeError("append batch must contain between 1 and 256 entries");
+  }
+  const inputs = values.map(normalizeAppendInput);
+  const tenantId = inputs[0]!.tenantId;
+  if (inputs.some((input) => input.tenantId !== tenantId)) {
+    throw new TypeError("append batch must belong to one tenant");
+  }
+  if (new Set(inputs.map((input) => input.requestId)).size !== inputs.length) {
+    throw new TypeError("append batch requestId values must be unique");
+  }
+  return Object.freeze(inputs);
+}
+
 export function requestDigest(input: OpcAppendInput): string {
   return sha256Digest(input);
 }

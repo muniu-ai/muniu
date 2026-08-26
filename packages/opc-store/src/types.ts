@@ -42,6 +42,7 @@ export interface OpcAppendInput<T extends SpecJsonValue = SpecJsonValue> {
 export interface OpcAppendStore {
   migrate?(): Promise<void>;
   append<T extends SpecJsonValue>(input: OpcAppendInput<T>): Promise<OpcStoredEntry<T>>;
+  appendBatch(inputs: readonly OpcAppendInput[]): Promise<readonly OpcStoredEntry[]>;
   read<T extends SpecJsonValue = SpecJsonValue>(
     tenantId: string,
     kind: OpcAggregateKind,

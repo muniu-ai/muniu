@@ -15,7 +15,7 @@ import {
   createEntry,
   entryKey,
   identifier,
-  normalizeAppendInput,
+  normalizeAppendBatch,
   requestDigest,
   requestKey
 } from "./shared.js";
@@ -26,31 +26,44 @@ interface RequestRecord {
 }
 
 export class MemoryOpcStore implements OpcAppendStore {
-  readonly #entries = new Map<string, OpcStoredEntry[]>();
-  readonly #requests = new Map<string, RequestRecord>();
+  #entries = new Map<string, OpcStoredEntry[]>();
+  #requests = new Map<string, RequestRecord>();
 
   async append<T extends SpecJsonValue>(inputValue: OpcAppendInput<T>): Promise<OpcStoredEntry<T>> {
-    const input = normalizeAppendInput(inputValue);
-    const request = requestKey(input.tenantId, input.requestId);
-    const digest = requestDigest(input);
-    const replay = this.#requests.get(request);
-    if (replay !== undefined) {
-      if (replay.digest !== digest) throw new OpcIdempotencyConflictError(input.requestId);
-      return replay.entry as OpcStoredEntry<T>;
+    return (await this.appendBatch([inputValue]))[0]! as OpcStoredEntry<T>;
+  }
+
+  async appendBatch(inputValues: readonly OpcAppendInput[]): Promise<readonly OpcStoredEntry[]> {
+    const inputs = normalizeAppendBatch(inputValues);
+    const entries = new Map(this.#entries);
+    const requests = new Map(this.#requests);
+    const result: OpcStoredEntry[] = [];
+    for (const input of inputs) {
+      const request = requestKey(input.tenantId, input.requestId);
+      const digest = requestDigest(input);
+      const replay = requests.get(request);
+      if (replay !== undefined) {
+        if (replay.digest !== digest) throw new OpcIdempotencyConflictError(input.requestId);
+        result.push(replay.entry);
+        continue;
+      }
+      const key = entryKey(input.tenantId, input.kind, input.id);
+      const history = entries.get(key) ?? [];
+      if (history.length !== input.expectedRevision) {
+        throw new OpcRevisionConflictError(input.expectedRevision, history.length);
+      }
+      const previous = history.at(-1);
+      if (previous !== undefined && Date.parse(input.createdAt) < Date.parse(previous.createdAt)) {
+        throw new TypeError("createdAt must not precede the current revision");
+      }
+      const entry = createEntry(input, history.length + 1, previous);
+      entries.set(key, [...history, entry]);
+      requests.set(request, { digest, entry });
+      result.push(entry);
     }
-    const key = entryKey(input.tenantId, input.kind, input.id);
-    const history = this.#entries.get(key) ?? [];
-    if (history.length !== input.expectedRevision) {
-      throw new OpcRevisionConflictError(input.expectedRevision, history.length);
-    }
-    const previous = history.at(-1);
-    if (previous !== undefined && Date.parse(input.createdAt) < Date.parse(previous.createdAt)) {
-      throw new TypeError("createdAt must not precede the current revision");
-    }
-    const entry = createEntry(input, history.length + 1, previous);
-    this.#entries.set(key, [...history, entry]);
-    this.#requests.set(request, { digest, entry });
-    return entry;
+    this.#entries = entries;
+    this.#requests = requests;
+    return Object.freeze(result);
   }
 
   async read<T extends SpecJsonValue = SpecJsonValue>(

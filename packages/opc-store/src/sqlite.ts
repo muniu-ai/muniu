@@ -5,7 +5,6 @@ import {
   constants,
   fchmodSync,
   fstatSync,
-  lstatSync,
   mkdirSync,
   openSync
 } from "node:fs";
@@ -25,7 +24,7 @@ import {
   aggregateKind,
   createEntry,
   identifier,
-  normalizeAppendInput,
+  normalizeAppendBatch,
   requestDigest
 } from "./shared.js";
 
@@ -66,9 +65,17 @@ export class SqliteOpcStore implements OpcAppendStore {
     const resolved = path.resolve(databaseFile);
     const directory = path.dirname(resolved);
     mkdirSync(directory, { recursive: true, mode: 0o700 });
-    const directoryStat = lstatSync(directory);
-    if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink() || (directoryStat.mode & 0o077) !== 0) {
-      throw new Error("SQLite OPC directory must be a private non-symlink directory");
+    const directoryDescriptor = openSync(
+      directory,
+      constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW
+    );
+    try {
+      if (!fstatSync(directoryDescriptor).isDirectory()) {
+        throw new Error("SQLite OPC directory must be a private non-symlink directory");
+      }
+      fchmodSync(directoryDescriptor, 0o700);
+    } finally {
+      closeSync(directoryDescriptor);
     }
     const descriptor = openSync(
       resolved,
@@ -114,67 +121,17 @@ export class SqliteOpcStore implements OpcAppendStore {
   }
 
   async append<T extends SpecJsonValue>(inputValue: OpcAppendInput<T>): Promise<OpcStoredEntry<T>> {
+    return (await this.appendBatch([inputValue]))[0]! as OpcStoredEntry<T>;
+  }
+
+  async appendBatch(inputValues: readonly OpcAppendInput[]): Promise<readonly OpcStoredEntry[]> {
     this.assertOpen();
-    const input = normalizeAppendInput(inputValue);
-    const semanticDigest = requestDigest(input);
+    const inputs = normalizeAppendBatch(inputValues);
     this.#database.exec("BEGIN IMMEDIATE");
     try {
-      const request = this.#database.prepare(`
-        SELECT request_digest, aggregate_kind, aggregate_id, revision
-        FROM opc_requests WHERE tenant_id = ? AND request_id = ?
-      `).get(input.tenantId, input.requestId) as {
-        request_digest: string;
-        aggregate_kind: OpcAggregateKind;
-        aggregate_id: string;
-        revision: number;
-      } | undefined;
-      if (request !== undefined) {
-        if (request.request_digest !== semanticDigest) {
-          throw new OpcIdempotencyConflictError(input.requestId);
-        }
-        const replay = this.entryAt(
-          input.tenantId,
-          request.aggregate_kind,
-          request.aggregate_id,
-          Number(request.revision)
-        );
-        if (replay === undefined) throw new Error("OPC idempotency entry is missing");
-        this.#database.exec("COMMIT");
-        return replay as OpcStoredEntry<T>;
-      }
-      const previous = this.latest(input.tenantId, input.kind, input.id);
-      const actualRevision = previous?.revision ?? 0;
-      if (actualRevision !== input.expectedRevision) {
-        throw new OpcRevisionConflictError(input.expectedRevision, actualRevision);
-      }
-      if (previous !== undefined && Date.parse(input.createdAt) < Date.parse(previous.createdAt)) {
-        throw new TypeError("createdAt must not precede the current revision");
-      }
-      const entry = createEntry(input, actualRevision + 1, previous);
-      this.#database.prepare(`
-        INSERT INTO opc_entries
-          (tenant_id, aggregate_kind, aggregate_id, revision, request_id, value_json,
-           value_digest, previous_digest, digest, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        entry.tenantId,
-        entry.kind,
-        entry.id,
-        entry.revision,
-        entry.requestId,
-        canonicalJson(entry.value),
-        entry.valueDigest,
-        entry.previousDigest ?? null,
-        entry.digest,
-        entry.createdAt
-      );
-      this.#database.prepare(`
-        INSERT INTO opc_requests
-          (tenant_id, request_id, request_digest, aggregate_kind, aggregate_id, revision)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `).run(entry.tenantId, entry.requestId, semanticDigest, entry.kind, entry.id, entry.revision);
+      const entries = inputs.map((input) => this.appendWithinTransaction(input));
       this.#database.exec("COMMIT");
-      return entry;
+      return Object.freeze(entries);
     } catch (error) {
       this.#database.exec("ROLLBACK");
       throw error;
@@ -238,6 +195,66 @@ export class SqliteOpcStore implements OpcAppendStore {
       ORDER BY revision DESC LIMIT 1
     `).get(tenantId, kind, id) as unknown as EntryRow | undefined;
     return row === undefined ? undefined : fromRow(row);
+  }
+
+  private appendWithinTransaction<T extends SpecJsonValue>(
+    input: OpcAppendInput<T>
+  ): OpcStoredEntry<T> {
+    const semanticDigest = requestDigest(input);
+    const request = this.#database.prepare(`
+      SELECT request_digest, aggregate_kind, aggregate_id, revision
+      FROM opc_requests WHERE tenant_id = ? AND request_id = ?
+    `).get(input.tenantId, input.requestId) as {
+      request_digest: string;
+      aggregate_kind: OpcAggregateKind;
+      aggregate_id: string;
+      revision: number;
+    } | undefined;
+    if (request !== undefined) {
+      if (request.request_digest !== semanticDigest) {
+        throw new OpcIdempotencyConflictError(input.requestId);
+      }
+      const replay = this.entryAt(
+        input.tenantId,
+        request.aggregate_kind,
+        request.aggregate_id,
+        Number(request.revision)
+      );
+      if (replay === undefined) throw new Error("OPC idempotency entry is missing");
+      return replay as OpcStoredEntry<T>;
+    }
+    const previous = this.latest(input.tenantId, input.kind, input.id);
+    const actualRevision = previous?.revision ?? 0;
+    if (actualRevision !== input.expectedRevision) {
+      throw new OpcRevisionConflictError(input.expectedRevision, actualRevision);
+    }
+    if (previous !== undefined && Date.parse(input.createdAt) < Date.parse(previous.createdAt)) {
+      throw new TypeError("createdAt must not precede the current revision");
+    }
+    const entry = createEntry(input, actualRevision + 1, previous);
+    this.#database.prepare(`
+      INSERT INTO opc_entries
+        (tenant_id, aggregate_kind, aggregate_id, revision, request_id, value_json,
+         value_digest, previous_digest, digest, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      entry.tenantId,
+      entry.kind,
+      entry.id,
+      entry.revision,
+      entry.requestId,
+      canonicalJson(entry.value),
+      entry.valueDigest,
+      entry.previousDigest ?? null,
+      entry.digest,
+      entry.createdAt
+    );
+    this.#database.prepare(`
+      INSERT INTO opc_requests
+        (tenant_id, request_id, request_digest, aggregate_kind, aggregate_id, revision)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(entry.tenantId, entry.requestId, semanticDigest, entry.kind, entry.id, entry.revision);
+    return entry;
   }
 
   private entryAt(
