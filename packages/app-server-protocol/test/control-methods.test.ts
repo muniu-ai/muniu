@@ -17,14 +17,35 @@ test("maps every legacy control operation to one unique namespaced RPC method", 
     new URL("../../schema/legacy-openapi-operations.json", import.meta.url),
     "utf8"
   )) as Array<{ operationId: string }>;
-  assert.equal(fixture.length, 149);
+  assert.equal(fixture.length, 167);
   assert.equal(MUNIU_CONTROL_OPERATIONS.length, fixture.length);
   assert.equal(new Set(MUNIU_METHODS).size, fixture.length);
   assert.deepEqual(
     MUNIU_CONTROL_OPERATIONS.map((entry) => entry.operationId),
     fixture.map((entry) => entry.operationId)
   );
-  assert.ok(MUNIU_METHODS.every((method) => /^muniu\/(?:project|task|run|runJob|evidence|artifact|provider|modelCatalog|policy|approval|extension|skillRegistry|config|diagnostics)\//u.test(method)));
+  assert.ok(MUNIU_METHODS.every((method) => /^muniu\/(?:project|task|run|runJob|evidence|artifact|provider|modelCatalog|policy|approval|extension|skillRegistry|config|diagnostics|domain|opc|attention|action|sync)\//u.test(method)));
+  const opcMethods = [
+    "muniu/domain/domains/get",
+    "muniu/domain/runs/post",
+    "muniu/domain/runs/byId/get",
+    "muniu/domain/runs/byId/events/get",
+    "muniu/opc/records/post",
+    "muniu/opc/records/byId/revisions/post",
+    "muniu/opc/commitments/byId/approve/post",
+    "muniu/opc/commitments/byId/runs/post",
+    "muniu/attention/items/get",
+    "muniu/attention/items/byId/decide/post",
+    "muniu/action/intents/byId/decide/post",
+    "muniu/opc/deliveries/byId/acceptances/post",
+    "muniu/opc/settlements/post",
+    "muniu/evidence/domainRuns/byId/export/get",
+    "muniu/extension/businessPacks/get",
+    "muniu/extension/businessPacks/byId/enable/post",
+    "muniu/sync/publications/post",
+    "muniu/sync/receipts/get"
+  ];
+  for (const method of opcMethods) assert.ok(MUNIU_METHODS.includes(method as never), method);
 });
 
 test("control RPC maps Agent attachment upload into the artifact domain", () => {

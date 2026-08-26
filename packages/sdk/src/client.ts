@@ -221,6 +221,11 @@ export class MuniuClient {
   readonly skillRegistry = new ControlService(this, "skillRegistry");
   readonly config = new ControlService(this, "config");
   readonly diagnostics = new ControlService(this, "diagnostics");
+  readonly domain = new ControlService(this, "domain");
+  readonly opc = new ControlService(this, "opc");
+  readonly attention = new ControlService(this, "attention");
+  readonly action = new ControlService(this, "action");
+  readonly sync = new ControlService(this, "sync");
 
   constructor(options: MuniuClientOptions) {
     this.#options = options;

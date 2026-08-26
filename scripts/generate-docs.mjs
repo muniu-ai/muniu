@@ -29,7 +29,8 @@ const routeSources = [
   "apps/api/src/agentSessionRoutes.ts",
   "apps/api/src/enterpriseBuiltinAgentRoutes.ts",
   "apps/api/src/controlPlane.ts",
-  "apps/api/src/evidenceRoutes.ts"
+  "apps/api/src/evidenceRoutes.ts",
+  "apps/api/src/opcRoutes.ts"
 ];
 const routes = [];
 for (const path of routeSources) {
@@ -144,6 +145,9 @@ const descriptions = {
   "local-proxy": "Provider proxy, usage accounting and receipts.",
   "usage": "Usage aggregation and cost summaries.",
   "specs": "Spec revisions, validation and import.",
+  "operations": "Governed domain runs, operation events, action authority and attention scheduling.",
+  "opc": "OPC business records, commitments, settlement, publication and declarative business packs.",
+  "opc-store": "Append-only tenant-scoped OPC persistence for memory, SQLite and PostgreSQL RLS.",
   "data-policy": "Credential and business-data protection.",
 };
 for (const parent of ["apps", "packages"]) {

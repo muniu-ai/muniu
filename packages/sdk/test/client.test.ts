@@ -109,6 +109,13 @@ test("SDK drives thread lifecycle, streamed items, control services and approval
     accepted: true
   });
   assert.deepEqual(controlCalls, ["post__v1_tasks"]);
+  assert.ok(client.domain.methods.includes("muniu/domain/runs/post"));
+  assert.ok(client.opc.methods.includes("muniu/opc/commitments/byId/runs/post"));
+  assert.ok(client.attention.methods.includes("muniu/attention/items/byId/decide/post"));
+  assert.ok(client.action.methods.includes("muniu/action/intents/byId/decide/post"));
+  assert.ok(client.sync.methods.includes("muniu/sync/publications/post"));
+  assert.ok(client.evidence.methods.includes("muniu/evidence/domainRuns/byId/export/get"));
+  assert.ok(client.extensions.methods.includes("muniu/extension/businessPacks/byId/enable/post"));
   await assert.rejects(
     () => client.config.call("muniu/config/capabilities/get"),
     (error: unknown) => error instanceof RpcResponseError

@@ -1,5 +1,10 @@
 [
   {
+    "operationId": "post__v1_action_intents_id_decide",
+    "path": "/v1/action-intents/{id}/decide",
+    "verb": "post"
+  },
+  {
     "operationId": "get__v1_agent_sessions",
     "path": "/v1/agent-sessions",
     "verb": "get"
@@ -55,9 +60,29 @@
     "verb": "post"
   },
   {
+    "operationId": "get__v1_attention_items",
+    "path": "/v1/attention-items",
+    "verb": "get"
+  },
+  {
+    "operationId": "post__v1_attention_items_id_decide",
+    "path": "/v1/attention-items/{id}/decide",
+    "verb": "post"
+  },
+  {
     "operationId": "get__v1_audit_events",
     "path": "/v1/audit-events",
     "verb": "get"
+  },
+  {
+    "operationId": "get__v1_business_packs",
+    "path": "/v1/business-packs",
+    "verb": "get"
+  },
+  {
+    "operationId": "post__v1_business_packs_id_enable",
+    "path": "/v1/business-packs/{id}/enable",
+    "verb": "post"
   },
   {
     "operationId": "get__v1_capabilities",
@@ -73,6 +98,31 @@
     "operationId": "post__v1_deep_links_preview",
     "path": "/v1/deep-links/preview",
     "verb": "post"
+  },
+  {
+    "operationId": "post__v1_domain_runs",
+    "path": "/v1/domain-runs",
+    "verb": "post"
+  },
+  {
+    "operationId": "get__v1_domain_runs_id_",
+    "path": "/v1/domain-runs/{id}",
+    "verb": "get"
+  },
+  {
+    "operationId": "get__v1_domain_runs_id_events",
+    "path": "/v1/domain-runs/{id}/events",
+    "verb": "get"
+  },
+  {
+    "operationId": "get__v1_domain_runs_id_evidence_export",
+    "path": "/v1/domain-runs/{id}/evidence-export",
+    "verb": "get"
+  },
+  {
+    "operationId": "get__v1_domains",
+    "path": "/v1/domains",
+    "verb": "get"
   },
   {
     "operationId": "get__v1_eval_assets",
@@ -172,6 +222,36 @@
   {
     "operationId": "post__v1_mcp_servers_id_project",
     "path": "/v1/mcp/servers/{id}/project",
+    "verb": "post"
+  },
+  {
+    "operationId": "post__v1_opc_commitments_id_approve",
+    "path": "/v1/opc-commitments/{id}/approve",
+    "verb": "post"
+  },
+  {
+    "operationId": "post__v1_opc_commitments_id_runs",
+    "path": "/v1/opc-commitments/{id}/runs",
+    "verb": "post"
+  },
+  {
+    "operationId": "post__v1_opc_deliveries_id_acceptances",
+    "path": "/v1/opc-deliveries/{id}/acceptances",
+    "verb": "post"
+  },
+  {
+    "operationId": "post__v1_opc_records",
+    "path": "/v1/opc-records",
+    "verb": "post"
+  },
+  {
+    "operationId": "post__v1_opc_records_id_revisions",
+    "path": "/v1/opc-records/{id}/revisions",
+    "verb": "post"
+  },
+  {
+    "operationId": "post__v1_opc_settlements",
+    "path": "/v1/opc-settlements",
     "verb": "post"
   },
   {
@@ -352,6 +432,16 @@
   {
     "operationId": "post__v1_proxy_stop",
     "path": "/v1/proxy/stop",
+    "verb": "post"
+  },
+  {
+    "operationId": "get__v1_publication_receipts",
+    "path": "/v1/publication-receipts",
+    "verb": "get"
+  },
+  {
+    "operationId": "post__v1_publications",
+    "path": "/v1/publications",
     "verb": "post"
   },
   {

@@ -161,6 +161,12 @@ import type {
   EvidenceReferenceQuery,
   ResolvedEvidenceReference
 } from "./evidenceTruth.js";
+import {
+  PostgresOpcStore,
+  SqliteOpcStore,
+  type OpcAppendStore
+} from "@mn/opc-store";
+import { registerOpcRoutes } from "./opcRoutes.js";
 import { prepareGovernedRunBindings } from "./governedRunBindings.js";
 import type { FileSpecRepository, SpecRef, SpecRevision } from "@mn/specs";
 import {
@@ -441,6 +447,10 @@ export interface BuildServerOptions {
    * enterprise profile never opts out.
    */
   enterprisePostgres?: EnterprisePostgresOptions | false;
+  /** Append-only OPC control-plane storage. The server owns and closes an
+   * injected store. Local defaults to SQLite; enterprise defaults to the
+   * authenticated PostgreSQL pool with tenant RLS. */
+  opcStore?: OpcAppendStore;
   /** Stable replica identity used by the durable builtin execution owner
    * lease. Kubernetes supplies the API Pod name through the Downward API. */
   enterpriseBuiltinInstanceId?: string;
@@ -1680,6 +1690,11 @@ export function buildServer(options: BuildServerOptions = {}) {
     options.enterprisePostgres !== false
     ? new EnterprisePostgresRuntime(options.enterprisePostgres)
     : undefined;
+  const opcStore: OpcAppendStore = options.opcStore ?? (
+    enterprisePostgres
+      ? new PostgresOpcStore(enterprisePostgres.pool)
+      : new SqliteOpcStore(join(mniuRoot, "opc.sqlite"))
+  );
   const telemetry = options.telemetry !== undefined && options.telemetry !== false
     ? new OtlpHttpTelemetry(options.telemetry)
     : undefined;
@@ -2510,6 +2525,7 @@ export function buildServer(options: BuildServerOptions = {}) {
   if (enterprisePostgres) {
     app.addHook("onReady", async () => {
       await enterprisePostgres.migrate();
+      await opcStore.migrate?.();
       await enterpriseBuiltinAgentBroker.migrate();
       let snapshot = await enterprisePostgres.readStateSnapshot();
       if (snapshot.metadata.length === 0) {
@@ -2531,6 +2547,11 @@ export function buildServer(options: BuildServerOptions = {}) {
         );
       }
       await enterprisePostgres.checkReadWrite();
+    });
+  }
+  if (!enterprisePostgres) {
+    app.addHook("onReady", async () => {
+      await opcStore.migrate?.();
     });
   }
 
@@ -2876,6 +2897,7 @@ export function buildServer(options: BuildServerOptions = {}) {
     cordisRuntime = undefined;
     await proxyServer?.stop();
     proxyServer = undefined;
+    await opcStore.close();
     await enterprisePostgres?.close();
   });
 
@@ -3204,6 +3226,13 @@ export function buildServer(options: BuildServerOptions = {}) {
       : {}),
     requireVerifiedStandardPacks:
       runtimeProfile === "enterprise" && options.standardPackTrustProfile !== false
+  });
+  registerOpcRoutes(app, {
+    store: opcStore,
+    contextForRequest: (request) => {
+      const context = requestContexts.get(request) ?? localRequestContext(request.id);
+      return { tenantId: context.tenantId, actorId: context.actorId, roles: context.roles };
+    }
   });
   registerEvidenceRoutes(app, {
     store,

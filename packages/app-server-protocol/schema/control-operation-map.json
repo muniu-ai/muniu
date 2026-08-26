@@ -1,5 +1,11 @@
 [
   {
+    "operationId": "post__v1_action_intents_id_decide",
+    "path": "/v1/action-intents/{id}/decide",
+    "verb": "post",
+    "method": "muniu/action/intents/byId/decide/post"
+  },
+  {
     "operationId": "get__v1_agent_sessions",
     "path": "/v1/agent-sessions",
     "verb": "get",
@@ -66,10 +72,34 @@
     "method": "muniu/artifact/artifacts/store/cleanup/post"
   },
   {
+    "operationId": "get__v1_attention_items",
+    "path": "/v1/attention-items",
+    "verb": "get",
+    "method": "muniu/attention/items/get"
+  },
+  {
+    "operationId": "post__v1_attention_items_id_decide",
+    "path": "/v1/attention-items/{id}/decide",
+    "verb": "post",
+    "method": "muniu/attention/items/byId/decide/post"
+  },
+  {
     "operationId": "get__v1_audit_events",
     "path": "/v1/audit-events",
     "verb": "get",
     "method": "muniu/evidence/auditEvents/get"
+  },
+  {
+    "operationId": "get__v1_business_packs",
+    "path": "/v1/business-packs",
+    "verb": "get",
+    "method": "muniu/extension/businessPacks/get"
+  },
+  {
+    "operationId": "post__v1_business_packs_id_enable",
+    "path": "/v1/business-packs/{id}/enable",
+    "verb": "post",
+    "method": "muniu/extension/businessPacks/byId/enable/post"
   },
   {
     "operationId": "get__v1_capabilities",
@@ -88,6 +118,36 @@
     "path": "/v1/deep-links/preview",
     "verb": "post",
     "method": "muniu/config/deepLinks/preview/post"
+  },
+  {
+    "operationId": "post__v1_domain_runs",
+    "path": "/v1/domain-runs",
+    "verb": "post",
+    "method": "muniu/domain/runs/post"
+  },
+  {
+    "operationId": "get__v1_domain_runs_id_",
+    "path": "/v1/domain-runs/{id}",
+    "verb": "get",
+    "method": "muniu/domain/runs/byId/get"
+  },
+  {
+    "operationId": "get__v1_domain_runs_id_events",
+    "path": "/v1/domain-runs/{id}/events",
+    "verb": "get",
+    "method": "muniu/domain/runs/byId/events/get"
+  },
+  {
+    "operationId": "get__v1_domain_runs_id_evidence_export",
+    "path": "/v1/domain-runs/{id}/evidence-export",
+    "verb": "get",
+    "method": "muniu/evidence/domainRuns/byId/export/get"
+  },
+  {
+    "operationId": "get__v1_domains",
+    "path": "/v1/domains",
+    "verb": "get",
+    "method": "muniu/domain/domains/get"
   },
   {
     "operationId": "get__v1_eval_assets",
@@ -208,6 +268,42 @@
     "path": "/v1/mcp/servers/{id}/project",
     "verb": "post",
     "method": "muniu/extension/mcp/servers/byId/project/post"
+  },
+  {
+    "operationId": "post__v1_opc_commitments_id_approve",
+    "path": "/v1/opc-commitments/{id}/approve",
+    "verb": "post",
+    "method": "muniu/opc/commitments/byId/approve/post"
+  },
+  {
+    "operationId": "post__v1_opc_commitments_id_runs",
+    "path": "/v1/opc-commitments/{id}/runs",
+    "verb": "post",
+    "method": "muniu/opc/commitments/byId/runs/post"
+  },
+  {
+    "operationId": "post__v1_opc_deliveries_id_acceptances",
+    "path": "/v1/opc-deliveries/{id}/acceptances",
+    "verb": "post",
+    "method": "muniu/opc/deliveries/byId/acceptances/post"
+  },
+  {
+    "operationId": "post__v1_opc_records",
+    "path": "/v1/opc-records",
+    "verb": "post",
+    "method": "muniu/opc/records/post"
+  },
+  {
+    "operationId": "post__v1_opc_records_id_revisions",
+    "path": "/v1/opc-records/{id}/revisions",
+    "verb": "post",
+    "method": "muniu/opc/records/byId/revisions/post"
+  },
+  {
+    "operationId": "post__v1_opc_settlements",
+    "path": "/v1/opc-settlements",
+    "verb": "post",
+    "method": "muniu/opc/settlements/post"
   },
   {
     "operationId": "post__v1_projects",
@@ -424,6 +520,18 @@
     "path": "/v1/proxy/stop",
     "verb": "post",
     "method": "muniu/diagnostics/proxy/stop/post"
+  },
+  {
+    "operationId": "get__v1_publication_receipts",
+    "path": "/v1/publication-receipts",
+    "verb": "get",
+    "method": "muniu/sync/receipts/get"
+  },
+  {
+    "operationId": "post__v1_publications",
+    "path": "/v1/publications",
+    "verb": "post",
+    "method": "muniu/sync/publications/post"
   },
   {
     "operationId": "get__v1_run_jobs_queue",

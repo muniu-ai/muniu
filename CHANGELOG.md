@@ -6,6 +6,21 @@ during the Developer Preview.
 
 ## Unreleased
 
+### Added
+
+- Versioned OPC domain contracts for governed Operation Runs, business records,
+  customer commitments, attention items, action authority, settlements,
+  controlled publication, and declarative business packs.
+- Eighteen app-server v2 OPC methods and matching TypeScript SDK services while
+  retaining the v0.2 coding Run projection for one compatibility cycle.
+- Append-only tenant-scoped OPC persistence for local SQLite and PostgreSQL
+  with composite tenant keys, forced RLS, revision CAS, and idempotent replay.
+
+### Security
+
+- OPC decision roles are bound to the authenticated principal, and every OPC
+  write derives its tenant from request authentication rather than request data.
+
 ## 0.2.0 - 2026-08-23
 
 ### Added
