@@ -16,6 +16,10 @@ function canonicalize(value: unknown): unknown {
 
 export function digestRuntimeValue(value: unknown): string {
   return createHash("sha256")
-    .update(JSON.stringify(canonicalize(value)), "utf8")
+    .update(canonicalRuntimeJson(value), "utf8")
     .digest("hex");
+}
+
+export function canonicalRuntimeJson(value: unknown): string {
+  return JSON.stringify(canonicalize(value));
 }

@@ -5,3 +5,4 @@ export * from "./revisions.js";
 export * from "./native.js";
 export * from "./repository.js";
 export * from "./specKit.js";
+export * from "./v2.js";

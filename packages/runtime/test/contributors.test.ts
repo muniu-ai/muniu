@@ -56,6 +56,12 @@ test("contributor bus exposes every platform lifecycle channel", () => {
     "items.ordered",
     "tokenUsage.recorded",
     "config.changed",
-    "skill.invoked"
+    "skill.invoked",
+    "domain.record.validate",
+    "operation.compile",
+    "attention.collect",
+    "effect.authorize",
+    "settlement.observe",
+    "evidence.append"
   ]);
 });

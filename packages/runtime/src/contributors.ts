@@ -12,7 +12,13 @@ export const CONTRIBUTOR_CHANNELS = Object.freeze([
   "items.ordered",
   "tokenUsage.recorded",
   "config.changed",
-  "skill.invoked"
+  "skill.invoked",
+  "domain.record.validate",
+  "operation.compile",
+  "attention.collect",
+  "effect.authorize",
+  "settlement.observe",
+  "evidence.append"
 ] as const);
 
 export type ContributorChannel = (typeof CONTRIBUTOR_CHANNELS)[number];

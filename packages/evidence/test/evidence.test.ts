@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   EvalAssetRegistry,
   LearningProposalRegistry,
+  LearningProposalV2Registry,
   analyzeTraceGraph,
   buildMaturityReport,
   createEvalAssetRevision,
@@ -39,6 +40,68 @@ test("Eval Asset Registry persists immutable clause-bound revisions", () => {
       }),
     /does not supersede/u
   );
+});
+
+test("Learning Proposal V2 adds declarative OPC targets without allowing module code", () => {
+  const registry = new LearningProposalV2Registry({ verifySignature: () => true });
+  const draft = registry.create({
+    id: "learn-opc-1",
+    kind: "business_pack",
+    title: "Visit field confirmation",
+    rationale: "Repeated confirmed edits have matching evidence.",
+    sourceRunId: "operation-run-1",
+    sourceEvidenceIds: [A],
+    targetRef: "opc.visit-assistant@1",
+    changeDigest: B,
+    createdAt: "2026-08-26T00:00:00.000Z",
+    createdBy: "founder-1"
+  });
+  assert.equal(draft.schemaVersion, 2);
+  assert.equal(draft.kind, "business_pack");
+  registry.submit(draft.id, "reviewer", "2026-08-26T01:00:00.000Z");
+  registry.review({
+    id: draft.id,
+    approved: true,
+    actor: "reviewer",
+    decidedAt: "2026-08-26T02:00:00.000Z",
+    reason: "Declarative change only"
+  });
+  registry.recordCanary({
+    id: draft.id,
+    passed: true,
+    environment: "pilot",
+    evidenceDigest: C,
+    completedAt: "2026-08-26T03:00:00.000Z",
+    completedBy: "platform"
+  });
+  assert.equal(registry.get(draft.id)?.status, "canary_passed");
+  assert.throws(
+    () => registry.create({
+      id: "learn-code",
+      kind: "domain_module" as never,
+      title: "Executable module",
+      rationale: "Must use the release process.",
+      sourceRunId: "operation-run-1",
+      sourceEvidenceIds: [A],
+      targetRef: "opc-runtime",
+      changeDigest: B,
+      createdAt: "2026-08-26T00:00:00.000Z",
+      createdBy: "founder-1"
+    }),
+    /unsupported/u
+  );
+  assert.throws(() => new LearningProposalRegistry().create({
+    id: "learn-v1-business-pack",
+    kind: "business_pack" as never,
+    title: "V1 cannot widen",
+    rationale: "Keep the V1 enum exact.",
+    sourceRunId: "run-1",
+    sourceEvidenceIds: [A],
+    targetRef: "pack-1",
+    changeDigest: B,
+    createdAt: "2026-08-26T00:00:00.000Z",
+    createdBy: "founder-1"
+  }), /unsupported/u);
 });
 
 test("Eval Asset validation is exact and descriptor safe", () => {

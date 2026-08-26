@@ -145,3 +145,45 @@ export interface NativeSpecDocument {
   kind: "SpecRevision";
   revision: SpecRevision;
 }
+
+export type SpecJsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | readonly SpecJsonValue[]
+  | { readonly [key: string]: SpecJsonValue };
+
+export interface SpecSubjectRefV1 {
+  readonly kind: string;
+  readonly id: string;
+  readonly digest: string;
+}
+
+export type SpecRevisionV2Status = "draft" | "approved" | "superseded";
+
+export interface SpecRevisionV2 {
+  readonly schemaVersion: 2;
+  readonly specSetId: string;
+  readonly revision: number;
+  readonly status: SpecRevisionV2Status;
+  readonly domainId: string;
+  readonly subjectRefs: readonly SpecSubjectRefV1[];
+  readonly title: string;
+  readonly objective: string;
+  readonly outcomes: readonly string[];
+  readonly nonGoals: readonly string[];
+  readonly contracts: SpecContracts;
+  readonly acceptanceCases: readonly AcceptanceCase[];
+  readonly risks: readonly SpecRisk[];
+  readonly unknowns: readonly SpecUnknown[];
+  readonly domainExtension?: SpecJsonValue;
+  readonly createdAt: string;
+  readonly createdBy: string;
+  readonly approvedAt?: string;
+  readonly approvedBy?: string;
+  readonly previousDigest?: string;
+  readonly digest: string;
+}
+
+export type CreateSpecRevisionV2Input = Omit<SpecRevisionV2, "schemaVersion" | "digest">;

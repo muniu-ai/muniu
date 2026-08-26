@@ -85,6 +85,7 @@ export interface BootRuntimeOptions {
   readonly hmrDebounceMs?: number;
   readonly auditSink?: (event: RuntimeAuditEvent) => void | Promise<void>;
   readonly hostCapabilities?: readonly string[];
+  readonly trustedRuntimePluginKeys?: Readonly<Record<string, string>>;
   readonly plugins?: readonly {
     readonly manifestPath: string;
     readonly config?: Readonly<Record<string, unknown>>;

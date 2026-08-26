@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from "node:assert/strict";
+import { generateKeyPairSync, sign } from "node:crypto";
 import { mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -9,6 +10,7 @@ import test from "node:test";
 import {
   bootRuntime,
   runtimePluginIntegrity,
+  runtimePluginSignaturePayload,
   verifyRuntimePluginManifest
 } from "../src/index.js";
 
@@ -57,6 +59,96 @@ test("plugin manifest pins all executable contributions and loads through Cordis
   ));
   assert.equal(runtime.context.get("muniuContributorBus"), runtime.contributors);
   await runtime.dispose();
+});
+
+test("signed V2 manifest contributes only operator-approved domain capabilities", async () => {
+  const { entryPath, manifestPath } = await fixture();
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+  const unsigned = {
+    schemaVersion: 2,
+    name: "opc-domain",
+    version: "0.3.0",
+    integrity: runtimePluginIntegrity(await readFile(entryPath)),
+    entry: "plugin.mjs",
+    skills: ["visit-summary"],
+    mcpServers: [],
+    hooks: ["operation.compile"],
+    tools: ["visit_record"],
+    configSchema: { type: "object" },
+    requiredCapabilities: ["operations"],
+    release: { sequence: 1, publishedAt: "2026-08-26T00:00:00.000Z" },
+    trustClass: "official-domain",
+    contributes: {
+      domains: ["opc"],
+      recordSchemas: ["opc.visit.v1"],
+      workflows: ["opc.visit-assistant.v1"],
+      gates: ["opc.visit.source-trace.v1"],
+      connectors: [],
+      renderers: ["opc.visit.review.v1"]
+    },
+    externalEffects: [],
+    migrations: []
+  } as const;
+  const signature = sign(
+    null,
+    Buffer.from(runtimePluginSignaturePayload(unsigned), "utf8"),
+    privateKey
+  ).toString("base64");
+  await writeFile(manifestPath, `${JSON.stringify({
+    ...unsigned,
+    signature: { algorithm: "ed25519", keyId: "release-key", value: signature }
+  })}\n`, "utf8");
+
+  const trustedKeys = {
+    "release-key": publicKey.export({ type: "spki", format: "pem" }).toString()
+  };
+  const verified = await verifyRuntimePluginManifest(
+    manifestPath,
+    ["operations"],
+    { trustedKeys }
+  );
+  assert.equal(verified.manifest.schemaVersion, 2);
+  if (verified.manifest.schemaVersion === 2) {
+    assert.deepEqual(verified.manifest.contributes.domains, ["opc"]);
+    assert.equal(verified.manifest.trustClass, "official-domain");
+  }
+
+  await writeFile(manifestPath, `${JSON.stringify({
+    ...unsigned,
+    contributes: { ...unsigned.contributes, domains: ["opc", "finance"] },
+    signature: { algorithm: "ed25519", keyId: "release-key", value: signature }
+  })}\n`, "utf8");
+  await assert.rejects(
+    () => verifyRuntimePluginManifest(manifestPath, ["operations"], { trustedKeys }),
+    /signature/u
+  );
+
+  await writeFile(manifestPath, `${JSON.stringify({
+    ...unsigned,
+    signature: { algorithm: "ed25519", keyId: "release-key", value: "AAAA" }
+  })}\n`, "utf8");
+  await assert.rejects(
+    () => verifyRuntimePluginManifest(manifestPath, ["operations"], { trustedKeys }),
+    /signature is invalid/u
+  );
+
+  const impossibleDate = {
+    ...unsigned,
+    release: { sequence: 1, publishedAt: "2026-02-30T00:00:00.000Z" }
+  } as const;
+  const impossibleDateSignature = sign(
+    null,
+    Buffer.from(runtimePluginSignaturePayload(impossibleDate), "utf8"),
+    privateKey
+  ).toString("base64");
+  await writeFile(manifestPath, `${JSON.stringify({
+    ...impossibleDate,
+    signature: { algorithm: "ed25519", keyId: "release-key", value: impossibleDateSignature }
+  })}\n`, "utf8");
+  await assert.rejects(
+    () => verifyRuntimePluginManifest(manifestPath, ["operations"], { trustedKeys }),
+    /publishedAt/u
+  );
 });
 
 test("plugin manifest rejects digest mismatch, missing capability and symlinked entry", async () => {

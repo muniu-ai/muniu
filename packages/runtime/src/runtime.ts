@@ -155,7 +155,8 @@ export async function bootRuntime(options: BootRuntimeOptions): Promise<MuniuRun
   for (const plugin of options.plugins ?? []) {
     const verified = await verifyRuntimePluginManifest(
       plugin.manifestPath,
-      options.hostCapabilities ?? []
+      options.hostCapabilities ?? [],
+      { trustedKeys: options.trustedRuntimePluginKeys }
     );
     if (loadedPluginNames.has(verified.manifest.name)) {
       throw new Error(`runtime plugin ${verified.manifest.name} is configured more than once`);
