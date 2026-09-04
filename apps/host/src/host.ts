@@ -423,6 +423,64 @@ interface SubmittedSessionEntry {
   readonly createdAt: string;
 }
 
+interface DurableRuntimeProjection {
+  readonly executionId: string;
+  readonly streamVersion: number;
+  readonly nextSequence: number;
+  readonly records: readonly RuntimeRecord[];
+}
+
+function enqueueRuntimeInbox(
+  transaction: KernelTransaction,
+  input: {
+    readonly executionId: string;
+    readonly kind: "follow_up" | "steer";
+    readonly text: string;
+    readonly occurredAt: string;
+    readonly recordId: string;
+    readonly itemId: string;
+  },
+): RuntimeRecord {
+  const current = transaction.getProjection<DurableRuntimeProjection>(
+    "agent-runtime",
+    input.executionId,
+  ) ?? {
+    executionId: input.executionId,
+    streamVersion: 0,
+    nextSequence: 1,
+    records: [],
+  };
+  if (current.executionId !== input.executionId
+    || !Number.isSafeInteger(current.streamVersion) || current.streamVersion < 0
+    || !Number.isSafeInteger(current.nextSequence) || current.nextSequence < 1
+    || !Array.isArray(current.records)) {
+    throw new KernelError(
+      "AGENT_RUNTIME_CORRUPT",
+      "Agent Runtime 持久状态无效",
+      "停止执行并检查事件与投影",
+    );
+  }
+  const record: RuntimeRecord = {
+    sequence: current.nextSequence,
+    id: input.recordId,
+    executionId: input.executionId,
+    type: "inbox/enqueued",
+    occurredAt: input.occurredAt,
+    payload: {
+      id: input.itemId,
+      kind: input.kind,
+      text: input.text,
+    },
+  };
+  transaction.putProjection<DurableRuntimeProjection>("agent-runtime", input.executionId, {
+    executionId: input.executionId,
+    streamVersion: current.streamVersion + 1,
+    nextSequence: current.nextSequence + 1,
+    records: [...current.records, record],
+  });
+  return record;
+}
+
 async function threadTurns(
   store: KernelStore,
   tenantId: string,
@@ -882,7 +940,74 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         const execution = await projectionGet<Execution>(options.store, TENANT_ID, "execution", executionId);
         if (!execution) throw new KernelError("EXECUTION_NOT_FOUND", "执行不存在", "刷新执行列表");
         await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, execution.workspaceId, "operate");
-        const command = stringField(body, "command") as Parameters<AgentOsKernel["commandExecution"]>[5];
+        const command = stringField(body, "command")!;
+        if (command === "follow_up" || command === "steer") {
+          const text = stringField(body, "message")!;
+          const expected = expectedVersion(body);
+          const result = await idempotentProjectionMutation({
+            store: options.store,
+            tenantId: TENANT_ID,
+            key: mutationKey as string,
+            scope: `http.execution.command:${executionId}`,
+            request: body,
+            now,
+            work: (transaction) => {
+              const current = transaction.getProjection<Execution>("execution", executionId);
+              if (!current) throw new KernelError("EXECUTION_NOT_FOUND", "执行不存在", "刷新执行列表");
+              if (current.streamVersion !== expected) {
+                throw new KernelStreamVersionConflictError(expected, current.streamVersion);
+              }
+              if (current.status !== "running" && current.status !== "waiting_approval") {
+                throw new KernelError(
+                  "INVALID_EXECUTION_TRANSITION",
+                  `执行处于 ${current.status}，不能接收 ${command}`,
+                  "刷新执行状态；已结束的执行请提交新的 turn",
+                );
+              }
+              const timestamp = now();
+              const inboxItemId = nextId("inbox-item");
+              enqueueRuntimeInbox(transaction, {
+                executionId,
+                kind: command,
+                text,
+                occurredAt: timestamp,
+                recordId: nextId("runtime"),
+                itemId: inboxItemId,
+              });
+              const next: Execution = {
+                ...current,
+                streamVersion: current.streamVersion + 1,
+                updatedAt: timestamp,
+              };
+              transaction.putProjection("execution", executionId, next);
+              transaction.appendEvent({
+                tenantId: TENANT_ID,
+                aggregateType: "execution",
+                aggregateId: executionId,
+                expectedStreamVersion: current.streamVersion,
+                type: command === "follow_up" ? "execution.follow_up_queued" : "execution.steer_queued",
+                actorId: ACTOR_ID,
+                executionId,
+                generation: current.generation,
+                correlationId: nextId("correlation"),
+                publicPayload: {
+                  workspaceId: current.workspaceId,
+                  command,
+                  inboxItemId,
+                },
+              });
+              return next;
+            },
+          });
+          return json(result, 202, traceId);
+        }
+        if (command !== "cancel" && command !== "resume") {
+          throw new KernelError(
+            "EXECUTION_COMMAND_FORBIDDEN",
+            "该执行命令仅供内核和 Worker 使用",
+            "使用 follow_up、steer、cancel 或 resume",
+          );
+        }
         const result = await kernel.commandExecution(
           TENANT_ID, ACTOR_ID, mutationKey as string, executionId,
           expectedVersion(body), command,

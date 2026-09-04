@@ -374,6 +374,59 @@ test("thread turn 只接受插件 Agent 与已连接模型，并原子排入 Wor
   ));
   assert.equal(invalidAgent.status, 422);
   assert.equal(store.readJobs("local").length, 1);
+
+  const running = await host.kernel.commandExecution(
+    "local", "local-owner", "turn-worker-start", execution.id, execution.streamVersion, "start",
+  );
+  const followUpBody = {
+    expectedStreamVersion: running.streamVersion,
+    command: "follow_up",
+    message: "先核对反证，再进入下一轮",
+  };
+  const followed = await host.dispatch(jsonRequest(
+    `/v2/executions/${execution.id}/commands`, followUpBody, "turn-follow-up",
+  ));
+  assert.equal(followed.status, 202, JSON.stringify(await followed.clone().json()));
+  const followedExecution = (await responseJson(followed)).data;
+  assert.equal(followedExecution.status, "running");
+  assert.equal(followedExecution.streamVersion, running.streamVersion + 1);
+  const runtime = await store.transact("local", (transaction) =>
+    transaction.getProjection<any>("agent-runtime", execution.id));
+  assert.deepEqual(runtime.records.map((record: any) => [record.type, record.payload.kind, record.payload.text]), [
+    ["inbox/enqueued", "follow_up", "先核对反证，再进入下一轮"],
+  ]);
+  const replayedFollowUp = await host.dispatch(jsonRequest(
+    `/v2/executions/${execution.id}/commands`, followUpBody, "turn-follow-up",
+  ));
+  assert.equal((await responseJson(replayedFollowUp)).data.streamVersion, followedExecution.streamVersion);
+  assert.equal((await store.transact("local", (transaction) =>
+    transaction.getProjection<any>("agent-runtime", execution.id))).records.length, 1);
+
+  const steered = await host.dispatch(jsonRequest(
+    `/v2/executions/${execution.id}/commands`,
+    {
+      expectedStreamVersion: followedExecution.streamVersion,
+      command: "steer",
+      message: "下一次模型边界优先列出证据缺口",
+    },
+    "turn-steer",
+  ));
+  assert.equal(steered.status, 202);
+  const steeredExecution = (await responseJson(steered)).data;
+  const queuedInbox = await store.transact("local", (transaction) =>
+    transaction.getProjection<any>("agent-runtime", execution.id));
+  assert.deepEqual(queuedInbox.records.map((record: any) => record.payload.kind), [
+    "follow_up",
+    "steer",
+  ]);
+
+  const internalCommand = await host.dispatch(jsonRequest(
+    `/v2/executions/${execution.id}/commands`,
+    { expectedStreamVersion: steeredExecution.streamVersion, command: "complete" },
+    "turn-internal-command",
+  ));
+  assert.equal(internalCommand.status, 422);
+  assert.equal((await responseJson(internalCommand)).code, "EXECUTION_COMMAND_FORBIDDEN");
   await host.close();
 });
 

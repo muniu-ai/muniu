@@ -408,6 +408,54 @@ test("Agent Job 领取与完成会在同一事务推进 Job、Execution 和事�
   }
 });
 
+test("Worker 停止会原子中断 Execution 并终止当前 Job", async () => {
+  const hmacKey = randomBytes(32);
+  const storage = new SqliteStorage({
+    databaseFile: temporaryPath("state.sqlite"),
+    hmacKey
+  });
+  try {
+    await seedAgentExecutionJob(storage, {
+      executionId: "execution-interrupted",
+      jobId: "job-interrupted"
+    });
+    const claimed = await storage.claimJob("worker-a", "2026-09-04T00:00:01.000Z");
+    assert.equal(claimed?.fencingToken, 1);
+
+    await storage.interruptJob(
+      "job-interrupted",
+      "worker-a",
+      1,
+      "Worker 已停止",
+      "2026-09-04T00:00:02.000Z"
+    );
+
+    const physical = await storage.getJob("job-interrupted");
+    assert.equal(physical?.status, "failed");
+    assert.equal(physical?.failure?.code, "EXECUTION_INTERRUPTED");
+    const job = await storage.getProjection("tenant-a", "job", "job-interrupted");
+    assert.equal(job?.status, "failed");
+    assert.equal((job?.failure as { code?: string } | undefined)?.code, "EXECUTION_INTERRUPTED");
+    const execution = await storage.getProjection("tenant-a", "execution", "execution-interrupted");
+    assert.equal(execution?.status, "interrupted");
+    assert.equal(execution?.finishedAt, undefined);
+    const events = await storage.readEvents("tenant-a", { afterPosition: 0, limit: 20 });
+    assert.deepEqual(events.events.slice(-2).map((event) => event.type), [
+      "job.failed",
+      "execution.interrupted"
+    ]);
+    assert.equal(events.events.every((event) => verifyEventIntegrity(event, hmacKey)), true);
+    await assert.rejects(
+      storage.completeJob(
+        "job-interrupted", "worker-a", 1, { late: true }, "2026-09-04T00:00:03.000Z"
+      ),
+      StaleFencingTokenError
+    );
+  } finally {
+    await storage.close();
+  }
+});
+
 test("Agent Job 转移租约可恢复执行，陈旧 Worker 不能提交失败结果", async () => {
   const storage = new SqliteStorage({
     databaseFile: temporaryPath("state.sqlite"),
