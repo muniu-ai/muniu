@@ -12,24 +12,35 @@ export interface ApiOperationV2 {
 }
 
 export const API_OPERATIONS_V2: readonly ApiOperationV2[] = [
+  { method: "get", path: "/v2/openapi.json", operationId: "getOpenApi", mutation: false, versioned: false },
+  { method: "get", path: "/v2/health", operationId: "getHealth", mutation: false, versioned: false },
+  { method: "get", path: "/v2/readiness", operationId: "getReadiness", mutation: false, versioned: false },
+  { method: "post", path: "/v2/setup", operationId: "setup", mutation: true, versioned: false },
   { method: "get", path: "/v2/workspaces", operationId: "listWorkspaces", mutation: false, versioned: false },
   { method: "post", path: "/v2/workspaces", operationId: "createWorkspace", mutation: true, versioned: false },
   { method: "patch", path: "/v2/workspaces/{workspaceId}", operationId: "updateWorkspace", mutation: true, versioned: true },
+  { method: "get", path: "/v2/workspaces/{workspaceId}/home", operationId: "getWorkspaceHome", mutation: false, versioned: false },
   { method: "get", path: "/v2/workspaces/{workspaceId}/threads", operationId: "listThreads", mutation: false, versioned: false },
   { method: "post", path: "/v2/workspaces/{workspaceId}/threads", operationId: "createThread", mutation: true, versioned: false },
   { method: "post", path: "/v2/workspaces/{workspaceId}/threads/{threadId}/turns", operationId: "createTurn", mutation: true, versioned: true },
   { method: "get", path: "/v2/workspaces/{workspaceId}/events", operationId: "streamWorkspaceEvents", mutation: false, versioned: false },
   { method: "post", path: "/v2/executions/{executionId}/commands", operationId: "commandExecution", mutation: true, versioned: true },
   { method: "get", path: "/v2/inbox", operationId: "listInbox", mutation: false, versioned: false },
+  { method: "get", path: "/v2/activity", operationId: "listActivity", mutation: false, versioned: false },
   { method: "post", path: "/v2/approvals/{approvalId}/decisions", operationId: "decideApproval", mutation: true, versioned: true },
   { method: "get", path: "/v2/deliverables", operationId: "listDeliverables", mutation: false, versioned: false },
   { method: "get", path: "/v2/assets/{assetId}", operationId: "getAsset", mutation: false, versioned: false },
   { method: "get", path: "/v2/memories", operationId: "listMemories", mutation: false, versioned: false },
   { method: "post", path: "/v2/memories", operationId: "proposeMemory", mutation: true, versioned: false },
+  { method: "post", path: "/v2/memories/{memoryId}/decisions", operationId: "decideMemory", mutation: true, versioned: true },
+  { method: "get", path: "/v2/share-grants", operationId: "listShareGrants", mutation: false, versioned: false },
   { method: "post", path: "/v2/share-grants", operationId: "createShareGrant", mutation: true, versioned: true },
+  { method: "get", path: "/v2/model-connections/presets", operationId: "listModelPresets", mutation: false, versioned: false },
+  { method: "get", path: "/v2/model-connections", operationId: "listModelConnections", mutation: false, versioned: false },
   { method: "post", path: "/v2/model-connections", operationId: "createModelConnection", mutation: true, versioned: false },
   { method: "post", path: "/v2/model-connections/{connectionId}/probe", operationId: "probeModelConnection", mutation: true, versioned: true },
   { method: "post", path: "/v2/plugins/installations", operationId: "installPlugin", mutation: true, versioned: false },
+  { method: "get", path: "/v2/plugins/installations", operationId: "listPluginInstallations", mutation: false, versioned: false },
   { method: "post", path: "/v2/workspaces/{workspaceId}/plugin-activations", operationId: "activatePlugin", mutation: true, versioned: true },
   { method: "get", path: "/v2/plugins/{pluginId}/{path}", operationId: "getPluginResource", mutation: false, versioned: false },
   { method: "post", path: "/v2/plugins/{pluginId}/{path}", operationId: "mutatePluginResource", mutation: true, versioned: true },
@@ -45,10 +56,28 @@ export function createOpenApiDocument(): JsonObject {
     paths[operation.path]![operation.method] = {
       operationId: operation.operationId,
       parameters,
+      ...(operation.mutation ? {
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: operation.versioned
+                ? { $ref: "#/components/schemas/VersionedMutation" }
+                : { type: "object", additionalProperties: true },
+            },
+          },
+        },
+      } : {}),
       responses: {
-        "200": { description: "成功" },
-        "409": { description: "流版本冲突" },
-        "410": { description: "事件游标已过保留期" },
+        "200": {
+          description: "成功",
+          content: { "application/json": { schema: { $ref: "#/components/schemas/ApiEnvelope" } } },
+        },
+        "400": { $ref: "#/components/responses/BadRequest" },
+        "401": { $ref: "#/components/responses/Unauthorized" },
+        "409": { $ref: "#/components/responses/Conflict" },
+        "410": { $ref: "#/components/responses/CursorExpired" },
+        "422": { $ref: "#/components/responses/Unprocessable" },
       },
       "x-muniu-versioned": operation.versioned,
     };
@@ -57,5 +86,57 @@ export function createOpenApiDocument(): JsonObject {
     openapi: "3.1.0",
     info: { title: "Muniu Agent OS API", version: "0.2.0" },
     paths,
+    components: {
+      schemas: {
+        ApiEnvelope: {
+          type: "object",
+          required: ["data", "traceId"],
+          properties: {
+            data: {},
+            traceId: { type: "string" },
+          },
+        },
+        ApiError: {
+          type: "object",
+          additionalProperties: false,
+          required: ["code", "message", "action", "fieldIssues", "traceId", "retryable"],
+          properties: {
+            code: { type: "string" },
+            message: { type: "string" },
+            action: { type: "string" },
+            fieldIssues: {
+              type: "array",
+              items: {
+                type: "object",
+                required: ["field", "message"],
+                properties: { field: { type: "string" }, message: { type: "string" } },
+              },
+            },
+            traceId: { type: "string" },
+            retryable: { type: "boolean" },
+          },
+        },
+        VersionedMutation: {
+          type: "object",
+          required: ["expectedStreamVersion"],
+          properties: { expectedStreamVersion: { type: "integer", minimum: 0 } },
+          additionalProperties: true,
+        },
+      },
+      responses: {
+        BadRequest: errorResponse("请求无效"),
+        Unauthorized: errorResponse("需要认证"),
+        Conflict: errorResponse("流版本或幂等键冲突"),
+        CursorExpired: errorResponse("事件游标已过保留期"),
+        Unprocessable: errorResponse("请求不符合领域约束"),
+      },
+    },
+  };
+}
+
+function errorResponse(description: string): JsonObject {
+  return {
+    description,
+    content: { "application/json": { schema: { $ref: "#/components/schemas/ApiError" } } },
   };
 }

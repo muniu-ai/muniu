@@ -98,13 +98,13 @@ export class AgentOsClient {
   createFirstObject(workspaceId: string, pluginId: ProductPluginId, input: string) {
     const domain = pluginId === "opc" ? "opportunities" : "repositories";
     return this.request<unknown>(`/v2/plugins/${pluginId}/${domain}`, {
-      method: "POST", body: JSON.stringify({ workspaceId, input }),
+      method: "POST", body: JSON.stringify({ workspaceId, expectedStreamVersion: 0, input }),
     });
   }
 
   runReadOnlySample(workspaceId: string, pluginId: ProductPluginId) {
     return this.request<unknown>(`/v2/plugins/${pluginId}/samples/read-only`, {
-      method: "POST", body: JSON.stringify({ workspaceId }),
+      method: "POST", body: JSON.stringify({ workspaceId, expectedStreamVersion: 0 }),
     });
   }
 
@@ -130,7 +130,7 @@ export class AgentOsClient {
   capture(workspaceId: string, pluginId: ProductPluginId, input: string) {
     const resource = pluginId === "opc" ? "opportunities" : "tasks";
     return this.request<unknown>(`/v2/plugins/${pluginId}/${resource}`, {
-      method: "POST", body: JSON.stringify({ workspaceId, input }),
+      method: "POST", body: JSON.stringify({ workspaceId, expectedStreamVersion: 0, input }),
     });
   }
 }

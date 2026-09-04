@@ -8,8 +8,10 @@ import type {
 import { approvalStillMatches, isPotentiallyAutoApprovable } from "@mn/contracts";
 import { KernelError } from "./errors.js";
 
-function scopeKey(scope: ResourceRef): string {
-  return `${scope.namespace}:${scope.resourceId}`;
+function scopeIncludes(allowed: ResourceRef, requested: ResourceRef): boolean {
+  return allowed.namespace === requested.namespace
+    && (allowed.resourceId === "*" || allowed.resourceId === requested.resourceId)
+    && (allowed.digest === undefined || allowed.digest === requested.digest);
 }
 
 export function assertAuthorityAttenuation(
@@ -17,12 +19,11 @@ export function assertAuthorityAttenuation(
   child: ExecutionAuthority,
 ): void {
   const parentTools = new Set(parent.toolIds);
-  const parentScopes = new Set(parent.dataScopes.map(scopeKey));
   const parentEffects = new Set(parent.autoAllowedEffects);
   if (child.toolIds.some((tool) => !parentTools.has(tool))) {
     throw new KernelError("AUTHORITY_ESCALATION", "子 Agent 申请了父 Agent 没有的工具", "缩小工具范围");
   }
-  if (child.dataScopes.some((scope) => !parentScopes.has(scopeKey(scope)))) {
+  if (child.dataScopes.some((scope) => !parent.dataScopes.some((allowed) => scopeIncludes(allowed, scope)))) {
     throw new KernelError("AUTHORITY_ESCALATION", "子 Agent 申请了父 Agent 没有的数据范围", "缩小数据范围");
   }
   if (child.autoAllowedEffects.some((effect) => !parentEffects.has(effect))) {
@@ -52,8 +53,8 @@ export function authorityAllowsIntent(
   if (authority.executionId !== intent.executionId || authority.commitment !== intent.authorityCommitment) {
     throw new KernelError("AUTHORITY_MISMATCH", "工具调用的执行身份或权限承诺不匹配", "停止执行并重新生成工具调用");
   }
-  const allowedScopes = new Set(authority.dataScopes.map(scopeKey));
-  if (intent.resourceRefs.some((resource) => !allowedScopes.has(scopeKey(resource)))) {
+  if (intent.resourceRefs.some((resource) =>
+    !authority.dataScopes.some((allowed) => scopeIncludes(allowed, resource)))) {
     throw new KernelError("RESOURCE_DENIED", "工具调用超出已授权资源范围", "缩小资源范围");
   }
   if (

@@ -150,6 +150,8 @@ export interface KernelTransactionLike {
   deleteProjection(namespace: string, id: string): void;
   getIdempotency(scope: string, key: string): KernelIdempotencyRecordLike | undefined;
   putIdempotency(record: KernelIdempotencyRecordLike): void;
+  putJob(job: JobWrite): void;
+  putOutbox(message: OutboxWrite): void;
 }
 
 export interface KernelStoreCompatible {

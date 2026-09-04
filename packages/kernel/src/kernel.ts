@@ -3,6 +3,7 @@ import type {
   EventAppendRequest,
   Execution,
   ExecutionAuthority,
+  Job,
   JsonObject,
   MemoryRecord,
   ShareGrant,
@@ -13,7 +14,7 @@ import type {
 import { acceptMemory, deleteMemory, rejectMemory } from "./memory.js";
 import { authorityAllowsIntent } from "./authority.js";
 import { sha256 } from "./canonical.js";
-import { KernelError } from "./errors.js";
+import { KernelError, StreamVersionConflictError } from "./errors.js";
 import { transitionExecution, type ExecutionCommand } from "./execution.js";
 import type { InboxItem, ModelConnection } from "./models.js";
 import type { KernelStore, KernelTransaction } from "./store.js";
@@ -25,6 +26,20 @@ export interface KernelOptions {
 
 export interface ProtectedPayloadKeyDestroyer {
   destroy(reference: string): Promise<void>;
+}
+
+export interface SubmitTurnInput {
+  readonly workspaceId: string;
+  readonly threadId: string;
+  readonly expectedStreamVersion: number;
+  readonly message: string;
+  readonly agentDefinitionId: string;
+  readonly modelBindingId: string;
+  readonly executionPrincipalId: string;
+  readonly authority: Omit<
+    ExecutionAuthority,
+    "id" | "tenantId" | "executionId" | "streamVersion" | "commitment" | "createdAt" | "updatedAt"
+  >;
 }
 
 function payload(value: unknown): JsonObject {
@@ -216,6 +231,168 @@ export class AgentOsKernel {
         tenantId, aggregateType: "execution", aggregateId: id, expectedStreamVersion: 0,
         type: "execution.queued", actorId, executionId: id, generation: 1,
         publicPayload: { workspaceId: input.workspaceId, threadId: input.threadId, authorityId },
+      });
+      return execution;
+    });
+  }
+
+  async submitTurn(
+    tenantId: string,
+    actorId: string,
+    idempotencyKey: string,
+    input: SubmitTurnInput,
+  ): Promise<Execution> {
+    return this.mutation(tenantId, `thread.turn:${input.threadId}`, idempotencyKey, input, (transaction) => {
+      const workspace = transaction.getProjection<Workspace>("workspace", input.workspaceId);
+      if (!workspace) throw new KernelError("WORKSPACE_NOT_FOUND", "工作区不存在", "刷新工作区列表");
+      const thread = transaction.getProjection<Thread>("thread", input.threadId);
+      if (!thread || thread.workspaceId !== input.workspaceId) {
+        throw new KernelError("THREAD_NOT_FOUND", "会话不存在", "刷新工作区会话");
+      }
+      if (thread.streamVersion !== input.expectedStreamVersion) {
+        throw new StreamVersionConflictError(input.expectedStreamVersion, thread.streamVersion);
+      }
+      if (thread.pluginId !== workspace.activePluginIds.find((pluginId) => pluginId === thread.pluginId)) {
+        throw new KernelError("PLUGIN_NOT_ACTIVE", "工作区尚未启用此插件", "先在工作区启用插件");
+      }
+      if (!input.message.trim()) {
+        throw new KernelError("INVALID_BODY", "message 必须是非空字符串", "填写 message");
+      }
+      if (input.authority.workspaceId !== input.workspaceId
+        || input.authority.principalId !== input.executionPrincipalId) {
+        throw new KernelError("AUTHORITY_INVALID", "执行权限与工作区或执行身份不一致", "重新创建执行权限");
+      }
+
+      const timestamp = this.now();
+      const executionId = this.nextId("execution");
+      const authorityId = this.nextId("authority");
+      const turnId = this.nextId("turn");
+      const jobId = this.nextId("job");
+      const commitment = sha256({
+        executionId,
+        workspaceId: input.workspaceId,
+        principalId: input.authority.principalId,
+        toolIds: input.authority.toolIds,
+        dataScopes: input.authority.dataScopes,
+        autoAllowedEffects: input.authority.autoAllowedEffects,
+        budget: input.authority.budget,
+        parentAuthorityId: input.authority.parentAuthorityId,
+      });
+      const authority: ExecutionAuthority = {
+        ...input.authority,
+        id: authorityId,
+        tenantId,
+        executionId,
+        commitment,
+        streamVersion: 1,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      };
+      const execution: Execution = {
+        id: executionId,
+        tenantId,
+        workspaceId: input.workspaceId,
+        threadId: input.threadId,
+        pluginId: thread.pluginId,
+        agentDefinitionId: input.agentDefinitionId,
+        modelBindingId: input.modelBindingId,
+        initiatedBy: actorId,
+        executionPrincipalId: input.executionPrincipalId,
+        generation: 1,
+        status: "queued",
+        authorityId,
+        streamVersion: 1,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      };
+      const job: Job = {
+        id: jobId,
+        tenantId,
+        workspaceId: input.workspaceId,
+        kind: "agent.execution.run",
+        payload: { executionId, message: input.message.trim() },
+        status: "available",
+        attempts: 0,
+        availableAt: timestamp,
+        fencingToken: 0,
+        idempotencyKey: `execution:${executionId}:generation:1`,
+        streamVersion: 1,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      };
+
+      transaction.putProjection("thread", thread.id, {
+        ...thread,
+        streamVersion: thread.streamVersion + 1,
+        updatedAt: timestamp,
+      });
+      transaction.putProjection("session-log-entry", turnId, {
+        id: turnId,
+        tenantId,
+        workspaceId: input.workspaceId,
+        threadId: input.threadId,
+        executionId,
+        role: "user",
+        message: input.message.trim(),
+        generation: 1,
+        createdAt: timestamp,
+      });
+      transaction.putProjection("execution", executionId, execution);
+      transaction.putProjection("authority", authorityId, authority);
+      transaction.putProjection("job", jobId, job);
+      this.append(transaction, {
+        tenantId,
+        aggregateType: "thread",
+        aggregateId: thread.id,
+        expectedStreamVersion: thread.streamVersion,
+        type: "thread.turn_submitted",
+        actorId,
+        executionId,
+        generation: 1,
+        publicPayload: { workspaceId: input.workspaceId, executionId, pluginId: thread.pluginId },
+      });
+      this.append(transaction, {
+        tenantId,
+        aggregateType: "execution",
+        aggregateId: executionId,
+        expectedStreamVersion: 0,
+        type: "execution.queued",
+        actorId,
+        executionId,
+        generation: 1,
+        publicPayload: {
+          workspaceId: input.workspaceId,
+          threadId: input.threadId,
+          authorityId,
+          authorityCommitment: commitment,
+        },
+      });
+      this.append(transaction, {
+        tenantId,
+        aggregateType: "job",
+        aggregateId: jobId,
+        expectedStreamVersion: 0,
+        type: "job.available",
+        actorId,
+        executionId,
+        generation: 1,
+        publicPayload: { workspaceId: input.workspaceId, executionId, kind: job.kind },
+      });
+      transaction.putJob({
+        id: job.id,
+        tenantId,
+        workspaceId: job.workspaceId,
+        kind: job.kind,
+        payload: job.payload,
+        availableAt: job.availableAt,
+        idempotencyKey: job.idempotencyKey,
+      });
+      transaction.putOutbox({
+        id: this.nextId("outbox"),
+        tenantId,
+        topic: "job.available",
+        payload: { workspaceId: input.workspaceId, executionId, jobId },
+        availableAt: timestamp,
       });
       return execution;
     });

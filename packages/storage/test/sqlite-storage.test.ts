@@ -384,17 +384,40 @@ test("SQLite is structurally compatible with KernelStore transactions", async ()
         response: { id: "one" },
         createdAt: "2026-09-04T00:00:00.000Z"
       });
+      transaction.putJob({
+        id: "turn-job",
+        tenantId: "tenant-a",
+        workspaceId: "one",
+        kind: "agent.execution.run",
+        payload: { executionId: "execution-one", message: "开始" },
+        availableAt: "2026-09-04T00:00:00.000Z",
+        idempotencyKey: "turn-job-one"
+      });
+      transaction.putOutbox({
+        id: "turn-outbox",
+        tenantId: "tenant-a",
+        topic: "job.available",
+        payload: { jobId: "turn-job" }
+      });
       assert.equal(transaction.listProjections<{ id: string }>("workspace")[0]?.id, "one");
       return transaction.getIdempotency("workspace.create", "request-1")?.response;
     });
     assert.deepEqual(value, { id: "one" });
     assert.equal((await storage.readEvents("tenant-a", 0, 20)).events.length, 2);
+    assert.equal((await storage.getJob("turn-job"))?.kind, "agent.execution.run");
+    assert.equal((await storage.listOutbox("tenant-a", 20))[0]?.topic, "job.available");
 
     await assert.rejects(storage.transact("tenant-a", (transaction) => {
       transaction.putProjection("workspace", "rolled-back", { id: "rolled-back" });
+      transaction.putJob({
+        id: "rolled-back-job", tenantId: "tenant-a", kind: "agent.execution.run",
+        payload: { executionId: "rolled-back" }, availableAt: "2026-09-04T00:00:00.000Z",
+        idempotencyKey: "rolled-back-job"
+      });
       throw new Error("stop");
     }), /stop/);
     assert.equal(await storage.getProjection("tenant-a", "workspace", "rolled-back"), undefined);
+    assert.equal(await storage.getJob("rolled-back-job"), undefined);
   } finally {
     await storage.close();
   }

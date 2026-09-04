@@ -1,6 +1,7 @@
 import type {
   EventAppendRequest,
   EventPage,
+  JsonObject,
   KernelEventV1,
 } from "@mn/contracts";
 import { hmacSha256, sha256 } from "./canonical.js";
@@ -15,6 +16,24 @@ export interface IdempotencyRecord {
   readonly createdAt: string;
 }
 
+export interface KernelJobWrite {
+  readonly id: string;
+  readonly tenantId: string;
+  readonly workspaceId?: string;
+  readonly kind: string;
+  readonly payload: JsonObject;
+  readonly availableAt: string;
+  readonly idempotencyKey: string;
+}
+
+export interface KernelOutboxWrite {
+  readonly id: string;
+  readonly tenantId: string;
+  readonly topic: string;
+  readonly payload: JsonObject;
+  readonly availableAt?: string;
+}
+
 export interface KernelTransaction {
   appendEvent(request: EventAppendRequest): KernelEventV1;
   getProjection<T>(namespace: string, id: string): T | undefined;
@@ -23,6 +42,8 @@ export interface KernelTransaction {
   deleteProjection(namespace: string, id: string): void;
   getIdempotency(scope: string, key: string): IdempotencyRecord | undefined;
   putIdempotency(record: IdempotencyRecord): void;
+  putJob(job: KernelJobWrite): void;
+  putOutbox(message: KernelOutboxWrite): void;
 }
 
 export interface KernelStore {
@@ -36,6 +57,8 @@ interface MemoryState {
   idempotency: Map<string, IdempotencyRecord>;
   positions: Map<string, number>;
   streamVersions: Map<string, number>;
+  jobs: Map<string, KernelJobWrite>;
+  outbox: Map<string, KernelOutboxWrite>;
 }
 
 function cloneState(state: MemoryState): MemoryState {
@@ -45,6 +68,8 @@ function cloneState(state: MemoryState): MemoryState {
     idempotency: new Map(state.idempotency),
     positions: new Map(state.positions),
     streamVersions: new Map(state.streamVersions),
+    jobs: new Map(state.jobs),
+    outbox: new Map(state.outbox),
   };
 }
 
@@ -55,6 +80,8 @@ export class InMemoryKernelStore implements KernelStore {
     idempotency: new Map(),
     positions: new Map(),
     streamVersions: new Map(),
+    jobs: new Map(),
+    outbox: new Map(),
   };
 
   constructor(
@@ -122,6 +149,18 @@ export class InMemoryKernelStore implements KernelStore {
       putIdempotency: (record: IdempotencyRecord) => {
         staged.idempotency.set(`${tenantId}:${record.scope}:${record.key}`, record);
       },
+      putJob: (job) => {
+        if (job.tenantId !== tenantId) throw new Error("事务不能跨租户写入 Job");
+        const key = `${tenantId}:${job.id}`;
+        if (staged.jobs.has(key)) throw new Error(`Job ${job.id} 已存在`);
+        staged.jobs.set(key, job);
+      },
+      putOutbox: (message) => {
+        if (message.tenantId !== tenantId) throw new Error("事务不能跨租户写入 outbox");
+        const key = `${tenantId}:${message.id}`;
+        if (staged.outbox.has(key)) throw new Error(`Outbox ${message.id} 已存在`);
+        staged.outbox.set(key, message);
+      },
     };
     const result = work(transaction);
     this.state = staged;
@@ -138,5 +177,17 @@ export class InMemoryKernelStore implements KernelStore {
       nextPosition: events.at(-1)?.position ?? afterPosition,
       retentionFloor: floor,
     };
+  }
+
+  readJobs(tenantId: string): readonly KernelJobWrite[] {
+    return [...this.state.jobs.entries()]
+      .filter(([key]) => key.startsWith(`${tenantId}:`))
+      .map(([, job]) => job);
+  }
+
+  readOutbox(tenantId: string): readonly KernelOutboxWrite[] {
+    return [...this.state.outbox.entries()]
+      .filter(([key]) => key.startsWith(`${tenantId}:`))
+      .map(([, message]) => message);
   }
 }

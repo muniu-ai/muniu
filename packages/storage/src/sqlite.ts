@@ -299,6 +299,42 @@ export class SqliteStorage implements StoragePort {
             JSON.stringify(record.response),
             record.createdAt
           );
+        },
+        putJob: (job) => {
+          if (job.tenantId !== tenantId) throw new Error("A storage transaction cannot cross tenants");
+          const writtenAt = this.#now().toISOString();
+          this.#database.prepare(`
+            insert into jobs (
+              job_id, tenant_id, workspace_id, kind, payload_json, status, attempts,
+              available_at, fencing_token, idempotency_key, created_at, updated_at
+            ) values (?, ?, ?, ?, ?, 'available', 0, ?, 0, ?, ?, ?)
+          `).run(
+            job.id,
+            job.tenantId,
+            job.workspaceId ?? null,
+            job.kind,
+            JSON.stringify(job.payload),
+            job.availableAt,
+            job.idempotencyKey,
+            writtenAt,
+            writtenAt
+          );
+        },
+        putOutbox: (message) => {
+          if (message.tenantId !== tenantId) throw new Error("A storage transaction cannot cross tenants");
+          const writtenAt = this.#now().toISOString();
+          this.#database.prepare(`
+            insert into outbox (
+              message_id, tenant_id, topic, payload_json, available_at, created_at
+            ) values (?, ?, ?, ?, ?, ?)
+          `).run(
+            message.id,
+            message.tenantId,
+            message.topic,
+            JSON.stringify(message.payload),
+            message.availableAt ?? writtenAt,
+            writtenAt
+          );
         }
       };
       const result = work(transaction);

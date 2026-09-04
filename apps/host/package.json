@@ -26,6 +26,8 @@
     "@mn/agent-runtime": "0.2.0",
     "@mn/contracts": "0.2.0",
     "@mn/kernel": "0.2.0",
+    "@mn/plugin-coding": "0.2.0",
+    "@mn/plugin-opc": "0.2.0",
     "@mn/plugin-sdk": "0.2.0",
     "@mn/storage": "0.2.0"
   }

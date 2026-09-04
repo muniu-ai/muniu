@@ -112,6 +112,13 @@ test("OpenAPI 目录只有 v2，所有写操作要求幂等键", () => {
   const document = createOpenApiDocument();
   const serialized = JSON.stringify(document);
   assert.doesNotMatch(serialized, /\/v1(?:\/|\")/);
+  assert.match(serialized, /\/v2\/setup/);
+  assert.match(serialized, /\/v2\/workspaces\/\{workspaceId\}\/home/);
+  assert.match(serialized, /\/v2\/memories\/\{memoryId\}\/decisions/);
+  assert.equal(
+    (document.components as { schemas: Record<string, unknown> }).schemas.ApiError !== undefined,
+    true,
+  );
   for (const operation of API_OPERATIONS_V2.filter((entry) => entry.mutation)) {
     const paths = document.paths as Record<string, Record<string, { parameters?: Array<{ name: string }> }>>;
     assert.equal(paths[operation.path]?.[operation.method]?.parameters?.[0]?.name, "Idempotency-Key");

@@ -1,5 +1,4 @@
 import { spawn } from "node:child_process";
-import { createServer as createHttpServer } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import { mkdtemp, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -20,12 +19,22 @@ const apiUrl = `http://127.0.0.1:${apiPort}`;
 const appUrl = `http://127.0.0.1:${vitePort}`;
 const screenshotPath = join(temporaryRoot, `${mode}.png`);
 const requests = [];
-const state = { viewMode: "business", opcRequests: 0, approved: false };
-const api = createMockApi(apiPort, state, requests);
 const children = [];
 let browser;
 
 try {
+  const fixture = spawn(process.execPath, [join(scriptDir, "real-host-fixture.mjs")], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      MN_FIXTURE_API_PORT: String(apiPort),
+      MN_FIXTURE_APP_ORIGIN: appUrl,
+      MN_FIXTURE_MODE: mode,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  children.push(fixture);
+  fixture.stderr.on("data", (chunk) => process.stderr.write(chunk));
   await waitForHttp(`${apiUrl}/v2/health`);
   const viteBin = join(repoRoot, "node_modules", ".bin", process.platform === "win32" ? "vite.cmd" : "vite");
   const vite = spawn(viteBin, ["--host", "127.0.0.1", "--port", String(vitePort), "--strictPort"], {
@@ -41,6 +50,13 @@ try {
     await context.addInitScript(() => localStorage.setItem("muniu:v2:onboarding-complete", "1"));
   }
   const page = await context.newPage();
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.origin !== apiUrl || ["GET", "HEAD", "OPTIONS"].includes(request.method())) return;
+    let body = {};
+    try { body = request.postDataJSON(); } catch { /* 请求体不是 JSON */ }
+    requests.push({ method: request.method(), path: url.pathname, body });
+  });
   page.setDefaultTimeout(12_000);
   await page.goto(appUrl, { waitUntil: "domcontentloaded" });
 
@@ -65,7 +81,6 @@ try {
 } finally {
   await browser?.close().catch(() => undefined);
   for (const child of children.reverse()) child.kill("SIGTERM");
-  await new Promise((resolveClose) => api.close(resolveClose));
   if (process.env.MN_DESKTOP_E2E_KEEP_TEMP !== "1") await rm(temporaryRoot, { recursive: true, force: true });
 }
 
@@ -104,10 +119,7 @@ async function verifyOnboarding(page, requestLog) {
 async function verifyOpc(page) {
   await expectText(page, "首页");
   await page.getByRole("button", { name: "OPC" }).click();
-  await expectText(page, "OPC 已降级");
-  await expectText(page, "核心页面和 Coding 不受影响");
-  await page.getByRole("button", { name: "重试" }).click();
-  await expectText(page, "方案待验证");
+  await expectText(page, "已有兴趣信号");
   await expectText(page, "支持证据");
   await expectText(page, "反证");
   await expectText(page, "证据缺口");
@@ -119,7 +131,7 @@ async function verifyOpc(page) {
   await page.getByRole("button", { name: "仅批准这一次" }).click();
   await expectText(page, "收件箱已清空");
   await page.getByRole("button", { name: "OPC" }).click();
-  await expectText(page, "方案待验证");
+  await expectText(page, "已有兴趣信号");
 }
 
 async function verifyCoding(page, requestLog) {
@@ -137,73 +149,8 @@ async function verifyCoding(page, requestLog) {
   await expectText(page, "高级执行设置");
   await page.getByText("高级执行设置").click();
   await expectText(page, "Harness 摘要");
-  const workspacePaths = requestLog.filter((entry) => entry.path === "/v2/workspaces/workspace-1" || entry.path === "/v2/plugins/coding/tasks");
+  const workspacePaths = requestLog.filter((entry) => /^\/v2\/workspaces\/[^/]+$/.test(entry.path) || entry.path === "/v2/plugins/coding/tasks");
   if (workspacePaths.length === 0) throw new Error("专业视图没有使用统一 v2 接口");
-}
-
-function createMockApi(port, state, requestLog) {
-  return createHttpServer(async (request, response) => {
-    const url = new URL(request.url ?? "/", `http://127.0.0.1:${port}`);
-    const body = await readJson(request);
-    if (!["GET", "HEAD", "OPTIONS"].includes(request.method ?? "GET")) requestLog.push({ method: request.method, path: url.pathname, body });
-    response.setHeader("access-control-allow-origin", "*");
-    response.setHeader("access-control-allow-headers", "content-type,idempotency-key");
-    response.setHeader("access-control-allow-methods", "GET,POST,PATCH,OPTIONS");
-    if (request.method === "OPTIONS") return respond(response, 204);
-    if (url.pathname === "/v2/health") return respond(response, 200, { data: { core: { status: "healthy" }, plugins: [{ pluginId: "opc", status: "healthy" }, { pluginId: "coding", status: "healthy" }] } });
-    if (request.method === "POST" && url.pathname === "/v2/setup") return respond(response, 200, { data: { tenantId: "local", principalId: "local-owner" } });
-    if (request.method === "POST" && url.pathname === "/v2/model-connections") return respond(response, 200, { data: { id: "connection-1", defaultModel: "deepseek-chat", discoveredModels: ["deepseek-chat"] } });
-    if (request.method === "POST" && url.pathname === "/v2/model-connections/connection-1/probe") return respond(response, 200, { data: { status: "ready", defaultModel: "deepseek-chat" } });
-    if (request.method === "POST" && url.pathname === "/v2/workspaces") { state.viewMode = body.viewMode; return respond(response, 200, { data: workspace(body.name) }); }
-    if (request.method === "PATCH" && url.pathname === "/v2/workspaces/workspace-1") { state.viewMode = body.viewMode; return respond(response, 200, { data: workspace("设计师增长", 2) }); }
-    if (request.method === "GET" && url.pathname === "/v2/workspaces") return respond(response, 200, { data: [workspace("设计师增长")] });
-    if (request.method === "GET" && url.pathname === "/v2/workspaces/workspace-1/home") return respond(response, 200, { data: home(state.approved) });
-    if (request.method === "GET" && url.pathname === "/v2/deliverables") return respond(response, 200, { data: deliverables() });
-    if (request.method === "GET" && url.pathname === "/v2/activity") return respond(response, 200, { data: [{ id: "activity-1", title: "机会研究已完成", status: "completed", cost: "¥0.18", occurredAt: "2026-09-04T08:00:00Z" }] });
-    if (request.method === "GET" && url.pathname === "/v2/memories") return respond(response, 200, { data: [{ id: "memory-1", namespace: "opc", resourceId: "opportunity-1", summary: "目标客户重视可预测的获客节奏", source: "访谈记录 01", confidence: .82, status: "proposed", streamVersion: 1 }] });
-    if (request.method === "GET" && url.pathname === "/v2/plugins/opc/opportunities") {
-      state.opcRequests += 1;
-      if (mode === "opc" && state.opcRequests === 1) return respond(response, 503, failure("PLUGIN_DEGRADED", "OPC 暂时不可用", "点击重试"));
-      return respond(response, 200, { data: opportunities() });
-    }
-    if (request.method === "GET" && url.pathname === "/v2/plugins/coding/tasks") return respond(response, 200, { data: codingTasks() });
-    if (request.method === "POST" && url.pathname === "/v2/approvals/approval-1/decisions") { state.approved = true; return respond(response, 200, { data: { status: "approved_once" } }); }
-    if (request.method === "POST" && /\/v2\/memories\/[^/]+\/decisions$/.test(url.pathname)) return respond(response, 200, { data: { status: body.decision === "accept" ? "accepted" : "rejected" } });
-    if (request.method === "POST" && url.pathname.startsWith("/v2/plugins/")) return respond(response, 200, { data: { id: "created-1", streamVersion: 1 } });
-    return respond(response, 404, failure("NOT_FOUND", "接口不存在", "更新客户端"));
-  }).listen(port, "127.0.0.1");
-
-  function workspace(name, streamVersion = 1) { return { id: "workspace-1", name, viewMode: state.viewMode, activePluginIds: ["opc", "coding"], streamVersion }; }
-}
-
-function home(approved) {
-  return {
-    todayActions: [{ id: "action-1", title: "补足愿意付费的承诺证据", detail: "安排 3 次非诱导访谈", pluginId: "opc" }],
-    blockers: [{ id: "blocker-1", title: "收费假设仍缺少证据", detail: "至少需要一位目标客户确认下一步行动" }],
-    approvals: approved ? [] : [{ id: "approval-1", title: "公开网页读取", intent: "读取客户公开案例并保存摘要", resourceSummary: "https://example.com/case", risk: "external_read", expiresAt: "2026-09-05T08:00:00Z", streamVersion: 1 }],
-    recentDeliverables: deliverables(),
-  };
-}
-
-function deliverables() { return [{ id: "deliverable-1", pluginId: "opc", title: "机会验证档案", outcome: "已整理支持证据、反证和 2 个证据缺口", decision: "继续访谈", nextAction: "确认一次客户承诺", createdAt: "2026-09-04T08:00:00Z" }]; }
-
-function opportunities() { return [{ id: "opportunity-1", title: "独立设计师稳定获客", targetCustomer: "有 2–5 年经验的独立设计师", problem: "收入依赖不稳定的转介绍", falsifiableHypothesis: "若提供每周可执行的获客系统，3 位目标客户中至少 1 位愿意承诺付费试用", status: "evaluating", evidenceLevel: "none", streamVersion: 5, evidence: [{ id: "signal-1", stance: "supporting", summary: "两位设计师主动询问可复制的获客流程", source: "访谈记录", capturedAt: "2026-09-03T08:00:00Z" }, { id: "signal-2", stance: "opposing", summary: "一位受访者更愿意继续依赖熟人推荐", source: "访谈记录", capturedAt: "2026-09-04T08:00:00Z" }], gaps: ["没有价格承诺", "尚未观察实际使用"], nextAction: "用非诱导问题完成 3 次访谈" }]; }
-
-function codingTasks() { return [{ id: "task-1", title: "统一 Agent OS API", repository: "muniu-ai/muniu", status: "verify", diffSummary: "12 个文件 · +486 −120", checks: [{ name: "单元测试", status: "pass" }, { name: "类型检查", status: "pass" }, { name: "安全 Gate", status: "pending" }], approval: "安全 Gate 通过后请求合并批准", nextAction: "完成安全 Gate", advanced: { harnessDigest: "sha256:7ab4…d91e", candidateCount: 1, remainingBudget: "2 次修复 · 42 分钟" } }]; }
-
-function failure(code, message, action) { return { code, message, action, fieldIssues: [], traceId: "trace-test", retryable: true }; }
-
-async function readJson(request) {
-  const chunks = [];
-  for await (const chunk of request) chunks.push(chunk);
-  if (chunks.length === 0) return {};
-  try { return JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { return {}; }
-}
-
-function respond(response, status, value) {
-  response.statusCode = status;
-  if (value !== undefined) { response.setHeader("content-type", "application/json; charset=utf-8"); response.end(JSON.stringify(value)); }
-  else response.end();
 }
 
 async function expectText(page, text) {

@@ -4,13 +4,16 @@ import { Context } from "@deepseek-ai/cordis";
 import {
   apiError,
   createOpenApiDocument,
+  type Approval,
   type Asset,
+  type Deliverable,
   type Execution,
   type JsonObject,
   type JsonValue,
   type MemoryRecord,
   type Thread,
   type Workspace,
+  type WorkspaceMembership,
 } from "@mn/contracts";
 import {
   AgentOsKernel,
@@ -25,7 +28,6 @@ import {
   type ProviderPreset,
 } from "@mn/kernel";
 import {
-  emptyPluginContributions,
   PluginBoundaryError,
   PluginContributionHost,
   PluginPolicyError,
@@ -37,11 +39,35 @@ import {
   StreamVersionConflictError as StorageStreamVersionConflictError,
   type ContentAddressedStorage,
 } from "@mn/storage";
+import { codingPlugin } from "@mn/plugin-coding";
+import { createOpcPluginDefinition, OpcService } from "@mn/plugin-opc";
 import type { EnterpriseReadiness } from "./config.js";
+import {
+  KernelOpcRepository,
+  captureCodingRepository,
+  captureCodingTask,
+  captureOpportunity,
+  deliverableSummary,
+  encodePluginWorkspace,
+  listCodingTaskSummaries,
+  listOpportunitySummaries,
+  runReadOnlySample,
+  workspaceActivity,
+  workspaceHome,
+} from "./product-state.js";
 import type { ModelSecretStore } from "./secrets.js";
 
 const LOCAL_TENANT_ID = "local";
 const LOCAL_ACTOR_ID = "local-owner";
+const DESKTOP_ORIGINS = new Set([
+  "tauri://localhost",
+  "http://tauri.localhost",
+  "https://tauri.localhost",
+  "http://127.0.0.1:5173",
+  "http://localhost:5173",
+  "http://127.0.0.1:4173",
+  "http://localhost:4173",
+]);
 
 export interface ModelProbeResult {
   readonly models: readonly string[];
@@ -72,6 +98,8 @@ export interface AgentOsHostOptions {
     readonly tenantId: string;
     readonly principalId: string;
   } | Promise<{ readonly tenantId: string; readonly principalId: string }>;
+  /** 仅用于本地开发或测试宿主附加受信 WebView 来源。 */
+  readonly allowedOrigins?: readonly string[];
 }
 
 export interface ListenOptions {
@@ -87,15 +115,6 @@ export interface AgentOsHost {
   listen(options: ListenOptions): Promise<{ readonly host: string; readonly port: number }>;
   close(): Promise<void>;
 }
-
-const defaultOfficialPlugins: readonly PluginDefinitionV1[] = ["opc", "coding"].map((id) => ({
-  id,
-  version: "0.2.0",
-  official: true,
-  trustBoundary: "process_equivalent" as const,
-  contributions: emptyPluginContributions(),
-  healthCheck: () => ({ status: "healthy" as const }),
-}));
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -153,8 +172,23 @@ function safeError(error: unknown, traceId: string): Response {
   } else if (error instanceof KernelError) {
     status = error.code === "STREAM_VERSION_CONFLICT" ? 409
       : error.code === "AUTHENTICATION_REQUIRED" ? 401
+        : error.code === "WORKSPACE_ACCESS_DENIED" ? 403
         : 422;
     code = error.code; message = error.message; action = error.action; retryable = error.retryable;
+  } else if (isObject(error)
+    && typeof error.code === "string"
+    && typeof error.message === "string"
+    && typeof error.action === "string") {
+    status = error.code === "NOT_FOUND" ? 404 : 422;
+    code = error.code;
+    message = error.message;
+    action = error.action;
+    retryable = Boolean(error.retryable);
+    const field = typeof error.field === "string" ? error.field : undefined;
+    return Response.json(apiError(code, message, action, traceId, {
+      retryable,
+      ...(field ? { fieldIssues: [{ field, message }] } : {}),
+    }), { status });
   } else if (error instanceof SyntaxError) {
     status = 400; code = "INVALID_JSON"; message = "请求体不是有效 JSON"; action = "检查 JSON 格式"; retryable = false;
   }
@@ -201,6 +235,28 @@ function projectionGet<T>(store: KernelStore, tenantId: string, namespace: strin
   return store.transact(tenantId, (transaction) => transaction.getProjection<T>(namespace, id));
 }
 
+async function authorizedWorkspace(
+  store: KernelStore,
+  tenantId: string,
+  principalId: string,
+  workspaceId: string,
+  access: "view" | "operate" | "review" | "owner" = "view",
+): Promise<Workspace> {
+  return store.transact(tenantId, (transaction) => {
+    const workspace = transaction.getProjection<Workspace>("workspace", workspaceId);
+    if (!workspace) throw new KernelError("WORKSPACE_NOT_FOUND", "工作区不存在", "刷新工作区列表");
+    const membership = transaction.getProjection<WorkspaceMembership>("membership", `${workspaceId}:${principalId}`);
+    const allowedRoles = access === "view" ? ["owner", "operator", "reviewer", "viewer"]
+      : access === "operate" ? ["owner", "operator"]
+        : access === "review" ? ["owner", "operator", "reviewer"]
+          : ["owner"];
+    if (!membership || !allowedRoles.includes(membership.workspaceRole)) {
+      throw new KernelError("WORKSPACE_ACCESS_DENIED", "无权访问此工作区", "联系工作区所有者授予权限");
+    }
+    return workspace;
+  });
+}
+
 function idempotentProjectionMutation<T>(input: {
   readonly store: KernelStore;
   readonly tenantId: string;
@@ -236,31 +292,43 @@ async function idempotentAsyncOperation<T>(input: {
   readonly request: unknown;
   readonly work: () => Promise<T>;
   readonly now: () => string;
+  readonly inFlight: Map<string, Promise<unknown>>;
 }): Promise<T> {
-  const requestDigest = sha256(input.request);
-  const previous = await input.store.transact(input.tenantId, (transaction) =>
-    transaction.getIdempotency(input.scope, input.key));
-  if (previous) {
-    if (previous.requestDigest !== requestDigest) {
-      throw new KernelError("IDEMPOTENCY_KEY_REUSED", "幂等键已用于不同请求", "使用新的 Idempotency-Key");
-    }
-    return previous.response as T;
-  }
-  const result = await input.work();
-  return input.store.transact(input.tenantId, (transaction) => {
-    const raced = transaction.getIdempotency(input.scope, input.key);
-    if (raced) {
-      if (raced.requestDigest !== requestDigest) {
+  const flightKey = `${input.tenantId.length}:${input.tenantId}${input.scope.length}:${input.scope}${input.key}`;
+  const active = input.inFlight.get(flightKey);
+  if (active) return active as Promise<T>;
+  const operation = (async () => {
+    const requestDigest = sha256(input.request);
+    const previous = await input.store.transact(input.tenantId, (transaction) =>
+      transaction.getIdempotency(input.scope, input.key));
+    if (previous) {
+      if (previous.requestDigest !== requestDigest) {
         throw new KernelError("IDEMPOTENCY_KEY_REUSED", "幂等键已用于不同请求", "使用新的 Idempotency-Key");
       }
-      return raced.response as T;
+      return previous.response as T;
     }
-    transaction.putIdempotency({
-      tenantId: input.tenantId, scope: input.scope, key: input.key,
-      requestDigest, response: result, createdAt: input.now(),
+    const result = await input.work();
+    return input.store.transact(input.tenantId, (transaction) => {
+      const raced = transaction.getIdempotency(input.scope, input.key);
+      if (raced) {
+        if (raced.requestDigest !== requestDigest) {
+          throw new KernelError("IDEMPOTENCY_KEY_REUSED", "幂等键已用于不同请求", "使用新的 Idempotency-Key");
+        }
+        return raced.response as T;
+      }
+      transaction.putIdempotency({
+        tenantId: input.tenantId, scope: input.scope, key: input.key,
+        requestDigest, response: result, createdAt: input.now(),
+      });
+      return result;
     });
-    return result;
-  });
+  })();
+  input.inFlight.set(flightKey, operation);
+  try {
+    return await operation;
+  } finally {
+    input.inFlight.delete(flightKey);
+  }
 }
 
 export async function createAgentOsHost(options: AgentOsHostOptions): Promise<AgentOsHost> {
@@ -270,7 +338,20 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
   const kernel = new AgentOsKernel(options.store, { now, id: nextId });
   if (profile === "local") await kernel.bootstrapLocal("agent-os-v2-local-bootstrap");
   const plugins = new PluginContributionHost({ isAvailable: () => true });
-  for (const plugin of options.officialPlugins ?? defaultOfficialPlugins) plugins.registerOfficial(plugin);
+  const opcRepository = new KernelOpcRepository({ store: options.store, now, id: nextId });
+  const officialPlugins = options.officialPlugins ?? [
+    createOpcPluginDefinition({
+      service: new OpcService({
+        repository: opcRepository,
+        clock: now,
+        createId: nextId,
+      }),
+    }),
+    codingPlugin,
+  ];
+  const pluginDefinitions = new Map(officialPlugins.map((plugin) => [plugin.id, plugin]));
+  for (const plugin of officialPlugins) plugins.registerOfficial(plugin);
+  const activatedWorkspaceScopes = new Set<string>();
 
   const context = new Context().extend(Object.freeze({
     agentOsKernel: kernel,
@@ -278,6 +359,17 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
     agentOsProfile: profile,
   }));
   let server: Server | undefined;
+  const inFlightAsyncMutations = new Map<string, Promise<unknown>>();
+  const allowedOrigins = new Set([...DESKTOP_ORIGINS, ...(options.allowedOrigins ?? [])]);
+
+  const ensurePluginsActive = async (tenantId: string, workspace: Workspace): Promise<string> => {
+    const scope = encodePluginWorkspace(tenantId, workspace.id);
+    if (!activatedWorkspaceScopes.has(scope)) {
+      for (const pluginId of workspace.activePluginIds) await plugins.activate(scope, pluginId);
+      activatedWorkspaceScopes.add(scope);
+    }
+    return scope;
+  };
 
   const dispatch = async (request: Request): Promise<Response> => {
     const traceId = request.headers.get("X-Trace-Id")?.trim() || randomUUID();
@@ -303,41 +395,77 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         ? await options.identityResolver(request)
         : profile === "local"
           ? { tenantId: LOCAL_TENANT_ID, principalId: LOCAL_ACTOR_ID }
-          : {
-              tenantId: request.headers.get("X-Muniu-Tenant-Id")?.trim() ?? "",
-              principalId: request.headers.get("X-Muniu-Principal-Id")?.trim() ?? "",
-            };
+          : { tenantId: "", principalId: "" };
       if (!identity.tenantId || !identity.principalId) {
         throw new KernelError("AUTHENTICATION_REQUIRED", "缺少企业身份上下文", "重新登录后重试");
       }
       const TENANT_ID = identity.tenantId;
       const ACTOR_ID = identity.principalId;
-      const pluginWorkspaceKey = (workspaceId: string) => `${TENANT_ID}:${workspaceId}`;
+      const pluginWorkspaceKey = (workspaceId: string) => encodePluginWorkspace(TENANT_ID, workspaceId);
+      const accessibleWorkspaceIds = async () => new Set(
+        (await projectionList<WorkspaceMembership>(options.store, TENANT_ID, "membership"))
+          .filter((membership) => membership.principalId === ACTOR_ID)
+          .map((membership) => membership.workspaceId),
+      );
+      if (request.method === "POST" && url.pathname === "/v2/setup") {
+        const body = await readBody(request);
+        const result = await idempotentProjectionMutation({
+          store: options.store,
+          tenantId: TENANT_ID,
+          key: mutationKey as string,
+          scope: "http.setup",
+          request: body,
+          now,
+          work: () => ({ tenantId: TENANT_ID, principalId: ACTOR_ID }),
+        });
+        return json(result, 200, traceId);
+      }
       if (request.method === "GET" && url.pathname === "/v2/health") {
         const workspaceId = url.searchParams.get("workspaceId");
-        return json(await plugins.health(workspaceId ? pluginWorkspaceKey(workspaceId) : `${TENANT_ID}:__core__`), 200, traceId);
+        if (!workspaceId) return json(await plugins.health("__core__"), 200, traceId);
+        const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId);
+        const scope = await ensurePluginsActive(TENANT_ID, workspace);
+        return json(await plugins.health(scope), 200, traceId);
       }
       if (request.method === "GET" && url.pathname === "/v2/workspaces") {
-        return json(await kernel.listWorkspaces(TENANT_ID), 200, traceId);
+        const workspaces = await kernel.listWorkspaces(TENANT_ID);
+        const memberships = await projectionList<WorkspaceMembership>(options.store, TENANT_ID, "membership");
+        const allowed = new Set(memberships
+          .filter((membership) => membership.principalId === ACTOR_ID)
+          .map((membership) => membership.workspaceId));
+        return json(workspaces.filter((workspace) => allowed.has(workspace.id)), 200, traceId);
       }
       if (request.method === "POST" && url.pathname === "/v2/workspaces") {
         const body = await readBody(request);
         const pluginsInput = Array.isArray(body.pluginIds) && body.pluginIds.every((id) => typeof id === "string")
           ? body.pluginIds as string[] : [];
+        const knownPlugins = new Set(plugins.listOfficial().map((plugin) => plugin.pluginId));
+        const unknownPlugin = pluginsInput.find((pluginId) => !knownPlugins.has(pluginId));
+        if (unknownPlugin) {
+          throw new PluginPolicyError(
+            "PLUGIN_NOT_INSTALLED",
+            `插件 ${unknownPlugin} 不可用`,
+            "安装插件后再创建工作区",
+          );
+        }
         const viewMode = body.viewMode === "professional" ? "professional" : "business";
         const workspace = await kernel.createWorkspace(TENANT_ID, ACTOR_ID, mutationKey as string, {
           name: stringField(body, "name")!, viewMode, pluginIds: pluginsInput,
         });
         for (const pluginId of pluginsInput) await plugins.activate(pluginWorkspaceKey(workspace.id), pluginId);
+        activatedWorkspaceScopes.add(pluginWorkspaceKey(workspace.id));
         return json(workspace, 201, traceId);
       }
       const workspaceMatch = url.pathname.match(/^\/v2\/workspaces\/([^/]+)$/u);
       if (workspaceMatch && request.method === "GET") {
-        const workspace = await projectionGet<Workspace>(options.store, TENANT_ID, "workspace", decodeURIComponent(workspaceMatch[1]!));
-        return workspace ? json(workspace, 200, traceId) : notFound(traceId);
+        const workspace = await authorizedWorkspace(
+          options.store, TENANT_ID, ACTOR_ID, decodeURIComponent(workspaceMatch[1]!),
+        );
+        return json(workspace, 200, traceId);
       }
       if (workspaceMatch && request.method === "PATCH") {
         const id = decodeURIComponent(workspaceMatch[1]!);
+        await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, id, "owner");
         const body = await readBody(request);
         const expected = expectedVersion(body);
         const workspace = await idempotentProjectionMutation({
@@ -364,14 +492,26 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         });
         return json(workspace, 200, traceId);
       }
+      const homeMatch = url.pathname.match(/^\/v2\/workspaces\/([^/]+)\/home$/u);
+      if (homeMatch && request.method === "GET") {
+        const workspaceId = decodeURIComponent(homeMatch[1]!);
+        const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId);
+        await ensurePluginsActive(TENANT_ID, workspace);
+        return json(await workspaceHome(options.store, TENANT_ID, workspaceId), 200, traceId);
+      }
       const threadsMatch = url.pathname.match(/^\/v2\/workspaces\/([^/]+)\/threads$/u);
       if (threadsMatch && request.method === "GET") {
-        return json(await kernel.listThreads(TENANT_ID, decodeURIComponent(threadsMatch[1]!)), 200, traceId);
+        const workspaceId = decodeURIComponent(threadsMatch[1]!);
+        await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId);
+        return json(await kernel.listThreads(TENANT_ID, workspaceId), 200, traceId);
       }
       if (threadsMatch && request.method === "POST") {
         const body = await readBody(request);
+        const workspaceId = decodeURIComponent(threadsMatch[1]!);
+        const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId, "operate");
+        await ensurePluginsActive(TENANT_ID, workspace);
         const thread = await kernel.createThread(TENANT_ID, ACTOR_ID, mutationKey as string, {
-          workspaceId: decodeURIComponent(threadsMatch[1]!),
+          workspaceId,
           subject: stringField(body, "subject")!, pluginId: stringField(body, "pluginId")!,
         });
         return json(thread, 201, traceId);
@@ -381,40 +521,68 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         const body = await readBody(request);
         const workspaceId = decodeURIComponent(turnMatch[1]!);
         const threadId = decodeURIComponent(turnMatch[2]!);
+        const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId, "operate");
+        await ensurePluginsActive(TENANT_ID, workspace);
         const expected = expectedVersion(body);
-        const execution = await idempotentProjectionMutation<Execution>({
-          store: options.store, tenantId: TENANT_ID, key: mutationKey as string, scope: `thread.turn:${threadId}`, request: body, now,
-          work: (transaction) => {
-            const thread = transaction.getProjection<Thread>("thread", threadId);
-            if (!thread || thread.workspaceId !== workspaceId) {
-              throw new KernelError("THREAD_NOT_FOUND", "会话不存在", "刷新工作区会话");
-            }
-            if (thread.streamVersion !== expected) throw new KernelStreamVersionConflictError(expected, thread.streamVersion);
-            const executionId = nextId("execution");
-            const timestamp = now();
-            const value: Execution = {
-              id: executionId, tenantId: TENANT_ID, workspaceId, threadId, pluginId: thread.pluginId,
-              agentDefinitionId: typeof body.agentDefinitionId === "string" ? body.agentDefinitionId : `${thread.pluginId}.default`,
-              modelBindingId: typeof body.modelBindingId === "string" ? body.modelBindingId : "default",
-              initiatedBy: ACTOR_ID, executionPrincipalId: `agent:${thread.pluginId}`, generation: 1,
-              status: "queued", authorityId: nextId("authority"), streamVersion: 1,
-              createdAt: timestamp, updatedAt: timestamp,
-            };
-            transaction.putProjection("execution", executionId, value);
-            transaction.putProjection("turn", nextId("turn"), {
-              executionId, workspaceId, threadId, message: stringField(body, "message")!,
-              persistedBeforeDispatch: true, createdAt: timestamp,
-            });
-            transaction.putProjection("thread", threadId, {
-              ...thread, streamVersion: thread.streamVersion + 1, updatedAt: timestamp,
-            });
-            transaction.appendEvent({
-              tenantId: TENANT_ID, aggregateType: "thread", aggregateId: threadId,
-              expectedStreamVersion: expected, type: "thread.turn_submitted", actorId: ACTOR_ID,
-              executionId, generation: 1, correlationId: nextId("correlation"),
-              publicPayload: { workspaceId, executionId, pluginId: thread.pluginId },
-            });
-            return value;
+        const thread = await projectionGet<Thread>(options.store, TENANT_ID, "thread", threadId);
+        if (!thread || thread.workspaceId !== workspaceId) {
+          throw new KernelError("THREAD_NOT_FOUND", "会话不存在", "刷新工作区会话");
+        }
+        const definition = pluginDefinitions.get(thread.pluginId);
+        if (!definition) {
+          throw new PluginPolicyError("PLUGIN_NOT_INSTALLED", `插件 ${thread.pluginId} 不可用`, "安装插件后重试");
+        }
+        const requestedAgent = stringField(body, "agentDefinitionId", false);
+        const agentDefinition = requestedAgent
+          ? definition.contributions.agents.find((agent) => agent.id === requestedAgent)
+          : definition.contributions.agents[0];
+        if (!agentDefinition) {
+          throw new PluginPolicyError(
+            "PLUGIN_CONTRIBUTION_INVALID",
+            requestedAgent ? `插件未提供 Agent ${requestedAgent}` : "插件未提供可用 Agent",
+            "选择该插件声明的 Agent",
+          );
+        }
+        const requestedModel = stringField(body, "modelBindingId", false);
+        const connections = await projectionList<ModelConnection>(options.store, TENANT_ID, "modelConnection");
+        const modelConnection = requestedModel
+          ? connections.find((connection) => connection.id === requestedModel && connection.status === "ready")
+          : connections.find((connection) => connection.status === "ready");
+        if (!modelConnection) {
+          throw new KernelError(
+            "MODEL_CONNECTION_REQUIRED",
+            requestedModel ? "所选模型连接不可用" : "尚未连接可用模型",
+            "在集成设置中连接模型后重试",
+          );
+        }
+        const toolIds = definition.contributions.tools.map((tool) => tool.id);
+        const dataNamespaces = new Set([thread.pluginId]);
+        if (toolIds.some((toolId) => toolId.includes("web"))) dataNamespaces.add("web");
+        if (toolIds.some((toolId) => toolId.includes("repository") || toolId.includes("sandbox"))) {
+          dataNamespaces.add("repository");
+        }
+        const execution = await kernel.submitTurn(TENANT_ID, ACTOR_ID, mutationKey as string, {
+          workspaceId,
+          threadId,
+          expectedStreamVersion: expected,
+          message: stringField(body, "message")!,
+          agentDefinitionId: agentDefinition.id,
+          modelBindingId: modelConnection.id,
+          executionPrincipalId: `agent:${thread.pluginId}`,
+          authority: {
+            workspaceId,
+            principalId: `agent:${thread.pluginId}`,
+            toolIds,
+            dataScopes: [...dataNamespaces].map((namespace) => ({ namespace, resourceId: "*" })),
+            autoAllowedEffects: ["local_read", "external_read", "local_reversible_write"],
+            budget: {
+              maxSubagentDepth: 2,
+              maxSubagents: 4,
+              maxTokens: 100_000,
+              maxCostMinorUnits: "5000",
+              currency: "CNY",
+              maxDurationMs: 3_600_000,
+            },
           },
         });
         return json(execution, 202, traceId);
@@ -422,8 +590,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
       const eventsMatch = url.pathname.match(/^\/v2\/workspaces\/([^/]+)\/events$/u);
       if (eventsMatch && request.method === "GET") {
         const workspaceId = decodeURIComponent(eventsMatch[1]!);
-        const workspace = await projectionGet<Workspace>(options.store, TENANT_ID, "workspace", workspaceId);
-        if (!workspace) throw new KernelError("WORKSPACE_NOT_FOUND", "工作区不存在", "刷新工作区列表");
+        await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId);
         const cursorRaw = request.headers.get("Last-Event-ID") ?? url.searchParams.get("after") ?? "0";
         const cursor = Number(cursorRaw);
         if (!Number.isSafeInteger(cursor) || cursor < 0) {
@@ -440,35 +607,60 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
       const executionCommand = url.pathname.match(/^\/v2\/executions\/([^/]+)\/commands$/u);
       if (executionCommand && request.method === "POST") {
         const body = await readBody(request);
+        const executionId = decodeURIComponent(executionCommand[1]!);
+        const execution = await projectionGet<Execution>(options.store, TENANT_ID, "execution", executionId);
+        if (!execution) throw new KernelError("EXECUTION_NOT_FOUND", "执行不存在", "刷新执行列表");
+        await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, execution.workspaceId, "operate");
         const command = stringField(body, "command") as Parameters<AgentOsKernel["commandExecution"]>[5];
         const result = await kernel.commandExecution(
-          TENANT_ID, ACTOR_ID, mutationKey as string, decodeURIComponent(executionCommand[1]!),
+          TENANT_ID, ACTOR_ID, mutationKey as string, executionId,
           expectedVersion(body), command,
         );
         return json(result, 200, traceId);
       }
       if (url.pathname === "/v2/inbox" && request.method === "GET") {
-        return json(await kernel.listInbox(TENANT_ID, url.searchParams.get("workspaceId") ?? undefined), 200, traceId);
+        const workspaceId = url.searchParams.get("workspaceId") ?? undefined;
+        if (workspaceId) await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId);
+        const inbox = await kernel.listInbox(TENANT_ID, workspaceId);
+        const allowed = workspaceId ? undefined : await accessibleWorkspaceIds();
+        return json(allowed ? inbox.filter((item) => allowed.has(item.workspaceId)) : inbox, 200, traceId);
       }
       const approvalMatch = url.pathname.match(/^\/v2\/approvals\/([^/]+)\/decisions$/u);
       if (approvalMatch && request.method === "POST") {
         const body = await readBody(request);
+        const approvalId = decodeURIComponent(approvalMatch[1]!);
+        const approval = await projectionGet<Approval>(options.store, TENANT_ID, "approval", approvalId);
+        if (!approval) throw new KernelError("APPROVAL_NOT_FOUND", "批准请求不存在", "刷新收件箱");
+        await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, approval.workspaceId, "review");
         const decision = stringField(body, "decision");
         if (decision !== "approve_once" && decision !== "deny") {
           throw new KernelError("INVALID_DECISION", "批准决定无效", "选择 approve_once 或 deny");
         }
         return json(await kernel.decideApproval(
-          TENANT_ID, ACTOR_ID, mutationKey as string, decodeURIComponent(approvalMatch[1]!),
+          TENANT_ID, ACTOR_ID, mutationKey as string, approvalId,
           expectedVersion(body), decision,
         ), 200, traceId);
       }
       if (url.pathname === "/v2/deliverables" && request.method === "GET") {
-        return json(await projectionList(options.store, TENANT_ID, "deliverable"), 200, traceId);
+        const workspaceId = url.searchParams.get("workspaceId") ?? undefined;
+        if (workspaceId) await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId);
+        const allowed = workspaceId ? undefined : await accessibleWorkspaceIds();
+        const values = await projectionList<Deliverable>(options.store, TENANT_ID, "deliverable");
+        return json(values
+          .filter((item) => workspaceId ? item.workspaceId === workspaceId : allowed!.has(item.workspaceId))
+          .map(deliverableSummary), 200, traceId);
+      }
+      if (url.pathname === "/v2/activity" && request.method === "GET") {
+        const workspaceId = url.searchParams.get("workspaceId");
+        if (!workspaceId) throw new KernelError("INVALID_BODY", "缺少 workspaceId", "选择工作区后重试");
+        await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId);
+        return json(await workspaceActivity(options.store, TENANT_ID, workspaceId), 200, traceId);
       }
       const assetMatch = url.pathname.match(/^\/v2\/assets\/([^/]+)$/u);
       if (assetMatch && request.method === "GET") {
         const asset = await projectionGet<Asset>(options.store, TENANT_ID, "asset", decodeURIComponent(assetMatch[1]!));
         if (!asset) return notFound(traceId);
+        await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, asset.workspaceId);
         if (url.searchParams.get("content") !== "1") return json(asset, 200, traceId);
         if (!options.cas) throw new KernelError("ASSET_STORE_UNAVAILABLE", "成果文件暂不可用", "检查对象存储连接");
         return new Response(await options.cas.get(asset.digest), {
@@ -477,11 +669,27 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
       }
       if (url.pathname === "/v2/memories" && request.method === "GET") {
         const namespace = url.searchParams.get("namespace");
+        const workspaceId = url.searchParams.get("workspaceId") ?? undefined;
+        if (workspaceId) await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId);
+        const allowed = workspaceId ? undefined : await accessibleWorkspaceIds();
         const values = await projectionList<MemoryRecord>(options.store, TENANT_ID, "memory");
-        return json(namespace ? values.filter((value) => value.namespace === namespace) : values, 200, traceId);
+        return json(values
+          .filter((value) => workspaceId ? value.workspaceId === workspaceId : allowed!.has(value.workspaceId))
+          .filter((value) => !namespace || value.namespace === namespace)
+          .map((value) => ({
+            id: value.id,
+            namespace: value.namespace,
+            resourceId: value.resourceId,
+            summary: typeof value.value?.summary === "string" ? value.value.summary : "待审阅的记忆提案",
+            source: value.sourceEventId,
+            confidence: value.confidence,
+            status: value.status === "deleted" ? "invalidated" : value.status,
+            streamVersion: value.streamVersion,
+          })), 200, traceId);
       }
       if (url.pathname === "/v2/memories" && request.method === "POST") {
         const body = await readBody(request);
+        await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, stringField(body, "workspaceId")!, "operate");
         const memory = await kernel.proposeMemory(TENANT_ID, ACTOR_ID, mutationKey as string, {
           workspaceId: stringField(body, "workspaceId")!,
           scopeType: body.scopeType === "thread" || body.scopeType === "resource" || body.scopeType === "principal"
@@ -494,11 +702,36 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         });
         return json(memory, 201, traceId);
       }
+      const memoryDecisionMatch = url.pathname.match(/^\/v2\/memories\/([^/]+)\/decisions$/u);
+      if (memoryDecisionMatch && request.method === "POST") {
+        const body = await readBody(request);
+        const memoryId = decodeURIComponent(memoryDecisionMatch[1]!);
+        const memory = await projectionGet<MemoryRecord>(options.store, TENANT_ID, "memory", memoryId);
+        if (!memory) throw new KernelError("MEMORY_NOT_FOUND", "记忆不存在", "刷新记忆列表");
+        await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, memory.workspaceId, "review");
+        const decision = stringField(body, "decision");
+        if (decision !== "accept" && decision !== "reject") {
+          throw new KernelError("INVALID_DECISION", "记忆决定无效", "选择 accept 或 reject");
+        }
+        return json(await kernel.decideMemory(
+          TENANT_ID,
+          ACTOR_ID,
+          mutationKey as string,
+          memoryId,
+          expectedVersion(body),
+          decision,
+        ), 200, traceId);
+      }
       if (url.pathname === "/v2/share-grants" && request.method === "GET") {
-        return json(await projectionList(options.store, TENANT_ID, "shareGrant"), 200, traceId);
+        const allowed = await accessibleWorkspaceIds();
+        const grants = await projectionList<{ readonly workspaceId: string }>(options.store, TENANT_ID, "shareGrant");
+        return json(grants.filter((grant) => allowed.has(grant.workspaceId)), 200, traceId);
       }
       if (url.pathname === "/v2/share-grants" && request.method === "POST") {
         const body = await readBody(request);
+        const memory = await projectionGet<MemoryRecord>(options.store, TENANT_ID, "memory", stringField(body, "memoryId")!);
+        if (!memory) throw new KernelError("MEMORY_NOT_FOUND", "记忆不存在", "刷新记忆列表");
+        await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, memory.workspaceId, "operate");
         return json(await kernel.createShareGrant(
           TENANT_ID, ACTOR_ID, mutationKey as string, stringField(body, "memoryId")!,
           expectedVersion(body), stringField(body, "toNamespace")!,
@@ -523,7 +756,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         if (!preset) throw new KernelError("MODEL_PRESET_NOT_FOUND", "厂商预设不存在", "刷新厂商列表");
         const connection = await idempotentAsyncOperation<ModelConnection>({
           store: options.store, tenantId: TENANT_ID, key: mutationKey as string,
-          scope: "http.modelConnection.create", request: body, now,
+          scope: "http.modelConnection.create", request: body, now, inFlight: inFlightAsyncMutations,
           work: async () => {
             const apiKey = stringField(body, "apiKey")!;
             const secretAccount = sha256({ tenantId: TENANT_ID, idempotencyKey: mutationKey }).slice(0, 32);
@@ -544,7 +777,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         const expected = expectedVersion(body);
         const connection = await idempotentAsyncOperation<ModelConnection>({
           store: options.store, tenantId: TENANT_ID, key: mutationKey as string,
-          scope: `http.modelConnection.probe:${id}`, request: body, now,
+          scope: `http.modelConnection.probe:${id}`, request: body, now, inFlight: inFlightAsyncMutations,
           work: async () => {
             const current = await projectionGet<ModelConnection>(options.store, TENANT_ID, "modelConnection", id);
             if (!current) throw new KernelError("MODEL_CONNECTION_NOT_FOUND", "模型连接不存在", "刷新模型连接列表");
@@ -585,7 +818,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         const body = await readBody(request);
         const result = await idempotentAsyncOperation({
           store: options.store, tenantId: TENANT_ID, key: mutationKey as string,
-          scope: "http.plugin.install", request: body, now,
+          scope: "http.plugin.install", request: body, now, inFlight: inFlightAsyncMutations,
           work: () => options.pluginInstaller!.install(body),
         });
         return json(result, 201, traceId);
@@ -594,11 +827,12 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
       if (activationMatch && request.method === "POST") {
         const body = await readBody(request);
         const workspaceId = decodeURIComponent(activationMatch[1]!);
+        await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId, "owner");
         const pluginId = stringField(body, "pluginId")!;
         const expected = expectedVersion(body);
         const workspace = await idempotentAsyncOperation<Workspace>({
           store: options.store, tenantId: TENANT_ID, key: mutationKey as string,
-          scope: `http.plugin.activate:${workspaceId}`, request: body, now,
+          scope: `http.plugin.activate:${workspaceId}`, request: body, now, inFlight: inFlightAsyncMutations,
           work: async () => {
             const current = await projectionGet<Workspace>(options.store, TENANT_ID, "workspace", workspaceId);
             if (!current) throw new KernelError("WORKSPACE_NOT_FOUND", "工作区不存在", "刷新工作区列表");
@@ -627,18 +861,78 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         });
         return json(workspace, 200, traceId);
       }
+      if (url.pathname === "/v2/plugins/opc/opportunities" && request.method === "GET") {
+        const workspaceId = url.searchParams.get("workspaceId");
+        if (!workspaceId) throw new KernelError("INVALID_BODY", "缺少 workspaceId", "选择工作区后重试");
+        const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId);
+        await ensurePluginsActive(TENANT_ID, workspace);
+        return json(await listOpportunitySummaries(options.store, TENANT_ID, workspaceId), 200, traceId);
+      }
+      if (url.pathname === "/v2/plugins/coding/tasks" && request.method === "GET") {
+        const workspaceId = url.searchParams.get("workspaceId");
+        if (!workspaceId) throw new KernelError("INVALID_BODY", "缺少 workspaceId", "选择工作区后重试");
+        const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId);
+        await ensurePluginsActive(TENANT_ID, workspace);
+        return json(await listCodingTaskSummaries(options.store, TENANT_ID, workspaceId), 200, traceId);
+      }
+      const productCapture = url.pathname.match(/^\/v2\/plugins\/(opc|coding)\/(opportunities|repositories|tasks)$/u);
+      if (productCapture && request.method === "POST") {
+        const body = await readBody(request);
+        const pluginId = productCapture[1] as "opc" | "coding";
+        const resource = productCapture[2]!;
+        const workspaceId = stringField(body, "workspaceId")!;
+        const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId, "operate");
+        await ensurePluginsActive(TENANT_ID, workspace);
+        const common = {
+          store: options.store,
+          tenantId: TENANT_ID,
+          workspaceId,
+          actorId: ACTOR_ID,
+          idempotencyKey: mutationKey as string,
+          expectedStreamVersion: expectedVersion(body),
+          input: stringField(body, "input")!,
+          now,
+          id: nextId,
+        };
+        const result = pluginId === "opc"
+          ? await captureOpportunity(common)
+          : resource === "repositories"
+            ? await captureCodingRepository(common)
+            : await captureCodingTask(common);
+        return json(result, 201, traceId);
+      }
+      const sampleMatch = url.pathname.match(/^\/v2\/plugins\/(opc|coding)\/samples\/read-only$/u);
+      if (sampleMatch && request.method === "POST") {
+        const body = await readBody(request);
+        const workspaceId = stringField(body, "workspaceId")!;
+        const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId, "operate");
+        await ensurePluginsActive(TENANT_ID, workspace);
+        return json(await runReadOnlySample({
+          store: options.store,
+          tenantId: TENANT_ID,
+          workspaceId,
+          actorId: ACTOR_ID,
+          idempotencyKey: mutationKey as string,
+          expectedStreamVersion: expectedVersion(body),
+          now,
+          id: nextId,
+        }, sampleMatch[1] as "opc" | "coding"), 200, traceId);
+      }
       const pluginMatch = url.pathname.match(/^\/v2\/plugins\/([^/]+)\/(.+)$/u);
       if (pluginMatch && request.method === "POST") {
         const body = await readBody(request);
         expectedVersion(body);
         const workspaceId = stringField(body, "workspaceId")!;
+        const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId, "operate");
+        await ensurePluginsActive(TENANT_ID, workspace);
         const pluginId = decodeURIComponent(pluginMatch[1]!);
         const commandId = decodeURIComponent(pluginMatch[2]!);
         const commandInput = Object.fromEntries(Object.entries(body)
-          .filter(([key]) => key !== "workspaceId" && key !== "expectedStreamVersion")) as JsonObject;
+          .filter(([key]) => key !== "workspaceId")) as JsonObject;
         const result = await idempotentAsyncOperation({
           store: options.store, tenantId: TENANT_ID, key: mutationKey as string,
           scope: `http.plugin.command:${workspaceId}:${pluginId}:${commandId}`, request: body, now,
+          inFlight: inFlightAsyncMutations,
           work: () => plugins.runCommand(pluginWorkspaceKey(workspaceId), pluginId, commandId, commandInput, ACTOR_ID),
         });
         return json(result, 200, traceId);
@@ -657,6 +951,17 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
     async listen({ host = "127.0.0.1", port }) {
       if (server) throw new Error("Host 已启动");
       server = createServer(async (incoming, outgoing) => {
+        const origin = typeof incoming.headers.origin === "string" ? incoming.headers.origin : undefined;
+        if (origin && !allowedOrigins.has(origin)) {
+          outgoing.writeHead(403, { "content-type": "application/json; charset=utf-8" });
+          outgoing.end(JSON.stringify(apiError(
+            "ORIGIN_NOT_ALLOWED",
+            "请求来源不受信任",
+            "从木牛桌面应用发起请求",
+            randomUUID(),
+          )));
+          return;
+        }
         const chunks: Buffer[] = [];
         for await (const chunk of incoming) chunks.push(Buffer.from(chunk));
         const address = `http://${incoming.headers.host ?? `${host}:${port}`}${incoming.url ?? "/"}`;
@@ -667,7 +972,14 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
             ? {} : { body: Buffer.concat(chunks) }),
         });
         const response = await dispatch(request);
-        outgoing.writeHead(response.status, Object.fromEntries(response.headers));
+        const headers: Record<string, string> = Object.fromEntries(response.headers);
+        if (origin) {
+          headers["access-control-allow-origin"] = origin;
+          headers["access-control-allow-methods"] = "GET,POST,PATCH,DELETE,OPTIONS";
+          headers["access-control-allow-headers"] = "Content-Type,Idempotency-Key,Last-Event-ID,X-Trace-Id";
+          headers.vary = "Origin";
+        }
+        outgoing.writeHead(response.status, headers);
         outgoing.end(Buffer.from(await response.arrayBuffer()));
       });
       await new Promise<void>((resolve, reject) => {
@@ -689,8 +1001,40 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
   };
 }
 
-async function defaultModelProbe({ preset }: { readonly preset: ProviderPreset }): Promise<ModelProbeResult> {
-  return { models: preset.suggestedModels, defaultModel: preset.suggestedModels[0] ?? "" };
+async function defaultModelProbe({
+  preset,
+  apiKey,
+}: {
+  readonly preset: ProviderPreset;
+  readonly apiKey: string;
+}): Promise<ModelProbeResult> {
+  const endpoint = `${preset.endpoint.replace(/\/$/u, "")}${preset.id === "openai" ? "" : "/v1"}/models`;
+  const headers: Record<string, string> = preset.probeKind === "anthropic"
+    ? { "x-api-key": apiKey, "anthropic-version": "2023-06-01" }
+    : { authorization: `Bearer ${apiKey}` };
+  let response: Response;
+  try {
+    response = await fetch(endpoint, { headers, signal: AbortSignal.timeout(10_000) });
+  } catch {
+    throw new KernelError("MODEL_PROBE_FAILED", "无法连接模型厂商", "检查网络和 API Key 后重试", true);
+  }
+  if (!response.ok) {
+    throw new KernelError(
+      "MODEL_PROBE_FAILED",
+      response.status === 401 || response.status === 403 ? "模型密钥无效" : "模型厂商探测失败",
+      "检查 API Key 和厂商服务状态后重试",
+      response.status >= 500,
+    );
+  }
+  const body = await response.json() as { readonly data?: readonly { readonly id?: unknown }[] };
+  const models = (body.data ?? [])
+    .map((item) => item.id)
+    .filter((id): id is string => typeof id === "string" && Boolean(id.trim()));
+  if (models.length === 0) {
+    throw new KernelError("MODEL_PROBE_FAILED", "厂商未返回可用模型", "检查账号权限后重试");
+  }
+  const defaultModel = preset.suggestedModels.find((model) => models.includes(model)) ?? models[0]!;
+  return { models, defaultModel };
 }
 
 export type { InboxItem };

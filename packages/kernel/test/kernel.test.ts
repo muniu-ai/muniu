@@ -5,6 +5,7 @@ import {
   AgentOsKernel,
   InMemoryKernelStore,
   assertAuthorityAttenuation,
+  authorityAllowsIntent,
   canReadMemory,
   transitionExecution,
   unknownEffectStatus,
@@ -49,6 +50,70 @@ test("本地身份、工作区、线程和执行共用同一事件流", async ()
   assert.equal(events.events.every((event) => event.hmac.length === 64), true);
 });
 
+test("提交 turn 会原子持久化上下文、权限、Execution、Job 和 outbox", async () => {
+  const store = new InMemoryKernelStore(undefined, () => now);
+  const kernel = new AgentOsKernel(store, { now: () => now });
+  await kernel.bootstrapLocal("setup-turn");
+  const workspace = await kernel.createWorkspace("local", "local-owner", "workspace-turn", {
+    name: "机会验证", viewMode: "business", pluginIds: ["opc"],
+  });
+  const thread = await kernel.createThread("local", "local-owner", "thread-turn", {
+    workspaceId: workspace.id, subject: "验证设计师获客", pluginId: "opc",
+  });
+  const execution = await kernel.submitTurn("local", "local-owner", "turn-1", {
+    workspaceId: workspace.id,
+    threadId: thread.id,
+    expectedStreamVersion: thread.streamVersion,
+    message: "请整理支持证据和反证",
+    agentDefinitionId: "opc.opportunity-validator",
+    modelBindingId: "connection-1",
+    executionPrincipalId: "agent:opc",
+    authority: {
+      workspaceId: workspace.id,
+      principalId: "agent:opc",
+      toolIds: ["opc.public-web.read"],
+      dataScopes: [{ namespace: "workspace", resourceId: workspace.id }],
+      autoAllowedEffects: ["local_read", "external_read", "local_reversible_write"],
+      budget: {
+        maxSubagentDepth: 2, maxSubagents: 4, maxTokens: 20_000,
+        maxCostMinorUnits: "1000", currency: "CNY", maxDurationMs: 3_600_000,
+      },
+    },
+  });
+
+  assert.equal(execution.status, "queued");
+  const saved = await store.transact("local", (transaction) => ({
+    authority: transaction.getProjection<ExecutionAuthority>("authority", execution.authorityId),
+    session: transaction.listProjections<{ message: string }>("session-log-entry"),
+  }));
+  assert.equal(saved.authority?.commitment.length, 64);
+  assert.equal(saved.session[0]?.message, "请整理支持证据和反证");
+  assert.deepEqual(store.readJobs("local").map((job) => [job.kind, job.payload.executionId]), [
+    ["agent.execution.run", execution.id],
+  ]);
+  assert.deepEqual(store.readOutbox("local").map((message) => message.topic), ["job.available"]);
+
+  await assert.rejects(kernel.submitTurn("local", "local-owner", "turn-stale", {
+    workspaceId: workspace.id,
+    threadId: thread.id,
+    expectedStreamVersion: thread.streamVersion,
+    message: "过期写入",
+    agentDefinitionId: "opc.opportunity-validator",
+    modelBindingId: "connection-1",
+    executionPrincipalId: "agent:opc",
+    authority: {
+      workspaceId: workspace.id,
+      principalId: "agent:opc",
+      toolIds: [], dataScopes: [], autoAllowedEffects: [],
+      budget: {
+        maxSubagentDepth: 1, maxSubagents: 1, maxTokens: 1,
+        maxCostMinorUnits: "0", currency: "CNY", maxDurationMs: 1,
+      },
+    },
+  }), /版本冲突/);
+  assert.equal(store.readJobs("local").length, 1);
+});
+
 test("执行只允许明确状态转换，恢复会递增 generation", async () => {
   assert.equal(transitionExecution("paused", "resume"), "queued");
   assert.throws(() => transitionExecution("running", "resume"), /不能执行/);
@@ -77,6 +142,53 @@ test("子 Agent 的工具、数据和预算必须是父权限的严格子集", (
     () => assertAuthorityAttenuation(parent, { ...child, budget: { ...child.budget, maxSubagentDepth: 3 } }),
     /没有衰减/,
   );
+  assert.doesNotThrow(() => assertAuthorityAttenuation(
+    { ...parent, dataScopes: [{ namespace: "web", resourceId: "*" }] },
+    { ...child, dataScopes: [{ namespace: "web", resourceId: "https://example.com/case" }] },
+  ));
+});
+
+test("资源通配范围仍约束 namespace，固定摘要不可被替换", () => {
+  const executionAuthority: ExecutionAuthority = {
+    ...authority("resource"),
+    id: "authority-resource",
+    tenantId: "local",
+    executionId: "execution-resource",
+    commitment: "commitment-resource",
+    dataScopes: [
+      { namespace: "web", resourceId: "*" },
+      { namespace: "repository", resourceId: "/workspace/muniu", digest: "sha256:approved" },
+    ],
+    streamVersion: 1,
+    createdAt: now,
+    updatedAt: now,
+  };
+  const base: ToolCallIntent = {
+    id: "resource-call",
+    executionId: executionAuthority.executionId,
+    generation: 1,
+    toolId: "web.read",
+    toolVersion: "1",
+    effectClass: "external_read",
+    intent: "读取公开网页",
+    normalizedArguments: {},
+    argumentsDigest: "args",
+    resourceRefs: [{ namespace: "web", resourceId: "https://example.com/case" }],
+    resourcesDigest: "resources",
+    authorityCommitment: executionAuthority.commitment,
+    expiresAt: "2026-09-05T00:00:00Z",
+  };
+  assert.equal(authorityAllowsIntent(executionAuthority, base), "auto");
+  assert.throws(() => authorityAllowsIntent(executionAuthority, {
+    ...base,
+    resourceRefs: [{ namespace: "private-network", resourceId: "http://127.0.0.1" }],
+  }), /超出已授权资源范围/);
+  assert.throws(() => authorityAllowsIntent({ ...executionAuthority, toolIds: ["repository.read"] }, {
+    ...base,
+    toolId: "repository.read",
+    effectClass: "local_read",
+    resourceRefs: [{ namespace: "repository", resourceId: "/workspace/muniu", digest: "sha256:changed" }],
+  }), /超出已授权资源范围/);
 });
 
 test("只读工具可自动执行，高影响操作进入审批收件箱", async () => {
