@@ -35,6 +35,7 @@
   mn code runner inspect claude-cli --workspace <工作区 ID> --path /绝对路径/claude
   mn code runner confirm claude-cli --workspace <工作区 ID> --path /绝对路径/claude --binary-version <人工核实版本> --sha256 <摘要> --version <配置版本>
   mn ask <任务> --workspace <工作区 ID> --thread <会话 ID> --runner claude-cli
+  mn code reconcile <执行 ID> terminate --version <执行版本> --coding-version <Coding 执行版本>
 ```
 
 <!-- generated:cli-help:end -->
@@ -140,6 +141,24 @@ mn ask "修复事件游标" \
 `inspect` 不启用或执行 Runner，只读取绝对真实路径、SHA-256 和文件身份。`confirm` 会再次被动检查同一路径；摘要与提交值不一致时拒绝确认，并把用户声明的版本绑定到该文件身份。确认后，Worker 才会把制品复制到其管理的只读目录，在受限环境中探测版本并复核完整身份。二进制变化后，旧确认不再有效。
 
 Claude 与 Codex CLI 使用各自已有的登录、provider 和 MCP 配置。木牛只调用适配器的 `start/events/cancel/resume`，不会向外部 Runner 注入木牛的 BYOK 密钥、Prompt 注册表、Skill 或历史会话。每次外部启动仍需单次副作用审批；结果无法确认时进入 `needs_reconciliation`，不会自动重放。
+
+人工核对必须同时提交 core Execution 和 Coding execution 的当前版本：
+
+```bash
+mn code reconcile EXECUTION_ID terminate \
+  --version EXECUTION_STREAM_VERSION \
+  --coding-version CODING_EXECUTION_STREAM_VERSION
+
+mn code reconcile EXECUTION_ID mark_completed \
+  --version EXECUTION_STREAM_VERSION \
+  --coding-version CODING_EXECUTION_STREAM_VERSION
+
+mn code reconcile EXECUTION_ID create_new_call \
+  --version EXECUTION_STREAM_VERSION \
+  --coding-version CODING_EXECUTION_STREAM_VERSION
+```
+
+`mark_completed` 缺少已持久化的权威通过 Gate 或 CodeEvidence 时会被拒绝。`create_new_call` 创建独立 Execution 和 Job，不重放结果未知的旧 Job。三种决定都会把旧沙箱的清理任务入队。
 
 ## 备份
 

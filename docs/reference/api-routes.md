@@ -81,6 +81,7 @@ Agent OS 0.2 默认监听 `http://127.0.0.1:7318`。成功的 JSON 响应使用 
 | `GET` | `/v2/plugins/coding/runners` | `listCodingRunners` | — | — |
 | `POST` | `/v2/plugins/coding/runners/{runnerId}/inspections` | `inspectCodingRunner` | 必需 | — |
 | `POST` | `/v2/plugins/coding/runners/{runnerId}/confirmations` | `confirmCodingRunner` | 必需 | 必需 |
+| `POST` | `/v2/plugins/coding/executions/{executionId}/reconciliation-decisions` | `decideCodingReconciliation` | 必需 | 必需 |
 | `GET` | `/v2/plugins/{pluginId}/{path}` | `getPluginResource` | — | — |
 | `POST` | `/v2/plugins/{pluginId}/{path}` | `mutatePluginResource` | 必需 | 必需 |
 
@@ -113,6 +114,16 @@ Coding turn 的 `runnerId` 可选值为 `builtin`、`claude-cli` 或 `codex-cli`
 生产 Worker 只接受官方原生安装提供的 macOS Mach-O CLI，不支持 npm 或 shebang wrapper。Host 不执行待确认路径；确认后，Worker 才会把制品复制到其管理的只读目录，并在受限环境中探测版本。
 
 确认接口不会信任客户端转述的身份：Host 会重新检查同一绝对路径，并要求版本和 SHA-256 与请求完全一致。Worker 在副作用承诺前再次检查持久化身份；任何差异都会 fail closed。外部 CLI 已启动但无法获得确定终态时，Execution 进入 `needs_reconciliation`，同一 Job 不会自动重放。
+
+## Coding 人工核对
+
+`POST /v2/plugins/coding/executions/{executionId}/reconciliation-decisions` 同时要求 core `expectedStreamVersion` 和 `expectedCodingStreamVersion`。`decision` 支持：
+
+- `terminate`：终止未知调用并把清理 Job 入队；
+- `mark_completed`：仅在已持久化候选、权威通过 Gate 与匹配的 CodeEvidence 均存在时标记完成；
+- `create_new_call`：终止旧调用并创建新的 Execution 与 Job，不重放旧 Job。
+
+三种决定都会在同一数据库事务中收敛 core Execution、Coding execution、Coding task 和关联收件箱，并写入清理 Job、`job.available` 事件及 outbox。清理 Job 只携带原 Execution ID；Worker 从已持久化的 `externalInvocation` 读取受控路径。停用 Runner 插件后仍可终止或标记完成，但创建新调用要求 Coding 与对应 Runner 插件已启用且健康。
 
 执行命令包括 `follow_up`、`steer`、`cancel` 和 `resume`。审批决定只接受 `approve_once` 或 `deny`。调用参数、资源、工具版本、generation 或 authority commitment 变化后，原批准失效。
 

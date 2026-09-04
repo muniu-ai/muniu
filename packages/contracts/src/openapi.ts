@@ -64,6 +64,7 @@ export const API_OPERATIONS_V2: readonly ApiOperationV2[] = [
   { method: "get", path: "/v2/plugins/coding/runners", operationId: "listCodingRunners", mutation: false, versioned: false },
   { method: "post", path: "/v2/plugins/coding/runners/{runnerId}/inspections", operationId: "inspectCodingRunner", mutation: true, versioned: false },
   { method: "post", path: "/v2/plugins/coding/runners/{runnerId}/confirmations", operationId: "confirmCodingRunner", mutation: true, versioned: true },
+  { method: "post", path: "/v2/plugins/coding/executions/{executionId}/reconciliation-decisions", operationId: "decideCodingReconciliation", mutation: true, versioned: true },
   { method: "get", path: "/v2/plugins/{pluginId}/{path}", operationId: "getPluginResource", mutation: false, versioned: false },
   { method: "post", path: "/v2/plugins/{pluginId}/{path}", operationId: "mutatePluginResource", mutation: true, versioned: true },
 ] as const;
@@ -321,6 +322,19 @@ export function createOpenApiDocument(): JsonObject {
             sha256: { type: "string", pattern: "^[0-9a-f]{64}$" },
           },
         },
+        DecideCodingReconciliationMutation: {
+          type: "object",
+          additionalProperties: false,
+          required: ["expectedStreamVersion", "expectedCodingStreamVersion", "decision"],
+          properties: {
+            expectedStreamVersion: { type: "integer", minimum: 1 },
+            expectedCodingStreamVersion: { type: "integer", minimum: 1 },
+            decision: {
+              type: "string",
+              enum: ["terminate", "mark_completed", "create_new_call"],
+            },
+          },
+        },
       },
       responses: {
         BadRequest: errorResponse("请求无效"),
@@ -341,6 +355,7 @@ function mutationSchema(operationId: string, versioned: boolean): JsonObject {
     commandOpcOpportunity: "OpcOpportunityCommandMutation",
     inspectCodingRunner: "InspectCodingRunnerMutation",
     confirmCodingRunner: "ConfirmCodingRunnerMutation",
+    decideCodingReconciliation: "DecideCodingReconciliationMutation",
   };
   const schema = schemas[operationId];
   if (schema) return { $ref: `#/components/schemas/${schema}` };

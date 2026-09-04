@@ -119,11 +119,13 @@ test("受保护附件先写密文 CAS，再提交独立 wrapped DEK，并在授�
     id: (kind: string) => `${kind}-${++id}`,
   });
 
-  const workspace = (await json(await host.dispatch(request("/v2/workspaces", {
+  const workspaceResponse = await host.dispatch(request("/v2/workspaces", {
     name: "敏感访谈",
     viewMode: "business",
     pluginIds: ["opc"],
-  }, { key: "protected-workspace", principal: "owner-a" })))).data;
+  }, { key: "protected-workspace", principal: "owner-a" }));
+  assert.equal(workspaceResponse.status, 201, JSON.stringify(await workspaceResponse.clone().json()));
+  const workspace = (await json(workspaceResponse)).data;
   const plaintext = Buffer.from("客户明确要求不得公开的原始访谈。", "utf8");
   const upload = {
     workspaceId: workspace.id,

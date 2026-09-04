@@ -88,6 +88,10 @@ import {
 } from "./plugin-installation.js";
 import type { ModelSecretStore } from "./secrets.js";
 import {
+  decideCodingReconciliation,
+  type CodingReconciliationDecision,
+} from "./coding-reconciliation.js";
+import {
   confirmCodingRunner,
   inspectCodingRunner,
   listCodingRunners,
@@ -215,6 +219,18 @@ function expectedVersion(body: Record<string, unknown>): number {
   const value = body.expectedStreamVersion;
   if (!Number.isSafeInteger(value) || Number(value) < 0) {
     throw new KernelError("EXPECTED_STREAM_VERSION_REQUIRED", "缺少有效的 expectedStreamVersion", "刷新对象后重试");
+  }
+  return Number(value);
+}
+
+function expectedCodingVersion(body: Record<string, unknown>): number {
+  const value = body.expectedCodingStreamVersion;
+  if (!Number.isSafeInteger(value) || Number(value) < 0) {
+    throw new KernelError(
+      "EXPECTED_STREAM_VERSION_REQUIRED",
+      "缺少有效的 expectedCodingStreamVersion",
+      "刷新 Coding 执行后重试",
+    );
   }
   return Number(value);
 }
@@ -2153,6 +2169,83 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           }),
         });
         return json(configuration, 200, traceId);
+      }
+      const codingReconciliationMatch = url.pathname.match(
+        /^\/v2\/plugins\/coding\/executions\/([^/]+)\/reconciliation-decisions$/u,
+      );
+      if (codingReconciliationMatch && request.method === "POST") {
+        const body = await readBody(request);
+        if (Object.keys(body).some((field) => ![
+          "expectedStreamVersion", "expectedCodingStreamVersion", "decision",
+        ].includes(field))) {
+          throw new KernelError("INVALID_BODY", "人工核对请求包含不支持的字段", "按 OpenAPI 重新提交");
+        }
+        const decision = stringField(body, "decision") as CodingReconciliationDecision;
+        if (decision !== "terminate"
+          && decision !== "mark_completed"
+          && decision !== "create_new_call") {
+          throw new KernelError(
+            "INVALID_DECISION",
+            "人工核对决定无效",
+            "选择 terminate、mark_completed 或 create_new_call",
+          );
+        }
+        const executionId = decodeURIComponent(codingReconciliationMatch[1]!);
+        const expectedStreamVersion = expectedVersion(body);
+        const expectedCodingStreamVersion = expectedCodingVersion(body);
+        const reconciliationScope = `coding.reconciliation:${executionId}`;
+        const reconciliationRequest = {
+          executionId,
+          expectedStreamVersion,
+          expectedCodingStreamVersion,
+          decision,
+        };
+        const replay = await options.store.transact(TENANT_ID, (transaction) =>
+          transaction.getIdempotency(reconciliationScope, mutationKey as string));
+        if (replay) {
+          if (replay.requestDigest !== sha256(reconciliationRequest)) {
+            throw new KernelError(
+              "IDEMPOTENCY_KEY_REUSED",
+              "幂等键已用于不同请求",
+              "使用新的 Idempotency-Key",
+            );
+          }
+          return json(replay.response, 200, traceId);
+        }
+        if (decision === "create_new_call") {
+          const current = await projectionGet<Execution>(
+            options.store,
+            TENANT_ID,
+            "execution",
+            executionId,
+          );
+          if (!current || current.pluginId !== "coding") {
+            throw new KernelError("EXECUTION_NOT_FOUND", "Coding 执行不存在", "刷新收件箱");
+          }
+          const workspace = await authorizedWorkspace(
+            options.store,
+            TENANT_ID,
+            ACTOR_ID,
+            current.workspaceId,
+            "review",
+          );
+          await ensurePluginsActive(TENANT_ID, workspace);
+          if (current.runnerId === "claude-cli" || current.runnerId === "codex-cli") {
+            await requireRunnerPluginTool(TENANT_ID, workspace, current.runnerId);
+          }
+        }
+        const result = await decideCodingReconciliation(options.store, {
+          tenantId: TENANT_ID,
+          actorId: ACTOR_ID,
+          idempotencyKey: mutationKey as string,
+          executionId,
+          expectedStreamVersion,
+          expectedCodingStreamVersion,
+          decision,
+          now,
+          id: nextId,
+        });
+        return json(result, 200, traceId);
       }
       if (url.pathname === "/v2/plugins/opc/opportunities" && request.method === "GET") {
         const workspaceId = url.searchParams.get("workspaceId");

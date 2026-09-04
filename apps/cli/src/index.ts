@@ -45,6 +45,7 @@ const HELP = `木牛 Agent OS 0.2
   mn code runner inspect claude-cli --workspace <工作区 ID> --path /绝对路径/claude
   mn code runner confirm claude-cli --workspace <工作区 ID> --path /绝对路径/claude --binary-version <人工核实版本> --sha256 <摘要> --version <配置版本>
   mn ask <任务> --workspace <工作区 ID> --thread <会话 ID> --runner claude-cli
+  mn code reconcile <执行 ID> terminate --version <执行版本> --coding-version <Coding 执行版本>
 `;
 
 export interface CliIo {
@@ -209,6 +210,15 @@ function integerFlag(parsed: ParsedArguments, name: string, fallback: number): n
   if (raw === undefined) return fallback;
   const value = Number(raw);
   if (!Number.isSafeInteger(value) || value < 0) throw new CliUsageError(`--${name} 必须是非负整数`);
+  return value;
+}
+
+function requiredIntegerFlag(parsed: ParsedArguments, name: string): number {
+  const raw = flag(parsed, name, true)!;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new CliUsageError(`--${name} 必须是非负整数`);
+  }
   return value;
 }
 
@@ -441,6 +451,35 @@ function absoluteRunnerPath(parsed: ParsedArguments): string {
 
 async function code(parsed: ParsedArguments, api: ApiClient): Promise<CliResult> {
   const operation = parsed.positional[0] ?? "task";
+  if (operation === "reconcile") {
+    assertAllowedFlags(parsed, ["version", "coding-version"]);
+    if (parsed.positional.length !== 3) {
+      throw new CliUsageError("code reconcile 需要执行 ID 和决定");
+    }
+    const executionId = parsed.positional[1]!;
+    const decision = parsed.positional[2];
+    if (decision !== "terminate"
+      && decision !== "mark_completed"
+      && decision !== "create_new_call") {
+      throw new CliUsageError(
+        "核对决定只能是 terminate、mark_completed 或 create_new_call",
+      );
+    }
+    const data = await api.mutate(
+      `/v2/plugins/coding/executions/${encodeURIComponent(executionId)}/reconciliation-decisions`,
+      {
+        expectedStreamVersion: requiredIntegerFlag(parsed, "version"),
+        expectedCodingStreamVersion: requiredIntegerFlag(parsed, "coding-version"),
+        decision,
+      },
+    );
+    const human = decision === "terminate"
+      ? "未知外部调用已终止，清理任务已入队"
+      : decision === "mark_completed"
+        ? "已依据权威验证证据标记完成，清理任务已入队"
+        : "旧调用已终止，新调用与清理任务已入队";
+    return { command: "code", data, human };
+  }
   if (operation !== "runner" && operation !== "runners") {
     return productCommand("coding", "code", parsed, api);
   }

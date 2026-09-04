@@ -106,6 +106,7 @@ function mutationSchema(operation) {
     commandOpcOpportunity: "OpcOpportunityCommandMutation",
     inspectCodingRunner: "InspectCodingRunnerMutation",
     confirmCodingRunner: "ConfirmCodingRunnerMutation",
+    decideCodingReconciliation: "DecideCodingReconciliationMutation",
   };
   const schema = schemas[operation.operationId];
   if (schema) return { $ref: `#/components/schemas/${schema}` };
@@ -339,6 +340,19 @@ function openApiDocument(operations) {
             binaryPath: { type: "string", minLength: 1, pattern: "^/" },
             version: { type: "string", minLength: 1, maxLength: 256 },
             sha256: { type: "string", pattern: "^[0-9a-f]{64}$" },
+          },
+        },
+        DecideCodingReconciliationMutation: {
+          type: "object",
+          additionalProperties: false,
+          required: ["expectedStreamVersion", "expectedCodingStreamVersion", "decision"],
+          properties: {
+            expectedStreamVersion: { type: "integer", minimum: 1 },
+            expectedCodingStreamVersion: { type: "integer", minimum: 1 },
+            decision: {
+              type: "string",
+              enum: ["terminate", "mark_completed", "create_new_call"],
+            },
           },
         },
         Envelope: {

@@ -2,6 +2,7 @@ export * from "./config.js";
 export * from "./enterprise-plugin-repository.js";
 export * from "./assets.js";
 export * from "./coding-runners.js";
+export * from "./coding-reconciliation.js";
 export * from "./host.js";
 export * from "./local.js";
 export * from "./opc-api.js";

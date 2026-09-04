@@ -123,6 +123,7 @@ test("OpenAPI 目录只有 v2，所有写操作要求幂等键", () => {
   assert.match(serialized, /\/v2\/memories\/\{memoryId\}\/decisions/);
   assert.match(serialized, /\/v2\/plugins\/opc\/opportunities\/\{opportunityId\}\/commands/);
   assert.match(serialized, /\/v2\/plugins\/opc\/opportunities\/\{opportunityId\}\/exports/);
+  assert.match(serialized, /\/v2\/plugins\/coding\/executions\/\{executionId\}\/reconciliation-decisions/);
   const assetUpload = (document.paths as Record<string, Record<string, {
     requestBody?: { content?: Record<string, { schema?: { $ref?: string } }> };
     responses?: Record<string, unknown>;
@@ -162,6 +163,18 @@ test("OpenAPI 目录只有 v2，所有写操作要求幂等键", () => {
     (document.components as { schemas: Record<string, unknown> }).schemas.ApiError !== undefined,
     true,
   );
+  const reconciliation = (document.paths as Record<string, Record<string, {
+    requestBody?: { content?: Record<string, { schema?: { $ref?: string } }> };
+  }>>)["/v2/plugins/coding/executions/{executionId}/reconciliation-decisions"]?.post;
+  assert.equal(
+    reconciliation?.requestBody?.content?.["application/json"]?.schema?.$ref,
+    "#/components/schemas/DecideCodingReconciliationMutation",
+  );
+  const reconciliationSchema = (document.components as { schemas: Record<string, any> })
+    .schemas.DecideCodingReconciliationMutation;
+  assert.deepEqual(reconciliationSchema.properties.decision.enum, [
+    "terminate", "mark_completed", "create_new_call",
+  ]);
   for (const operation of API_OPERATIONS_V2.filter((entry) => entry.mutation)) {
     const paths = document.paths as Record<string, Record<string, { parameters?: Array<{ name: string }> }>>;
     assert.equal(paths[operation.path]?.[operation.method]?.parameters?.[0]?.name, "Idempotency-Key");

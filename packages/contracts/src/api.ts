@@ -96,6 +96,16 @@ export interface ConfirmCodingRunnerMutationBodyV2 extends VersionedMutationBody
   readonly sha256: string;
 }
 
+export type CodingReconciliationDecisionV2 =
+  | "terminate"
+  | "mark_completed"
+  | "create_new_call";
+
+export interface DecideCodingReconciliationMutationBodyV2 extends VersionedMutationBody {
+  readonly expectedCodingStreamVersion: number;
+  readonly decision: CodingReconciliationDecisionV2;
+}
+
 export const CORE_API_ROUTES = [
   "/v2/openapi.json",
   "/v2/health",
@@ -137,6 +147,7 @@ export const CORE_API_ROUTES = [
   "/v2/plugins/coding/runners",
   "/v2/plugins/coding/runners/{runnerId}/inspections",
   "/v2/plugins/coding/runners/{runnerId}/confirmations",
+  "/v2/plugins/coding/executions/{executionId}/reconciliation-decisions",
   "/v2/plugins/{pluginId}/{path}",
 ] as const;
 

@@ -995,6 +995,30 @@ paths:
         default:
           $ref: "#/components/responses/Error"
       x-muniu-versioned: true
+  /v2/plugins/coding/executions/{executionId}/reconciliation-decisions:
+    post:
+      operationId: decideCodingReconciliation
+      parameters:
+        - in: path
+          name: executionId
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DecideCodingReconciliationMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        default:
+          $ref: "#/components/responses/Error"
+      x-muniu-versioned: true
   /v2/plugins/{pluginId}/{path}:
     get:
       operationId: getPluginResource
@@ -1286,6 +1310,26 @@ components:
         sha256:
           type: string
           pattern: ^[0-9a-f]{64}$
+    DecideCodingReconciliationMutation:
+      type: object
+      additionalProperties: false
+      required:
+        - expectedStreamVersion
+        - expectedCodingStreamVersion
+        - decision
+      properties:
+        expectedStreamVersion:
+          type: integer
+          minimum: 1
+        expectedCodingStreamVersion:
+          type: integer
+          minimum: 1
+        decision:
+          type: string
+          enum:
+            - terminate
+            - mark_completed
+            - create_new_call
     Envelope:
       type: object
       required:
