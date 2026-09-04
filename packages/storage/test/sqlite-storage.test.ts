@@ -342,6 +342,53 @@ test("job leases last thirty seconds and fencing rejects a stale worker", async 
   }
 });
 
+test("Kernel 业务事务在同一 SQLite 事务内拒绝过期或陈旧 Job fence", async () => {
+  const storage = new SqliteStorage({
+    databaseFile: temporaryPath("state.sqlite"),
+    hmacKey: randomBytes(32)
+  });
+  try {
+    await seedAgentExecutionJob(storage);
+    const first = await storage.claimJob("worker-a", "2026-09-04T00:00:00.000Z");
+    assert.equal(first?.fencingToken, 1);
+    await storage.transact("tenant-a", (transaction) => {
+      transaction.assertJobLease?.({
+        jobId: "job-agent",
+        workerId: "worker-a",
+        fencingToken: 1,
+        occurredAt: "2026-09-04T00:00:29.999Z"
+      });
+      transaction.putProjection("fixture", "owned", { value: true });
+    });
+
+    await assert.rejects(storage.transact("tenant-a", (transaction) => {
+      transaction.assertJobLease?.({
+        jobId: "job-agent",
+        workerId: "worker-a",
+        fencingToken: 1,
+        occurredAt: "2026-09-04T00:00:30.000Z"
+      });
+      transaction.putProjection("fixture", "expired", { value: true });
+    }), StaleFencingTokenError);
+    assert.equal(await storage.getProjection("tenant-a", "fixture", "expired"), undefined);
+
+    const second = await storage.claimJob("worker-b", "2026-09-04T00:00:30.000Z");
+    assert.equal(second?.fencingToken, 2);
+    await assert.rejects(storage.transact("tenant-a", (transaction) => {
+      transaction.assertJobLease?.({
+        jobId: "job-agent",
+        workerId: "worker-a",
+        fencingToken: 1,
+        occurredAt: "2026-09-04T00:00:30.001Z"
+      });
+      transaction.putProjection("fixture", "stale", { value: true });
+    }), StaleFencingTokenError);
+    assert.equal(await storage.getProjection("tenant-a", "fixture", "stale"), undefined);
+  } finally {
+    await storage.close();
+  }
+});
+
 test("Agent Job 领取与完成会在同一事务推进 Job、Execution 和事件流", async () => {
   const hmacKey = randomBytes(32);
   const storage = new SqliteStorage({

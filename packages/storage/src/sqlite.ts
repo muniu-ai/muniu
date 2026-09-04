@@ -343,6 +343,33 @@ export class SqliteStorage implements StoragePort {
             message.availableAt ?? writtenAt,
             writtenAt
           );
+        },
+        assertJobLease: (input) => {
+          const row = this.#database.prepare(`
+            select status, lease_owner, lease_expires_at, fencing_token
+            from jobs where tenant_id = ? and job_id = ?
+          `).get(tenantId, input.jobId) as RecordRow | undefined;
+          const projectionRow = this.#database.prepare(`
+            select value_json from projections
+            where tenant_id = ? and namespace = 'job' and projection_key = ?
+          `).get(tenantId, input.jobId) as RecordRow | undefined;
+          const projection = projectionRow
+            ? parseJson<Record<string, unknown>>(projectionRow.value_json)
+            : undefined;
+          if (!row
+            || row.status !== "leased"
+            || row.lease_owner !== input.workerId
+            || Number(row.fencing_token) !== input.fencingToken
+            || typeof row.lease_expires_at !== "string"
+            || Date.parse(row.lease_expires_at) <= Date.parse(input.occurredAt)
+            || !projection
+            || projection.status !== "leased"
+            || projection.leaseOwner !== input.workerId
+            || projection.fencingToken !== input.fencingToken
+            || typeof projection.leaseExpiresAt !== "string"
+            || Date.parse(projection.leaseExpiresAt) <= Date.parse(input.occurredAt)) {
+            throw new StaleFencingTokenError(input.jobId);
+          }
         }
       };
       const result = work(transaction);

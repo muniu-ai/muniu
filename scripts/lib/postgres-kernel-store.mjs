@@ -158,6 +158,11 @@ export class PostgresKernelStore {
         select idempotency_key, request_hash, response_json, created_at from mn_v2.idempotency
         where tenant_id = $1 and idempotency_key like 'kernel:%'
       `, [tenantId]);
+      const leasedJobResult = await client.query(`
+        select job_id, status, lease_owner, lease_expires_at, fencing_token
+        from mn_v2.jobs where tenant_id = $1 and status = 'leased'
+        for update
+      `, [tenantId]);
 
       const head = headResult.rows[0];
       let nextPosition = safeInteger(head?.next_position ?? 1, "事件位置");
@@ -181,6 +186,7 @@ export class PostgresKernelStore {
           createdAt: iso(row.created_at),
         }];
       }));
+      const leasedJobs = new Map(leasedJobResult.rows.map((row) => [String(row.job_id), row]));
       const changedProjections = new Map();
       const deletedProjections = new Set();
       const changedIdempotency = new Map();
@@ -266,6 +272,25 @@ export class PostgresKernelStore {
             throw new Error("outbox 的 id 和 topic 不能为空");
           }
           outbox.push(message);
+        },
+        assertJobLease: ({ jobId, workerId, fencingToken, occurredAt }) => {
+          const row = leasedJobs.get(jobId);
+          const projected = projections.get(projectionKey("job", jobId));
+          if (!row
+            || row.status !== "leased"
+            || row.lease_owner !== workerId
+            || safeInteger(row.fencing_token, "fencing token") !== fencingToken
+            || row.lease_expires_at == null
+            || Date.parse(iso(row.lease_expires_at)) <= Date.parse(occurredAt)
+            || projected?.status !== "leased"
+            || projected?.leaseOwner !== workerId
+            || projected?.fencingToken !== fencingToken
+            || typeof projected?.leaseExpiresAt !== "string"
+            || Date.parse(projected.leaseExpiresAt) <= Date.parse(occurredAt)) {
+            const error = new Error(`Worker no longer owns job ${jobId}`);
+            error.code = "STALE_FENCING_TOKEN";
+            throw error;
+          }
         },
       };
 

@@ -34,6 +34,13 @@ export interface KernelOutboxWrite {
   readonly availableAt?: string;
 }
 
+export interface KernelJobLeaseAssertion {
+  readonly jobId: string;
+  readonly workerId: string;
+  readonly fencingToken: number;
+  readonly occurredAt: string;
+}
+
 export interface KernelTransaction {
   appendEvent(request: EventAppendRequest): KernelEventV1;
   getProjection<T>(namespace: string, id: string): T | undefined;
@@ -44,6 +51,12 @@ export interface KernelTransaction {
   putIdempotency(record: IdempotencyRecord): void;
   putJob(job: KernelJobWrite): void;
   putOutbox(message: KernelOutboxWrite): void;
+  /**
+   * Storage-backed implementations validate the physical lease and its query
+   * projection inside this same transaction. Worker business writes must fail
+   * closed when the capability is unavailable.
+   */
+  assertJobLease?(input: KernelJobLeaseAssertion): void;
 }
 
 export interface KernelStore {
@@ -162,6 +175,22 @@ export class InMemoryKernelStore implements KernelStore {
         const key = `${tenantId}:${message.id}`;
         if (staged.outbox.has(key)) throw new Error(`Outbox ${message.id} 已存在`);
         staged.outbox.set(key, message);
+      },
+      assertJobLease: (input) => {
+        const value = staged.projections.get(`${tenantId}:job:${input.jobId}`);
+        const job = typeof value === "object" && value !== null
+          ? value as Record<string, unknown>
+          : undefined;
+        if (!job
+          || job.status !== "leased"
+          || job.leaseOwner !== input.workerId
+          || job.fencingToken !== input.fencingToken
+          || typeof job.leaseExpiresAt !== "string"
+          || Date.parse(job.leaseExpiresAt) <= Date.parse(input.occurredAt)) {
+          const error = new Error(`Worker no longer owns job ${input.jobId}`) as Error & { code: string };
+          error.code = "STALE_FENCING_TOKEN";
+          throw error;
+        }
       },
     };
     const result = work(transaction);

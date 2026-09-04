@@ -32,7 +32,11 @@ import type {
   ToolCallIntent,
 } from "@mn/contracts";
 import { CODING_RUNNER_CONFIGURATION_NAMESPACE } from "@mn/contracts";
-import { sha256, type InboxItem, type KernelStore } from "@mn/kernel";
+import {
+  sha256,
+  type InboxItem,
+  type KernelStore,
+} from "@mn/kernel";
 import {
   buildRepositoryIndex,
   CODING_DEFAULT_LIMITS,
@@ -50,7 +54,7 @@ import {
   type RunnerEvent,
   RunnerKnownFailureError,
 } from "@mn/plugin-coding";
-import type { StoredJob } from "@mn/storage";
+import { StaleFencingTokenError, type StoredJob } from "@mn/storage";
 import {
   createClaudeCliRunner,
   verifyRunnerBinaryIdentity as verifyClaudeBinaryIdentity,
@@ -185,6 +189,9 @@ interface CommandResult {
 }
 
 export interface CodingWorkerJobContext {
+  readonly workerId: string;
+  readonly fencingToken: number;
+  readonly leaseExpiresAt: string;
   readonly signal: AbortSignal;
 }
 
@@ -215,6 +222,40 @@ export class CodingWorkerOutcomeError extends Error {
   }
 }
 
+function fencedCodingStore(
+  store: KernelStore,
+  job: StoredJob,
+  context: CodingWorkerJobContext,
+  now: () => string,
+): KernelStore {
+  if (job.status !== "leased"
+    || job.leaseOwner !== context.workerId
+    || job.fencingToken !== context.fencingToken
+    || job.leaseExpiresAt !== context.leaseExpiresAt) {
+    throw new StaleFencingTokenError(job.id);
+  }
+  return {
+    transact(tenantId, work) {
+      if (tenantId !== job.tenantId) throw new Error("Coding Job 事务不能跨租户");
+      return store.transact(tenantId, (transaction) => {
+        if (!transaction.assertJobLease) {
+          throw new Error("存储未实现事务内 Job fencing，Coding Worker 已拒绝写入");
+        }
+        transaction.assertJobLease({
+          jobId: job.id,
+          workerId: context.workerId,
+          fencingToken: context.fencingToken,
+          occurredAt: now(),
+        });
+        return work(transaction);
+      });
+    },
+    readEvents(tenantId, afterPosition, limit) {
+      return store.readEvents(tenantId, afterPosition, limit);
+    },
+  };
+}
+
 export function createCodingExecutionWorkerHandler(options: CodingExecutionWorkerOptions) {
   const now = options.now ?? (() => new Date().toISOString());
   const sandbox = new MacOsCodingSandbox({
@@ -227,7 +268,9 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
     if (job.payload.command !== undefined && job.payload.command !== "resume") {
       throw new Error("Coding Job command 无效");
     }
-    const state = await loadCodingState(options.store, job.tenantId, executionId);
+    const store = fencedCodingStore(options.store, job, context, now);
+    const effectiveOptions: CodingExecutionWorkerOptions = { ...options, store };
+    const state = await loadCodingState(store, job.tenantId, executionId);
     assertCodingState(job, state);
     const runnerId = state.execution.runnerId ?? "builtin";
     if (runnerId === "builtin"
@@ -237,7 +280,7 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
     }
     const runtime = new KernelProjectionRuntimeStore({
       tenantId: job.tenantId,
-      store: options.store,
+      store,
       now,
       id: (sequence) => `${executionId}:coding-runtime:${sequence}`,
     });
@@ -245,17 +288,17 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
       tenantId: job.tenantId,
       actorId: state.execution.executionPrincipalId,
       kernel: options.approvalKernel,
-      store: options.store,
+      store,
       ...(options.approvalPollIntervalMs
         ? { pollIntervalMs: options.approvalPollIntervalMs }
         : {}),
       now: () => Date.parse(now()),
     });
 
-    const recovered = await loadCodingRun(options.store, job.tenantId, executionId);
+    const recovered = await loadCodingRun(store, job.tenantId, executionId);
     if (recovered?.generation === state.execution.generation && recovered.result) {
       return settlePersistedResult({
-        options,
+        options: effectiveOptions,
         job,
         context,
         state,
@@ -278,7 +321,7 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
         },
       });
       await persistCodingResult({
-        store: options.store,
+        store,
         tenantId: job.tenantId,
         state,
         controlPlane: recovered.controlPlane,
@@ -321,7 +364,7 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
     });
     const controlPlane = await sandbox.controlPlane(snapshot, state.task, runnerId);
     await persistRunning(
-      options.store,
+      store,
       job.tenantId,
       state,
       controlPlane,
@@ -358,7 +401,7 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
           runtime,
           approval,
           sandbox,
-          store: options.store,
+          store,
           tenantId: job.tenantId,
           signal: context.signal,
           now,
@@ -387,7 +430,7 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
         ? acceptanceIntent(state.execution, state.authority, state.repository, result, now())
         : undefined;
       run = await persistCodingResult({
-        store: options.store,
+        store,
         tenantId: job.tenantId,
         state,
         controlPlane,
@@ -402,7 +445,7 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
       await runner.cleanup(preserveForReconciliation);
     }
     return settlePersistedResult({
-      options,
+      options: effectiveOptions,
       job,
       context,
       state,

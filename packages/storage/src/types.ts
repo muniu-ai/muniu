@@ -159,6 +159,12 @@ export interface KernelTransactionLike {
   putIdempotency(record: KernelIdempotencyRecordLike): void;
   putJob(job: JobWrite): void;
   putOutbox(message: OutboxWrite): void;
+  assertJobLease?(input: {
+    readonly jobId: string;
+    readonly workerId: string;
+    readonly fencingToken: number;
+    readonly occurredAt: string;
+  }): void;
 }
 
 export interface KernelStoreCompatible {
