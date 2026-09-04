@@ -1,0 +1,142 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import type { ExecutionAuthority, MemoryRecord, ToolCallIntent } from "@mn/contracts";
+import {
+  AgentOsKernel,
+  InMemoryKernelStore,
+  assertAuthorityAttenuation,
+  canReadMemory,
+  transitionExecution,
+  unknownEffectStatus,
+} from "../src/index.js";
+
+const now = "2026-09-04T00:00:00.000Z";
+
+function authority(executionId: string): Omit<ExecutionAuthority, "id" | "tenantId" | "executionId" | "streamVersion" | "createdAt" | "updatedAt"> {
+  return {
+    workspaceId: "workspace-1",
+    principalId: "agent-1",
+    toolIds: ["web.read"],
+    dataScopes: [{ namespace: "web", resourceId: "https://example.com" }],
+    autoAllowedEffects: ["external_read"],
+    budget: {
+      maxSubagentDepth: 3, maxSubagents: 4, maxTokens: 10_000,
+      maxCostMinorUnits: "1000", currency: "CNY", maxDurationMs: 60_000,
+    },
+    commitment: `authority:${executionId}`,
+  };
+}
+
+test("本地身份、工作区、线程和执行共用同一事件流", async () => {
+  const store = new InMemoryKernelStore(undefined, () => now);
+  const kernel = new AgentOsKernel(store, { now: () => now });
+  assert.deepEqual(await kernel.bootstrapLocal("setup-1"), { tenantId: "local", principalId: "local-owner" });
+  assert.deepEqual(await kernel.bootstrapLocal("setup-1"), { tenantId: "local", principalId: "local-owner" });
+  const workspace = await kernel.createWorkspace("local", "local-owner", "workspace-1", {
+    name: "新业务", viewMode: "business", pluginIds: ["opc"],
+  });
+  const thread = await kernel.createThread("local", "local-owner", "thread-1", {
+    workspaceId: workspace.id, subject: "验证设计师获客问题", pluginId: "opc",
+  });
+  const execution = await kernel.createExecution("local", "local-owner", "execution-1", {
+    workspaceId: workspace.id, threadId: thread.id, pluginId: "opc",
+    agentDefinitionId: "opc-validator", modelBindingId: "model-1", executionPrincipalId: "agent-1",
+    authority: { ...authority("new"), workspaceId: workspace.id },
+  });
+  const events = await store.readEvents("local", 0, 20);
+  assert.deepEqual(events.events.map((event) => event.position), [1, 2, 3, 4]);
+  assert.equal(events.events.at(-1)?.aggregateId, execution.id);
+  assert.equal(events.events.every((event) => event.hmac.length === 64), true);
+});
+
+test("执行只允许明确状态转换，恢复会递增 generation", async () => {
+  assert.equal(transitionExecution("paused", "resume"), "queued");
+  assert.throws(() => transitionExecution("running", "resume"), /不能执行/);
+  assert.equal(unknownEffectStatus("external_side_effect", false), "needs_reconciliation");
+  assert.equal(unknownEffectStatus("external_read", false), undefined);
+});
+
+test("子 Agent 的工具、数据和预算必须是父权限的严格子集", () => {
+  const parent: ExecutionAuthority = {
+    ...authority("parent"), id: "parent", tenantId: "local", executionId: "parent",
+    streamVersion: 1, createdAt: now, updatedAt: now,
+  };
+  const child: ExecutionAuthority = {
+    ...parent,
+    id: "child",
+    executionId: "child",
+    parentAuthorityId: "parent",
+    budget: { ...parent.budget, maxSubagentDepth: 2, maxTokens: 5_000, maxCostMinorUnits: "500" },
+  };
+  assert.doesNotThrow(() => assertAuthorityAttenuation(parent, child));
+  assert.throws(
+    () => assertAuthorityAttenuation(parent, { ...child, toolIds: ["web.read", "mail.send"] }),
+    /没有的工具/,
+  );
+  assert.throws(
+    () => assertAuthorityAttenuation(parent, { ...child, budget: { ...child.budget, maxSubagentDepth: 3 } }),
+    /没有衰减/,
+  );
+});
+
+test("只读工具可自动执行，高影响操作进入审批收件箱", async () => {
+  const store = new InMemoryKernelStore(undefined, () => now);
+  const kernel = new AgentOsKernel(store, { now: () => now });
+  await kernel.bootstrapLocal("setup");
+  const workspace = await kernel.createWorkspace("local", "local-owner", "ws", { name: "业务", viewMode: "business", pluginIds: ["opc"] });
+  const thread = await kernel.createThread("local", "local-owner", "thread", { workspaceId: workspace.id, subject: "机会", pluginId: "opc" });
+  const execution = await kernel.createExecution("local", "local-owner", "exec", {
+    workspaceId: workspace.id, threadId: thread.id, pluginId: "opc", agentDefinitionId: "a",
+    modelBindingId: "m", executionPrincipalId: "agent", authority: { ...authority("exec"), workspaceId: workspace.id },
+  });
+  const base: ToolCallIntent = {
+    id: "call", executionId: execution.id, generation: 1, toolId: "web.read", toolVersion: "1.0.0",
+    effectClass: "external_read", intent: "读取公开网页", normalizedArguments: { url: "https://example.com" },
+    argumentsDigest: "args", resourceRefs: [{ namespace: "web", resourceId: "https://example.com" }],
+    resourcesDigest: "resources", authorityCommitment: "authority:exec", expiresAt: "2026-09-05T00:00:00Z",
+  };
+  assert.equal((await kernel.requestToolApproval("local", "agent", "read", base)).mode, "auto");
+  const manual = await kernel.requestToolApproval("local", "agent", "write", {
+    ...base, id: "call-2", effectClass: "external_side_effect", intent: "发布内容",
+  });
+  assert.equal(manual.mode, "approval");
+  if (manual.mode === "approval") {
+    assert.equal(manual.approval.status, "pending");
+    const decided = await kernel.decideApproval("local", "local-owner", "decision", manual.approval.id, 1, "approve_once");
+    assert.equal(decided.status, "approved_once");
+    assert.equal((await kernel.listInbox("local")).length, 0);
+  }
+});
+
+test("跨 namespace 记忆必须有未撤销授权", () => {
+  const memory: MemoryRecord = {
+    id: "memory", tenantId: "local", workspaceId: "workspace", scopeType: "resource",
+    namespace: "opc", resourceId: "opportunity", sourceEventId: "event", status: "accepted",
+    confidence: 0.8, value: { note: "客户重视交付周期" }, confirmedAt: now, shareGrantIds: ["grant"],
+    streamVersion: 2, createdAt: now, updatedAt: now,
+  };
+  const grant = {
+    id: "grant", tenantId: "local", workspaceId: "workspace", memoryId: "memory",
+    fromNamespace: "opc", toNamespace: "coding", grantedBy: "owner", grantedAt: now,
+    streamVersion: 1, createdAt: now, updatedAt: now,
+  } as const;
+  assert.equal(canReadMemory(memory, "opc", []), true);
+  assert.equal(canReadMemory(memory, "coding", []), false);
+  assert.equal(canReadMemory(memory, "coding", [grant]), true);
+  assert.equal(canReadMemory(memory, "coding", [{ ...grant, revokedAt: now }]), false);
+});
+
+test("事务失败时事件和投影都不提交", async () => {
+  const store = new InMemoryKernelStore(undefined, () => now);
+  await assert.rejects(
+    store.transact("local", (transaction) => {
+      transaction.putProjection("workspace", "bad", { id: "bad" });
+      transaction.appendEvent({
+        tenantId: "local", aggregateType: "workspace", aggregateId: "bad", expectedStreamVersion: 1,
+        type: "bad", actorId: "owner", generation: 0, correlationId: "c", publicPayload: {},
+      });
+    }),
+    /版本冲突/,
+  );
+  assert.equal((await store.readEvents("local", 0, 10)).events.length, 0);
+});
