@@ -363,6 +363,74 @@ test("撤销共享授权会在同一事务使派生记忆失效", async () => {
   assert.equal(invalidated?.streamVersion, derived.streamVersion + 1);
 });
 
+test("撤销上游共享授权会递归使多层派生记忆失效", async () => {
+  const store = new InMemoryKernelStore(undefined, () => now);
+  const kernel = new AgentOsKernel(store, { now: () => now });
+  await kernel.bootstrapLocal("memory-transitive-setup");
+  const workspace = await kernel.createWorkspace("local", "local-owner", "memory-transitive-workspace", {
+    name: "链式记忆治理", viewMode: "professional", pluginIds: ["opc", "coding"],
+  });
+  const source = await kernel.proposeMemory("local", "agent:opc", "memory-transitive-source", {
+    workspaceId: workspace.id,
+    scopeType: "resource",
+    namespace: "opc",
+    resourceId: "opportunity-1",
+    sourceEventId: "event-source",
+    confidence: 0.9,
+    value: { summary: "客户要求审计证据" },
+  });
+  const acceptedSource = await kernel.decideMemory(
+    "local", "local-owner", "memory-transitive-source-accept", source.id, source.streamVersion, "accept",
+  );
+  const firstGrant = await kernel.createShareGrant(
+    "local", "local-owner", "memory-transitive-first-share",
+    source.id, acceptedSource.streamVersion, "coding",
+  );
+  const firstDerived = await kernel.proposeMemory("local", "agent:coding", "memory-transitive-first", {
+    workspaceId: workspace.id,
+    scopeType: "resource",
+    namespace: "coding",
+    resourceId: "repository-1",
+    sourceEventId: "event-first-derived",
+    confidence: 0.8,
+    value: { summary: "Gate 应保留审计证据" },
+    derivedFromMemoryId: source.id,
+    derivedViaShareGrantId: firstGrant.id,
+  });
+  const acceptedFirst = await kernel.decideMemory(
+    "local", "local-owner", "memory-transitive-first-accept",
+    firstDerived.id, firstDerived.streamVersion, "accept",
+  );
+  const secondGrant = await kernel.createShareGrant(
+    "local", "local-owner", "memory-transitive-second-share",
+    firstDerived.id, acceptedFirst.streamVersion, "opc",
+  );
+  const secondDerived = await kernel.proposeMemory("local", "agent:opc", "memory-transitive-second", {
+    workspaceId: workspace.id,
+    scopeType: "workspace",
+    namespace: "opc",
+    resourceId: workspace.id,
+    sourceEventId: "event-second-derived",
+    confidence: 0.7,
+    value: { summary: "后续机会也应保留审计证据" },
+    derivedFromMemoryId: firstDerived.id,
+    derivedViaShareGrantId: secondGrant.id,
+  });
+
+  await kernel.revokeShareGrant(
+    "local", "local-owner", "memory-transitive-revoke", firstGrant.id, firstGrant.streamVersion,
+  );
+  const [invalidatedFirst, invalidatedSecond] = await store.transact("local", (transaction) => [
+    transaction.getProjection<MemoryRecord>("memory", firstDerived.id),
+    transaction.getProjection<MemoryRecord>("memory", secondDerived.id),
+  ]);
+  assert.equal(invalidatedFirst?.status, "invalidated");
+  assert.equal(invalidatedSecond?.status, "invalidated");
+  const revokeEvent = (await store.readEvents("local", 0, 100)).events
+    .find((event) => event.type === "share_grant.revoked" && event.aggregateId === firstGrant.id);
+  assert.equal(revokeEvent?.publicPayload.invalidatedMemoryCount, 2);
+});
+
 test("用户可在接受前修改记忆提案，已确认记忆不可被静默改写", async () => {
   const store = new InMemoryKernelStore(undefined, () => now);
   const kernel = new AgentOsKernel(store, { now: () => now });

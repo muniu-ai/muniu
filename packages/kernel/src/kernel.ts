@@ -778,9 +778,24 @@ export class AgentOsKernel {
       const now = this.now();
       const next: ShareGrant = { ...grant, revokedAt: now, updatedAt: now, streamVersion: grant.streamVersion + 1 };
       transaction.putProjection("shareGrant", grantId, next);
-      const derived = transaction.listProjections<MemoryRecord>("memory")
-        .filter((memory) => memory.derivedViaShareGrantId === grantId
-          && memory.status !== "deleted" && memory.status !== "invalidated");
+      const readableMemories = transaction.listProjections<MemoryRecord>("memory")
+        .filter((memory) => memory.status !== "deleted" && memory.status !== "invalidated");
+      const derived: MemoryRecord[] = [];
+      const invalidatedIds = new Set<string>();
+      let changed = true;
+      while (changed) {
+        changed = false;
+        for (const memory of readableMemories) {
+          if (invalidatedIds.has(memory.id)) continue;
+          const directlyShared = memory.derivedViaShareGrantId === grantId;
+          const transitivelyDerived = memory.derivedFromMemoryId !== undefined
+            && invalidatedIds.has(memory.derivedFromMemoryId);
+          if (!directlyShared && !transitivelyDerived) continue;
+          invalidatedIds.add(memory.id);
+          derived.push(memory);
+          changed = true;
+        }
+      }
       for (const memory of derived) {
         const invalidated = {
           ...memory,
@@ -796,7 +811,13 @@ export class AgentOsKernel {
           expectedStreamVersion: memory.streamVersion,
           type: "memory.invalidated",
           actorId,
-          publicPayload: { workspaceId: memory.workspaceId, revokedGrantId: grantId },
+          publicPayload: {
+            workspaceId: memory.workspaceId,
+            revokedGrantId: grantId,
+            ...(memory.derivedViaShareGrantId === grantId
+              ? {}
+              : { invalidatedViaMemoryId: memory.derivedFromMemoryId }),
+          },
         });
       }
       this.append(transaction, {
