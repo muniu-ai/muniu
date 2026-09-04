@@ -62,6 +62,22 @@ test("0.2 只保留目标工作区", () => {
     "packages/verifier",
   ])
     assert.equal(existsSync(join(root, path)), false, `旧入口仍存在：${path}`);
+
+  const lock = JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8"));
+  const lockedPackages = Object.keys(lock.packages ?? {});
+  for (const path of [
+    "apps/api",
+    "packages/agent-host",
+    "packages/agent-kernel",
+    "packages/agent-llm",
+    "packages/agent-protocol",
+    "packages/agent-session",
+    "packages/agent-tools",
+    "packages/config-manager",
+    "packages/local-proxy",
+  ]) {
+    assert.equal(lockedPackages.includes(path), false, `package-lock 仍包含旧 workspace：${path}`);
+  }
 });
 
 test("内核不得导入产品插件", () => {
