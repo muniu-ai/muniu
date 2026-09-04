@@ -46,6 +46,7 @@ import {
 import { codingPlugin } from "@mn/plugin-coding";
 import { createOpcPluginDefinition, exportOpportunityDeliverables, OpcService } from "@mn/plugin-opc";
 import type { EnterpriseReadiness } from "./config.js";
+import { createAssets } from "./assets.js";
 import {
   KernelOpcRepository,
   captureCodingRepository,
@@ -1074,6 +1075,31 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           .filter((item) => workspaceId ? item.workspaceId === workspaceId : allowed!.has(item.workspaceId))
           .map(deliverableSummary), 200, traceId);
       }
+      if (url.pathname === "/v2/assets" && request.method === "POST") {
+        const body = await readBody(request);
+        if (Object.keys(body).some((field) => ![
+          "workspaceId", "expectedStreamVersion", "attachments",
+        ].includes(field))) {
+          throw new KernelError("INVALID_BODY", "附件请求包含不支持的字段", "删除未在 OpenAPI 中声明的字段");
+        }
+        const workspaceId = stringField(body, "workspaceId")!;
+        await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId, "operate");
+        if (!options.cas) {
+          throw new KernelError("ASSET_STORE_UNAVAILABLE", "附件存储暂不可用", "检查对象存储连接后重试");
+        }
+        return json(await createAssets({
+          store: options.store,
+          cas: options.cas,
+          tenantId: TENANT_ID,
+          workspaceId,
+          actorId: ACTOR_ID,
+          idempotencyKey: mutationKey as string,
+          expectedStreamVersion: expectedVersion(body),
+          attachments: body.attachments,
+          now,
+          id: nextId,
+        }), 201, traceId);
+      }
       if (url.pathname === "/v2/activity" && request.method === "GET") {
         const workspaceId = url.searchParams.get("workspaceId");
         if (!workspaceId) throw new KernelError("INVALID_BODY", "缺少 workspaceId", "选择工作区后重试");
@@ -1088,7 +1114,11 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         if (url.searchParams.get("content") !== "1") return json(asset, 200, traceId);
         if (!options.cas) throw new KernelError("ASSET_STORE_UNAVAILABLE", "成果文件暂不可用", "检查对象存储连接");
         return new Response(await options.cas.get(asset.digest), {
-          headers: { "content-type": asset.mediaType, "content-length": String(asset.byteLength) },
+          headers: {
+            "content-type": asset.mediaType,
+            "content-length": String(asset.byteLength),
+            "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(asset.fileName)}`,
+          },
         });
       }
       if (url.pathname === "/v2/memories" && request.method === "GET") {

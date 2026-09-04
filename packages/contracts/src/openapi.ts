@@ -30,6 +30,7 @@ export const API_OPERATIONS_V2: readonly ApiOperationV2[] = [
   { method: "get", path: "/v2/activity", operationId: "listActivity", mutation: false, versioned: false },
   { method: "post", path: "/v2/approvals/{approvalId}/decisions", operationId: "decideApproval", mutation: true, versioned: true },
   { method: "get", path: "/v2/deliverables", operationId: "listDeliverables", mutation: false, versioned: false },
+  { method: "post", path: "/v2/assets", operationId: "createAssets", mutation: true, versioned: true },
   { method: "get", path: "/v2/assets/{assetId}", operationId: "getAsset", mutation: false, versioned: false },
   { method: "get", path: "/v2/memories", operationId: "listMemories", mutation: false, versioned: false },
   { method: "post", path: "/v2/memories", operationId: "proposeMemory", mutation: true, versioned: false },
@@ -54,6 +55,20 @@ export const API_OPERATIONS_V2: readonly ApiOperationV2[] = [
   { method: "post", path: "/v2/plugins/{pluginId}/{path}", operationId: "mutatePluginResource", mutation: true, versioned: true },
 ] as const;
 
+function successStatus(operationId: string): "200" | "201" | "202" {
+  if (operationId === "createTurn") return "202";
+  if ([
+    "createWorkspace",
+    "createThread",
+    "createAssets",
+    "proposeMemory",
+    "createShareGrant",
+    "createModelConnection",
+    "installPlugin",
+  ].includes(operationId)) return "201";
+  return "200";
+}
+
 export function createOpenApiDocument(): JsonObject {
   const paths: Record<string, Record<string, JsonObject>> = {};
   for (const operation of API_OPERATIONS_V2) {
@@ -69,7 +84,9 @@ export function createOpenApiDocument(): JsonObject {
           required: true,
           content: {
             "application/json": {
-              schema: operation.versioned
+              schema: operation.operationId === "createAssets"
+                ? { $ref: "#/components/schemas/CreateAssetsMutation" }
+                : operation.versioned
                 ? { $ref: "#/components/schemas/VersionedMutation" }
                 : { type: "object", additionalProperties: true },
             },
@@ -77,7 +94,7 @@ export function createOpenApiDocument(): JsonObject {
         },
       } : {}),
       responses: {
-        "200": {
+        [successStatus(operation.operationId)]: {
           description: "成功",
           content: { "application/json": { schema: { $ref: "#/components/schemas/ApiEnvelope" } } },
         },
@@ -129,6 +146,36 @@ export function createOpenApiDocument(): JsonObject {
           required: ["expectedStreamVersion"],
           properties: { expectedStreamVersion: { type: "integer", minimum: 0 } },
           additionalProperties: true,
+        },
+        CreateAssetsMutation: {
+          type: "object",
+          additionalProperties: false,
+          required: ["workspaceId", "expectedStreamVersion", "attachments"],
+          properties: {
+            workspaceId: { type: "string", minLength: 1 },
+            expectedStreamVersion: { type: "integer", const: 0 },
+            attachments: {
+              type: "array",
+              minItems: 1,
+              maxItems: 20,
+              items: {
+                type: "object",
+                additionalProperties: false,
+                required: ["fileName", "mediaType", "contentBase64"],
+                properties: {
+                  fileName: { type: "string", minLength: 1 },
+                  mediaType: {
+                    type: "string",
+                    enum: [
+                      "text/plain", "text/markdown", "application/json", "text/csv",
+                      "application/pdf", "image/png", "image/jpeg", "image/webp",
+                    ],
+                  },
+                  contentBase64: { type: "string", contentEncoding: "base64" },
+                },
+              },
+            },
+          },
         },
       },
       responses: {

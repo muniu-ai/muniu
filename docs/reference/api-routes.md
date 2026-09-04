@@ -47,6 +47,7 @@ Agent OS 0.2 默认监听 `http://127.0.0.1:7318`。成功的 JSON 响应使用 
 | `GET` | `/v2/activity` | `listActivity` | — | — |
 | `POST` | `/v2/approvals/{approvalId}/decisions` | `decideApproval` | 必需 | 必需 |
 | `GET` | `/v2/deliverables` | `listDeliverables` | — | — |
+| `POST` | `/v2/assets` | `createAssets` | 必需 | 必需 |
 | `GET` | `/v2/assets/{assetId}` | `getAsset` | — | — |
 | `GET` | `/v2/memories` | `listMemories` | — | — |
 | `POST` | `/v2/memories` | `proposeMemory` | 必需 | — |
@@ -71,6 +72,8 @@ Agent OS 0.2 默认监听 `http://127.0.0.1:7318`。成功的 JSON 响应使用 
 | `POST` | `/v2/plugins/{pluginId}/{path}` | `mutatePluginResource` | 必需 | 必需 |
 
 <!-- generated:contracts-routes:end -->
+
+`POST /v2/assets` 接受 1 至 20 个 Base64 编码附件，新建请求的 `expectedStreamVersion` 固定为 `0`。Host 先校验文件名、MIME、内容签名和大小，再以 create-only 语义写入 CAS；全部对象写入成功后，Asset 投影、事件和幂等记录才在同一事务提交。当前接口只创建 `protected: false` 的 Asset，需要 KMS 加密的敏感内容不得通过该接口上传。
 
 工作区与会话路由负责创建 Thread 和 turn。创建 turn 会先持久化模型可见输入，再返回 queued Execution；客户端从 SSE 或活动页跟踪后续状态。
 

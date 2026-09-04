@@ -27,6 +27,26 @@ export interface VersionedMutationBody extends JsonObject {
   readonly expectedStreamVersion: number;
 }
 
+export interface AssetAttachmentUploadV2 extends JsonObject {
+  readonly fileName: string;
+  readonly mediaType:
+    | "text/plain"
+    | "text/markdown"
+    | "application/json"
+    | "text/csv"
+    | "application/pdf"
+    | "image/png"
+    | "image/jpeg"
+    | "image/webp";
+  readonly contentBase64: string;
+}
+
+export interface CreateAssetsMutationBodyV2 extends VersionedMutationBody {
+  readonly expectedStreamVersion: 0;
+  readonly workspaceId: string;
+  readonly attachments: readonly AssetAttachmentUploadV2[];
+}
+
 export const CORE_API_ROUTES = [
   "/v2/openapi.json",
   "/v2/health",
@@ -43,6 +63,7 @@ export const CORE_API_ROUTES = [
   "/v2/activity",
   "/v2/approvals/{approvalId}/decisions",
   "/v2/deliverables",
+  "/v2/assets",
   "/v2/assets/{assetId}",
   "/v2/memories",
   "/v2/memories/{memoryId}",

@@ -313,6 +313,25 @@ paths:
         default:
           $ref: "#/components/responses/Error"
       x-muniu-versioned: false
+  /v2/assets:
+    post:
+      operationId: createAssets
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAssetsMutation"
+      responses:
+        "201":
+          $ref: "#/components/responses/Success"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        default:
+          $ref: "#/components/responses/Error"
+      x-muniu-versioned: true
   /v2/assets/{assetId}:
     get:
       operationId: getAsset
@@ -785,6 +804,49 @@ components:
           type: integer
           minimum: 0
       additionalProperties: true
+    CreateAssetsMutation:
+      type: object
+      additionalProperties: false
+      required:
+        - workspaceId
+        - expectedStreamVersion
+        - attachments
+      properties:
+        workspaceId:
+          type: string
+          minLength: 1
+        expectedStreamVersion:
+          type: integer
+          const: 0
+        attachments:
+          type: array
+          minItems: 1
+          maxItems: 20
+          items:
+            type: object
+            additionalProperties: false
+            required:
+              - fileName
+              - mediaType
+              - contentBase64
+            properties:
+              fileName:
+                type: string
+                minLength: 1
+              mediaType:
+                type: string
+                enum:
+                  - text/plain
+                  - text/markdown
+                  - application/json
+                  - text/csv
+                  - application/pdf
+                  - image/png
+                  - image/jpeg
+                  - image/webp
+              contentBase64:
+                type: string
+                contentEncoding: base64
     Envelope:
       type: object
       required:

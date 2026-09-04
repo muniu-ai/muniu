@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,7 +7,7 @@ import test from "node:test";
 import { Context } from "@deepseek-ai/cordis";
 import { InMemoryKernelStore } from "@mn/kernel";
 import type { PluginDefinitionV1 } from "@mn/plugin-sdk";
-import { CursorExpiredError, SqliteStorage } from "@mn/storage";
+import { CursorExpiredError, SqliteStorage, type ContentAddressedStorage } from "@mn/storage";
 import {
   createAgentOsHost,
   defaultLocalStatePaths,
@@ -163,6 +164,109 @@ test("桌面首次向导与首页使用真实 0.2 接口和官方产品插件", 
     `http://host.test/v2/activity?workspaceId=${workspace.id}`,
   )));
   assert.ok(activity.data.some((item: any) => item.title === "创建机会"));
+  await host.close();
+});
+
+test("附件经校验和 CAS create-only 写入后才提交 Asset，幂等重放不重复写 CAS", async () => {
+  const store = new InMemoryKernelStore();
+  const objects = new Map<string, Buffer>();
+  const eventCountsAtPut: number[] = [];
+  let rejectPut = false;
+  const cas: ContentAddressedStorage = {
+    async put(bytes) {
+      const events = await store.readEvents("local", 0, 1_000);
+      eventCountsAtPut.push(events.events.filter((event) => event.type === "asset.created").length);
+      if (rejectPut) throw new Error("S3 unavailable");
+      const digest = createHash("sha256").update(bytes).digest("hex");
+      const created = !objects.has(digest);
+      objects.set(digest, Buffer.from(bytes));
+      return { digest, byteLength: bytes.byteLength, created };
+    },
+    async get(digest) {
+      const value = objects.get(digest);
+      if (!value) throw new Error("CAS object missing");
+      return value;
+    },
+    async has(digest) { return objects.has(digest); },
+    async gcOrphans() { return []; },
+  };
+  let id = 0;
+  const host = await createAgentOsHost({
+    store,
+    cas,
+    secretStore: secrets,
+    now: () => "2026-09-04T09:00:00.000Z",
+    id: (kind) => `${kind}-${++id}`,
+  });
+  const workspace = (await responseJson(await host.dispatch(jsonRequest("/v2/workspaces", {
+    name: "附件验证", viewMode: "business", pluginIds: ["opc"],
+  }, "asset-workspace")))).data;
+  const upload = {
+    workspaceId: workspace.id,
+    expectedStreamVersion: 0,
+    attachments: [{
+      fileName: "访谈记录.md",
+      mediaType: "text/markdown",
+      contentBase64: Buffer.from("# 访谈记录\n\n保留原始事实。", "utf8").toString("base64"),
+    }],
+  };
+
+  const createdResponse = await host.dispatch(jsonRequest("/v2/assets", upload, "asset-create"));
+  assert.equal(createdResponse.status, 201, JSON.stringify(await createdResponse.clone().json()));
+  const created = (await responseJson(createdResponse)).data;
+  assert.equal(created.length, 1);
+  assert.equal(created[0].fileName, "访谈记录.md");
+  assert.equal(created[0].protected, false);
+  assert.deepEqual(eventCountsAtPut, [0]);
+
+  const metadata = await responseJson(await host.dispatch(new Request(
+    `http://host.test/v2/assets/${created[0].id}`,
+  )));
+  assert.equal(metadata.data.digest, created[0].digest);
+  const content = await host.dispatch(new Request(`http://host.test/v2/assets/${created[0].id}?content=1`));
+  assert.equal(content.status, 200);
+  assert.equal(content.headers.get("content-type"), "text/markdown");
+  assert.match(content.headers.get("content-disposition") ?? "", /UTF-8''%E8%AE%BF%E8%B0%88%E8%AE%B0%E5%BD%95\.md/u);
+  assert.equal(await content.text(), "# 访谈记录\n\n保留原始事实。");
+
+  const replayed = await responseJson(await host.dispatch(jsonRequest("/v2/assets", upload, "asset-create")));
+  assert.deepEqual(replayed.data, created);
+  assert.deepEqual(eventCountsAtPut, [0]);
+
+  const reusedKey = await host.dispatch(jsonRequest("/v2/assets", {
+    ...upload,
+    attachments: [{
+      ...upload.attachments[0],
+      contentBase64: Buffer.from("不同内容", "utf8").toString("base64"),
+    }],
+  }, "asset-create"));
+  assert.equal(reusedKey.status, 409);
+  assert.deepEqual(eventCountsAtPut, [0]);
+
+  const invalid = await host.dispatch(jsonRequest("/v2/assets", {
+    ...upload,
+    attachments: [{ ...upload.attachments[0], fileName: "../访谈记录.md" }],
+  }, "asset-invalid"));
+  assert.equal(invalid.status, 422);
+  assert.deepEqual(eventCountsAtPut, [0]);
+
+  const tooMany = await host.dispatch(jsonRequest("/v2/assets", {
+    ...upload,
+    attachments: Array.from({ length: 21 }, (_, index) => ({
+      ...upload.attachments[0], fileName: `记录-${index}.md`,
+    })),
+  }, "asset-too-many"));
+  assert.equal(tooMany.status, 422);
+  assert.deepEqual(eventCountsAtPut, [0]);
+
+  rejectPut = true;
+  const failed = await host.dispatch(jsonRequest("/v2/assets", {
+    ...upload,
+    attachments: [{ ...upload.attachments[0], fileName: "另一份记录.md" }],
+  }, "asset-cas-failure"));
+  assert.equal(failed.status, 500);
+  const events = await store.readEvents("local", 0, 1_000);
+  assert.equal(events.events.filter((event) => event.type === "asset.created").length, 1);
   await host.close();
 });
 

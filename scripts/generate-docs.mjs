@@ -98,6 +98,7 @@ function successStatus(operationId) {
   if ([
     "createWorkspace",
     "createThread",
+    "createAssets",
     "proposeMemory",
     "createShareGrant",
     "createModelConnection",
@@ -132,7 +133,9 @@ function openApiDocument(operations) {
           required: true,
           content: {
             "application/json": {
-              schema: operation.versioned
+              schema: operation.operationId === "createAssets"
+                ? { $ref: "#/components/schemas/CreateAssetsMutation" }
+                : operation.versioned
                 ? { $ref: "#/components/schemas/VersionedMutation" }
                 : { $ref: "#/components/schemas/Mutation" },
             },
@@ -195,6 +198,36 @@ function openApiDocument(operations) {
           required: ["expectedStreamVersion"],
           properties: { expectedStreamVersion: { type: "integer", minimum: 0 } },
           additionalProperties: true,
+        },
+        CreateAssetsMutation: {
+          type: "object",
+          additionalProperties: false,
+          required: ["workspaceId", "expectedStreamVersion", "attachments"],
+          properties: {
+            workspaceId: { type: "string", minLength: 1 },
+            expectedStreamVersion: { type: "integer", const: 0 },
+            attachments: {
+              type: "array",
+              minItems: 1,
+              maxItems: 20,
+              items: {
+                type: "object",
+                additionalProperties: false,
+                required: ["fileName", "mediaType", "contentBase64"],
+                properties: {
+                  fileName: { type: "string", minLength: 1 },
+                  mediaType: {
+                    type: "string",
+                    enum: [
+                      "text/plain", "text/markdown", "application/json", "text/csv",
+                      "application/pdf", "image/png", "image/jpeg", "image/webp",
+                    ],
+                  },
+                  contentBase64: { type: "string", contentEncoding: "base64" },
+                },
+              },
+            },
+          },
         },
         Envelope: {
           type: "object",

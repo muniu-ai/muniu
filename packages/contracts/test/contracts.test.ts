@@ -123,6 +123,19 @@ test("OpenAPI 目录只有 v2，所有写操作要求幂等键", () => {
   assert.match(serialized, /\/v2\/memories\/\{memoryId\}\/decisions/);
   assert.match(serialized, /\/v2\/plugins\/opc\/opportunities\/\{opportunityId\}\/commands/);
   assert.match(serialized, /\/v2\/plugins\/opc\/opportunities\/\{opportunityId\}\/exports/);
+  const assetUpload = (document.paths as Record<string, Record<string, {
+    requestBody?: { content?: Record<string, { schema?: { $ref?: string } }> };
+    responses?: Record<string, unknown>;
+  }>>)["/v2/assets"]?.post;
+  assert.equal(
+    assetUpload?.requestBody?.content?.["application/json"]?.schema?.$ref,
+    "#/components/schemas/CreateAssetsMutation",
+  );
+  assert.equal(assetUpload?.responses?.["201"] !== undefined, true);
+  const assetSchema = (document.components as { schemas: Record<string, any> })
+    .schemas.CreateAssetsMutation;
+  assert.equal(assetSchema.properties.expectedStreamVersion.const, 0);
+  assert.equal(assetSchema.properties.attachments.maxItems, 20);
   assert.equal(
     (document.components as { schemas: Record<string, unknown> }).schemas.ApiError !== undefined,
     true,
