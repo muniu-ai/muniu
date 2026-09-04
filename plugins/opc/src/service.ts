@@ -49,7 +49,7 @@ export interface RecordInterviewCommand extends ExistingOpportunityCommand {
   readonly interviewId: string;
   readonly participantRef: string;
   readonly occurredAt: string;
-  readonly rawRecord: string;
+  readonly rawRecordAssetId: string;
 }
 
 export interface AnnotateInterviewCommand extends ExistingOpportunityCommand {
@@ -153,6 +153,16 @@ export class OpcService {
         throw new OpcDomainError("INVALID_INPUT", "公开网页来源必须使用 HTTP 或 HTTPS", "更换公开网页地址", "sourceUrl");
       }
     }
+    if (command.signal.sourceKind === "file") {
+      requireText(command.signal.sourceAssetId ?? "", "sourceAssetId", "文件 Asset 引用");
+    } else if (command.signal.sourceAssetId !== undefined) {
+      throw new OpcDomainError(
+        "INVALID_INPUT",
+        "只有文件信号可以引用 Asset",
+        "删除 sourceAssetId，或将来源类型改为 file",
+        "sourceAssetId",
+      );
+    }
     return this.#append(command, [{
       eventId: this.#createId("event"),
       type: "opportunity.signal_recorded",
@@ -176,7 +186,11 @@ export class OpcService {
         interviewId: requireText(command.interviewId, "interviewId", "访谈 ID"),
         participantRef: command.participantRef,
         interviewOccurredAt: command.occurredAt,
-        rawRecord: command.rawRecord,
+        rawRecordAssetId: requireText(
+          command.rawRecordAssetId,
+          "rawRecordAssetId",
+          "访谈原文 Asset 引用",
+        ),
       },
     }]);
   }

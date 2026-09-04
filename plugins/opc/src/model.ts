@@ -51,6 +51,7 @@ export interface Signal {
   readonly opportunityId: string;
   readonly sourceKind: SignalSourceKind;
   readonly sourceUrl?: string;
+  readonly sourceAssetId?: string;
   readonly observedAt: string;
   readonly excerpt?: string;
   readonly summary: string;
@@ -63,6 +64,7 @@ export interface Signal {
 export interface SignalInput {
   readonly sourceKind: SignalSourceKind;
   readonly sourceUrl?: string;
+  readonly sourceAssetId?: string;
   readonly observedAt: string;
   readonly excerpt?: string;
   readonly summary: string;
@@ -83,8 +85,8 @@ export interface Interview {
   readonly opportunityId: string;
   readonly participantRef: string;
   readonly occurredAt: string;
-  /** 原始记录是事实输入，只能由后续 annotation 追加解释。 */
-  readonly rawRecord: string;
+  /** 原始记录只存于受保护 Asset；领域事件和投影仅保存不可变引用。 */
+  readonly rawRecordAssetId: string;
   readonly recordedAt: string;
   readonly recordedBy: string;
   readonly annotations: readonly InterviewAnnotation[];

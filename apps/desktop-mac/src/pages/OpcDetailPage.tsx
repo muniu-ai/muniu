@@ -15,6 +15,7 @@ import {
 import { AgentOsApiError, type AgentOsClient } from "../api";
 import { Loading } from "../components/Status";
 import type {
+  AssetSummary,
   OpcDeliverablePreview,
   OpcOpportunityCommand,
   OpportunityCommitmentEvidence,
@@ -37,6 +38,8 @@ type RunCommand = (
   input: Readonly<Record<string, unknown>>,
   successMessage: string,
 ) => Promise<boolean>;
+
+type UploadAsset = (file: File, protectedValue: boolean) => Promise<AssetSummary | undefined>;
 
 interface OpcUiError {
   readonly title: string;
@@ -122,6 +125,21 @@ export function OpcDetailPage({ api, workspaceId, opportunityId, viewMode, onBac
     }
   }, [api, busy, load, onChanged, opportunity, workspaceId]);
 
+  const uploadAsset: UploadAsset = useCallback(async (file, protectedValue) => {
+    if (busy) return undefined;
+    setBusy(true);
+    setError(undefined);
+    setNotice(undefined);
+    try {
+      return await api.uploadAsset(workspaceId, file, protectedValue);
+    } catch (caught) {
+      setError({ title: "无法上传附件", message: apiMessage(caught) });
+      return undefined;
+    } finally {
+      setBusy(false);
+    }
+  }, [api, busy, workspaceId]);
+
   async function exportDeliverables() {
     if (!opportunity || busy) return;
     setBusy(true);
@@ -187,6 +205,7 @@ export function OpcDetailPage({ api, workspaceId, opportunityId, viewMode, onBac
       deliverableCount={deliverables.length}
       busy={busy}
       runCommand={runCommand}
+      uploadAsset={uploadAsset}
       onExport={exportDeliverables}
     />
 
@@ -205,9 +224,13 @@ export function OpcDetailPage({ api, workspaceId, opportunityId, viewMode, onBac
       </article>
       <article className="opc-record-card">
         <header><FileText size={17} /><div><strong>访谈原文</strong><small>{opportunity.interviews.length} 份记录</small></div></header>
-        {opportunity.interviews.length > 0 ? opportunity.interviews.map((interview) => <div className="opc-record-row" key={interview.id}>
-          <strong>{interview.participantRef}</strong><small>{formatDate(interview.occurredAt)}</small><p>{interview.rawRecord}</p>
-        </div>) : <p className="opc-record-empty">尚未保存访谈原文</p>}
+        {opportunity.interviews.length > 0 ? opportunity.interviews.map((interview) => <InterviewRecord
+          key={interview.id}
+          interview={interview}
+          busy={busy}
+          canAnnotate={["interviewing", "evaluating", "offer_ready"].includes(opportunity.state)}
+          runCommand={runCommand}
+        />) : <p className="opc-record-empty">尚未保存访谈原文</p>}
       </article>
       <article className="opc-record-card">
         <header><ClipboardCheck size={17} /><div><strong>方案与决策</strong><small>{opportunity.decision ? "已由负责人决策" : "随验证进展更新"}</small></div></header>
@@ -225,13 +248,14 @@ export function OpcDetailPage({ api, workspaceId, opportunityId, viewMode, onBac
   </div>;
 }
 
-function NextTask({ opportunity, pendingCommitment, confirmedCommitment, deliverableCount, busy, runCommand, onExport }: {
+function NextTask({ opportunity, pendingCommitment, confirmedCommitment, deliverableCount, busy, runCommand, uploadAsset, onExport }: {
   readonly opportunity: OpportunityDetail;
   readonly pendingCommitment?: OpportunityCommitmentEvidence;
   readonly confirmedCommitment?: OpportunityCommitmentEvidence;
   readonly deliverableCount: number;
   readonly busy: boolean;
   readonly runCommand: RunCommand;
+  readonly uploadAsset: UploadAsset;
   readonly onExport: () => Promise<void>;
 }) {
   if (opportunity.state === "captured") return <FrameTask opportunity={opportunity} busy={busy} runCommand={runCommand} />;
@@ -239,8 +263,8 @@ function NextTask({ opportunity, pendingCommitment, confirmedCommitment, deliver
     icon={<SearchCheck size={19} />} title="开始资料研究" detail="先收集真实市场信号，并同时寻找能推翻假设的材料。"
     button="开始研究" busy={busy} onClick={() => runCommand("start_research", {}, "研究阶段已开始")}
   />;
-  if (opportunity.state === "researching") return <SignalTask busy={busy} runCommand={runCommand} />;
-  if (opportunity.state === "interviewing") return <InterviewTask busy={busy} runCommand={runCommand} />;
+  if (opportunity.state === "researching") return <SignalTask busy={busy} runCommand={runCommand} uploadAsset={uploadAsset} />;
+  if (opportunity.state === "interviewing") return <InterviewTask busy={busy} runCommand={runCommand} uploadAsset={uploadAsset} />;
   if (opportunity.state === "evaluating") return <OfferTask opportunity={opportunity} busy={busy} runCommand={runCommand} />;
   if (opportunity.state === "offer_ready" && pendingCommitment) return <ConfirmCommitmentTask evidence={pendingCommitment} busy={busy} runCommand={runCommand} />;
   if (opportunity.state === "offer_ready" && !confirmedCommitment) return <CommitmentTask busy={busy} runCommand={runCommand} />;
@@ -267,7 +291,7 @@ function FrameTask({ opportunity, busy, runCommand }: { readonly opportunity: Op
   </TaskForm>;
 }
 
-function SignalTask({ busy, runCommand }: { readonly busy: boolean; readonly runCommand: RunCommand }) {
+function SignalTask({ busy, runCommand, uploadAsset }: { readonly busy: boolean; readonly runCommand: RunCommand; readonly uploadAsset: UploadAsset }) {
   const [sourceKind, setSourceKind] = useState("pasted");
   const [sourceUrl, setSourceUrl] = useState("");
   const [observedAt, setObservedAt] = useState(localDateTime());
@@ -275,14 +299,28 @@ function SignalTask({ busy, runCommand }: { readonly busy: boolean; readonly run
   const [summary, setSummary] = useState("");
   const [relationship, setRelationship] = useState("support");
   const [evidenceKind, setEvidenceKind] = useState("context");
+  const [sourceFile, setSourceFile] = useState<File>();
+  const [fileError, setFileError] = useState<string>();
 
   async function submit() {
+    setFileError(undefined);
+    let sourceAssetId: string | undefined;
+    if (sourceKind === "file") {
+      if (!sourceFile) {
+        setFileError("请选择要保存的证据文件");
+        return false;
+      }
+      const asset = await uploadAsset(sourceFile, true);
+      if (!asset) return false;
+      sourceAssetId = asset.id;
+    }
     const saved = await runCommand("record_signal", {
       sourceKind,
       ...(sourceKind === "public_web" ? { sourceUrl } : {}),
+      ...(sourceAssetId ? { sourceAssetId } : {}),
       observedAt: toIso(observedAt), excerpt, summary, relationship, evidenceKind,
     }, "信号已保存");
-    if (saved) { setExcerpt(""); setSummary(""); setSourceUrl(""); }
+    if (saved) { setExcerpt(""); setSummary(""); setSourceUrl(""); setSourceFile(undefined); }
     return saved;
   }
 
@@ -302,24 +340,46 @@ function SignalTask({ busy, runCommand }: { readonly busy: boolean; readonly run
       ] : [["context", "背景信号"]]} />
     </div>
     {sourceKind === "public_web" && <Field label="来源网址" type="url" value={sourceUrl} onChange={setSourceUrl} placeholder="https://example.com/research" />}
+    {sourceKind === "file" && <FileField
+      label="证据文件"
+      accept=".txt,.md,.json,.csv,.pdf,.png,.jpg,.jpeg,.webp"
+      value={sourceFile}
+      onChange={(file) => { setSourceFile(file); setFileError(undefined); }}
+      help="文件会先加密上传，再把 Asset 引用写入信号"
+      error={fileError}
+    />}
     <Field label="观察时间" type="datetime-local" value={observedAt} onChange={setObservedAt} />
     <Field label="原始摘录" value={excerpt} onChange={setExcerpt} placeholder="可选；保留能复核的原话或原文" multiline required={false} />
     <Field label="信号摘要" value={summary} onChange={setSummary} placeholder="一句话说明这条材料意味着什么" multiline />
   </TaskForm>;
 }
 
-function InterviewTask({ busy, runCommand }: { readonly busy: boolean; readonly runCommand: RunCommand }) {
+function InterviewTask({ busy, runCommand, uploadAsset }: { readonly busy: boolean; readonly runCommand: RunCommand; readonly uploadAsset: UploadAsset }) {
   const [participantRef, setParticipantRef] = useState("");
   const [occurredAt, setOccurredAt] = useState(localDateTime());
   const [rawRecord, setRawRecord] = useState("");
+  const [rawFile, setRawFile] = useState<File>();
+  const [sourceError, setSourceError] = useState<string>();
   async function submit() {
+    setSourceError(undefined);
+    if (!rawFile && !rawRecord.trim()) {
+      setSourceError("请选择访谈文件或粘贴访谈原文");
+      return false;
+    }
+    const source = rawFile ?? new File(
+      [rawRecord],
+      `访谈原文-${new Date().toISOString().slice(0, 10)}.txt`,
+      { type: "text/plain" },
+    );
+    const asset = await uploadAsset(source, true);
+    if (!asset) return false;
     const saved = await runCommand("record_interview", {
       interviewId: `interview-${globalThis.crypto.randomUUID()}`,
       participantRef,
       occurredAt: toIso(occurredAt),
-      rawRecord,
+      rawRecordAssetId: asset.id,
     }, "访谈原文已保存");
-    if (saved) { setParticipantRef(""); setRawRecord(""); }
+    if (saved) { setParticipantRef(""); setRawRecord(""); setRawFile(undefined); }
     return saved;
   }
   return <TaskForm title="保存访谈原文" detail="原始记录保存后不会被模型改写；后续解释只能作为标注追加。" icon={<FileText size={19} />} busy={busy} submitLabel="保存访谈原文" onSubmit={submit} secondary={{
@@ -330,7 +390,15 @@ function InterviewTask({ busy, runCommand }: { readonly busy: boolean; readonly 
       <Field label="受访者代号" value={participantRef} onChange={setParticipantRef} placeholder="例如：受访者 A" />
       <Field label="访谈时间" type="datetime-local" value={occurredAt} onChange={setOccurredAt} />
     </div>
-    <Field label="访谈原文" value={rawRecord} onChange={setRawRecord} placeholder="粘贴未经改写的访谈记录" multiline rows={6} />
+    <FileField
+      label="访谈文件"
+      accept=".txt,.md,text/plain,text/markdown"
+      value={rawFile}
+      onChange={(file) => { setRawFile(file); setSourceError(undefined); }}
+      help="可选择 UTF-8 文本或 Markdown；选择文件后以文件内容为准"
+    />
+    <Field label="访谈原文" value={rawRecord} onChange={(value) => { setRawRecord(value); setSourceError(undefined); }} placeholder="也可以粘贴未经改写的访谈记录" multiline rows={6} required={false} />
+    {sourceError && <p className="field-error" role="alert">{sourceError}</p>}
   </TaskForm>;
 }
 
@@ -456,12 +524,70 @@ function SelectField({ label, value, onChange, options }: { readonly label: stri
   return <div className="field"><label htmlFor={selectId}>{label}</label><select id={selectId} value={value} onChange={(event) => onChange(event.target.value)}>{options.map(([optionValue, text]) => <option key={optionValue} value={optionValue}>{text}</option>)}</select></div>;
 }
 
+function FileField({ label, accept, value, onChange, help, error }: {
+  readonly label: string;
+  readonly accept: string;
+  readonly value?: File;
+  readonly onChange: (file: File | undefined) => void;
+  readonly help: string;
+  readonly error?: string;
+}) {
+  const inputId = useId();
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!value && inputRef.current) inputRef.current.value = "";
+  }, [value]);
+  return <div className="field file-field">
+    <label htmlFor={inputId}>{label}</label>
+    <input ref={inputRef} id={inputId} type="file" accept={accept} onChange={(event) => onChange(event.target.files?.[0])} />
+    <small>{value ? `${value.name} · ${formatBytes(value.size)}` : help}</small>
+    {error && <span className="field-error" role="alert">{error}</span>}
+  </div>;
+}
+
 function BackButton({ onClick }: { readonly onClick: () => void }) {
   return <button className="quiet-button opc-back" type="button" onClick={onClick}><ArrowLeft size={16} />返回机会列表</button>;
 }
 
 function InlineError({ title, message, onDismiss, retry = false }: { readonly title: string; readonly message: string; readonly onDismiss: () => void; readonly retry?: boolean }) {
   return <div className="opc-inline-error" role="alert"><AlertTriangle size={18} /><div><strong>{title}</strong><p>{message}</p></div><button className="secondary-button" type="button" onClick={onDismiss}>{retry ? "重试" : "关闭"}</button></div>;
+}
+
+function InterviewRecord({ interview, busy, canAnnotate, runCommand }: {
+  readonly interview: OpportunityDetail["interviews"][number];
+  readonly busy: boolean;
+  readonly canAnnotate: boolean;
+  readonly runCommand: RunCommand;
+}) {
+  const [annotation, setAnnotation] = useState("");
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    const saved = await runCommand("annotate_interview", {
+      interviewId: interview.id,
+      annotation,
+    }, "访谈标注已追加");
+    if (saved) setAnnotation("");
+  }
+  return <div className="opc-record-row interview-record">
+    <strong>{interview.participantRef}</strong><small>{formatDate(interview.occurredAt)}</small>
+    <p>{interview.rawRecord}</p>
+    {interview.annotations.length > 0 && <ul aria-label={`${interview.participantRef}的访谈标注`}>
+      {interview.annotations.map((item) => <li key={item.id}>{item.text}</li>)}
+    </ul>}
+    {canAnnotate && <form onSubmit={(event) => void submit(event)}>
+      <label>
+        <span>追加标注</span>
+        <input
+          aria-label={`为${interview.participantRef} 追加标注`}
+          required
+          value={annotation}
+          placeholder="补充解释，不覆盖原文"
+          onChange={(event) => setAnnotation(event.target.value)}
+        />
+      </label>
+      <button type="submit" className="quiet-button" disabled={busy || !annotation.trim()}>追加标注</button>
+    </form>}
+  </div>;
 }
 
 function EvidenceRows({ opportunity }: { readonly opportunity: OpportunityDetail }) {
@@ -528,6 +654,11 @@ function formatPrice(amountMinor: string, currency: string) {
 
 function decisionLabel(choice: "pursue" | "revise" | "stop") {
   return ({ pursue: "继续推进", revise: "修订方案", stop: "停止机会" })[choice];
+}
+
+function formatBytes(value: number) {
+  if (value < 1024) return `${value} B`;
+  return `${(value / 1024).toFixed(value < 10 * 1024 ? 1 : 0)} KiB`;
 }
 
 function guessCapture(raw: string, field: "目标客户" | "问题" | "假设") {

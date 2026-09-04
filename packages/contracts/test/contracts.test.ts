@@ -144,6 +144,20 @@ test("OpenAPI 目录只有 v2，所有写操作要求幂等键", () => {
     assetDelete?.requestBody?.content?.["application/json"]?.schema?.$ref,
     "#/components/schemas/DeleteAssetMutation",
   );
+  const opcCommand = (document.paths as Record<string, Record<string, {
+    requestBody?: { content?: Record<string, { schema?: { $ref?: string } }> };
+  }>>)["/v2/plugins/opc/opportunities/{opportunityId}/commands"]?.post;
+  assert.equal(
+    opcCommand?.requestBody?.content?.["application/json"]?.schema?.$ref,
+    "#/components/schemas/OpcOpportunityCommandMutation",
+  );
+  const opcCommandSchema = (document.components as { schemas: Record<string, any> })
+    .schemas.OpcOpportunityCommandMutation;
+  assert.deepEqual(opcCommandSchema.allOf[0].then.properties.input.required, [
+    "interviewId", "participantRef", "occurredAt", "rawRecordAssetId",
+  ]);
+  assert.deepEqual(opcCommandSchema.allOf[0].then.properties.input.not.required, ["rawRecord"]);
+  assert.deepEqual(opcCommandSchema.allOf[1].then.properties.input.required, ["sourceAssetId"]);
   assert.equal(
     (document.components as { schemas: Record<string, unknown> }).schemas.ApiError !== undefined,
     true,

@@ -167,6 +167,7 @@ export interface OpportunitySignal {
   readonly id: string;
   readonly sourceKind: "public_web" | "pasted" | "file" | "manual";
   readonly sourceUrl?: string;
+  readonly sourceAssetId?: string;
   readonly observedAt: string;
   readonly excerpt?: string;
   readonly summary: string;
@@ -178,8 +179,19 @@ export interface OpportunityInterview {
   readonly id: string;
   readonly participantRef: string;
   readonly occurredAt: string;
+  readonly rawRecordAssetId: string;
   readonly rawRecord: string;
   readonly annotations: readonly { readonly id: string; readonly text: string }[];
+}
+
+export interface AssetSummary {
+  readonly id: string;
+  readonly workspaceId: string;
+  readonly fileName: string;
+  readonly mediaType: string;
+  readonly byteLength: number;
+  readonly protected: boolean;
+  readonly streamVersion: number;
 }
 
 export interface OpportunityExperiment {

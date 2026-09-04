@@ -370,6 +370,9 @@ pre { overflow: auto; padding: 10px; border-radius: 7px; color: #dce5dc; backgro
 .opc-task-heading p:last-child { max-width: 720px; margin: 5px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .opc-task-form { display: grid; gap: 15px; padding: 19px 20px 20px; }
 .opc-task-form .field select { width: 100%; height: 42px; padding: 0 10px; border: 1px solid #cfd5ce; border-radius: 9px; color: var(--ink); background: #fff; }
+.opc-task-form .file-field input { width: 100%; padding: 9px; border: 1px dashed #b9c3b8; border-radius: 9px; color: var(--ink); background: var(--surface-soft); }
+.opc-task-form .file-field small { display: block; margin-top: 5px; color: var(--muted); font-size: 9px; }
+.opc-task-form .field-error { margin: 0; color: var(--danger); font-size: 10px; line-height: 1.4; }
 .opc-task-form > footer, .opc-simple-action { display: flex; gap: 8px; justify-content: flex-end; padding-top: 2px; }
 .opc-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .opc-form-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -396,6 +399,12 @@ pre { overflow: auto; padding: 10px; border-radius: 7px; color: #dce5dc; backgro
 .opc-record-row.opposing strong, .opc-record-row.oppose strong { color: var(--danger); }
 .opc-record-row small { color: var(--muted); font-size: 9px; }
 .opc-record-row p { margin: 5px 0 0; font-size: 11px; line-height: 1.45; white-space: pre-wrap; }
+.interview-record ul { display: grid; gap: 4px; margin: 8px 0 0; padding: 0; list-style: none; }
+.interview-record li { padding: 5px 7px; border-left: 2px solid #aab9aa; color: var(--muted); background: var(--surface); font-size: 9px; line-height: 1.4; }
+.interview-record form { display: flex; gap: 5px; align-items: flex-end; margin-top: 8px; }
+.interview-record form label { display: grid; min-width: 0; flex: 1; gap: 3px; color: var(--muted); font-size: 9px; }
+.interview-record form input { min-width: 0; height: 29px; padding: 0 7px; border: 1px solid #cfd5ce; border-radius: 6px; background: var(--surface); font-size: 10px; }
+.interview-record form .quiet-button { min-height: 29px; padding: 0 8px; font-size: 9px; }
 .opc-record-empty { margin: 0; padding: 15px 8px; text-align: center; color: var(--muted); font-size: 10px; }
 .opc-deliverable-preview { padding: 17px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
 .opc-deliverable-preview > header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 11px; }

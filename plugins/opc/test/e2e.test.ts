@@ -68,7 +68,7 @@ test("确定性 E2E：捕获、支持与反证、访谈、待验证方案、人�
     interviewId: "interview-a",
     participantRef: "受访者 A",
     occurredAt: "2026-09-03T10:00:00.000Z",
-    rawRecord: "我下载过模板，但不知道问题是否带有诱导性。",
+    rawRecordAssetId: "asset-interview-a",
   });
   opportunity = await service.annotateInterview({
     ...base,
@@ -91,7 +91,8 @@ test("确定性 E2E：捕获、支持与反证、访谈、待验证方案、人�
   });
   assert.equal(opportunity.experiments.length, 1);
 
-  const beforeCommitment = exportOpportunityDeliverables(opportunity);
+  const interviewRawRecords = new Map([["asset-interview-a", "我下载过模板，但不知道问题是否带有诱导性。"]]);
+  const beforeCommitment = exportOpportunityDeliverables(opportunity, { interviewRawRecords });
   const beforeText = renderDeliverablesAsText(beforeCommitment);
   assert.match(beforeText, /方案待验证/u);
   assert.doesNotMatch(beforeText, /已验证/u);
@@ -132,7 +133,7 @@ test("确定性 E2E：捕获、支持与反证、访谈、待验证方案、人�
     rationale: "有明确承诺，同时保留对免费替代方案的风险观察",
   });
 
-  const deliverables = exportOpportunityDeliverables(opportunity);
+  const deliverables = exportOpportunityDeliverables(opportunity, { interviewRawRecords });
   assert.deepEqual(deliverables.map((item) => item.kind), OPC_DELIVERABLE_OUTCOMES.map((item) => item.kind));
   assert.equal(deliverables.length, 6);
   assert.match(renderDeliverablesAsText(deliverables), /人工确认的承诺证据/u);

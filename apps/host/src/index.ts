@@ -3,6 +3,7 @@ export * from "./assets.js";
 export * from "./host.js";
 export * from "./local.js";
 export * from "./opc-api.js";
+export * from "./opc-protected-sources.js";
 export * from "./plugin-installation.js";
 export * from "./product-state.js";
 export * from "./secrets.js";

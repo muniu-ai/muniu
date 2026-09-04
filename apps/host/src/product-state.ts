@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import type { Approval, Deliverable, JsonObject, Thread, Workspace } from "@mn/contracts";
+import type { Approval, Asset, Deliverable, JsonObject, Thread, Workspace } from "@mn/contracts";
 import {
   KernelError,
   sha256,
@@ -154,6 +154,9 @@ export class KernelOpcRepository implements OpcRepository {
           ids.add(eventId);
           return { ...event, eventId, streamVersion: current.length + index + 1 } as StoredOpcEvent;
         });
+        for (const event of appended) {
+          validateOpcAssetReference(transaction, scope.tenantId, scope.workspaceId, event);
+        }
         const events = [...current, ...appended];
         const aggregate = reduceOpcEvents(scope.workspaceId, request.opportunityId, events);
         if (!aggregate) throw new OpcDomainError("INVALID_INPUT", "事件未生成机会", "先提交机会捕获事件");
@@ -200,6 +203,64 @@ export class KernelOpcRepository implements OpcRepository {
         opcEventsKey(scope.workspaceId, opportunityId),
       ) ?? []);
   }
+}
+
+function validateOpcAssetReference(
+  transaction: KernelTransaction,
+  tenantId: string,
+  workspaceId: string,
+  event: StoredOpcEvent,
+): void {
+  if (event.type === "opportunity.signal_recorded" && event.payload.signal.sourceKind === "file") {
+    requireOpcAsset(transaction, tenantId, workspaceId, event.payload.signal.sourceAssetId ?? "");
+  }
+  if (event.type !== "opportunity.interview_recorded") return;
+  const asset = requireOpcAsset(transaction, tenantId, workspaceId, event.payload.rawRecordAssetId);
+  if (!asset.protected) {
+    throw new KernelError(
+      "OPC_INTERVIEW_ASSET_NOT_PROTECTED",
+      "访谈原文必须使用受保护附件",
+      "重新上传并启用受保护存储",
+    );
+  }
+  if (asset.mediaType !== "text/plain" && asset.mediaType !== "text/markdown") {
+    throw new KernelError(
+      "OPC_INTERVIEW_ASSET_TYPE_INVALID",
+      "访谈原文只接受纯文本或 Markdown",
+      "上传 UTF-8 编码的 .txt 或 .md 文件",
+    );
+  }
+}
+
+function requireOpcAsset(
+  transaction: KernelTransaction,
+  tenantId: string,
+  workspaceId: string,
+  assetId: string,
+): Asset {
+  const asset = transaction.getProjection<Asset>("asset", assetId);
+  if (!asset) {
+    throw new KernelError(
+      "OPC_ASSET_NOT_FOUND",
+      "OPC 引用的附件不存在或已删除",
+      "重新上传附件并更新引用",
+    );
+  }
+  if (asset.tenantId !== tenantId) {
+    throw new KernelError(
+      "OPC_ASSET_NOT_FOUND",
+      "OPC 引用的附件不存在或已删除",
+      "重新上传附件并更新引用",
+    );
+  }
+  if (asset.workspaceId !== workspaceId) {
+    throw new KernelError(
+      "OPC_ASSET_SCOPE_MISMATCH",
+      "OPC 不能引用其他工作区的附件",
+      "选择当前工作区中的附件",
+    );
+  }
+  return asset;
 }
 
 export async function captureOpportunity(options: ProductMutationOptions): Promise<OpportunityAggregate> {

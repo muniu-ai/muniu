@@ -2,6 +2,7 @@ import type {
   AgentCatalog,
   ActivitySummary,
   ApiFailure,
+  AssetSummary,
   CodingTaskSummary,
   DeliverableSummary,
   HomeSummary,
@@ -166,6 +167,23 @@ export class AgentOsClient {
       },
     );
   }
+  async uploadAsset(workspaceId: string, file: File, protectedValue: boolean) {
+    const [asset] = await this.request<readonly AssetSummary[]>("/v2/assets", {
+      method: "POST",
+      body: JSON.stringify({
+        workspaceId,
+        expectedStreamVersion: 0,
+        attachments: [{
+          fileName: file.name,
+          mediaType: attachmentMediaType(file),
+          contentBase64: await fileBase64(file),
+          protected: protectedValue,
+        }],
+      }),
+    });
+    if (!asset) throw new Error("Host 没有返回已上传附件");
+    return asset;
+  }
   codingTasks(workspaceId: string) { return this.request<readonly CodingTaskSummary[]>(`/v2/plugins/coding/tasks?workspaceId=${encodeURIComponent(workspaceId)}`); }
 
   decideApproval(approvalId: string, streamVersion: number, decision: "approve_once" | "deny") {
@@ -186,4 +204,30 @@ export class AgentOsClient {
       method: "POST", body: JSON.stringify({ workspaceId, expectedStreamVersion: 0, input }),
     });
   }
+}
+
+const MEDIA_TYPES_BY_EXTENSION: Readonly<Record<string, string>> = {
+  txt: "text/plain",
+  md: "text/markdown",
+  json: "application/json",
+  csv: "text/csv",
+  pdf: "application/pdf",
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  webp: "image/webp",
+};
+
+function attachmentMediaType(file: File): string {
+  const extension = file.name.split(".").at(-1)?.toLowerCase() ?? "";
+  return MEDIA_TYPES_BY_EXTENSION[extension] ?? (file.type || "application/octet-stream");
+}
+
+async function fileBase64(file: File): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const chunks: string[] = [];
+  for (let offset = 0; offset < bytes.byteLength; offset += 0x8000) {
+    chunks.push(String.fromCharCode(...bytes.subarray(offset, offset + 0x8000)));
+  }
+  return btoa(chunks.join(""));
 }

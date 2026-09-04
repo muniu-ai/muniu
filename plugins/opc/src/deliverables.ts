@@ -60,8 +60,14 @@ export interface OpcDeliverable {
   readonly content: Readonly<Record<string, unknown>>;
 }
 
+export interface OpcDeliverableRenderOptions {
+  /** 仅由完成工作区授权和受保护 Asset 解密的 API 边界提供。 */
+  readonly interviewRawRecords?: ReadonlyMap<string, string>;
+}
+
 export function exportOpportunityDeliverables(
   opportunity: OpportunityAggregate,
+  options: OpcDeliverableRenderOptions = {},
 ): readonly OpcDeliverable[] {
   const hypothesis = opportunity.hypotheses.at(-1);
   const support = opportunity.signals.filter((signal) => signal.relationship === "support");
@@ -93,7 +99,10 @@ export function exportOpportunityDeliverables(
         id: interview.id,
         participantRef: interview.participantRef,
         occurredAt: interview.occurredAt,
-        rawRecord: interview.rawRecord,
+        rawRecordAssetId: interview.rawRecordAssetId,
+        ...(options.interviewRawRecords?.has(interview.rawRecordAssetId)
+          ? { rawRecord: options.interviewRawRecords.get(interview.rawRecordAssetId) }
+          : {}),
         annotations: interview.annotations.map((annotation) => ({
           text: annotation.text,
           createdBy: annotation.createdBy,
@@ -107,6 +116,7 @@ export function exportOpportunityDeliverables(
         id: signal.id,
         sourceKind: signal.sourceKind,
         sourceUrl: signal.sourceUrl ?? null,
+        sourceAssetId: signal.sourceAssetId ?? null,
         observedAt: signal.observedAt,
         excerpt: signal.excerpt ?? null,
         summary: signal.summary,
@@ -197,6 +207,7 @@ function signalSummary(signal: Signal): Readonly<Record<string, unknown>> {
   return {
     summary: signal.summary,
     sourceKind: signal.sourceKind,
+    sourceAssetId: signal.sourceAssetId ?? null,
     observedAt: signal.observedAt,
     excerpt: signal.excerpt ?? null,
   };

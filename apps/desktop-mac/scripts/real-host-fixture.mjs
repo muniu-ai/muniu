@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { createAgentOsHost } from "../../host/dist/index.js";
 import { InMemoryKernelStore } from "../../../packages/kernel/dist/index.js";
+import { InMemoryKeyProvider } from "../../../packages/storage/dist/index.js";
 
 const port = Number(process.env.MN_FIXTURE_API_PORT);
 const appOrigin = process.env.MN_FIXTURE_APP_ORIGIN;
@@ -12,8 +13,27 @@ if (!Number.isSafeInteger(port) || port <= 0 || !appOrigin) throw new Error("缺
 const store = new InMemoryKernelStore();
 const now = () => new Date().toISOString();
 const id = (kind) => `${kind}-${randomUUID()}`;
+const objects = new Map();
+const cas = {
+  async put(bytes) {
+    const copy = Buffer.from(bytes);
+    const digest = createHash("sha256").update(copy).digest("hex");
+    const created = !objects.has(digest);
+    objects.set(digest, copy);
+    return { digest, byteLength: copy.byteLength, created };
+  },
+  async get(digest) {
+    const value = objects.get(digest);
+    if (!value) throw new Error("CAS object missing");
+    return Buffer.from(value);
+  },
+  async has(digest) { return objects.has(digest); },
+  async gcOrphans() { return []; },
+};
 const host = await createAgentOsHost({
   store,
+  cas,
+  protectedPayloadKeyProvider: new InMemoryKeyProvider(randomBytes(32)),
   now,
   id,
   allowedOrigins: [appOrigin],

@@ -127,6 +127,8 @@ captured → framed → researching → interviewing
 
 非终态可进入 `paused` 或 `abandoned`。承诺和付费证据必须人工确认；最终决策也只能由人作出。公开网页研究通过受控只读工具访问，阻止本机、私网、link-local、DNS rebinding 与跨协议重定向。
 
+文件信号引用当前 tenant、当前工作区中的 Asset。访谈原文必须先写入受保护文本 Asset，OPC 事实事件和可重建投影只保存不可变 Asset ID。详情与导出在授权边界临时解密；持久化成果仍保存引用。Asset 删除、密钥销毁或工作区授权撤销后，相关详情与导出失败关闭。模型和人员都不能覆盖原文，只能追加访谈标注。
+
 Coding 的一等对象是 `Repository`、`Service`、`Spec`、`CodingTask`、`Candidate`、`GateResult` 与 `CodeEvidence`。流程为：
 
 ```text

@@ -178,7 +178,12 @@ async function verifyOpc(page, requestLog, hostUrl) {
   await page.getByRole("button", { name: "保存信号" }).click();
   await expectText(page, "信号已保存");
 
-  await page.getByLabel("来源类型").selectOption("pasted");
+  await page.getByLabel("来源类型").selectOption("file");
+  await page.getByLabel("证据文件").setInputFiles({
+    name: "免费替代方案.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from("熟人推荐已经够用"),
+  });
   await page.getByLabel("观察时间").fill("2026-09-04T08:40");
   await page.getByLabel("原始摘录").fill("熟人推荐已经够用");
   await page.getByLabel("信号摘要").fill("现有转介绍可能削弱付费意愿");
@@ -201,6 +206,14 @@ async function verifyOpc(page, requestLog, hostUrl) {
   await expectText(page, "访谈原文已保存");
   opportunity = await hostData(hostUrl, `/v2/plugins/opc/opportunities/${summary.id}?workspaceId=${encodeURIComponent(workspace.id)}`);
   if (opportunity.interviews[0]?.rawRecord !== rawInterview) throw new Error("访谈原文未按输入保存");
+  await page.getByLabel("为受访者 A 追加标注").fill("现有获客方式在淡季失效");
+  await page.getByRole("button", { name: "追加标注", exact: true }).click();
+  await expectText(page, "访谈标注已追加");
+  opportunity = await hostData(hostUrl, `/v2/plugins/opc/opportunities/${summary.id}?workspaceId=${encodeURIComponent(workspace.id)}`);
+  if (opportunity.interviews[0]?.rawRecord !== rawInterview
+    || opportunity.interviews[0]?.annotations?.[0]?.text !== "现有获客方式在淡季失效") {
+    throw new Error("追加访谈标注覆盖了原文或没有写入标注");
+  }
 
   await page.getByRole("button", { name: "访谈已够，开始评估" }).click();
   await expectText(page, "形成最小收费方案");
@@ -249,7 +262,7 @@ async function verifyOpc(page, requestLog, hostUrl) {
   if (exported.length !== 6) throw new Error(`实际导出成果数不是 6：${exported.length}`);
 
   const commandRequests = requestLog.filter((entry) => entry.method === "POST" && entry.path.endsWith("/commands"));
-  const successfulSequence = ["frame", "start_research", "record_signal", "record_signal", "start_interviewing", "record_interview", "start_evaluation", "prepare_offer", "propose_commitment", "confirm_commitment", "decide"];
+  const successfulSequence = ["frame", "start_research", "record_signal", "record_signal", "start_interviewing", "record_interview", "annotate_interview", "start_evaluation", "prepare_offer", "propose_commitment", "confirm_commitment", "decide"];
   let cursor = 0;
   for (const request of commandRequests) {
     if (request.body.command === successfulSequence[cursor]) cursor += 1;
@@ -259,6 +272,16 @@ async function verifyOpc(page, requestLog, hostUrl) {
   if (!requestLog.some((entry) => entry.method === "GET" && entry.path.endsWith(`/opportunities/${summary.id}/deliverables`))) throw new Error("档案没有调用真实 GET deliverables");
   if (!requestLog.some((entry) => entry.method === "POST" && entry.path.endsWith(`/opportunities/${summary.id}/exports`))) throw new Error("档案没有调用真实 POST exports");
   if (commandRequests.some((entry) => !Number.isInteger(entry.body.expectedStreamVersion))) throw new Error("OPC 命令缺少 expectedStreamVersion");
+  const fileSignal = commandRequests.find((entry) => entry.body.command === "record_signal" && entry.body.input?.sourceKind === "file");
+  if (!fileSignal?.body.input?.sourceAssetId) throw new Error("文件信号没有提交 Asset 引用");
+  const interviewCommand = commandRequests.find((entry) => entry.body.command === "record_interview");
+  if (!interviewCommand?.body.input?.rawRecordAssetId || "rawRecord" in interviewCommand.body.input) {
+    throw new Error("访谈命令没有使用受保护 Asset 引用");
+  }
+  const assetUploads = requestLog.filter((entry) => entry.method === "POST" && entry.path === "/v2/assets");
+  if (assetUploads.length < 2 || assetUploads.some((entry) => entry.body.attachments?.[0]?.protected !== true)) {
+    throw new Error("OPC 文件没有通过受保护附件接口上传");
+  }
   const commandCountBeforeModeSwitch = commandRequests.length;
 
   await page.getByRole("button", { name: "返回机会列表" }).click();

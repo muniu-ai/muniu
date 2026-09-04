@@ -72,6 +72,10 @@ import {
 } from "./product-state.js";
 import { executeOpcCommand } from "./opc-api.js";
 import {
+  hydrateOpcOpportunity,
+  validateOpcCommandSources,
+} from "./opc-protected-sources.js";
+import {
   LocalProductionPluginInstaller,
   LocalSignedPluginRepository,
   type PluginInstallerPort,
@@ -1712,7 +1716,17 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           decodeURIComponent(opcOpportunityMatch[1]!),
         );
         if (!opportunity) throw new KernelError("NOT_FOUND", "机会不存在", "刷新机会列表");
-        return json(opportunity, 200, traceId);
+        const hydrated = await hydrateOpcOpportunity({
+          store: options.store,
+          tenantId: TENANT_ID,
+          workspaceId,
+          opportunity,
+          ...(options.cas ? { cas: options.cas } : {}),
+          ...(options.protectedPayloadKeyProvider
+            ? { protectedPayloadKeyProvider: options.protectedPayloadKeyProvider }
+            : {}),
+        });
+        return json(hydrated.opportunity, 200, traceId);
       }
       const opcCommandMatch = url.pathname.match(/^\/v2\/plugins\/opc\/opportunities\/([^/]+)\/commands$/u);
       if (opcCommandMatch && request.method === "POST") {
@@ -1720,7 +1734,27 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         const workspaceId = stringField(body, "workspaceId")!;
         const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId, "operate");
         await ensurePluginsActive(TENANT_ID, workspace);
-        return json(await executeOpcCommand({
+        const sourceOptions = {
+          store: options.store,
+          tenantId: TENANT_ID,
+          workspaceId,
+          ...(options.cas ? { cas: options.cas } : {}),
+          ...(options.protectedPayloadKeyProvider
+            ? { protectedPayloadKeyProvider: options.protectedPayloadKeyProvider }
+            : {}),
+        };
+        const current = await opcService.get(
+          encodePluginWorkspace(TENANT_ID, workspaceId),
+          decodeURIComponent(opcCommandMatch[1]!),
+        );
+        if (!current) throw new KernelError("NOT_FOUND", "机会不存在", "刷新机会列表");
+        await hydrateOpcOpportunity({ ...sourceOptions, opportunity: current });
+        await validateOpcCommandSources({
+          ...sourceOptions,
+          command: stringField(body, "command")!,
+          input: body.input,
+        });
+        const updated = await executeOpcCommand({
           service: opcService,
           scopedWorkspaceId: encodePluginWorkspace(TENANT_ID, workspaceId),
           opportunityId: decodeURIComponent(opcCommandMatch[1]!),
@@ -1730,7 +1764,9 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           input: body.input,
           idempotencyKey: mutationKey as string,
           idempotencyRequest: body,
-        }), 200, traceId);
+        });
+        const hydrated = await hydrateOpcOpportunity({ ...sourceOptions, opportunity: updated });
+        return json(hydrated.opportunity, 200, traceId);
       }
       const opcDeliverablesMatch = url.pathname.match(
         /^\/v2\/plugins\/opc\/opportunities\/([^/]+)\/deliverables$/u,
@@ -1745,7 +1781,19 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           decodeURIComponent(opcDeliverablesMatch[1]!),
         );
         if (!opportunity) throw new KernelError("NOT_FOUND", "机会不存在", "刷新机会列表");
-        return json(exportOpportunityDeliverables(opportunity), 200, traceId);
+        const hydrated = await hydrateOpcOpportunity({
+          store: options.store,
+          tenantId: TENANT_ID,
+          workspaceId,
+          opportunity,
+          ...(options.cas ? { cas: options.cas } : {}),
+          ...(options.protectedPayloadKeyProvider
+            ? { protectedPayloadKeyProvider: options.protectedPayloadKeyProvider }
+            : {}),
+        });
+        return json(exportOpportunityDeliverables(opportunity, {
+          interviewRawRecords: hydrated.interviewRawRecords,
+        }), 200, traceId);
       }
       const opcExportMatch = url.pathname.match(/^\/v2\/plugins\/opc\/opportunities\/([^/]+)\/exports$/u);
       if (opcExportMatch && request.method === "POST") {
@@ -1753,17 +1801,37 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         const workspaceId = stringField(body, "workspaceId")!;
         const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId, "operate");
         await ensurePluginsActive(TENANT_ID, workspace);
-        return json(await exportOpcOpportunity({
+        const opportunityId = decodeURIComponent(opcExportMatch[1]!);
+        const opportunity = await opcService.get(encodePluginWorkspace(TENANT_ID, workspaceId), opportunityId);
+        if (!opportunity) throw new KernelError("NOT_FOUND", "机会不存在", "刷新机会列表");
+        const hydrated = await hydrateOpcOpportunity({
           store: options.store,
           tenantId: TENANT_ID,
           workspaceId,
-          opportunityId: decodeURIComponent(opcExportMatch[1]!),
+          opportunity,
+          ...(options.cas ? { cas: options.cas } : {}),
+          ...(options.protectedPayloadKeyProvider
+            ? { protectedPayloadKeyProvider: options.protectedPayloadKeyProvider }
+            : {}),
+        });
+        const rendered = exportOpportunityDeliverables(opportunity, {
+          interviewRawRecords: hydrated.interviewRawRecords,
+        });
+        const stored = await exportOpcOpportunity({
+          store: options.store,
+          tenantId: TENANT_ID,
+          workspaceId,
+          opportunityId,
           actorId: ACTOR_ID,
           idempotencyKey: mutationKey as string,
           expectedStreamVersion: expectedVersion(body),
           now,
           id: nextId,
-        }), 201, traceId);
+        });
+        return json(stored.map((item) => ({
+          ...item,
+          content: rendered.find((candidate) => candidate.kind === item.kind)?.content ?? item.content,
+        })), 201, traceId);
       }
       if (url.pathname === "/v2/plugins/coding/tasks" && request.method === "GET") {
         const workspaceId = url.searchParams.get("workspaceId");

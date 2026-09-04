@@ -137,6 +137,8 @@ function openApiDocument(operations) {
                 ? { $ref: "#/components/schemas/CreateAssetsMutation" }
                 : operation.operationId === "deleteAsset"
                   ? { $ref: "#/components/schemas/DeleteAssetMutation" }
+                : operation.operationId === "commandOpcOpportunity"
+                  ? { $ref: "#/components/schemas/OpcOpportunityCommandMutation" }
                 : operation.versioned
                 ? { $ref: "#/components/schemas/VersionedMutation" }
                 : { $ref: "#/components/schemas/Mutation" },
@@ -240,6 +242,49 @@ function openApiDocument(operations) {
             expectedStreamVersion: { type: "integer", minimum: 1 },
             reason: { type: "string", minLength: 1 },
           },
+        },
+        OpcOpportunityCommandMutation: {
+          type: "object",
+          additionalProperties: false,
+          required: ["workspaceId", "expectedStreamVersion", "command", "input"],
+          properties: {
+            workspaceId: { type: "string", minLength: 1 },
+            expectedStreamVersion: { type: "integer", minimum: 1 },
+            command: { type: "string", minLength: 1 },
+            input: { type: "object", additionalProperties: true },
+          },
+          allOf: [
+            {
+              if: { required: ["command"], properties: { command: { const: "record_interview" } } },
+              then: {
+                properties: {
+                  input: {
+                    type: "object",
+                    required: ["interviewId", "participantRef", "occurredAt", "rawRecordAssetId"],
+                    not: { required: ["rawRecord"] },
+                  },
+                },
+              },
+            },
+            {
+              if: {
+                required: ["command", "input"],
+                properties: {
+                  command: { const: "record_signal" },
+                  input: {
+                    type: "object",
+                    required: ["sourceKind"],
+                    properties: { sourceKind: { const: "file" } },
+                  },
+                },
+              },
+              then: {
+                properties: {
+                  input: { type: "object", required: ["sourceAssetId"] },
+                },
+              },
+            },
+          ],
         },
         Envelope: {
           type: "object",

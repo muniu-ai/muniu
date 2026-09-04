@@ -52,12 +52,20 @@ export async function executeOpcCommand(
     case "start_interviewing":
       return options.service.startInterviewing(base);
     case "record_interview":
+      if (Object.hasOwn(input, "rawRecord")) {
+        throw new OpcDomainError(
+          "INVALID_INPUT",
+          "访谈原文不能直接写入命令",
+          "先上传受保护附件，再提交 rawRecordAssetId",
+          "rawRecord",
+        );
+      }
       return options.service.recordInterview({
         ...base,
         interviewId: text(input, "interviewId"),
         participantRef: text(input, "participantRef"),
         occurredAt: text(input, "occurredAt"),
-        rawRecord: text(input, "rawRecord", false),
+        rawRecordAssetId: text(input, "rawRecordAssetId"),
       });
     case "annotate_interview":
       return options.service.annotateInterview({
@@ -109,6 +117,7 @@ function signal(input: Record<string, unknown>): SignalInput {
   return {
     sourceKind,
     ...(optionalText(input, "sourceUrl") ? { sourceUrl: optionalText(input, "sourceUrl") } : {}),
+    ...(optionalText(input, "sourceAssetId") ? { sourceAssetId: optionalText(input, "sourceAssetId") } : {}),
     observedAt: text(input, "observedAt"),
     ...(optionalText(input, "excerpt") ? { excerpt: optionalText(input, "excerpt") } : {}),
     summary: text(input, "summary"),

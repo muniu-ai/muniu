@@ -31,7 +31,7 @@ export type OpcEvent =
       readonly interviewId: string;
       readonly participantRef: string;
       readonly interviewOccurredAt: string;
-      readonly rawRecord: string;
+      readonly rawRecordAssetId: string;
     }>
   | OpcEventEnvelope<"opportunity.interview_annotated", {
       readonly interviewId: string;

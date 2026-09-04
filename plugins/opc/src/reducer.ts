@@ -104,12 +104,24 @@ export function applyOpcEvent(
       const sourceUrl = signal.sourceKind === "public_web"
         ? requirePublicSourceUrl(signal.sourceUrl)
         : signal.sourceUrl;
+      const sourceAssetId = signal.sourceKind === "file"
+        ? requireText(signal.sourceAssetId ?? "", "sourceAssetId", "文件 Asset 引用")
+        : undefined;
+      if (signal.sourceKind !== "file" && signal.sourceAssetId !== undefined) {
+        throw new OpcDomainError(
+          "INVALID_INPUT",
+          "只有文件信号可以引用 Asset",
+          "删除 sourceAssetId，或将来源类型改为 file",
+          "sourceAssetId",
+        );
+      }
       return updateWithEvidence(current, event, {
         signals: [...current.signals, {
           id: event.payload.signalId,
           opportunityId,
           sourceKind: signal.sourceKind,
           ...(sourceUrl ? { sourceUrl } : {}),
+          ...(sourceAssetId ? { sourceAssetId } : {}),
           observedAt: requireText(signal.observedAt, "observedAt", "采集时间"),
           ...(signal.excerpt ? { excerpt: signal.excerpt } : {}),
           summary: requireText(signal.summary, "summary", "信号摘要"),
@@ -139,7 +151,11 @@ export function applyOpcEvent(
           opportunityId,
           participantRef: requireText(event.payload.participantRef, "participantRef", "受访者引用"),
           occurredAt: requireText(event.payload.interviewOccurredAt, "occurredAt", "访谈时间"),
-          rawRecord: requireText(event.payload.rawRecord, "rawRecord", "访谈原始记录"),
+          rawRecordAssetId: requireText(
+            event.payload.rawRecordAssetId,
+            "rawRecordAssetId",
+            "访谈原文 Asset 引用",
+          ),
           recordedAt: event.occurredAt,
           recordedBy: event.actor.id,
           annotations: [],

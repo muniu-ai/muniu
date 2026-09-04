@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,7 +7,12 @@ import test from "node:test";
 import { Context } from "@deepseek-ai/cordis";
 import { InMemoryKernelStore } from "@mn/kernel";
 import type { PluginDefinitionV1 } from "@mn/plugin-sdk";
-import { CursorExpiredError, SqliteStorage, type ContentAddressedStorage } from "@mn/storage";
+import {
+  CursorExpiredError,
+  InMemoryKeyProvider,
+  SqliteStorage,
+  type ContentAddressedStorage,
+} from "@mn/storage";
 import {
   createAgentOsHost,
   defaultLocalStatePaths,
@@ -303,8 +308,27 @@ test("附件经校验和 CAS create-only 写入后才提交 Asset，幂等重放
 
 test("OPC /v2 完成证据、访谈、收费方案、人工决策与成果导出全流程", async () => {
   let id = 0;
+  const objects = new Map<string, Buffer>();
+  const cas: ContentAddressedStorage = {
+    async put(bytes) {
+      const copy = Buffer.from(bytes);
+      const digest = createHash("sha256").update(copy).digest("hex");
+      const created = !objects.has(digest);
+      objects.set(digest, copy);
+      return { digest, byteLength: copy.byteLength, created };
+    },
+    async get(digest) {
+      const value = objects.get(digest);
+      if (!value) throw new Error("CAS object missing");
+      return Buffer.from(value);
+    },
+    async has(digest) { return objects.has(digest); },
+    async gcOrphans() { return []; },
+  };
   const host = await createAgentOsHost({
     store: new InMemoryKernelStore(),
+    cas,
+    protectedPayloadKeyProvider: new InMemoryKeyProvider(randomBytes(32)),
     secretStore: secrets,
     now: () => "2026-09-04T09:00:00.000Z",
     id: (kind) => `${kind}-${++id}`,
@@ -375,11 +399,24 @@ test("OPC /v2 完成证据、访谈、收费方案、人工决策与成果导出
     evidenceKind: "context",
   });
   await command("start_interviewing", {});
+  const rawRecord = "我下载过模板，但不知道问题是否带有诱导性。";
+  const rawAssetResponse = await host.dispatch(jsonRequest("/v2/assets", {
+    workspaceId: workspace.id,
+    expectedStreamVersion: 0,
+    attachments: [{
+      fileName: "访谈原文.txt",
+      mediaType: "text/plain",
+      contentBase64: Buffer.from(rawRecord).toString("base64"),
+      protected: true,
+    }],
+  }, "opc-interview-asset"));
+  assert.equal(rawAssetResponse.status, 201, JSON.stringify(await rawAssetResponse.clone().json()));
+  const rawAsset = (await responseJson(rawAssetResponse)).data[0];
   await command("record_interview", {
     interviewId: "interview-a",
     participantRef: "受访者 A",
     occurredAt: "2026-09-03T10:00:00.000Z",
-    rawRecord: "我下载过模板，但不知道问题是否带有诱导性。",
+    rawRecordAssetId: rawAsset.id,
   });
   await command("annotate_interview", {
     interviewId: "interview-a",
@@ -431,7 +468,8 @@ test("OPC /v2 完成证据、访谈、收费方案、人工决策与成果导出
     rationale: "有明确承诺，同时保留免费替代方案风险",
   });
   assert.equal(opportunity.decision.choice, "pursue");
-  assert.equal(opportunity.interviews[0].rawRecord, "我下载过模板，但不知道问题是否带有诱导性。");
+  assert.equal(opportunity.interviews[0].rawRecord, rawRecord);
+  assert.equal(opportunity.interviews[0].rawRecordAssetId, rawAsset.id);
 
   const exported = await responseJson(await host.dispatch(jsonRequest(
     `/v2/plugins/opc/opportunities/${opportunity.id}/exports`,

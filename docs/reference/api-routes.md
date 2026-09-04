@@ -87,6 +87,10 @@ Agent OS 0.2 默认监听 `http://127.0.0.1:7318`。成功的 JSON 响应使用 
 
 `GET /v2/assets/{assetId}?content=1` 先校验工作区权限，再读取 CAS。受保护附件还需通过 Keychain 或 Vault/KMS 解包 DEK 并完成认证解密。`DELETE /v2/assets/{assetId}` 只允许工作区 owner 调用，要求当前 `expectedStreamVersion` 和删除原因；事务会删除 Asset 与 wrapped DEK，保留对象摘要和原因摘要 tombstone。CAS 密文作为孤立对象等待保留期 GC，删除后的 API 不再提供解密路径。
 
+OPC 的 `record_signal` 在 `sourceKind=file` 时必须提交 `sourceAssetId`。Host 从当前 tenant 读取 Asset，并在写入领域事件的同一事务再次校验工作区归属；跨 tenant 引用表现为不存在，跨工作区引用被拒绝。`record_interview` 不接受 `rawRecord`，只接受 `rawRecordAssetId`，且目标必须是当前工作区内受保护的 UTF-8 纯文本或 Markdown Asset。
+
+机会详情、成果预览和导出会在工作区授权通过后读取受保护 Asset，并只在当前响应中解密访谈原文。OPC 事件、机会投影、幂等记录和持久化成果只保存 Asset ID。Asset 被删除、数据密钥被销毁或调用方失去工作区权限后，读取与导出失败关闭，不使用缓存原文继续响应。访谈原文不能覆盖；后续解释只能通过 `annotate_interview` 追加。
+
 工作区与会话路由负责创建 Thread 和 turn。创建 turn 会先持久化模型可见输入，再返回 queued Execution；客户端从 SSE 或活动页跟踪后续状态。
 
 执行命令包括 `follow_up`、`steer`、`cancel` 和 `resume`。审批决定只接受 `approve_once` 或 `deny`。调用参数、资源、工具版本、generation 或 authority commitment 变化后，原批准失效。

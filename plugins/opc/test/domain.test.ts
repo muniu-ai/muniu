@@ -211,7 +211,7 @@ test("暂停可恢复到原状态，放弃是非终态之外的显式终止", as
 });
 
 test("访谈原文不可覆盖，模型和人只能追加标注", async () => {
-  const { service } = createFixture();
+  const { repository, service } = createFixture();
   let aggregate = await service.capture({
     workspaceId: WORKSPACE_ID,
     opportunityId: OPPORTUNITY_ID,
@@ -239,7 +239,7 @@ test("访谈原文不可覆盖，模型和人只能追加标注", async () => {
       interviewId: "model-generated",
       participantRef: "受访者 A",
       occurredAt: NOW,
-      rawRecord: "模型生成的原文",
+      rawRecordAssetId: "asset-model-generated",
     }),
     (error: unknown) => error instanceof OpcDomainError && error.code === "HUMAN_REQUIRED",
   );
@@ -251,7 +251,7 @@ test("访谈原文不可覆盖，模型和人只能追加标注", async () => {
     interviewId: "interview-one",
     participantRef: "受访者 A",
     occurredAt: NOW,
-    rawRecord: "我上个月试了三种表格，最后都没坚持。",
+    rawRecordAssetId: "asset-interview-one",
   });
   aggregate = await service.annotateInterview({
     workspaceId: WORKSPACE_ID,
@@ -270,12 +270,91 @@ test("访谈原文不可覆盖，模型和人只能追加标注", async () => {
     annotation: "需追问停止使用的具体触发点",
   });
 
-  assert.equal(aggregate.interviews[0]?.rawRecord, "我上个月试了三种表格，最后都没坚持。");
+  assert.equal(aggregate.interviews[0]?.rawRecordAssetId, "asset-interview-one");
   assert.deepEqual(aggregate.interviews[0]?.annotations.map((item) => item.text), [
     "已有替代方案，但持续使用困难",
     "需追问停止使用的具体触发点",
   ]);
   assert.equal("replaceInterview" in service, false);
+  const persisted = await repository.events(WORKSPACE_ID, OPPORTUNITY_ID);
+  assert.doesNotMatch(JSON.stringify(persisted), /我上个月试了三种表格|模型生成的原文/u);
+});
+
+test("文件信号必须保存 Asset 引用，非文件信号不能夹带引用", async () => {
+  const { service } = createFixture();
+  let aggregate = await service.capture({
+    workspaceId: WORKSPACE_ID,
+    opportunityId: OPPORTUNITY_ID,
+    expectedStreamVersion: 0,
+    actor: HUMAN,
+    draft: createOpportunityDraft("文件信号测试"),
+  });
+  aggregate = await service.frame({
+    workspaceId: WORKSPACE_ID,
+    opportunityId: OPPORTUNITY_ID,
+    expectedStreamVersion: aggregate.streamVersion,
+    actor: HUMAN,
+    targetCustomer: "独立开发者",
+    problem: "缺少可复核资料",
+    falsifiableHypothesis: "文件证据会推翻或支持当前判断",
+  });
+  aggregate = await service.startResearch({
+    workspaceId: WORKSPACE_ID,
+    opportunityId: OPPORTUNITY_ID,
+    expectedStreamVersion: aggregate.streamVersion,
+    actor: HUMAN,
+  });
+
+  await assert.rejects(
+    service.recordSignal({
+      workspaceId: WORKSPACE_ID,
+      opportunityId: OPPORTUNITY_ID,
+      expectedStreamVersion: aggregate.streamVersion,
+      actor: HUMAN,
+      signal: {
+        sourceKind: "file",
+        observedAt: NOW,
+        summary: "缺少文件引用",
+        relationship: "neutral",
+        evidenceKind: "context",
+      },
+    }),
+    (error: unknown) => error instanceof OpcDomainError && error.code === "REQUIRED_FIELD",
+  );
+
+  aggregate = await service.recordSignal({
+    workspaceId: WORKSPACE_ID,
+    opportunityId: OPPORTUNITY_ID,
+    expectedStreamVersion: aggregate.streamVersion,
+    actor: HUMAN,
+    signal: {
+      sourceKind: "file",
+      sourceAssetId: "asset-signal-one",
+      observedAt: NOW,
+      summary: "文件中的价格信息反对当前假设",
+      relationship: "oppose",
+      evidenceKind: "context",
+    },
+  });
+  assert.equal(aggregate.signals[0]?.sourceAssetId, "asset-signal-one");
+
+  await assert.rejects(
+    service.recordSignal({
+      workspaceId: WORKSPACE_ID,
+      opportunityId: OPPORTUNITY_ID,
+      expectedStreamVersion: aggregate.streamVersion,
+      actor: HUMAN,
+      signal: {
+        sourceKind: "manual",
+        sourceAssetId: "asset-forged",
+        observedAt: NOW,
+        summary: "人工记录",
+        relationship: "neutral",
+        evidenceKind: "context",
+      },
+    }),
+    (error: unknown) => error instanceof OpcDomainError && error.code === "INVALID_INPUT",
+  );
 });
 
 test("commitment 与 paid 只有人工确认后才提升证据等级", async () => {
