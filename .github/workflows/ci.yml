@@ -153,6 +153,11 @@ jobs:
       - run: npm run verify:mac-release
       - run: npm run typecheck:desktop
       - run: npm run build:desktop
+      - name: Verify Agent OS desktop journeys
+        run: |
+          npm run verify:onboarding-ui
+          npm run verify:opc-ui
+          npm run verify:coding-ui
       - name: Build ignored mn-host sidecar
         run: npm run build:host-sidecar -- --smoke
       - run: cargo check --locked

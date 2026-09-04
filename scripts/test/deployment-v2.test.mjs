@@ -123,6 +123,9 @@ test("macOS CI and release jobs exercise the external Coding Runner chain", () =
     assert.match(desktopJob, /npm test -w @mn\/runner-claude-cli/u);
     assert.match(desktopJob, /npm test -w @mn\/runner-codex-cli/u);
     assert.match(desktopJob, /npm test -w @mn\/worker/u);
+    assert.match(desktopJob, /npm run verify:onboarding-ui/u);
+    assert.match(desktopJob, /npm run verify:opc-ui/u);
+    assert.match(desktopJob, /npm run verify:coding-ui/u);
     const installIndex = desktopJob.indexOf("npm ci");
     assert.ok(installIndex >= 0);
     for (const command of ["build:vendor", "build:core", "npm test -w @mn/worker"]) {
