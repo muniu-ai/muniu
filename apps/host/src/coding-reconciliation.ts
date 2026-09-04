@@ -15,6 +15,7 @@ import type {
 } from "@mn/contracts";
 import { CODING_RUNNER_CONFIGURATION_NAMESPACE } from "@mn/contracts";
 import {
+  computeExecutionAuthorityCommitment,
   KernelError,
   sha256,
   StreamVersionConflictError,
@@ -733,7 +734,7 @@ function newCallReadiness(
       )
     : undefined;
   const externalRunnerId = run.runnerId as ExternalCodingRunnerId;
-  const expectedAuthorityCommitment = authority ? sha256({
+  const expectedAuthorityCommitment = authority ? computeExecutionAuthorityCommitment({
     executionId: execution.id,
     workspaceId: execution.workspaceId,
     principalId: authority.principalId,
@@ -1081,7 +1082,7 @@ function createNewCall(
   const authorityId = input.id("authority");
   const turnId = input.id("turn");
   const jobId = input.id("job");
-  const commitment = sha256({
+  const commitment = computeExecutionAuthorityCommitment({
     executionId,
     workspaceId: previousExecution.workspaceId,
     principalId: previousAuthority.principalId,

@@ -1058,7 +1058,7 @@ test("SQLite 终止已领取的核对验证 Job 时推进 fencing token", async 
       },
       "sqlite-terminate-leased-verification",
     ));
-    assert.equal(terminated.status, 200);
+    assert.equal(terminated.status, 200, JSON.stringify(await terminated.clone().json()));
 
     const invalidated = await storage.getJob(pending.verificationJobId);
     assert.equal(invalidated?.status, "failed");
