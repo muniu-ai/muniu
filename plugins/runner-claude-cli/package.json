@@ -1,0 +1,25 @@
+{
+  "name": "@mn/runner-claude-cli",
+  "version": "0.2.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "repository": "https://github.com/muniu-ai/muniu",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.test.json && node --experimental-strip-types --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@mn/contracts": "0.2.0",
+    "@mn/plugin-sdk": "0.2.0"
+  }
+}
