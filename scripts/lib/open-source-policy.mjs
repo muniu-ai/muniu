@@ -235,11 +235,18 @@ function formatWorkflowReference(reference) {
 export function validateAttributionPolicy({ notice, thirdParty, provenance }) {
   const hasImportedFiles = !/^files:\s*\[\s*\]\s*$/mu.test(provenance);
   if (!hasImportedFiles) {
-    if (/DeepSeek Harness|deepseek-ai\/deepseek-harness/iu.test(notice)) {
+    const unsupportedClaim = notice
+      .split(/\n\s*\n/gu)
+      .some((paragraph) => {
+        if (!/DeepSeek Harness|deepseek-ai\/deepseek-harness/iu.test(paragraph)) return false;
+        if (/\bvendor\//u.test(paragraph) && /\bCordis\b/u.test(paragraph)) return false;
+        return /(?:derived|copied|adapted)\s+(?:or\s+adapted\s+)?from\s+DeepSeek Harness/iu.test(paragraph);
+      });
+    if (unsupportedClaim) {
       throw new Error("NOTICE must not claim DeepSeek Harness attribution before files are imported");
     }
-    if (!/no DeepSeek Harness source file is copied/iu.test(thirdParty)) {
-      throw new Error("THIRD_PARTY_NOTICES must state that no DeepSeek Harness source is currently copied");
+    if (!/no (?:non-vendored )?DeepSeek Harness source file is copied(?: or adapted)?/iu.test(thirdParty)) {
+      throw new Error("THIRD_PARTY_NOTICES must state that no non-vendored DeepSeek Harness source is currently copied or adapted");
     }
   }
   return true;
@@ -272,11 +279,11 @@ function parseProvenance(provenance, failures) {
     value = document.toJS({ maxAliasCount: 0 });
   } catch (error) {
     failures.push(`provenance is invalid YAML: ${error instanceof Error ? error.message.split("\n", 1)[0] : String(error)}`);
-    return { approvedCommits: new Set(), files: [] };
+    return { approvedCommits: new Set(), architectureReferences: [], files: [] };
   }
   if (!value || typeof value !== "object") {
     failures.push("provenance must be an object");
-    return { approvedCommits: new Set(), files: [] };
+    return { approvedCommits: new Set(), architectureReferences: [], files: [] };
   }
   if (value.schemaVersion !== 2) failures.push("provenance schemaVersion must be 2");
 
@@ -304,20 +311,95 @@ function parseProvenance(provenance, failures) {
     }
   }
 
+  const architectureReferences = value.architectureReferences;
+  if (!Array.isArray(architectureReferences)) {
+    failures.push("provenance architectureReferences must be an array");
+  }
   if (!Array.isArray(value.files)) {
     failures.push("provenance files must be an array");
-    return { approvedCommits, files: [] };
+    return {
+      approvedCommits,
+      architectureReferences: Array.isArray(architectureReferences) ? architectureReferences : [],
+      files: []
+    };
   }
-  return { approvedCommits, files: value.files };
+  return {
+    approvedCommits,
+    architectureReferences: Array.isArray(architectureReferences) ? architectureReferences : [],
+    files: value.files
+  };
 }
 
 /** Enforce Apache-by-default and exact, provenance-backed DeepSeek MIT exceptions. */
 export function validateWorkspaceSourceLicenses({ manifests, provenance, sourceFiles }) {
   const failures = [];
-  const { approvedCommits, files: entries } = parseProvenance(provenance, failures);
+  const {
+    approvedCommits,
+    architectureReferences,
+    files: entries
+  } = parseProvenance(provenance, failures);
   const sources = new Map(sourceFiles.map((file) => [file.path, file.text]));
   const listed = new Map();
   const mixedManifests = new Set();
+  const manifestPaths = new Set(manifests.map((manifest) => manifest.path));
+
+  const seenArchitectureReferences = new Set();
+  for (const [index, rawReference] of architectureReferences.entries()) {
+    const label = `provenance architectureReferences[${index}]`;
+    if (!rawReference || typeof rawReference !== "object" || Array.isArray(rawReference)) {
+      failures.push(`${label} must be an object`);
+      continue;
+    }
+    const reference = rawReference;
+    const upstreamPath = reference.upstreamPath;
+    const upstreamCommit = reference.upstreamCommit;
+    const referenceKey = `${String(upstreamCommit)}:${String(upstreamPath)}`;
+    if (seenArchitectureReferences.has(referenceKey)) {
+      failures.push(`${label} duplicates ${referenceKey}`);
+    }
+    seenArchitectureReferences.add(referenceKey);
+    if (typeof upstreamPath !== "string" || !/^docs\/[A-Za-z0-9._/-]+\.md$/u.test(upstreamPath)) {
+      failures.push(`${label} upstreamPath must identify an upstream Markdown document`);
+    }
+    if (typeof upstreamCommit !== "string"
+      || !/^[0-9a-f]{40}$/u.test(upstreamCommit)
+      || !approvedCommits.has(upstreamCommit)) {
+      failures.push(`${label} upstreamCommit must be an approved fixed commit`);
+    }
+    if (reference.mode !== "reference-only") {
+      failures.push(`${label} mode must be reference-only`);
+    }
+    if (reference.licenseImpact !== "none") {
+      failures.push(`${label} licenseImpact must be none`);
+    }
+    if (typeof reference.summary !== "string" || reference.summary.trim().length === 0) {
+      failures.push(`${label} summary must not be empty`);
+    }
+    if (!Array.isArray(reference.concepts)
+      || reference.concepts.length === 0
+      || reference.concepts.some((concept) => typeof concept !== "string" || concept.trim().length === 0)) {
+      failures.push(`${label} concepts must be a non-empty string array`);
+    }
+    if (!Array.isArray(reference.localPackages) || reference.localPackages.length === 0) {
+      failures.push(`${label} localPackages must be a non-empty array`);
+      continue;
+    }
+    const seenLocalPackages = new Set();
+    for (const localPackage of reference.localPackages) {
+      if (typeof localPackage !== "string" || !/^packages\/[A-Za-z0-9._-]+$/u.test(localPackage)) {
+        failures.push(`${label} localPackages must contain workspace package paths`);
+        continue;
+      }
+      if (seenLocalPackages.has(localPackage)) {
+        failures.push(`${label} duplicates local package ${localPackage}`);
+      }
+      seenLocalPackages.add(localPackage);
+      const manifestPath = `${localPackage}/package.json`;
+      if (!manifestPaths.has(manifestPath)) {
+        failures.push(`${manifestPath} is missing for an architecture reference`);
+      }
+    }
+  }
 
   for (const [index, rawEntry] of entries.entries()) {
     const label = `provenance files[${index}]`;
@@ -376,7 +458,6 @@ export function validateWorkspaceSourceLicenses({ manifests, provenance, sourceF
     if (!listed.has(file.path)) failures.push(`${file.path} has an unlisted DeepSeek MIT notice`);
   }
 
-  const manifestPaths = new Set(manifests.map((manifest) => manifest.path));
   for (const manifestPath of mixedManifests) {
     if (!manifestPaths.has(manifestPath)) failures.push(`${manifestPath} is missing for a listed MIT source`);
   }

@@ -321,6 +321,19 @@ test("attribution policy rejects claiming unimported upstream code in NOTICE", (
   );
 });
 
+test("attribution policy distinguishes vendored Cordis from reference-only workspaces", () => {
+  assert.doesNotThrow(() =>
+    validateAttributionPolicy({
+      notice: [
+        "The Cordis framework under vendor/ is copied from DeepSeek Harness",
+        "commit 99f6f02fecdb7dff40c3fbc9470f5907c29f74ca."
+      ].join("\n"),
+      thirdParty: "No non-vendored DeepSeek Harness source file is copied or adapted.",
+      provenance: "files: []"
+    })
+  );
+});
+
 test("license policy accepts approved SPDX expressions and rejects forbidden or unknown values", () => {
   assert.equal(validateLicenseExpression("MIT OR Apache-2.0"), true);
   assert.equal(validateLicenseExpression("MIT OR GPL-3.0-only"), true);
@@ -355,6 +368,7 @@ test("workspace source license policy permits MIT only for exact provenance-back
     "  approvedSourceCommits:",
     "    - 47f943859bef60e4160492346772ded9b24f765a",
     "    - 141eb6fef83422698aef7a981029e843e8161534",
+    "architectureReferences: []",
     "files:",
     "  - upstreamPath: packages/core/agent-loop/src/agent.ts",
     "    localPath: packages/agent-kernel/src/react-driver.ts",
@@ -407,6 +421,7 @@ test("workspace source license policy fails closed on bad provenance metadata an
       "  approvedSourceCommits:",
       "    - 47f943859bef60e4160492346772ded9b24f765a",
       "    - 141eb6fef83422698aef7a981029e843e8161534",
+      "architectureReferences: []",
       "files:",
       "  - upstreamPath: packages/core/agent-loop/src/agent.ts",
       "    localPath: packages/agent-kernel/src/react-driver.ts",
@@ -441,6 +456,7 @@ test("workspace source license policy requires schema v2 and a per-file approved
     "  approvedSourceCommits:",
     "    - 47f943859bef60e4160492346772ded9b24f765a",
     "    - 141eb6fef83422698aef7a981029e843e8161534",
+    "architectureReferences: []",
     "files:",
     "  - upstreamPath: packages/core/agent-loop/src/agent.ts",
     "    localPath: packages/agent-kernel/src/react-driver.ts",
@@ -475,4 +491,67 @@ test("workspace source license policy requires schema v2 and a per-file approved
     provenance: base.with(0, "schemaVersion: 1").toSpliced(8, 0, "    upstreamCommit: 141eb6fef83422698aef7a981029e843e8161534").join("\n")
   });
   assert.equal(legacy.some((failure) => /schemaVersion must be 2/u.test(failure)), true);
+});
+
+test("workspace source license policy validates reference-only architecture entries", () => {
+  const provenance = [
+    "schemaVersion: 2",
+    "upstream:",
+    "  approvedSourceCommits:",
+    "    - 47f943859bef60e4160492346772ded9b24f765a",
+    "    - 141eb6fef83422698aef7a981029e843e8161534",
+    "architectureReferences:",
+    "  - upstreamPath: docs/architecture.md",
+    "    upstreamCommit: 141eb6fef83422698aef7a981029e843e8161534",
+    "    mode: reference-only",
+    "    licenseImpact: none",
+    "    localPackages:",
+    "      - packages/contracts",
+    "      - packages/kernel",
+    "      - packages/agent-runtime",
+    "    concepts:",
+    "      - Cordis composition and lifecycle scopes",
+    "      - Agent inbox and turn boundaries",
+    "      - append-only session log and derived surface",
+    "    summary: Architecture comparison only; no source text was copied or adapted.",
+    "files: []"
+  ].join("\n");
+  const manifests = [
+    { path: "packages/contracts/package.json", license: "Apache-2.0" },
+    { path: "packages/kernel/package.json", license: "Apache-2.0" },
+    { path: "packages/agent-runtime/package.json", license: "Apache-2.0" }
+  ];
+
+  assert.deepEqual(validateWorkspaceSourceLicenses({ manifests, provenance, sourceFiles: [] }), []);
+
+  const invalid = validateWorkspaceSourceLicenses({
+    manifests,
+    provenance: provenance
+      .replace("upstreamCommit: 141eb6fef83422698aef7a981029e843e8161534", "upstreamCommit: main")
+      .replace("mode: reference-only", "mode: adapted")
+      .replace("licenseImpact: none", "licenseImpact: MIT")
+      .replace("      - packages/kernel", "      - packages/missing"),
+    sourceFiles: []
+  });
+  assert.equal(invalid.some((failure) => /architectureReferences\[0\].*approved fixed commit/u.test(failure)), true);
+  assert.equal(invalid.some((failure) => /architectureReferences\[0\].*mode must be reference-only/u.test(failure)), true);
+  assert.equal(invalid.some((failure) => /architectureReferences\[0\].*licenseImpact must be none/u.test(failure)), true);
+  assert.equal(invalid.some((failure) => /packages\/missing\/package\.json is missing for an architecture reference/u.test(failure)), true);
+});
+
+test("current cutover provenance contains only valid source and architecture mappings", async () => {
+  const provenance = await readFile(
+    new URL("../../docs/upstream-provenance/deepseek-harness.yaml", import.meta.url),
+    "utf8"
+  );
+  const packagePaths = ["contracts", "kernel", "agent-runtime"];
+  const manifests = await Promise.all(packagePaths.map(async (workspace) => ({
+    path: `packages/${workspace}/package.json`,
+    license: JSON.parse(await readFile(
+      new URL(`../../packages/${workspace}/package.json`, import.meta.url),
+      "utf8"
+    )).license
+  })));
+
+  assert.deepEqual(validateWorkspaceSourceLicenses({ manifests, provenance, sourceFiles: [] }), []);
 });
