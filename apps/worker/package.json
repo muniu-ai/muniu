@@ -16,13 +16,14 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsc -p tsconfig.test.json && node --test dist-test/test/worker-v2.test.js",
+    "test": "tsc -p tsconfig.test.json && node --test dist-test/test/*.test.js",
     "dev": "npm run build && node dist/main.js"
   },
   "dependencies": {
     "@mn/agent-runtime": "0.2.0",
     "@mn/contracts": "0.2.0",
     "@mn/kernel": "0.2.0",
+    "@mn/plugin-coding": "0.2.0",
     "@mn/storage": "0.2.0"
   }
 }

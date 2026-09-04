@@ -30,7 +30,12 @@ import {
   type ByokProviderId,
 } from "./model-invoker.js";
 import { createKernelToolApprovalPort, type ToolApprovalKernel } from "./approval.js";
+import {
+  CodingWorkerOutcomeError,
+  createCodingExecutionWorkerHandler,
+} from "./coding.js";
 export * from "./approval.js";
+export * from "./coding.js";
 
 export * from "./model-invoker.js";
 
@@ -451,6 +456,8 @@ export interface KernelAgentTurnHandlerOptions {
   readonly approvalKernel?: ToolApprovalKernel;
   readonly approvalPollIntervalMs?: number;
   readonly opcPublicWebReader?: OpcPublicWebReader;
+  readonly codingSandboxRoot?: string;
+  readonly codingSandboxExecutable?: string;
   readonly controlPollIntervalMs?: number;
   readonly acceptsSecretReference?: (reference: string) => boolean;
   readonly now?: () => string;
@@ -470,7 +477,7 @@ export function createKernelAgentTurnHandler(
   if (!Number.isSafeInteger(controlPollIntervalMs) || controlPollIntervalMs < 1) {
     throw new TypeError("执行控制轮询间隔必须是正整数毫秒");
   }
-  return createAgentTurnHandler({
+  const genericHandler = createAgentTurnHandler({
     observeControl: async (handle, job) => observeExecutionControl(
       options.store,
       job.tenantId,
@@ -596,6 +603,93 @@ export function createKernelAgentTurnHandler(
       };
     },
   });
+  const codingHandler = options.codingSandboxRoot
+    ? createCodingExecutionWorkerHandler({
+        store: options.store,
+        secretStore: options.secretStore,
+        modelInvoker: invokeModel,
+        approvalKernel,
+        sandboxRoot: options.codingSandboxRoot,
+        ...(options.codingSandboxExecutable
+          ? { sandboxExecutable: options.codingSandboxExecutable }
+          : {}),
+        acceptsSecretReference,
+        ...(options.approvalPollIntervalMs
+          ? { approvalPollIntervalMs: options.approvalPollIntervalMs }
+          : {}),
+        ...(options.now ? { now: options.now } : {}),
+      })
+    : undefined;
+  return async (job, context) => {
+    const executionId = requiredPayloadString(job.payload, "executionId");
+    const pluginId = await options.store.transact(job.tenantId, (transaction) =>
+      transaction.getProjection<Execution>("execution", executionId)?.pluginId);
+    if (pluginId !== "coding") return genericHandler(job, context);
+    if (!codingHandler) {
+      throw new Error("Coding sandbox 尚未配置，已拒绝无沙箱执行");
+    }
+    const control = await observeCodingExecutionControl(
+      options.store,
+      job.tenantId,
+      executionId,
+      controlPollIntervalMs,
+    );
+    try {
+      return await codingHandler(job, {
+        ...context,
+        signal: AbortSignal.any([context.signal, control.signal]),
+      });
+    } catch (error) {
+      const status = await options.store.transact(job.tenantId, (transaction) =>
+        transaction.getProjection<Execution>("execution", executionId)?.status);
+      if (status === "cancelled") throw new AgentExecutionCancelledError(executionId);
+      if (status === "paused" || status === "interrupted") {
+        throw new AgentExecutionInterruptedError(executionId);
+      }
+      if (!(error instanceof CodingWorkerOutcomeError)) throw error;
+      if (error.status === "needs_reconciliation") {
+        throw new UnknownExternalSideEffectError(error.executionId);
+      }
+      if (error.status === "cancelled") {
+        throw new AgentExecutionCancelledError(error.executionId);
+      }
+      throw error;
+    } finally {
+      await control.stop();
+    }
+  };
+}
+
+async function observeCodingExecutionControl(
+  store: AgentExecutionStore,
+  tenantId: string,
+  executionId: string,
+  intervalMs: number,
+): Promise<{ readonly signal: AbortSignal; readonly stop: () => Promise<void> }> {
+  const abort = new AbortController();
+  let stopped = false;
+  let current = Promise.resolve();
+  const inspect = async () => {
+    if (stopped || abort.signal.aborted) return;
+    const status = await store.transact(tenantId, (transaction) =>
+      transaction.getProjection<Execution>("execution", executionId)?.status);
+    if (status === "cancelled" || status === "paused" || status === "interrupted") {
+      abort.abort(status);
+    }
+  };
+  const schedule = () => {
+    current = current.then(inspect).catch(() => abort.abort("执行控制状态检查失败"));
+  };
+  await inspect();
+  const timer = setInterval(schedule, intervalMs);
+  return {
+    signal: abort.signal,
+    stop: async () => {
+      stopped = true;
+      clearInterval(timer);
+      await current;
+    },
+  };
 }
 
 function publicWebUrl(value: JsonValue | undefined): string {

@@ -1,4 +1,5 @@
 import { homedir } from "node:os";
+import { join } from "node:path";
 import { FileCas, SqliteStorage } from "@mn/storage";
 import { createNodePublicWebReader } from "@mn/plugin-opc";
 import {
@@ -95,6 +96,7 @@ export async function startLocalAgentOsHost(options: StartLocalHostOptions = {})
     secretStore,
     approvalKernel: host.kernel,
     opcPublicWebReader: options.opcPublicWebReader ?? createNodePublicWebReader(),
+    codingSandboxRoot: join(paths.root, "sandboxes", "coding"),
     ...(options.modelInvoker ? { modelInvoker: options.modelInvoker } : {}),
     acceptsSecretReference: (reference) => reference.startsWith("keychain://muniu.v2/"),
     ...(options.now ? { now: options.now } : {}),

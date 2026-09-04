@@ -262,9 +262,9 @@ export class CodingExecutionEngine {
       }
 
       const gate = candidate.sandbox.enforced && !candidate.sandbox.fallbackUsed
-        && candidate.sandbox.evidenceDigest
+        && candidate.sandbox.evidenceDigest === input.controlPlane.sandboxDigest
         ? await verifyFailClosed(input.gateVerifier, candidate, input.controlPlane)
-        : sandboxFailure(candidate);
+        : sandboxFailure(candidate, input.controlPlane.sandboxDigest);
       gates.push(gate);
 
       if (gate.status === "passed") {
@@ -280,29 +280,16 @@ export class CodingExecutionEngine {
           gateEvidenceDigest: gate.evidenceDigest!,
           diffDigest: candidate.diffDigest,
         });
-        if (!input.approval) {
-          return outcome(input, runnerId, limits, candidates, gates, "waiting_approval", evidence,
-            "审阅 Diff、检查结果和证据后决定是否批准");
-        }
+        const pending = outcome(input, runnerId, limits, candidates, gates, "waiting_approval", evidence,
+          "审阅 Diff、检查结果和证据后决定是否批准");
+        if (!input.approval) return pending;
         const approval = await input.approval({
           effectClass: "local_reversible_write",
           intent: `批准 Coding 任务“${input.task.title}”的代码变更`,
           candidate,
           evidence,
         });
-        if (approval === "denied") {
-          return outcome(input, runnerId, limits, candidates, gates, "cancelled", evidence,
-            "变更已拒绝，任务未应用", approval);
-        }
-        const deliverable = immutable({
-          kind: "code_change" as const,
-          title: input.task.title,
-          summary: candidate.summary,
-          diffDigest: candidate.diffDigest,
-          nextStep: "查看成果并记录学习结论",
-        });
-        return outcome(input, runnerId, limits, candidates, gates, "completed", evidence,
-          deliverable.nextStep, approval, deliverable);
+        return decideCodingExecution(pending, approval);
       }
 
       const repairsUsed = candidates.length - 1;
@@ -392,13 +379,56 @@ async function verifyFailClosed(
   });
 }
 
-function sandboxFailure(candidate: Candidate): GateResult {
+function sandboxFailure(candidate: Candidate, expectedDigest: string): GateResult {
+  const reason = candidate.sandbox.enforced && !candidate.sandbox.fallbackUsed
+    && candidate.sandbox.evidenceDigest
+    && candidate.sandbox.evidenceDigest !== expectedDigest
+    ? "Sandbox 证据与固定控制面不一致，已按失败处理"
+    : "Sandbox 未强制生效或发生降级，已按失败处理";
   return immutable({
     candidateId: candidate.id,
     status: "failed",
     authoritative: false,
     checks: [],
-    reason: "Sandbox 未强制生效或发生降级，已按失败处理",
+    reason,
+  });
+}
+
+export function decideCodingExecution(
+  result: CodingExecutionResult,
+  decision: ApprovalDecision,
+): CodingExecutionResult {
+  if (result.status !== "waiting_approval" || result.approval !== "pending") {
+    throw new Error("只有等待审批的 Coding 执行可以处理决定");
+  }
+  const candidate = result.candidates.at(-1);
+  const gate = result.gates.at(-1);
+  if (!candidate || !result.evidence || !gate || gate.candidateId !== candidate.id
+    || gate.status !== "passed" || !gate.authoritative || !gate.evidenceDigest) {
+    throw new Error("等待审批的 Coding 执行缺少固定候选、Gate 或 Evidence");
+  }
+  if (decision === "denied") {
+    return immutable({
+      ...result,
+      status: "cancelled" as const,
+      approval: decision,
+      deliverable: undefined,
+      nextStep: "变更已拒绝，任务未应用",
+    });
+  }
+  const deliverable = immutable({
+    kind: "code_change" as const,
+    title: result.task.title,
+    summary: candidate.summary,
+    diffDigest: candidate.diffDigest,
+    nextStep: "查看成果并记录学习结论",
+  });
+  return immutable({
+    ...result,
+    status: "completed" as const,
+    approval: decision,
+    deliverable,
+    nextStep: deliverable.nextStep,
   });
 }
 

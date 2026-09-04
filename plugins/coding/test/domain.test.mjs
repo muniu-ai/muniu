@@ -93,5 +93,10 @@ test("官方 Coding 插件声明成果导向 Skill 和 builtin 默认 Agent", ()
   assert.deepEqual(codingPlugin.contributions.skills[0].permissionIds, [
     "coding.repository.read",
     "coding.sandbox.write",
+    "coding.candidate.accept",
   ]);
+  assert.deepEqual(
+    codingPlugin.contributions.tools.find((tool) => tool.id === "coding.candidate.accept"),
+    { id: "coding.candidate.accept", version: "0.2.0", effectClass: "privileged" },
+  );
 });

@@ -47,7 +47,11 @@ export const codingPlugin = {
         source: "Muniu",
         license: "Apache-2.0",
         version: "0.2.0",
-        permissionIds: ["coding.repository.read", "coding.sandbox.write"],
+        permissionIds: [
+          "coding.repository.read",
+          "coding.sandbox.write",
+          "coding.candidate.accept",
+        ],
       },
     ],
     workflows: [
@@ -57,6 +61,7 @@ export const codingPlugin = {
       { id: "coding.repository.read", version: "0.2.0", effectClass: "local_read" },
       { id: "coding.sandbox.write", version: "0.2.0", effectClass: "local_reversible_write" },
       { id: "coding.gate.verify", version: "0.2.0", effectClass: "local_read" },
+      { id: "coding.candidate.accept", version: "0.2.0", effectClass: "privileged" },
     ],
     memorySchemas: [
       { id: "coding.memory.repository", version: "0.2.0", namespace: "coding" },

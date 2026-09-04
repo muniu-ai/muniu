@@ -613,6 +613,7 @@ test("Coding 任务原子绑定 Thread，并通过通用 turns 提交 builtin Ex
     "coding.repository.read",
     "coding.sandbox.write",
     "coding.gate.verify",
+    "coding.candidate.accept",
   ]);
   assert.equal(store.readJobs("local").length, 1);
   assert.equal(store.readJobs("local")[0]?.payload.executionId, execution.id);

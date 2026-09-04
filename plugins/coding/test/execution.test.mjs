@@ -5,6 +5,7 @@ import {
   CODING_DEFAULT_LIMITS,
   CodingExecutionEngine,
   createCodingTask,
+  decideCodingExecution,
   presentCodingResult,
 } from "../src/index.ts";
 
@@ -42,7 +43,7 @@ function candidate(sequence) {
     sandbox: {
       enforced: true,
       fallbackUsed: false,
-      evidenceDigest: SHA("9"),
+      evidenceDigest: SHA("4"),
     },
   };
 }
@@ -139,6 +140,55 @@ test("Gate、Evidence 和 Sandbox 缺失时失败关闭", async (t) => {
     assert.equal(result.status, "needs_human_decision");
     assert.match(result.gates[0].reason, /Sandbox/);
   });
+
+  await t.test("Sandbox 证据与固定控制面不一致时不执行 Gate", async () => {
+    let gateCalls = 0;
+    const mismatched = candidate(1);
+    mismatched.sandbox = { enforced: true, fallbackUsed: false, evidenceDigest: SHA("9") };
+    const runner = fakeRunner([[{ type: "candidate", candidate: mismatched }]]);
+    const result = await new CodingExecutionEngine({ runners: [runner] }).execute({
+      task: task(),
+      controlPlane: controlPlane(),
+      limits: { maxRepairAttempts: 0, maxDurationMs: 3_600_000 },
+      gateVerifier: {
+        async verify() {
+          gateCalls += 1;
+          return { status: "passed", authoritative: true, evidenceDigest: SHA("8"), checks: [] };
+        },
+      },
+    });
+    assert.equal(gateCalls, 0);
+    assert.equal(result.status, "needs_human_decision");
+    assert.match(result.gates[0].reason, /固定控制面不一致/);
+  });
+});
+
+test("等待审批的持久结果可在恢复后完成，且不会重新执行 Runner", async () => {
+  const runner = fakeRunner([[{ type: "candidate", candidate: {
+    ...candidate(1),
+    sandbox: { enforced: true, fallbackUsed: false, evidenceDigest: SHA("4") },
+  } }]]);
+  const pending = await new CodingExecutionEngine({ runners: [runner] }).execute({
+    task: task(),
+    controlPlane: controlPlane(),
+    gateVerifier: {
+      async verify() {
+        return {
+          status: "passed",
+          authoritative: true,
+          evidenceDigest: SHA("8"),
+          checks: [{ id: "test", status: "passed", summary: "全部通过" }],
+        };
+      },
+    },
+  });
+
+  assert.equal(pending.status, "waiting_approval");
+  const completed = decideCodingExecution(pending, "approved_once");
+  assert.equal(completed.status, "completed");
+  assert.equal(completed.deliverable.diffDigest, SHA("1"));
+  assert.equal(runner.state.starts, 1);
+  assert.throws(() => decideCodingExecution(completed, "approved_once"), /等待审批/);
 });
 
 test("完整执行生成不可变证据、审批和成果", async () => {
