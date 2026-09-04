@@ -419,6 +419,7 @@ test("workspace source license policy maps plugin provenance to its manifest", (
     "  approvedSourceCommits:",
     "    - 47f943859bef60e4160492346772ded9b24f765a",
     "    - 141eb6fef83422698aef7a981029e843e8161534",
+    "architectureReferences: []",
     "files:",
     "  - upstreamPath: packages/core/agent-loop/src/agent.ts",
     "    localPath: plugins/coding/src/react-driver.ts",
