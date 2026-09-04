@@ -1059,6 +1059,63 @@ test("企业工作区创建要求组织管理员并保留经验证的组织角�
   await host.close();
 });
 
+test("企业插件供应链变更只允许组织管理员或治理管理员", async () => {
+  let installCalls = 0;
+  const host = await createAgentOsHost({
+    profile: "enterprise",
+    store: new InMemoryKernelStore(),
+    secretStore: secrets,
+    identityResolver(request) {
+      const principalId = request.headers.get("authorization")?.replace(/^Bearer\s+/u, "") ?? "";
+      const organizationRoles = principalId === "governance"
+        ? ["governance_admin"] as const
+        : principalId === "auditor" ? ["auditor"] as const : [] as const;
+      return principalId ? { tenantId: "tenant-a", principalId, organizationRoles }
+        : { tenantId: "", principalId: "", organizationRoles };
+    },
+    pluginInstaller: {
+      async install() {
+        installCalls += 1;
+        return {
+          id: "research",
+          tenantId: "tenant-a",
+          streamVersion: 1,
+          createdAt: "2026-09-04T00:00:00.000Z",
+          updatedAt: "2026-09-04T00:00:00.000Z",
+          pluginId: "research",
+          version: "0.2.0",
+          packageSha256: "a".repeat(64),
+          releaseSequence: 1,
+          status: "installed",
+          projectionNamespace: "research_v1",
+          developmentMode: false,
+        };
+      },
+    },
+  });
+  const install = (principalId: string, key: string) => host.dispatch(new Request(
+    "http://host.test/v2/plugins/installations",
+    {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${principalId}`,
+        "content-type": "application/json",
+        "Idempotency-Key": key,
+      },
+      body: JSON.stringify({ pluginId: "research", version: "0.2.0" }),
+    },
+  ));
+  const denied = await install("auditor", "plugin-auditor-denied");
+  assert.equal(denied.status, 403);
+  assert.equal((await responseJson(denied)).code, "ORGANIZATION_ACCESS_DENIED");
+  assert.equal(installCalls, 0);
+
+  const allowed = await install("governance", "plugin-governance-allowed");
+  assert.equal(allowed.status, 201);
+  assert.equal(installCalls, 1);
+  await host.close();
+});
+
 test("同一 tenant 内仍按工作区成员隔离", async () => {
   const store = new InMemoryKernelStore();
   const host = await createAgentOsHost({
