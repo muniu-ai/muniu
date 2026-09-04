@@ -230,7 +230,7 @@ test("企业全局停用与清除要求治理角色，工作区停用要求所�
     profile: "enterprise",
     store: enterpriseStore,
     secretStore: secrets,
-    pluginInstaller: installer,
+    tenantPluginInstallerFactory: () => installer,
     identityResolver(request) {
       return {
         tenantId: "tenant-a",

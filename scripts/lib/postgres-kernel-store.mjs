@@ -125,6 +125,13 @@ export class PostgresKernelStore {
     } : undefined;
   }
 
+  async listTenantIds() {
+    const result = await this.#pool.query(
+      "select tenant_id from mn_v2.tenant_heads order by tenant_id asc",
+    );
+    return result.rows.map((row) => String(row.tenant_id));
+  }
+
   async transact(tenantId, work) {
     if (typeof tenantId !== "string" || !tenantId.trim()) throw new TypeError("tenantId 不能为空");
     const client = await this.#pool.connect();

@@ -225,6 +225,14 @@ export class SqliteStorage implements StoragePort {
 
   async initialize(): Promise<void> {}
 
+  async listTenantIds(): Promise<readonly string[]> {
+    this.#assertOpen();
+    const rows = this.#database.prepare(
+      "select tenant_id from tenant_heads order by tenant_id asc",
+    ).all() as RecordRow[];
+    return rows.map((row) => String(row.tenant_id));
+  }
+
   /**
    * Synchronous transaction callback compatible with packages/kernel's
    * KernelStore. Callers must not return a Promise from the callback.

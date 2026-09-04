@@ -3,7 +3,11 @@
 
 import { createHash } from "node:crypto";
 
-import { createAgentOsHost, enterpriseReadiness } from "@mn/host";
+import {
+  createAgentOsHost,
+  createEnterpriseFilePluginRepository,
+  enterpriseReadiness,
+} from "@mn/host";
 import { S3Cas } from "@mn/storage";
 import pg from "pg";
 
@@ -101,6 +105,25 @@ const protectedPayloadKeyProvider = vaultConfigured
     })
   : new UnavailableEnterpriseKeyProvider();
 
+const pluginRepositoryIndex = process.env.MN_PLUGIN_REPOSITORY_INDEX?.trim();
+const pluginTrustedRoots = process.env.MN_PLUGIN_TRUSTED_ROOTS?.trim();
+const pluginRepositoryDigest = process.env.MN_PLUGIN_REPOSITORY_DIGEST?.trim();
+if (Boolean(pluginRepositoryIndex) !== Boolean(pluginTrustedRoots)
+  || Boolean(pluginRepositoryIndex) !== Boolean(pluginRepositoryDigest)) {
+  throw new Error(
+    "MN_PLUGIN_REPOSITORY_INDEX、MN_PLUGIN_TRUSTED_ROOTS 与 MN_PLUGIN_REPOSITORY_DIGEST 必须同时配置",
+  );
+}
+const enterprisePlugins = pluginRepositoryIndex
+  ? await createEnterpriseFilePluginRepository({
+      indexFile: pluginRepositoryIndex,
+      trustedRootsFile: pluginTrustedRoots,
+    })
+  : undefined;
+if (enterprisePlugins && enterprisePlugins.repositoryDigest !== pluginRepositoryDigest) {
+  throw new Error("企业插件仓库摘要与 MN_PLUGIN_REPOSITORY_DIGEST 不一致");
+}
+
 const retention = {
   businessDays: positiveInteger("MN_RETENTION_BUSINESS_DAYS"),
   executionDays: positiveInteger("MN_RETENTION_EXECUTION_DAYS"),
@@ -152,6 +175,10 @@ const host = await createAgentOsHost({
   cas,
   secretStore,
   protectedPayloadKeyProvider,
+  ...(enterprisePlugins ? {
+    pluginRepository: enterprisePlugins.pluginRepository,
+    trustedPluginRoots: enterprisePlugins.trustedPluginRoots,
+  } : {}),
   readiness,
   identityResolver: (request) => oidc.resolve(request),
 });

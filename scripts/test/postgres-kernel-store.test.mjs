@@ -98,3 +98,17 @@ test("PostgreSQL Kernel transaction rolls back cross-tenant Job writes", async (
   }), /不能跨租户/u);
   assert.equal(client.queries.at(-1).sql, "rollback");
 });
+
+test("PostgreSQL Kernel store lists tenants for plugin lock readiness", async () => {
+  const queries = [];
+  const pool = {
+    async connect() { throw new Error("本测试不应打开事务连接"); },
+    async query(sql) {
+      queries.push(sql.replace(/\s+/gu, " ").trim());
+      return { rows: [{ tenant_id: "tenant-a" }, { tenant_id: "tenant-b" }] };
+    },
+  };
+  const store = new PostgresKernelStore({ pool, hmacKey: Buffer.alloc(32, 11) });
+  assert.deepEqual(await store.listTenantIds(), ["tenant-a", "tenant-b"]);
+  assert.match(queries[0], /from mn_v2\.tenant_heads order by tenant_id asc/u);
+});

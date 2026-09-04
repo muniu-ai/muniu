@@ -4,6 +4,11 @@
 {{- if .Values.telemetry.enabled }}{{- fail "telemetry must remain disabled by default" }}{{- end }}
 {{- if not (regexMatch "^[a-f0-9]{64}$" .Values.runtimeLocks.engineDigest) }}{{- fail "runtimeLocks.engineDigest must be a SHA-256 digest" }}{{- end }}
 {{- if not (regexMatch "^[a-f0-9]{64}$" .Values.runtimeLocks.pluginDigest) }}{{- fail "runtimeLocks.pluginDigest must be a SHA-256 digest" }}{{- end }}
+{{- if .Values.pluginRepository.enabled }}
+{{- if not (hasPrefix "/" .Values.pluginRepository.indexFile) }}{{- fail "pluginRepository.indexFile must be an absolute image path" }}{{- end }}
+{{- if not (hasPrefix "/" .Values.pluginRepository.trustedRootsFile) }}{{- fail "pluginRepository.trustedRootsFile must be an absolute image path" }}{{- end }}
+{{- if not (regexMatch "^[a-f0-9]{64}$" .Values.pluginRepository.digest) }}{{- fail "pluginRepository.digest must be a SHA-256 digest" }}{{- end }}
+{{- end }}
 {{- if or (lt (int .Values.retention.businessDays) 1) (lt (int .Values.retention.executionDays) 1) (lt (int .Values.retention.deliverableDays) 1) (lt (int .Values.retention.auditDays) 1) }}{{- fail "all retention policies must be configured" }}{{- end }}
 {{- if and .Values.worker.enabled (ne .Values.sandbox.driver "kubernetes") }}{{- fail "enterprise worker requires sandbox.driver=kubernetes" }}{{- end }}
 apiVersion: v1
@@ -28,6 +33,11 @@ data:
   MN_PLUGIN_LOCK_DIGEST: {{ .Values.runtimeLocks.pluginDigest | quote }}
   MN_EXPECTED_ENGINE_LOCK_DIGEST: {{ .Values.runtimeLocks.engineDigest | quote }}
   MN_EXPECTED_PLUGIN_LOCK_DIGEST: {{ .Values.runtimeLocks.pluginDigest | quote }}
+  {{- if .Values.pluginRepository.enabled }}
+  MN_PLUGIN_REPOSITORY_INDEX: {{ .Values.pluginRepository.indexFile | quote }}
+  MN_PLUGIN_TRUSTED_ROOTS: {{ .Values.pluginRepository.trustedRootsFile | quote }}
+  MN_PLUGIN_REPOSITORY_DIGEST: {{ .Values.pluginRepository.digest | quote }}
+  {{- end }}
   MN_RETENTION_BUSINESS_DAYS: {{ .Values.retention.businessDays | quote }}
   MN_RETENTION_EXECUTION_DAYS: {{ .Values.retention.executionDays | quote }}
   MN_RETENTION_DELIVERABLE_DAYS: {{ .Values.retention.deliverableDays | quote }}

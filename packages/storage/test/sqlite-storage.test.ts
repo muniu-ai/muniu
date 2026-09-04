@@ -983,6 +983,7 @@ test("SQLite is structurally compatible with KernelStore transactions", async ()
       return transaction.getIdempotency("workspace.create", "request-1")?.response;
     });
     assert.deepEqual(value, { id: "one" });
+    assert.deepEqual(await storage.listTenantIds(), ["tenant-a"]);
     assert.equal((await storage.readEvents("tenant-a", 0, 20)).events.length, 2);
     assert.equal((await storage.getJob("turn-job"))?.kind, "agent.execution.run");
     assert.equal((await storage.listOutbox("tenant-a", 20))[0]?.topic, "job.available");

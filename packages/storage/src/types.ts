@@ -164,6 +164,7 @@ export interface KernelTransactionLike {
 export interface KernelStoreCompatible {
   transact<T>(tenantId: string, work: (transaction: KernelTransactionLike) => T): Promise<T>;
   readEvents(tenantId: string, afterPosition: number, limit: number): Promise<EventPage>;
+  listTenantIds?(): Promise<readonly string[]>;
 }
 
 export class StreamVersionConflictError extends Error {

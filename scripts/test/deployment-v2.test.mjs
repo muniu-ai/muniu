@@ -60,6 +60,8 @@ test("企业 Host 可通过 Vault Transit 端口包装和解包受保护数据�
   const host = read("scripts/enterprise-host.mjs");
   assert.match(host, /protectedPayloadKeyProvider/u);
   assert.match(host, /VaultTransitKeyProvider/u);
+  assert.match(host, /createEnterpriseFilePluginRepository/u);
+  assert.match(host, /MN_PLUGIN_REPOSITORY_DIGEST/u);
 });
 
 test("Helm chart deploys matching Host and Worker replicas with fail-closed readiness", () => {
@@ -80,6 +82,10 @@ test("Helm chart deploys matching Host and Worker replicas with fail-closed read
   assert.match(config, /MN_VAULT_TRANSIT_KEY/);
   assert.match(config, /MN_EXPECTED_ENGINE_LOCK_DIGEST/);
   assert.match(config, /MN_EXPECTED_PLUGIN_LOCK_DIGEST/);
+  assert.match(values, /pluginRepository:\n\s+enabled:\s+false/u);
+  assert.match(config, /MN_PLUGIN_REPOSITORY_INDEX/u);
+  assert.match(config, /MN_PLUGIN_TRUSTED_ROOTS/u);
+  assert.match(config, /MN_PLUGIN_REPOSITORY_DIGEST/u);
   assert.doesNotMatch(`${values}\n${host}\n${worker}\n${config}`, legacyControlPlane);
 });
 

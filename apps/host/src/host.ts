@@ -81,6 +81,7 @@ import {
 import {
   LocalProductionPluginInstaller,
   LocalSignedPluginRepository,
+  PLUGIN_INSTALLATION_PROJECTION,
   type PluginInstallerPort,
   type ProductionPluginProjectionManager,
   type TrustedRegistryRoot,
@@ -119,6 +120,15 @@ export type ModelProbe = (input: {
   readonly apiKey: string;
 }) => Promise<ModelProbeResult>;
 
+export interface TenantPluginInstallerFactoryInput {
+  readonly tenantId: string;
+  readonly contributions: PluginContributionHost;
+}
+
+export type TenantPluginInstallerFactory = (
+  input: TenantPluginInstallerFactoryInput,
+) => PluginInstallerPort | undefined | Promise<PluginInstallerPort | undefined>;
+
 export interface AgentOsHostOptions {
   readonly store: KernelStore;
   readonly profile?: "local" | "enterprise";
@@ -126,14 +136,19 @@ export interface AgentOsHostOptions {
   readonly secretStore: ModelSecretStore;
   readonly modelProbe?: ModelProbe;
   readonly officialPlugins?: readonly PluginDefinitionV1[];
+  /** 仅限 local profile 的单租户安装器；企业必须按租户创建实例。 */
   readonly pluginInstaller?: PluginInstallerPort;
+  /** 企业插件安装态属于租户，工厂必须为每个 tenant 返回独立实例。 */
+  readonly tenantPluginInstallerFactory?: TenantPluginInstallerFactory;
   /** 本地生产仓库只暴露组合根已经加载的签名制品，不访问远程 JavaScript。 */
   readonly pluginRepository?: LocalSignedPluginRepository;
   readonly trustedPluginRoots?: readonly TrustedRegistryRoot[];
   /** 生产更新先通过此端口排空该插件的 Execution。 */
   readonly pluginExecutionControl?: PluginExecutionControl;
+  readonly tenantPluginExecutionControlFactory?: (tenantId: string) => PluginExecutionControl;
   /** 投影先在独立命名空间重放；activate 在 Kernel 事务内原子切换。 */
   readonly pluginProjections?: ProductionPluginProjectionManager;
+  readonly tenantPluginProjectionsFactory?: (tenantId: string) => ProductionPluginProjectionManager;
   readonly readiness?: () => EnterpriseReadiness | Promise<EnterpriseReadiness>;
   readonly now?: () => string;
   readonly id?: (kind: string) => string;
@@ -710,12 +725,19 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
     acceptsModelSecretReference,
   });
   if (profile === "local") await kernel.bootstrapLocal("agent-os-v2-local-bootstrap");
+  if (profile === "enterprise" && options.pluginInstaller) {
+    throw new Error("企业 profile 必须使用租户化插件安装器工厂，不能复用单例安装器");
+  }
+  if (Boolean(options.pluginRepository) !== Boolean(options.trustedPluginRoots?.length)) {
+    throw new Error("签名插件仓库与 Ed25519 受信根必须同时配置");
+  }
+  if (options.tenantPluginInstallerFactory && options.pluginRepository) {
+    throw new Error("租户化插件安装器工厂与内置签名仓库不能同时配置");
+  }
+  if (profile === "enterprise" && (options.pluginExecutionControl || options.pluginProjections)) {
+    throw new Error("企业插件执行排空和投影端口必须使用租户化工厂");
+  }
   const officialPluginIds = new Set<string>();
-  let pluginInstaller: PluginInstallerPort | undefined;
-  const plugins = new PluginContributionHost({
-    isAvailable: (pluginId) => officialPluginIds.has(pluginId)
-      || Boolean(pluginInstaller?.isInstalled?.(pluginId)),
-  });
   const opcRepository = new KernelOpcRepository({ store: options.store, now, id: nextId });
   const opcService = new OpcService({
     repository: opcRepository,
@@ -728,24 +750,154 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
     claudeCliPluginDefinition,
     codexCliPluginDefinition,
   ];
-  for (const plugin of officialPlugins) {
-    plugins.registerOfficial(plugin);
-    officialPluginIds.add(plugin.id);
-  }
-  pluginInstaller = options.pluginInstaller ?? (profile === "local"
-    ? new LocalProductionPluginInstaller({
-      store: options.store,
-      repository: options.pluginRepository ?? new LocalSignedPluginRepository(),
-      trustedRoots: options.trustedPluginRoots ?? [],
-      contributions: plugins,
-      now,
-      ...(options.pluginExecutionControl ? { executionControl: options.pluginExecutionControl } : {}),
-      ...(options.pluginProjections ? { projections: options.pluginProjections } : {}),
-    })
-    : undefined);
-  await pluginInstaller?.initialize?.();
-  const activatedWorkspaceScopes = new Set<string>();
+  for (const plugin of officialPlugins) officialPluginIds.add(plugin.id);
 
+  interface TenantPluginRuntime {
+    readonly tenantId: string;
+    readonly plugins: PluginContributionHost;
+    readonly installer?: PluginInstallerPort;
+  }
+  const tenantRuntimes = new Map<string, Promise<TenantPluginRuntime>>();
+  const tenantRuntimeFailures = new Set<string>();
+  const tenantInstallerOwners = new WeakMap<object, string>();
+  const createTenantRuntime = async (tenantId: string): Promise<TenantPluginRuntime> => {
+    let installer: PluginInstallerPort | undefined;
+    const plugins = new PluginContributionHost({
+      isAvailable: (pluginId) => officialPluginIds.has(pluginId)
+        || Boolean(installer?.isInstalled?.(pluginId)),
+    });
+    for (const plugin of officialPlugins) plugins.registerOfficial(plugin);
+    if (profile === "local" && options.pluginInstaller) {
+      installer = options.pluginInstaller;
+    } else if (options.tenantPluginInstallerFactory) {
+      installer = await options.tenantPluginInstallerFactory({ tenantId, contributions: plugins });
+    } else if (options.pluginRepository || (options.trustedPluginRoots?.length ?? 0) > 0) {
+      installer = new LocalProductionPluginInstaller({
+        store: options.store,
+        repository: options.pluginRepository ?? new LocalSignedPluginRepository(),
+        trustedRoots: options.trustedPluginRoots ?? [],
+        contributions: plugins,
+        tenantId,
+        actorId: profile === "enterprise" ? "system:plugin-runtime" : LOCAL_ACTOR_ID,
+        now,
+        ...(options.tenantPluginExecutionControlFactory
+          ? { executionControl: options.tenantPluginExecutionControlFactory(tenantId) }
+          : options.pluginExecutionControl ? { executionControl: options.pluginExecutionControl } : {}),
+        ...(options.tenantPluginProjectionsFactory
+          ? { projections: options.tenantPluginProjectionsFactory(tenantId) }
+          : options.pluginProjections ? { projections: options.pluginProjections } : {}),
+      });
+    } else if (profile === "local") {
+      installer = new LocalProductionPluginInstaller({
+        store: options.store,
+        repository: new LocalSignedPluginRepository(),
+        trustedRoots: [],
+        contributions: plugins,
+        tenantId,
+        actorId: LOCAL_ACTOR_ID,
+        now,
+        ...(options.pluginExecutionControl ? { executionControl: options.pluginExecutionControl } : {}),
+        ...(options.pluginProjections ? { projections: options.pluginProjections } : {}),
+      });
+    }
+    if (profile === "enterprise" && installer) {
+      const owner = tenantInstallerOwners.get(installer);
+      if (owner && owner !== tenantId) {
+        throw new Error(`企业租户 ${tenantId} 不能复用租户 ${owner} 的插件安装器实例`);
+      }
+      tenantInstallerOwners.set(installer, tenantId);
+    }
+    await installer?.initialize?.();
+    return { tenantId, plugins, ...(installer ? { installer } : {}) };
+  };
+  const runtimeForTenant = (tenantId: string): Promise<TenantPluginRuntime> => {
+    const existing = tenantRuntimes.get(tenantId);
+    if (existing) return existing;
+    const created = createTenantRuntime(tenantId);
+    tenantRuntimes.set(tenantId, created);
+    void created.then(
+      () => tenantRuntimeFailures.delete(tenantId),
+      () => {
+        tenantRuntimeFailures.add(tenantId);
+        tenantRuntimes.delete(tenantId);
+      },
+    );
+    return created;
+  };
+  const defaultRuntime = profile === "local"
+    ? await runtimeForTenant(LOCAL_TENANT_ID)
+    : (() => {
+      const corePlugins = new PluginContributionHost({
+        isAvailable: (pluginId) => officialPluginIds.has(pluginId),
+      });
+      for (const plugin of officialPlugins) corePlugins.registerOfficial(plugin);
+      return {
+        tenantId: "__enterprise_core__",
+        plugins: corePlugins,
+      } satisfies TenantPluginRuntime;
+    })();
+  const plugins = defaultRuntime.plugins;
+  if (profile === "enterprise") {
+    if (!options.store.listTenantIds) {
+      throw new Error("企业签名插件要求存储实现 listTenantIds，以便 readiness 校验全部租户 lock");
+    }
+    const tenantIds = await options.store.listTenantIds();
+    await Promise.all(tenantIds.map((tenantId) => runtimeForTenant(tenantId)));
+  }
+
+  const tenantPluginReadiness = async (): Promise<EnterpriseReadiness> => {
+    const issues: EnterpriseReadiness["issues"][number][] = [];
+    if (profile === "enterprise") {
+      try {
+        const tenantIds = await options.store.listTenantIds!();
+        await Promise.allSettled(tenantIds.map((tenantId) => runtimeForTenant(tenantId)));
+      } catch {
+        issues.push({
+          code: "TENANT_PLUGIN_READINESS_FAILED",
+          message: "无法列出需要校验插件 lock 的租户",
+          action: "恢复 PostgreSQL 后重新检查插件状态",
+        });
+      }
+    }
+    if (tenantRuntimeFailures.size > 0) {
+      issues.push({
+        code: "TENANT_PLUGIN_RUNTIME_UNAVAILABLE",
+        message: "至少一个租户的插件运行时无法创建",
+        action: "检查镜像内签名插件仓库和租户插件配置",
+      });
+    }
+    const settled = await Promise.allSettled([...tenantRuntimes.values()].map(async (runtimePromise) => {
+      const runtime = await runtimePromise;
+      const missingInstalledRuntime = !runtime.installer
+        && await options.store.transact(runtime.tenantId, (transaction) =>
+          transaction.listProjections(PLUGIN_INSTALLATION_PROJECTION).length > 0);
+      if (missingInstalledRuntime) {
+        return {
+          ready: false,
+          issues: [{
+            code: "TENANT_PLUGIN_REPOSITORY_REQUIRED",
+            message: "数据库存在租户插件 installation，但当前 Host 未配置对应签名仓库",
+            action: "使用包含相同签名插件仓库的发布镜像重新部署",
+          }],
+        };
+      }
+      await runtime.installer?.synchronize?.();
+      return runtime.installer?.readiness?.();
+    }));
+    for (const result of settled) {
+      if (result.status === "rejected") {
+        issues.push({
+          code: "TENANT_PLUGIN_READINESS_FAILED",
+          message: "至少一个租户的插件 lock 无法读取",
+          action: "恢复 PostgreSQL 后重新检查插件状态",
+        });
+        continue;
+      }
+      for (const issue of result.value?.issues ?? []) issues.push(issue);
+    }
+    const unique = [...new Map(issues.map((issue) => [issue.code, issue])).values()];
+    return { ready: unique.length === 0, issues: unique };
+  };
   const context = new Context().extend(Object.freeze({
     agentOsKernel: kernel,
     agentOsPlugins: plugins,
@@ -759,14 +911,71 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
   const ssePollIntervalMs = positiveInterval(options.ssePollIntervalMs, 250);
   const sseKeepAliveIntervalMs = positiveInterval(options.sseKeepAliveIntervalMs, 15_000);
 
-  const ensurePluginsActive = async (tenantId: string, workspace: Workspace): Promise<string> => {
+  const withPluginUse = async <T>(
+    runtime: TenantPluginRuntime,
+    pluginId: string,
+    purpose: "activation" | "execution",
+    actorId: string | undefined,
+    work: () => Promise<T>,
+  ): Promise<T> => {
+    if (officialPluginIds.has(pluginId)) return work();
+    if (runtime.installer?.withPluginUse) {
+      return runtime.installer.withPluginUse(pluginId, purpose, work, { actorId });
+    }
+    if (profile === "enterprise") {
+      throw new PluginPolicyError(
+        "PLUGIN_NOT_ACTIVE",
+        `企业插件 ${pluginId} 的安装器不能证明跨 Host 互斥`,
+        "配置支持持久化执行租约的租户安装器",
+      );
+    }
+    if (purpose === "execution") runtime.installer?.assertCanStartExecution?.(pluginId);
+    else runtime.installer?.assertCanActivate?.(pluginId);
+    return work();
+  };
+
+  const withPluginUses = async <T>(
+    runtime: TenantPluginRuntime,
+    pluginIds: readonly string[],
+    purpose: "activation" | "execution",
+    actorId: string | undefined,
+    work: () => Promise<T>,
+  ): Promise<T> => {
+    const pending = [...new Set(pluginIds.filter((pluginId) => !officialPluginIds.has(pluginId)))].sort();
+    const run = async (index: number): Promise<T> => index === pending.length
+      ? work()
+      : withPluginUse(runtime, pending[index]!, purpose, actorId, () => run(index + 1));
+    return run(0);
+  };
+
+  const ensurePluginsActive = async (
+    tenantId: string,
+    workspace: Workspace,
+    runtime?: TenantPluginRuntime,
+    actorId?: string,
+  ): Promise<string> => {
+    const tenantRuntime = runtime ?? await runtimeForTenant(tenantId);
+    if (profile === "enterprise") await tenantRuntime.installer?.synchronize?.();
     const scope = encodePluginWorkspace(tenantId, workspace.id);
-    if (!activatedWorkspaceScopes.has(scope)) {
-      for (const pluginId of workspace.activePluginIds) {
-        if (!officialPluginIds.has(pluginId)) await pluginInstaller?.activate?.(pluginId);
-        await plugins.activate(scope, pluginId);
+    const desired = new Set(workspace.activePluginIds);
+    for (const registered of tenantRuntime.plugins.listRegistered()) {
+      if (!desired.has(registered.pluginId)
+        && tenantRuntime.plugins.activeWorkspaceIds(registered.pluginId).includes(scope)) {
+        await tenantRuntime.plugins.deactivate(scope, registered.pluginId);
       }
-      activatedWorkspaceScopes.add(scope);
+    }
+    for (const pluginId of desired) {
+      if (!officialPluginIds.has(pluginId)) {
+        await withPluginUse(tenantRuntime, pluginId, "activation", actorId, async () => {
+          tenantRuntime.installer?.assertCanActivate?.(pluginId);
+          if (!tenantRuntime.installer?.isActive?.(pluginId)) {
+            await tenantRuntime.installer?.activate?.(pluginId, { actorId });
+          }
+          await tenantRuntime.plugins.activate(scope, pluginId);
+        });
+        continue;
+      }
+      await tenantRuntime.plugins.activate(scope, pluginId);
     }
     return scope;
   };
@@ -785,7 +994,14 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         return json(createOpenApiDocument(), 200, traceId);
       }
       if (request.method === "GET" && url.pathname === "/v2/readiness") {
-        const readiness = await options.readiness?.() ?? { ready: true, issues: [] };
+        const [base, pluginState] = await Promise.all([
+          options.readiness?.() ?? { ready: true, issues: [] },
+          tenantPluginReadiness(),
+        ]);
+        const readiness = {
+          ready: base.ready && pluginState.ready,
+          issues: [...base.issues, ...pluginState.issues],
+        };
         return json(readiness, readiness.ready ? 200 : 503, traceId);
       }
       if (request.method === "GET" && url.pathname === "/v2/health" && !url.searchParams.has("workspaceId")) {
@@ -802,6 +1018,9 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
       const TENANT_ID = identity.tenantId;
       const ACTOR_ID = identity.principalId;
       const ORGANIZATION_ROLES = identity.organizationRoles ?? [];
+      const tenantRuntime = await runtimeForTenant(TENANT_ID);
+      const tenantPlugins = tenantRuntime.plugins;
+      const pluginInstaller = tenantRuntime.installer;
       const pluginWorkspaceKey = (workspaceId: string) => encodePluginWorkspace(TENANT_ID, workspaceId);
       const accessibleWorkspaceIds = async () => new Set(
         (await projectionList<WorkspaceMembership>(options.store, TENANT_ID, "membership"))
@@ -823,10 +1042,10 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
       }
       if (request.method === "GET" && url.pathname === "/v2/health") {
         const workspaceId = url.searchParams.get("workspaceId");
-        if (!workspaceId) return json(await plugins.health("__core__"), 200, traceId);
+        if (!workspaceId) return json(await tenantPlugins.health("__core__"), 200, traceId);
         const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId);
-        const scope = await ensurePluginsActive(TENANT_ID, workspace);
-        return json(await plugins.health(scope), 200, traceId);
+        const scope = await ensurePluginsActive(TENANT_ID, workspace, tenantRuntime, ACTOR_ID);
+        return json(await tenantPlugins.health(scope), 200, traceId);
       }
       if (request.method === "GET" && url.pathname === "/v2/workspaces") {
         const workspaces = await kernel.listWorkspaces(TENANT_ID);
@@ -838,10 +1057,13 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
       }
       if (request.method === "POST" && url.pathname === "/v2/workspaces") {
         requireOrganizationRole(profile, ORGANIZATION_ROLES, ["organization_admin"]);
+        if (profile === "enterprise") await pluginInstaller?.synchronize?.();
         const body = await readBody(request);
         const pluginsInput = Array.isArray(body.pluginIds) && body.pluginIds.every((id) => typeof id === "string")
           ? body.pluginIds as string[] : [];
-        const knownPlugins = new Set(plugins.listRegistered().map((plugin) => plugin.pluginId));
+        const knownPlugins = new Set(
+          tenantPlugins.listRegistered().map((plugin) => plugin.pluginId),
+        );
         const unknownPlugin = pluginsInput.find((pluginId) => !knownPlugins.has(pluginId));
         if (unknownPlugin) {
           throw new PluginPolicyError(
@@ -851,15 +1073,25 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           );
         }
         const viewMode = body.viewMode === "professional" ? "professional" : "business";
-        const workspace = await kernel.createWorkspace(TENANT_ID, ACTOR_ID, mutationKey as string, {
-          name: stringField(body, "name")!, viewMode, pluginIds: pluginsInput,
-          organizationRoles: ORGANIZATION_ROLES,
-        });
-        for (const pluginId of pluginsInput) {
-          if (!officialPluginIds.has(pluginId)) await pluginInstaller?.activate?.(pluginId);
-          await plugins.activate(pluginWorkspaceKey(workspace.id), pluginId);
-        }
-        activatedWorkspaceScopes.add(pluginWorkspaceKey(workspace.id));
+        const workspace = await withPluginUses(
+          tenantRuntime,
+          pluginsInput,
+          "activation",
+          ACTOR_ID,
+          async () => {
+            const created = await kernel.createWorkspace(TENANT_ID, ACTOR_ID, mutationKey as string, {
+              name: stringField(body, "name")!, viewMode, pluginIds: pluginsInput,
+              organizationRoles: ORGANIZATION_ROLES,
+            });
+            for (const pluginId of pluginsInput) {
+              if (!officialPluginIds.has(pluginId)) {
+                await pluginInstaller?.activate?.(pluginId, { actorId: ACTOR_ID });
+              }
+              await tenantPlugins.activate(pluginWorkspaceKey(created.id), pluginId);
+            }
+            return created;
+          },
+        );
         return json(workspace, 201, traceId);
       }
       const workspaceMatch = url.pathname.match(/^\/v2\/workspaces\/([^/]+)$/u);
@@ -949,10 +1181,11 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
       if (agentCatalogMatch && request.method === "GET") {
         const workspaceId = decodeURIComponent(agentCatalogMatch[1]!);
         const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId);
+        await ensurePluginsActive(TENANT_ID, workspace, tenantRuntime, ACTOR_ID);
         const agents = [];
         const skills = [];
         for (const pluginId of workspace.activePluginIds) {
-          const definition = plugins.definition(pluginId);
+          const definition = tenantPlugins.definition(pluginId);
           if (!definition) continue;
           agents.push(...definition.contributions.agents.map((agent) => ({
             pluginId,
@@ -979,7 +1212,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
       if (homeMatch && request.method === "GET") {
         const workspaceId = decodeURIComponent(homeMatch[1]!);
         const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId);
-        await ensurePluginsActive(TENANT_ID, workspace);
+        await ensurePluginsActive(TENANT_ID, workspace, tenantRuntime, ACTOR_ID);
         return json(await workspaceHome(options.store, TENANT_ID, workspaceId), 200, traceId);
       }
       const threadsMatch = url.pathname.match(/^\/v2\/workspaces\/([^/]+)\/threads$/u);
@@ -992,7 +1225,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         const body = await readBody(request);
         const workspaceId = decodeURIComponent(threadsMatch[1]!);
         const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId, "operate");
-        await ensurePluginsActive(TENANT_ID, workspace);
+        await ensurePluginsActive(TENANT_ID, workspace, tenantRuntime, ACTOR_ID);
         const thread = await kernel.createThread(TENANT_ID, ACTOR_ID, mutationKey as string, {
           workspaceId,
           subject: stringField(body, "subject")!, pluginId: stringField(body, "pluginId")!,
@@ -1015,7 +1248,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         const workspaceId = decodeURIComponent(turnMatch[1]!);
         const threadId = decodeURIComponent(turnMatch[2]!);
         const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId, "operate");
-        await ensurePluginsActive(TENANT_ID, workspace);
+        await ensurePluginsActive(TENANT_ID, workspace, tenantRuntime, ACTOR_ID);
         const expected = expectedVersion(body);
         const thread = await projectionGet<Thread>(options.store, TENANT_ID, "thread", threadId);
         if (!thread || thread.workspaceId !== workspaceId) {
@@ -1028,12 +1261,9 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
             "先在工作区启用插件",
           );
         }
-        const definition = plugins.definition(thread.pluginId);
+        const definition = tenantPlugins.definition(thread.pluginId);
         if (!definition) {
           throw new PluginPolicyError("PLUGIN_NOT_INSTALLED", `插件 ${thread.pluginId} 不可用`, "安装插件后重试");
-        }
-        if (!officialPluginIds.has(thread.pluginId)) {
-          pluginInstaller?.assertCanStartExecution?.(thread.pluginId);
         }
         const requestedAgent = stringField(body, "agentDefinitionId", false);
         const agentDefinition = requestedAgent
@@ -1087,31 +1317,42 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         if (toolIds.some((toolId) => toolId.includes("repository") || toolId.includes("sandbox"))) {
           dataNamespaces.add("repository");
         }
-        const execution = await kernel.submitTurn(TENANT_ID, ACTOR_ID, mutationKey as string, {
-          workspaceId,
-          threadId,
-          expectedStreamVersion: expected,
-          message: stringField(body, "message")!,
-          agentDefinitionId: agentDefinition.id,
-          modelBindingId: modelConnection.id,
-          executionPrincipalId: `agent:${thread.pluginId}`,
-          ...(runnerId ? { runnerId } : {}),
-          authority: {
-            workspaceId,
-            principalId: `agent:${thread.pluginId}`,
-            toolIds,
-            dataScopes: [...dataNamespaces].map((namespace) => ({ namespace, resourceId: "*" })),
-            autoAllowedEffects: ["local_read", "external_read", "local_reversible_write"],
-            budget: {
-              maxSubagentDepth: 2,
-              maxSubagents: 4,
-              maxTokens: 100_000,
-              maxCostMinorUnits: "5000",
-              currency: "CNY",
-              maxDurationMs: 3_600_000,
-            },
+        const execution = await withPluginUse(
+          tenantRuntime,
+          thread.pluginId,
+          "execution",
+          ACTOR_ID,
+          async () => {
+            if (!officialPluginIds.has(thread.pluginId)) {
+              pluginInstaller?.assertCanStartExecution?.(thread.pluginId);
+            }
+            return kernel.submitTurn(TENANT_ID, ACTOR_ID, mutationKey as string, {
+              workspaceId,
+              threadId,
+              expectedStreamVersion: expected,
+              message: stringField(body, "message")!,
+              agentDefinitionId: agentDefinition.id,
+              modelBindingId: modelConnection.id,
+              executionPrincipalId: `agent:${thread.pluginId}`,
+              ...(runnerId ? { runnerId } : {}),
+              authority: {
+                workspaceId,
+                principalId: `agent:${thread.pluginId}`,
+                toolIds,
+                dataScopes: [...dataNamespaces].map((namespace) => ({ namespace, resourceId: "*" })),
+                autoAllowedEffects: ["local_read", "external_read", "local_reversible_write"],
+                budget: {
+                  maxSubagentDepth: 2,
+                  maxSubagents: 4,
+                  maxTokens: 100_000,
+                  maxCostMinorUnits: "5000",
+                  currency: "CNY",
+                  maxDurationMs: 3_600_000,
+                },
+              },
+            });
           },
-        });
+        );
         return json(execution, 202, traceId);
       }
       const eventsMatch = url.pathname.match(/^\/v2\/workspaces\/([^/]+)\/events$/u);
@@ -1545,8 +1786,19 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         return json(publicConnection, 200, traceId);
       }
       if (url.pathname === "/v2/plugins/installations" && request.method === "GET") {
+        const missingInstalledRuntime = !pluginInstaller
+          && await options.store.transact(TENANT_ID, (transaction) =>
+            transaction.listProjections(PLUGIN_INSTALLATION_PROJECTION).length > 0);
+        if (missingInstalledRuntime) {
+          throw new PluginPolicyError(
+            "PLUGIN_REGISTRY_UNAVAILABLE",
+            "该租户已有插件安装态，但当前 Host 缺少已验签运行制品",
+            "使用包含相同插件仓库的发布镜像重新部署",
+          );
+        }
+        if (profile === "enterprise") await pluginInstaller?.synchronize?.();
         const installed = await pluginInstaller?.list?.() ?? [];
-        return json([...plugins.listOfficial(), ...installed], 200, traceId);
+        return json([...tenantPlugins.listOfficial(), ...installed], 200, traceId);
       }
       if (url.pathname === "/v2/plugins/installations" && request.method === "POST") {
         requireOrganizationRole(profile, ORGANIZATION_ROLES, ["organization_admin", "governance_admin"]);
@@ -1560,6 +1812,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           work: () => pluginInstaller!.install(body, {
             idempotencyKey: mutationKey as string,
             idempotencyScope: "http.plugin.install",
+            actorId: ACTOR_ID,
           }),
         });
         return json(result, 201, traceId);
@@ -1583,6 +1836,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           work: () => pluginInstaller!.update!(pluginId, body, {
             idempotencyKey: mutationKey as string,
             idempotencyScope: `http.plugin.update:${pluginId}`,
+            actorId: ACTOR_ID,
           }),
         });
         return json(result, 200, traceId);
@@ -1607,6 +1861,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           work: () => pluginInstaller!.disable!(pluginId, body, {
             idempotencyKey: mutationKey as string,
             idempotencyScope: scope,
+            actorId: ACTOR_ID,
           }),
         });
         return json(result, 200, traceId);
@@ -1630,6 +1885,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           work: () => pluginInstaller!.purge!(pluginId, body, {
             idempotencyKey: mutationKey as string,
             idempotencyScope: scope,
+            actorId: ACTOR_ID,
           }),
         });
         return json(result, 200, traceId);
@@ -1644,13 +1900,15 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         const workspace = await idempotentAsyncOperation<Workspace>({
           store: options.store, tenantId: TENANT_ID, key: mutationKey as string,
           scope: `http.plugin.activate:${workspaceId}`, request: body, now, inFlight: inFlightAsyncMutations,
-          work: async () => {
+          work: () => withPluginUse(tenantRuntime, pluginId, "activation", ACTOR_ID, async () => {
             const current = await projectionGet<Workspace>(options.store, TENANT_ID, "workspace", workspaceId);
             if (!current) throw new KernelError("WORKSPACE_NOT_FOUND", "工作区不存在", "刷新工作区列表");
             if (current.streamVersion !== expected) throw new KernelStreamVersionConflictError(expected, current.streamVersion);
             try {
-              if (!officialPluginIds.has(pluginId)) await pluginInstaller?.activate?.(pluginId);
-              await plugins.activate(pluginWorkspaceKey(workspaceId), pluginId);
+              if (!officialPluginIds.has(pluginId)) {
+                await pluginInstaller?.activate?.(pluginId, { actorId: ACTOR_ID });
+              }
+              await tenantPlugins.activate(pluginWorkspaceKey(workspaceId), pluginId);
               return await options.store.transact(TENANT_ID, (transaction) => {
               const value = transaction.getProjection<Workspace>("workspace", workspaceId)!;
               if (value.streamVersion !== expected) throw new KernelStreamVersionConflictError(expected, value.streamVersion);
@@ -1666,10 +1924,10 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
               return next;
               });
             } catch (error) {
-              await plugins.deactivate(pluginWorkspaceKey(workspaceId), pluginId);
+              await tenantPlugins.deactivate(pluginWorkspaceKey(workspaceId), pluginId);
               throw error;
             }
-          },
+          }),
         });
         return json(workspace, 200, traceId);
       }
@@ -1704,8 +1962,8 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
                 "刷新工作区插件列表",
               );
             }
-            const hookWasActive = plugins.activeWorkspaceIds(pluginId).includes(scope);
-            await plugins.deactivate(scope, pluginId).catch(() => undefined);
+            const hookWasActive = tenantPlugins.activeWorkspaceIds(pluginId).includes(scope);
+            await tenantPlugins.deactivate(scope, pluginId).catch(() => undefined);
             try {
               return await options.store.transact(TENANT_ID, (transaction) => {
                 const value = transaction.getProjection<Workspace>("workspace", workspaceId);
@@ -1734,7 +1992,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
                 return next;
               });
             } catch (error) {
-              if (hookWasActive) await plugins.activate(scope, pluginId).catch(() => undefined);
+              if (hookWasActive) await tenantPlugins.activate(scope, pluginId).catch(() => undefined);
               throw error;
             }
           },
@@ -1844,7 +2102,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         const workspaceId = url.searchParams.get("workspaceId");
         if (!workspaceId) throw new KernelError("INVALID_BODY", "缺少 workspaceId", "选择工作区后重试");
         const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId);
-        await ensurePluginsActive(TENANT_ID, workspace);
+        await ensurePluginsActive(TENANT_ID, workspace, tenantRuntime, ACTOR_ID);
         return json(await listOpportunitySummaries(options.store, TENANT_ID, workspaceId), 200, traceId);
       }
       const opcOpportunityMatch = url.pathname.match(/^\/v2\/plugins\/opc\/opportunities\/([^/]+)$/u);
@@ -1852,7 +2110,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         const workspaceId = url.searchParams.get("workspaceId");
         if (!workspaceId) throw new KernelError("INVALID_BODY", "缺少 workspaceId", "选择工作区后重试");
         const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId);
-        await ensurePluginsActive(TENANT_ID, workspace);
+        await ensurePluginsActive(TENANT_ID, workspace, tenantRuntime, ACTOR_ID);
         const opportunity = await opcService.get(
           encodePluginWorkspace(TENANT_ID, workspaceId),
           decodeURIComponent(opcOpportunityMatch[1]!),
@@ -1875,7 +2133,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         const body = await readBody(request);
         const workspaceId = stringField(body, "workspaceId")!;
         const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId, "operate");
-        await ensurePluginsActive(TENANT_ID, workspace);
+        await ensurePluginsActive(TENANT_ID, workspace, tenantRuntime, ACTOR_ID);
         const sourceOptions = {
           store: options.store,
           tenantId: TENANT_ID,
@@ -1917,7 +2175,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         const workspaceId = url.searchParams.get("workspaceId");
         if (!workspaceId) throw new KernelError("INVALID_BODY", "缺少 workspaceId", "选择工作区后重试");
         const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId);
-        await ensurePluginsActive(TENANT_ID, workspace);
+        await ensurePluginsActive(TENANT_ID, workspace, tenantRuntime, ACTOR_ID);
         const opportunity = await opcService.get(
           encodePluginWorkspace(TENANT_ID, workspaceId),
           decodeURIComponent(opcDeliverablesMatch[1]!),
@@ -1942,7 +2200,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         const body = await readBody(request);
         const workspaceId = stringField(body, "workspaceId")!;
         const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId, "operate");
-        await ensurePluginsActive(TENANT_ID, workspace);
+        await ensurePluginsActive(TENANT_ID, workspace, tenantRuntime, ACTOR_ID);
         const opportunityId = decodeURIComponent(opcExportMatch[1]!);
         const opportunity = await opcService.get(encodePluginWorkspace(TENANT_ID, workspaceId), opportunityId);
         if (!opportunity) throw new KernelError("NOT_FOUND", "机会不存在", "刷新机会列表");
@@ -1979,7 +2237,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         const workspaceId = url.searchParams.get("workspaceId");
         if (!workspaceId) throw new KernelError("INVALID_BODY", "缺少 workspaceId", "选择工作区后重试");
         const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId);
-        await ensurePluginsActive(TENANT_ID, workspace);
+        await ensurePluginsActive(TENANT_ID, workspace, tenantRuntime, ACTOR_ID);
         return json(await listCodingTaskSummaries(options.store, TENANT_ID, workspaceId), 200, traceId);
       }
       const productCapture = url.pathname.match(/^\/v2\/plugins\/(opc|coding)\/(opportunities|repositories|tasks)$/u);
@@ -1989,7 +2247,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         const resource = productCapture[2]!;
         const workspaceId = stringField(body, "workspaceId")!;
         const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId, "operate");
-        await ensurePluginsActive(TENANT_ID, workspace);
+        await ensurePluginsActive(TENANT_ID, workspace, tenantRuntime, ACTOR_ID);
         const common = {
           store: options.store,
           tenantId: TENANT_ID,
@@ -2013,7 +2271,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         const body = await readBody(request);
         const workspaceId = stringField(body, "workspaceId")!;
         const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId, "operate");
-        await ensurePluginsActive(TENANT_ID, workspace);
+        await ensurePluginsActive(TENANT_ID, workspace, tenantRuntime, ACTOR_ID);
         return json(await runReadOnlySample({
           store: options.store,
           tenantId: TENANT_ID,
@@ -2031,17 +2289,21 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         expectedVersion(body);
         const workspaceId = stringField(body, "workspaceId")!;
         const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId, "operate");
-        await ensurePluginsActive(TENANT_ID, workspace);
+        await ensurePluginsActive(TENANT_ID, workspace, tenantRuntime, ACTOR_ID);
         const pluginId = decodeURIComponent(pluginMatch[1]!);
         const commandId = decodeURIComponent(pluginMatch[2]!);
-        if (!officialPluginIds.has(pluginId)) pluginInstaller?.assertCanStartExecution?.(pluginId);
         const commandInput = Object.fromEntries(Object.entries(body)
           .filter(([key]) => key !== "workspaceId")) as JsonObject;
         const result = await idempotentAsyncOperation({
           store: options.store, tenantId: TENANT_ID, key: mutationKey as string,
           scope: `http.plugin.command:${workspaceId}:${pluginId}:${commandId}`, request: body, now,
           inFlight: inFlightAsyncMutations,
-          work: () => plugins.runCommand(pluginWorkspaceKey(workspaceId), pluginId, commandId, commandInput, ACTOR_ID),
+          work: () => withPluginUse(tenantRuntime, pluginId, "execution", ACTOR_ID, async () => {
+            if (!officialPluginIds.has(pluginId)) pluginInstaller?.assertCanStartExecution?.(pluginId);
+            return tenantPlugins.runCommand(
+              pluginWorkspaceKey(workspaceId), pluginId, commandId, commandInput, ACTOR_ID,
+            );
+          }),
         });
         return json(result, 200, traceId);
       }

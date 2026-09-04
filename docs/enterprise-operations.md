@@ -10,6 +10,7 @@
 - 身份层能提供 tenant 与 principal，并映射组织和工作区角色。
 - 业务、执行、成果和审计保留策略都已配置。
 - Host 与 Worker 使用相同的 engine lock、plugin lock 和镜像摘要。
+- 启用第三方插件时，所有 Host 镜像包含相同的只读签名仓库、Ed25519 受信根和仓库摘要。
 - Coding sandbox 使用明确的 RuntimeClass、无 token 的 ServiceAccount 与默认拒绝网络策略。
 
 缺少保留策略、密钥、存储或 lock 一致性时，readiness 必须失败。
@@ -35,13 +36,17 @@ helm upgrade --install muniu deploy/helm/muniu \
 
 Host 通过 `MN_VAULT_TRANSIT_MOUNT` 和 `MN_VAULT_TRANSIT_KEY` 选择专用于 0.2 受保护数据的 Transit key。Vault policy 只授予该 key 的 `encrypt` 与 `decrypt`，token 由 Secret 或工作负载身份注入。未配置 Vault/KMS 时，普通附件仍可用，但受保护附件上传与读取失败关闭且不产生 Asset 事实事件。
 
+第三方插件应在构建阶段放入镜像内只读目录。Helm 的 `pluginRepository.enabled` 开启后，必须填写 `indexFile`、`trustedRootsFile` 与 `digest`；对应路径不能来自可变网络挂载。Host 不直接 import 文件路径，而是在仓库元数据、manifest、实际模块摘要和包策略全部通过后执行已读取的模块字节。仓库配置不完整、任一租户 lock 无法恢复或副本缺包时，readiness 失败。插件代码与 Host 进程权限等价，不是沙箱。
+
+插件更新、全局停用和清除使用 PostgreSQL 内的租户级操作锁；执行提交、命令调用和工作区启用使用与其互斥的短期租约。排空锁存在时，所有副本都拒绝新的第三方插件工作。Host 崩溃后不自动删除残留锁，也不自动重放结果未知的变更；readiness 会提示人工核对。处理前应确认没有活动 Execution、插件版本和摘要未变化、目标投影 namespace 未切换，再按事件审计记录决定继续或回退部署。
+
 若 NetworkPolicy 由 Service DNAT 之后的地址判断出站目标，还需显式放行实际 PostgreSQL、S3、KMS 和 Kubernetes API endpoint 的 CIDR/端口。Chart 不应猜测生产网段。
 
 ## 蓝绿切换
 
 1. 备份 PostgreSQL、S3 版本与 plugin lock。
 2. 在绿色环境部署同一版本的 Host、Worker 和插件。
-3. 检查 `/v2/readiness`，并用只读任务验证数据库、CAS、KMS 与 sandbox。
+3. 检查 `/v2/readiness`，确认所有已有租户插件 lock 已恢复，再用只读任务验证数据库、CAS、KMS 与 sandbox。
 4. 停止蓝色环境接受新执行，等待活动执行到达安全边界。
 5. 原子切换流量和 Worker claim 权限。
 6. 观察事件位置、Job 租约、outbox 和人工核对队列。

@@ -49,6 +49,8 @@ export interface KernelTransaction {
 export interface KernelStore {
   transact<T>(tenantId: string, work: (transaction: KernelTransaction) => T): Promise<T>;
   readEvents(tenantId: string, afterPosition: number, limit: number): Promise<EventPage>;
+  /** 企业 Host 用于启动时逐租户恢复并校验插件 lock。 */
+  listTenantIds?(): Promise<readonly string[]>;
 }
 
 interface MemoryState {
@@ -177,6 +179,10 @@ export class InMemoryKernelStore implements KernelStore {
       nextPosition: events.at(-1)?.position ?? afterPosition,
       retentionFloor: floor,
     };
+  }
+
+  async listTenantIds(): Promise<readonly string[]> {
+    return [...new Set(this.state.events.map((event) => event.tenantId))].sort();
   }
 
   readJobs(tenantId: string): readonly KernelJobWrite[] {

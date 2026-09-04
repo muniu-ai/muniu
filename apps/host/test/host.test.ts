@@ -1143,12 +1143,12 @@ test("企业插件供应链变更只允许组织管理员或治理管理员", as
       return principalId ? { tenantId: "tenant-a", principalId, organizationRoles }
         : { tenantId: "", principalId: "", organizationRoles };
     },
-    pluginInstaller: {
+    tenantPluginInstallerFactory: (context) => ({
       async install() {
         installCalls += 1;
         return {
           id: "research",
-          tenantId: "tenant-a",
+          tenantId: context.tenantId,
           streamVersion: 1,
           createdAt: "2026-09-04T00:00:00.000Z",
           updatedAt: "2026-09-04T00:00:00.000Z",
@@ -1161,7 +1161,7 @@ test("企业插件供应链变更只允许组织管理员或治理管理员", as
           developmentMode: false,
         };
       },
-    },
+    }),
   });
   const install = (principalId: string, key: string) => host.dispatch(new Request(
     "http://host.test/v2/plugins/installations",

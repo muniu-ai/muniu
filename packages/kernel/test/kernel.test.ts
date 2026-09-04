@@ -37,6 +37,7 @@ test("内存事件使用与持久化存储相同的摘要 HMAC", async () => {
 
   assert.equal(event.hmac, createHmac("sha256", hmacKey).update(event.digest).digest("hex"));
   assert.equal(verifyEventIntegrity(event, hmacKey), true);
+  assert.deepEqual(await store.listTenantIds(), ["tenant-a"]);
 });
 
 function authority(executionId: string): Omit<ExecutionAuthority, "id" | "tenantId" | "executionId" | "streamVersion" | "createdAt" | "updatedAt"> {

@@ -35,6 +35,20 @@ BYOK 是唯一模型接入方式。Desktop 从厂商预设创建连接，将 API
 
 缺少任一保留策略时，生产 readiness 必须失败。Host 与 Worker 的 engine/plugin lock 摘要不一致时，Host 拒绝 readiness 或 Worker 拒绝 claim。
 
+### 企业签名插件仓库
+
+第三方插件仓库必须随发布镜像以只读文件提供，并同时配置：
+
+- `MN_PLUGIN_REPOSITORY_INDEX`：绝对路径的仓库索引；
+- `MN_PLUGIN_TRUSTED_ROOTS`：绝对路径的 Ed25519 受信根文件；
+- `MN_PLUGIN_REPOSITORY_DIGEST`：索引、受信根、manifest 和实际模块摘要形成的固定摘要。
+
+三个变量必须同时存在。Host 先验证仓库序号、撤销时效、发布签名、包 SHA-256、精确依赖和包策略，再执行已读取的同一份模块字节。生产仓库拒绝浮动版本、install hook、远程 JavaScript、摘要降级和 release 回滚。当前企业文件仓库只接受自包含的 Host 入口；声明 Worker、UI 或 CLI 入口的第三方包会失败关闭，直到这些入口具备同等验签装载链。
+
+插件 installation 和 lock 属于 tenant，激活属于 workspace。企业 Host 启动时通过存储列出已有 tenant，逐个恢复运行定义并核对持久化 lock。任一副本缺少已安装制品或 lock 被改写时，`/v2/readiness` 返回失败；`/v2/health`、首页和未受影响的官方插件仍可响应。全局安装、更新、停用和清除要求组织管理员或治理管理员，工作区启用和停用只允许该工作区 owner。
+
+更新、全局停用和清除会先在租户权威存储写入插件操作锁；第三方插件的新执行和工作区启用会在同一存储获取短期使用租约。操作锁与使用租约互斥，因此一个 Host 排空时，其他 Host 不能接收新执行。操作锁不会按时间自动失效；若发起操作的 Host 异常退出，readiness 保持失败，管理员必须先核对执行、installation、工作区和投影切换状态，再人工处理残留锁。该选择避免未知结果被自动重放。
+
 ## 视图和插件
 
 `business` 与 `professional` 是工作区展示设置，不是不同业务配置。插件安装是 tenant 级记录，启用是 workspace 级状态。插件配置属于各自 `dataNamespace`，不能用全局配置绕过授权或跨插件共享数据。

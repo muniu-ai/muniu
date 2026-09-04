@@ -45,6 +45,10 @@ Host 仅在权威存储、密钥服务、engine lock 和 plugin lock 一致时�
 
 企业环境使用蓝绿切换。Host 与 Worker 的 lock 摘要不一致时，Host 拒绝 readiness，Worker 拒绝领取 Job。
 
+企业第三方插件按 tenant 创建独立安装器和贡献宿主，避免 installation、激活状态、命令和健康状态跨租户共享。企业组合根可注入 `tenantPluginInstallerFactory`；标准入口使用镜像内文件仓库，先验证 Ed25519 和实际字节摘要，再加载 Host 定义。存储必须实现 `listTenantIds`，Host 启动时才能逐租户恢复 lock；无法证明完整恢复时 readiness 失败。
+
+跨 Host 更新、全局停用和清除先持久化租户级操作锁；执行与工作区启用持有互斥的短期使用租约。操作发起者异常退出后不自动清锁，readiness 失败并要求人工核对，避免未知结果被另一个副本重放。
+
 ## 验证
 
 ```bash

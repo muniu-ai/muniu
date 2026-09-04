@@ -1,4 +1,5 @@
 export * from "./config.js";
+export * from "./enterprise-plugin-repository.js";
 export * from "./assets.js";
 export * from "./coding-runners.js";
 export * from "./host.js";
