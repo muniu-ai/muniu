@@ -461,6 +461,7 @@ export class LocalProductionPluginInstaller implements PluginInstallerPort {
 
       this.#startingBlocked.add(pluginId);
       let prepared: PreparedProductionProjectionUpgrade | undefined;
+      let projectionCommitted = false;
       try {
         await this.#executionControl.drain(pluginId);
         prepared = this.#projections
@@ -571,6 +572,7 @@ export class LocalProductionPluginInstaller implements PluginInstallerPort {
           await Promise.resolve(prepared.discard()).catch(() => undefined);
           return persisted.installation;
         }
+        projectionCommitted = true;
         try {
           if (this.#contributions.definition(pluginId)) {
             this.#contributions.replaceVerified(artifact, release.definition);
@@ -585,7 +587,9 @@ export class LocalProductionPluginInstaller implements PluginInstallerPort {
         }
         return persisted.installation;
       } catch (error) {
-        if (prepared) await Promise.resolve(prepared.discard()).catch(() => undefined);
+        if (prepared && !projectionCommitted) {
+          await Promise.resolve(prepared.discard()).catch(() => undefined);
+        }
         throw error;
       } finally {
         this.#startingBlocked.delete(pluginId);

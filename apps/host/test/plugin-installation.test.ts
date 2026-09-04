@@ -319,6 +319,51 @@ test("生产更新的投影切换失败时回滚状态、lock 与新命名空间
   await host.close();
 });
 
+test("数据库切换后运行贡献加载失败会保留当前投影并使插件失败关闭", async () => {
+  const store = new InMemoryKernelStore();
+  const fixture = await signedUpgradeRepository();
+  let discarded = false;
+  const host = await createAgentOsHost({
+    store,
+    secretStore: secrets,
+    now: () => NOW,
+    pluginRepository: fixture.repository,
+    trustedPluginRoots: [{ keyId: "root-1", publicKey: fixture.root.publicKey }],
+    pluginProjections: {
+      async replayAndValidate(input) {
+        return {
+          namespace: input.namespace,
+          activate(transaction) {
+            transaction.putProjection("plugin-projection-pointer", "research", {
+              namespace: input.namespace,
+            });
+          },
+          discard() { discarded = true; },
+        };
+      },
+    },
+  });
+  const installed = (await responseJson(await host.dispatch(jsonRequest("/v2/plugins/installations", {
+    pluginId: "research", version: "1.2.3",
+  }, "install-before-definition-failure")))).data as PluginInstallation;
+  host.plugins.replaceVerified = () => { throw new Error("definition load failed"); };
+
+  const failed = await host.dispatch(jsonRequest("/v2/plugins/installations/research", {
+    version: "1.3.0",
+    expectedStreamVersion: installed.streamVersion,
+  }, "definition-failure-update", "PATCH"));
+  assert.equal(failed.status, 500);
+  assert.equal(discarded, false);
+  const persisted = await store.transact("local", (transaction) => ({
+    installation: transaction.getProjection<PluginInstallation>(PLUGIN_INSTALLATION_PROJECTION, "research"),
+    pointer: transaction.getProjection<{ readonly namespace: string }>("plugin-projection-pointer", "research"),
+  }));
+  assert.equal(persisted.installation?.version, "1.3.0");
+  assert.equal(persisted.installation?.status, "failed");
+  assert.equal(persisted.pointer?.namespace, "research__1_3_0__5");
+  await host.close();
+});
+
 test("生产更新在插件仍有未终结 Execution 时拒绝切换", async () => {
   const store = new InMemoryKernelStore();
   const fixture = await signedUpgradeRepository();
