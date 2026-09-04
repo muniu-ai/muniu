@@ -1,30 +1,19 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default desktop permissions for the main window.",
+  "description": "木牛 Agent OS 主窗口的最小权限。",
   "windows": ["main"],
   "permissions": [
     "core:default",
     "autostart:default",
-    "deep-link:default",
-    "dialog:allow-save",
-    "opener:default",
-    "process:allow-restart",
     {
       "identifier": "shell:allow-spawn",
       "allow": [
         {
-          "name": "binaries/mn-api",
+          "name": "binaries/mn-host",
           "sidecar": true,
-          "args": true
+          "args": false
         }
-      ]
-    },
-    "fs:allow-write-file",
-    {
-      "identifier": "fs:scope",
-      "allow": [
-        { "path": "$HOME/**" }
       ]
     }
   ]

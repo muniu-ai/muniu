@@ -1,5 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    mniu_desktop_lib::run()
+    muniu_desktop_lib::run()
 }
