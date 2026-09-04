@@ -25,6 +25,7 @@ export interface KernelOptions {
 }
 
 export interface ProtectedPayloadKeyDestroyer {
+  /** 必须幂等：进程中断后可能用同一引用再次确认销毁。 */
   destroy(reference: string): Promise<void>;
 }
 
@@ -601,6 +602,26 @@ export class AgentOsKernel {
     input: Omit<MemoryRecord, "id" | "tenantId" | "streamVersion" | "status" | "createdAt" | "updatedAt" | "shareGrantIds">,
   ): Promise<MemoryRecord> {
     return this.mutation(tenantId, "memory.propose", idempotencyKey, input, (transaction) => {
+      if (Boolean(input.derivedFromMemoryId) !== Boolean(input.derivedViaShareGrantId)) {
+        throw new KernelError(
+          "MEMORY_DERIVATION_INVALID",
+          "派生记忆必须同时记录来源记忆与共享授权",
+          "重新生成记忆提案",
+        );
+      }
+      if (input.derivedFromMemoryId && input.derivedViaShareGrantId) {
+        const source = transaction.getProjection<MemoryRecord>("memory", input.derivedFromMemoryId);
+        const grant = transaction.getProjection<ShareGrant>("shareGrant", input.derivedViaShareGrantId);
+        if (!source || source.status !== "accepted" || !grant || grant.revokedAt
+          || grant.memoryId !== source.id || grant.toNamespace !== input.namespace
+          || grant.workspaceId !== input.workspaceId) {
+          throw new KernelError(
+            "MEMORY_SHARE_REQUIRED",
+            "派生记忆缺少有效的跨 namespace 授权",
+            "重新授权后再生成记忆提案",
+          );
+        }
+      }
       const now = this.now();
       const id = this.nextId("memory");
       const memory: MemoryRecord = {
@@ -643,6 +664,54 @@ export class AgentOsKernel {
     });
   }
 
+  async reviseMemoryProposal(
+    tenantId: string,
+    actorId: string,
+    idempotencyKey: string,
+    memoryId: string,
+    expectedStreamVersion: number,
+    revision: { readonly confidence: number; readonly value: JsonObject },
+  ): Promise<MemoryRecord> {
+    return this.mutation(
+      tenantId,
+      `memory.revise:${memoryId}`,
+      idempotencyKey,
+      { expectedStreamVersion, revision },
+      (transaction) => {
+        const memory = transaction.getProjection<MemoryRecord>("memory", memoryId);
+        if (!memory) throw new KernelError("MEMORY_NOT_FOUND", "记忆不存在", "刷新记忆列表");
+        if (memory.streamVersion !== expectedStreamVersion) {
+          throw new KernelError("STREAM_VERSION_CONFLICT", "记忆版本已变化", "刷新记忆后重试", true);
+        }
+        if (memory.status !== "proposed") {
+          throw new KernelError("MEMORY_NOT_PROPOSED", "只有待确认记忆可以修改", "创建新的记忆提案");
+        }
+        if (!Number.isFinite(revision.confidence)
+          || revision.confidence < 0 || revision.confidence > 1) {
+          throw new KernelError("MEMORY_CONFIDENCE_INVALID", "记忆置信度必须在 0 到 1 之间", "修正置信度");
+        }
+        const next: MemoryRecord = {
+          ...memory,
+          confidence: revision.confidence,
+          value: revision.value,
+          updatedAt: this.now(),
+          streamVersion: memory.streamVersion + 1,
+        };
+        transaction.putProjection("memory", memoryId, next);
+        this.append(transaction, {
+          tenantId,
+          aggregateType: "memory",
+          aggregateId: memoryId,
+          expectedStreamVersion,
+          type: "memory.proposal_revised",
+          actorId,
+          publicPayload: { workspaceId: memory.workspaceId, confidence: next.confidence },
+        });
+        return next;
+      },
+    );
+  }
+
   async createShareGrant(
     tenantId: string,
     actorId: string,
@@ -673,6 +742,16 @@ export class AgentOsKernel {
         tenantId, aggregateType: "memory", aggregateId: memoryId, expectedStreamVersion,
         type: "memory.shared", actorId, publicPayload: { grantId: id, fromNamespace: memory.namespace, toNamespace },
       });
+      this.append(transaction, {
+        tenantId, aggregateType: "shareGrant", aggregateId: id, expectedStreamVersion: 0,
+        type: "share_grant.created", actorId,
+        publicPayload: {
+          workspaceId: memory.workspaceId,
+          memoryId,
+          fromNamespace: memory.namespace,
+          toNamespace,
+        },
+      });
       return grant;
     });
   }
@@ -694,9 +773,36 @@ export class AgentOsKernel {
       const now = this.now();
       const next: ShareGrant = { ...grant, revokedAt: now, updatedAt: now, streamVersion: grant.streamVersion + 1 };
       transaction.putProjection("shareGrant", grantId, next);
+      const derived = transaction.listProjections<MemoryRecord>("memory")
+        .filter((memory) => memory.derivedViaShareGrantId === grantId
+          && memory.status !== "deleted" && memory.status !== "invalidated");
+      for (const memory of derived) {
+        const invalidated = {
+          ...memory,
+          status: "invalidated" as const,
+          updatedAt: now,
+          streamVersion: memory.streamVersion + 1,
+        };
+        transaction.putProjection("memory", memory.id, invalidated);
+        this.append(transaction, {
+          tenantId,
+          aggregateType: "memory",
+          aggregateId: memory.id,
+          expectedStreamVersion: memory.streamVersion,
+          type: "memory.invalidated",
+          actorId,
+          publicPayload: { workspaceId: memory.workspaceId, revokedGrantId: grantId },
+        });
+      }
       this.append(transaction, {
         tenantId, aggregateType: "shareGrant", aggregateId: grantId, expectedStreamVersion,
-        type: "share_grant.revoked", actorId, publicPayload: { memoryId: grant.memoryId, toNamespace: grant.toNamespace },
+        type: "share_grant.revoked", actorId,
+        publicPayload: {
+          workspaceId: grant.workspaceId,
+          memoryId: grant.memoryId,
+          toNamespace: grant.toNamespace,
+          invalidatedMemoryCount: derived.length,
+        },
       });
       return next;
     });
@@ -711,23 +817,73 @@ export class AgentOsKernel {
     reason: string,
     keys: ProtectedPayloadKeyDestroyer,
   ): Promise<MemoryRecord> {
-    const memory = await this.store.transact(tenantId, (transaction) => transaction.getProjection<MemoryRecord>("memory", memoryId));
-    if (!memory) throw new KernelError("MEMORY_NOT_FOUND", "记忆不存在", "刷新记忆列表");
-    if (memory.protectedPayloadRef) await keys.destroy(memory.protectedPayloadRef);
-    return this.mutation(tenantId, `memory.delete:${memoryId}`, idempotencyKey, { expectedStreamVersion, reason }, (transaction) => {
+    const pending = await this.mutation(
+      tenantId,
+      `memory.delete.request:${memoryId}`,
+      idempotencyKey,
+      { expectedStreamVersion, reason },
+      (transaction) => {
       const current = transaction.getProjection<MemoryRecord>("memory", memoryId);
-      if (!current || current.streamVersion !== expectedStreamVersion) {
+      if (!current) throw new KernelError("MEMORY_NOT_FOUND", "记忆不存在", "刷新记忆列表");
+      if (current.streamVersion !== expectedStreamVersion) {
         throw new KernelError("STREAM_VERSION_CONFLICT", "记忆版本已变化", "刷新记忆后重试", true);
       }
-      const next = deleteMemory(current, this.now());
+      const next: MemoryRecord = {
+        ...current,
+        status: "deletion_pending",
+        value: undefined,
+        shareGrantIds: [],
+        updatedAt: this.now(),
+        streamVersion: current.streamVersion + 1,
+      };
       transaction.putProjection("memory", memoryId, next);
       this.append(transaction, {
         tenantId, aggregateType: "memory", aggregateId: memoryId, expectedStreamVersion,
-        type: "memory.deleted", actorId,
-        publicPayload: { objectDigest: sha256({ id: current.id, namespace: current.namespace, resourceId: current.resourceId }), reason },
+        type: "memory.deletion_requested", actorId,
+        publicPayload: {
+          workspaceId: current.workspaceId,
+          objectDigest: sha256({ id: current.id, namespace: current.namespace, resourceId: current.resourceId }),
+        },
       });
       return next;
     });
+    const latest = await this.store.transact(tenantId, (transaction) =>
+      transaction.getProjection<MemoryRecord>("memory", memoryId));
+    if (latest?.status === "deleted") return latest;
+    if (pending.protectedPayloadRef) await keys.destroy(pending.protectedPayloadRef);
+    return this.mutation(
+      tenantId,
+      `memory.delete.finalize:${memoryId}`,
+      idempotencyKey,
+      { deletionRequestVersion: pending.streamVersion, reason },
+      (transaction) => {
+        const current = transaction.getProjection<MemoryRecord>("memory", memoryId);
+        if (!current || current.status !== "deletion_pending"
+          || current.streamVersion !== pending.streamVersion) {
+          throw new KernelError(
+            "MEMORY_DELETE_RECONCILIATION_REQUIRED",
+            "无法确认敏感记忆删除结果",
+            "核对密钥状态与审计记录",
+          );
+        }
+        const next = deleteMemory(current, this.now());
+        transaction.putProjection("memory", memoryId, next);
+        this.append(transaction, {
+          tenantId,
+          aggregateType: "memory",
+          aggregateId: memoryId,
+          expectedStreamVersion: current.streamVersion,
+          type: "memory.deleted",
+          actorId,
+          publicPayload: {
+            workspaceId: current.workspaceId,
+            objectDigest: sha256({ id: current.id, namespace: current.namespace, resourceId: current.resourceId }),
+            reason,
+          },
+        });
+        return next;
+      },
+    );
   }
 
   async saveModelConnection(

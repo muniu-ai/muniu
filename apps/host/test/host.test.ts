@@ -197,6 +197,66 @@ test("thread turn 只接受插件 Agent 与已连接模型，并原子排入 Wor
   await host.close();
 });
 
+test("记忆可审阅修正，撤销共享会使派生记忆失效，删除写入 tombstone", async () => {
+  const host = await createAgentOsHost({ store: new InMemoryKernelStore(), secretStore: secrets });
+  const workspace = (await responseJson(await host.dispatch(jsonRequest("/v2/workspaces", {
+    name: "记忆工作区", viewMode: "business", pluginIds: ["opc", "coding"],
+  }, "memory-workspace")))).data;
+  const proposed = (await responseJson(await host.dispatch(jsonRequest("/v2/memories", {
+    workspaceId: workspace.id,
+    scopeType: "resource",
+    namespace: "opc",
+    resourceId: "opportunity-1",
+    sourceEventId: "event-interview",
+    confidence: 0.5,
+    value: { summary: "客户可能关注速度" },
+  }, "memory-propose")))).data;
+  const revised = (await responseJson(await host.dispatch(jsonRequest(`/v2/memories/${proposed.id}`, {
+    expectedStreamVersion: proposed.streamVersion,
+    confidence: 0.9,
+    value: { summary: "客户明确关注恢复速度" },
+  }, "memory-revise", "PATCH")))).data;
+  assert.equal(revised.value.summary, "客户明确关注恢复速度");
+  const accepted = (await responseJson(await host.dispatch(jsonRequest(
+    `/v2/memories/${proposed.id}/decisions`,
+    { expectedStreamVersion: revised.streamVersion, decision: "accept" },
+    "memory-accept",
+  )))).data;
+  const grant = (await responseJson(await host.dispatch(jsonRequest("/v2/share-grants", {
+    memoryId: accepted.id,
+    expectedStreamVersion: accepted.streamVersion,
+    toNamespace: "coding",
+  }, "memory-share")))).data;
+  const derived = (await responseJson(await host.dispatch(jsonRequest("/v2/memories", {
+    workspaceId: workspace.id,
+    scopeType: "resource",
+    namespace: "coding",
+    resourceId: "repository-1",
+    sourceEventId: "event-derived",
+    confidence: 0.7,
+    value: { summary: "把恢复速度加入 Gate" },
+    derivedFromMemoryId: accepted.id,
+    derivedViaShareGrantId: grant.id,
+  }, "memory-derived")))).data;
+  const revoked = await host.dispatch(jsonRequest(`/v2/share-grants/${grant.id}`, {
+    expectedStreamVersion: grant.streamVersion,
+  }, "memory-revoke", "DELETE"));
+  assert.equal(revoked.status, 200);
+  const memoriesAfterRevoke = (await responseJson(await host.dispatch(
+    new Request(`http://host.test/v2/memories?workspaceId=${workspace.id}`),
+  ))).data;
+  assert.equal(memoriesAfterRevoke.find((memory: any) => memory.id === derived.id).status, "invalidated");
+
+  const sourceAfterShare = memoriesAfterRevoke.find((memory: any) => memory.id === accepted.id);
+  const deleted = await host.dispatch(jsonRequest(`/v2/memories/${accepted.id}`, {
+    expectedStreamVersion: sourceAfterShare.streamVersion,
+    reason: "用户主动删除",
+  }, "memory-delete", "DELETE"));
+  assert.equal(deleted.status, 200);
+  assert.equal((await responseJson(deleted)).data.status, "deleted");
+  await host.close();
+});
+
 test("只提供 /v2，mutation 强制幂等键并稳定重放", async () => {
   const host = await createAgentOsHost({ store: new InMemoryKernelStore(), secretStore: secrets });
   const old = await host.dispatch(new Request("http://host.test/v1/health"));

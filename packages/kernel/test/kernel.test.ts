@@ -267,6 +267,131 @@ test("跨 namespace 记忆必须有未撤销授权", () => {
   assert.equal(canReadMemory(memory, "coding", [{ ...grant, revokedAt: now }]), false);
 });
 
+test("撤销共享授权会在同一事务使派生记忆失效", async () => {
+  const store = new InMemoryKernelStore(undefined, () => now);
+  const kernel = new AgentOsKernel(store, { now: () => now });
+  await kernel.bootstrapLocal("memory-derived-setup");
+  const workspace = await kernel.createWorkspace("local", "local-owner", "memory-derived-workspace", {
+    name: "记忆治理", viewMode: "professional", pluginIds: ["opc", "coding"],
+  });
+  const source = await kernel.proposeMemory("local", "agent:opc", "memory-source", {
+    workspaceId: workspace.id,
+    scopeType: "resource",
+    namespace: "opc",
+    resourceId: "opportunity-1",
+    sourceEventId: "event-source",
+    confidence: 0.9,
+    value: { summary: "客户重视恢复能力" },
+  });
+  const accepted = await kernel.decideMemory(
+    "local", "local-owner", "memory-source-accept", source.id, source.streamVersion, "accept",
+  );
+  const grant = await kernel.createShareGrant(
+    "local", "local-owner", "memory-source-share", source.id, accepted.streamVersion, "coding",
+  );
+  const derived = await kernel.proposeMemory("local", "agent:coding", "memory-derived", {
+    workspaceId: workspace.id,
+    scopeType: "resource",
+    namespace: "coding",
+    resourceId: "repository-1",
+    sourceEventId: "event-derived",
+    confidence: 0.7,
+    value: { summary: "恢复检查应进入 Gate" },
+    derivedFromMemoryId: source.id,
+    derivedViaShareGrantId: grant.id,
+  });
+
+  await kernel.revokeShareGrant("local", "local-owner", "memory-revoke", grant.id, grant.streamVersion);
+  const invalidated = await store.transact("local", (transaction) =>
+    transaction.getProjection<MemoryRecord>("memory", derived.id));
+  assert.equal(invalidated?.status, "invalidated");
+  assert.equal(invalidated?.streamVersion, derived.streamVersion + 1);
+});
+
+test("用户可在接受前修改记忆提案，已确认记忆不可被静默改写", async () => {
+  const store = new InMemoryKernelStore(undefined, () => now);
+  const kernel = new AgentOsKernel(store, { now: () => now });
+  await kernel.bootstrapLocal("memory-revise-setup");
+  const workspace = await kernel.createWorkspace("local", "local-owner", "memory-revise-workspace", {
+    name: "记忆修正", viewMode: "business", pluginIds: ["opc"],
+  });
+  const proposal = await kernel.proposeMemory("local", "agent:opc", "memory-revise-source", {
+    workspaceId: workspace.id,
+    scopeType: "workspace",
+    namespace: "opc",
+    resourceId: workspace.id,
+    sourceEventId: "event-memory-revise",
+    confidence: 0.55,
+    value: { summary: "客户可能重视速度" },
+  });
+  const revised = await kernel.reviseMemoryProposal(
+    "local", "local-owner", "memory-revise", proposal.id, proposal.streamVersion,
+    { confidence: 0.9, value: { summary: "客户明确重视恢复速度" } },
+  );
+  assert.equal(revised.confidence, 0.9);
+  assert.equal(revised.value?.summary, "客户明确重视恢复速度");
+  const accepted = await kernel.decideMemory(
+    "local", "local-owner", "memory-revise-accept", revised.id, revised.streamVersion, "accept",
+  );
+  await assert.rejects(kernel.reviseMemoryProposal(
+    "local", "local-owner", "memory-revise-after-accept", accepted.id, accepted.streamVersion,
+    { confidence: 0.1, value: { summary: "静默改写" } },
+  ), /只有待确认记忆/);
+});
+
+test("删除敏感记忆先锁定版本，再销毁密钥并写入 tombstone", async () => {
+  const store = new InMemoryKernelStore(undefined, () => now);
+  const kernel = new AgentOsKernel(store, { now: () => now });
+  await kernel.bootstrapLocal("memory-delete-setup");
+  const workspace = await kernel.createWorkspace("local", "local-owner", "memory-delete-workspace", {
+    name: "记忆删除", viewMode: "business", pluginIds: ["opc"],
+  });
+  const memory = await kernel.proposeMemory("local", "agent:opc", "memory-delete-source", {
+    workspaceId: workspace.id,
+    scopeType: "resource",
+    namespace: "opc",
+    resourceId: "opportunity-secret",
+    sourceEventId: "event-secret",
+    confidence: 0.8,
+    protectedPayloadRef: "key://memory-secret",
+  });
+  let destroyCalls = 0;
+  const keys = { async destroy() { destroyCalls += 1; } };
+  await assert.rejects(kernel.deleteMemory(
+    "local", "local-owner", "memory-delete-stale", memory.id, 0, "用户要求删除", keys,
+  ), /版本/);
+  assert.equal(destroyCalls, 0);
+
+  let first = true;
+  const flakyKeys = {
+    async destroy() {
+      destroyCalls += 1;
+      if (first) { first = false; throw new Error("Keychain 暂时不可用"); }
+    },
+  };
+  await assert.rejects(kernel.deleteMemory(
+    "local", "local-owner", "memory-delete", memory.id, memory.streamVersion, "用户要求删除", flakyKeys,
+  ), /Keychain/);
+  const pending = await store.transact("local", (transaction) =>
+    transaction.getProjection<MemoryRecord>("memory", memory.id));
+  assert.equal(pending?.status, "deletion_pending");
+  assert.equal(pending?.value, undefined);
+
+  const deleted = await kernel.deleteMemory(
+    "local", "local-owner", "memory-delete", memory.id, memory.streamVersion, "用户要求删除", flakyKeys,
+  );
+  assert.equal(deleted.status, "deleted");
+  assert.equal(deleted.protectedPayloadRef, undefined);
+  assert.equal(deleted.streamVersion, memory.streamVersion + 2);
+  assert.equal(destroyCalls, 2);
+  const events = (await store.readEvents("local", 0, 50)).events
+    .filter((event) => event.aggregateType === "memory" && event.aggregateId === memory.id);
+  assert.deepEqual(events.slice(-2).map((event) => event.type), [
+    "memory.deletion_requested",
+    "memory.deleted",
+  ]);
+});
+
 test("事务失败时事件和投影都不提交", async () => {
   const store = new InMemoryKernelStore(undefined, () => now);
   await assert.rejects(

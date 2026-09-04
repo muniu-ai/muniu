@@ -25,6 +25,7 @@ import {
   type KernelStore,
   type KernelTransaction,
   type ModelConnection,
+  type ProtectedPayloadKeyDestroyer,
   type ProviderPreset,
 } from "@mn/kernel";
 import {
@@ -100,6 +101,7 @@ export interface AgentOsHostOptions {
   } | Promise<{ readonly tenantId: string; readonly principalId: string }>;
   /** 仅用于本地开发或测试宿主附加受信 WebView 来源。 */
   readonly allowedOrigins?: readonly string[];
+  readonly protectedPayloadKeys?: ProtectedPayloadKeyDestroyer;
 }
 
 export interface ListenOptions {
@@ -699,6 +701,10 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           confidence: typeof body.confidence === "number" ? body.confidence : 0,
           ...(isObject(body.value) ? { value: body.value as JsonObject } : {}),
           ...(typeof body.protectedPayloadRef === "string" ? { protectedPayloadRef: body.protectedPayloadRef } : {}),
+          ...(typeof body.derivedFromMemoryId === "string"
+            ? { derivedFromMemoryId: body.derivedFromMemoryId } : {}),
+          ...(typeof body.derivedViaShareGrantId === "string"
+            ? { derivedViaShareGrantId: body.derivedViaShareGrantId } : {}),
         });
         return json(memory, 201, traceId);
       }
@@ -722,6 +728,49 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           decision,
         ), 200, traceId);
       }
+      const memoryMatch = url.pathname.match(/^\/v2\/memories\/([^/]+)$/u);
+      if (memoryMatch && request.method === "PATCH") {
+        const body = await readBody(request);
+        const memoryId = decodeURIComponent(memoryMatch[1]!);
+        const memory = await projectionGet<MemoryRecord>(options.store, TENANT_ID, "memory", memoryId);
+        if (!memory) throw new KernelError("MEMORY_NOT_FOUND", "记忆不存在", "刷新记忆列表");
+        await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, memory.workspaceId, "operate");
+        if (!isObject(body.value) || typeof body.confidence !== "number") {
+          throw new KernelError("INVALID_BODY", "修改记忆需要 value 和 confidence", "填写修正后的内容与置信度");
+        }
+        return json(await kernel.reviseMemoryProposal(
+          TENANT_ID,
+          ACTOR_ID,
+          mutationKey as string,
+          memoryId,
+          expectedVersion(body),
+          { confidence: body.confidence, value: body.value as JsonObject },
+        ), 200, traceId);
+      }
+      if (memoryMatch && request.method === "DELETE") {
+        const body = await readBody(request);
+        const memoryId = decodeURIComponent(memoryMatch[1]!);
+        const memory = await projectionGet<MemoryRecord>(options.store, TENANT_ID, "memory", memoryId);
+        if (!memory) throw new KernelError("MEMORY_NOT_FOUND", "记忆不存在", "刷新记忆列表");
+        await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, memory.workspaceId, "owner");
+        if (memory.protectedPayloadRef && !options.protectedPayloadKeys) {
+          throw new KernelError(
+            "KEY_DESTROYER_UNAVAILABLE",
+            "敏感记忆暂时无法安全删除",
+            "修复 Keychain 或 KMS 连接后重试",
+            true,
+          );
+        }
+        return json(await kernel.deleteMemory(
+          TENANT_ID,
+          ACTOR_ID,
+          mutationKey as string,
+          memoryId,
+          expectedVersion(body),
+          stringField(body, "reason")!,
+          options.protectedPayloadKeys ?? { async destroy() { /* 非敏感记忆没有数据密钥。 */ } },
+        ), 200, traceId);
+      }
       if (url.pathname === "/v2/share-grants" && request.method === "GET") {
         const allowed = await accessibleWorkspaceIds();
         const grants = await projectionList<{ readonly workspaceId: string }>(options.store, TENANT_ID, "shareGrant");
@@ -736,6 +785,23 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           TENANT_ID, ACTOR_ID, mutationKey as string, stringField(body, "memoryId")!,
           expectedVersion(body), stringField(body, "toNamespace")!,
         ), 201, traceId);
+      }
+      const shareGrantMatch = url.pathname.match(/^\/v2\/share-grants\/([^/]+)$/u);
+      if (shareGrantMatch && request.method === "DELETE") {
+        const body = await readBody(request);
+        const grantId = decodeURIComponent(shareGrantMatch[1]!);
+        const grant = await projectionGet<{ readonly workspaceId: string }>(
+          options.store, TENANT_ID, "shareGrant", grantId,
+        );
+        if (!grant) throw new KernelError("SHARE_GRANT_NOT_FOUND", "共享授权不存在", "刷新授权列表");
+        await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, grant.workspaceId, "owner");
+        return json(await kernel.revokeShareGrant(
+          TENANT_ID,
+          ACTOR_ID,
+          mutationKey as string,
+          grantId,
+          expectedVersion(body),
+        ), 200, traceId);
       }
       if (url.pathname === "/v2/model-connections/presets" && request.method === "GET") {
         return json(PROVIDER_PRESETS.map(({ endpoint: _endpoint, probeKind: _probeKind, ...preset }) => preset), 200, traceId);

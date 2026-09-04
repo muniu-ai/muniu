@@ -182,13 +182,15 @@ export interface MemoryRecord extends VersionedEntity {
   readonly namespace: string;
   readonly resourceId: string;
   readonly sourceEventId: string;
-  readonly status: "proposed" | "accepted" | "rejected" | "deleted" | "invalidated";
+  readonly status: "proposed" | "accepted" | "rejected" | "deletion_pending" | "deleted" | "invalidated";
   readonly confidence: number;
   readonly value?: JsonObject;
   readonly protectedPayloadRef?: string;
   readonly confirmedAt?: IsoDateTime;
   readonly expiresAt?: IsoDateTime;
   readonly shareGrantIds: readonly string[];
+  readonly derivedFromMemoryId?: string;
+  readonly derivedViaShareGrantId?: string;
 }
 
 export interface ShareGrant extends VersionedEntity {
