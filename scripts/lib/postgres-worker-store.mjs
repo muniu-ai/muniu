@@ -100,19 +100,64 @@ async function lockTenantHead(client, tenantId) {
   };
 }
 
-async function loadProjection(client, tenantId, namespace, key, label) {
+async function loadOptionalProjection(client, tenantId, namespace, key, label) {
   const row = (await client.query(`
     select stream_version, value_json from mn_v2.projections
     where tenant_id = $1 and namespace = $2 and projection_key = $3
     for update
   `, [tenantId, namespace, key])).rows[0];
-  if (!row) throw new Error(`${label} ${key} 的投影不存在`);
+  if (!row) return undefined;
   const value = json(row.value_json);
   const streamVersion = safeInteger(row.stream_version, `${label} projection streamVersion`);
   if (safeInteger(value.streamVersion, `${label} streamVersion`) !== streamVersion) {
     throw new Error(`${label} ${key} 的投影版本不一致`);
   }
   return { value, streamVersion };
+}
+
+async function loadProjection(client, tenantId, namespace, key, label) {
+  const projection = await loadOptionalProjection(client, tenantId, namespace, key, label);
+  if (!projection) throw new Error(`${label} ${key} 的投影不存在`);
+  return projection;
+}
+
+async function loadGenericJobContext(client, row) {
+  if (String(row.kind) === AGENT_JOB_KIND) return undefined;
+  const tenantId = String(row.tenant_id);
+  const jobId = String(row.job_id);
+  const head = await lockTenantHead(client, tenantId);
+  const projection = await loadOptionalProjection(client, tenantId, "job", jobId, "Job");
+  if (!projection) return undefined;
+  const job = projection.value;
+  if (job.tenantId !== tenantId
+    || job.kind !== String(row.kind)
+    || requiredString(job.id, "Job id") !== jobId) {
+    throw new Error("Job 物理记录与查询投影不一致");
+  }
+  const physicalWorkspaceId = row.workspace_id == null ? undefined : String(row.workspace_id);
+  const projectedWorkspaceId = typeof job.workspaceId === "string" ? job.workspaceId : undefined;
+  if (projectedWorkspaceId !== physicalWorkspaceId) {
+    throw new Error("Job 工作区与查询投影不一致");
+  }
+  const payload = json(row.payload_json);
+  const executionId = typeof payload.executionId === "string"
+    ? payload.executionId
+    : typeof payload.reconciliationExecutionId === "string"
+      ? payload.reconciliationExecutionId
+      : undefined;
+  const generation = Number.isSafeInteger(payload.generation) && payload.generation >= 1
+    ? payload.generation
+    : 1;
+  return {
+    tenantId,
+    jobId,
+    ...(physicalWorkspaceId ? { workspaceId: physicalWorkspaceId } : {}),
+    ...(executionId ? { executionId } : {}),
+    generation,
+    head,
+    job,
+    jobStreamVersion: projection.streamVersion,
+  };
 }
 
 async function loadExecutionContext(client, row, { requireAgentJob = true } = {}) {
@@ -203,7 +248,7 @@ async function appendEvent(client, hmacKey, context, request, occurredAt) {
     type: request.type,
     occurredAt,
     actorId: request.actorId,
-    executionId: context.executionId,
+    ...(context.executionId ? { executionId: context.executionId } : {}),
     generation: context.generation,
     correlationId: request.correlationId,
     publicPayload: request.publicPayload,
@@ -222,7 +267,7 @@ async function appendEvent(client, hmacKey, context, request, occurredAt) {
     )
   `, [
     event.tenantId, event.position, event.id, event.aggregateType, event.aggregateId,
-    event.streamVersion, event.type, event.occurredAt, event.actorId, event.executionId,
+    event.streamVersion, event.type, event.occurredAt, event.actorId, event.executionId ?? null,
     event.generation, event.correlationId, JSON.stringify(event.publicPayload),
     event.previousDigest ?? null, event.digest, event.hmac,
   ]);
@@ -268,7 +313,7 @@ async function putProjection(client, context, namespace, key, previousVersion, v
 }
 
 async function settleTerminalJobBeforeClaim(client, hmacKey, context, row, workerId, now) {
-  if (!context?.job) return false;
+  if (!context?.job || !context.execution) return false;
   const executionStatus = String(context.execution.status);
   const failure = terminalExecutionClaimFailure(executionStatus);
   if (!failure) return false;
@@ -328,11 +373,14 @@ async function recordClaim(client, hmacKey, context, row, workerId, leaseExpires
     aggregateType: "job", aggregateId: jobId, expectedStreamVersion: context.jobStreamVersion,
     type: "job.leased", actorId: `worker:${workerId}`, correlationId,
     publicPayload: {
-      workspaceId: context.workspaceId, executionId: context.executionId, workerId,
-      fencingToken, leaseExpiresAt,
+      ...(context.workspaceId ? { workspaceId: context.workspaceId } : {}),
+      ...(context.executionId ? { executionId: context.executionId } : {}),
+      ...(!context.execution ? { jobId, kind: String(row.kind) } : {}),
+      workerId, fencingToken, leaseExpiresAt,
     },
   }, now);
   await putProjection(client, context, "job", jobId, context.jobStreamVersion, nextJob, now);
+  if (!context.execution) return;
   if (context.execution.status === "running" || context.execution.status === "waiting_approval") return;
   if (context.execution.status !== "queued") {
     throw new Error(`状态为 ${String(context.execution.status)} 的 Execution 不能领取 Agent Job`);
@@ -373,8 +421,10 @@ async function recordRenewal(client, hmacKey, context, row, workerId, leaseExpir
     type: "job.lease_renewed", actorId: `worker:${workerId}`,
     correlationId: `job:${jobId}:fence:${fencingToken}`,
     publicPayload: {
-      workspaceId: context.workspaceId, executionId: context.executionId, workerId,
-      fencingToken, leaseExpiresAt,
+      ...(context.workspaceId ? { workspaceId: context.workspaceId } : {}),
+      ...(context.executionId ? { executionId: context.executionId } : {}),
+      ...(!context.execution ? { jobId, kind: String(row.kind) } : {}),
+      workerId, fencingToken, leaseExpiresAt,
     },
   }, now);
   await putProjection(client, context, "job", jobId, context.jobStreamVersion, nextJob, now);
@@ -403,10 +453,15 @@ async function recordTerminal(client, hmacKey, context, row, workerId, fencingTo
     aggregateType: "job", aggregateId: jobId, expectedStreamVersion: context.jobStreamVersion,
     type: `job.${status}`, actorId: `worker:${workerId}`, correlationId,
     publicPayload: {
-      workspaceId: context.workspaceId, executionId: context.executionId, status, fencingToken,
+      ...(context.workspaceId ? { workspaceId: context.workspaceId } : {}),
+      ...(context.executionId ? { executionId: context.executionId } : {}),
+      ...(!context.execution ? { jobId, kind: String(row.kind) } : {}),
+      status,
+      fencingToken,
     },
   }, now);
   await putProjection(client, context, "job", jobId, context.jobStreamVersion, nextJob, now);
+  if (!context.execution) return;
   const failureCode = status === "failed"
     ? requiredString(value?.code ?? "WORKER_FAILED", "failure code")
     : undefined;
@@ -434,6 +489,69 @@ async function recordTerminal(client, hmacKey, context, row, workerId, fencingTo
     actorId: `worker:${workerId}`, correlationId,
     publicPayload: {
       workspaceId: context.workspaceId, jobId, status, ...(failureCode ? { failureCode } : {}),
+    },
+  }, now);
+  await putProjection(
+    client, context, "execution", context.executionId,
+    context.executionStreamVersion, nextExecution, now,
+  );
+}
+
+async function recordInterrupted(client, hmacKey, context, row, workerId, fencingToken, failure, now) {
+  if (!context?.job || !context.execution) return;
+  assertJobProjectionMatchesPhysical(context, row, "owned", workerId, fencingToken);
+  const jobId = String(row.job_id);
+  const correlationId = `job:${jobId}:fence:${fencingToken}`;
+  const {
+    leaseOwner: _leaseOwner,
+    leaseExpiresAt: _leaseExpiresAt,
+    result: _priorResult,
+    failure: _priorFailure,
+    ...jobWithoutLease
+  } = context.job;
+  const nextJob = {
+    ...jobWithoutLease,
+    status: "failed",
+    failure,
+    streamVersion: context.jobStreamVersion + 1,
+    updatedAt: now,
+  };
+  await appendEvent(client, hmacKey, context, {
+    aggregateType: "job", aggregateId: jobId, expectedStreamVersion: context.jobStreamVersion,
+    type: "job.failed", actorId: `worker:${workerId}`, correlationId,
+    publicPayload: {
+      workspaceId: context.workspaceId,
+      executionId: context.executionId,
+      status: "failed",
+      failureCode: "EXECUTION_INTERRUPTED",
+      fencingToken,
+    },
+  }, now);
+  await putProjection(client, context, "job", jobId, context.jobStreamVersion, nextJob, now);
+  if (context.execution.status !== "running" && context.execution.status !== "waiting_approval") {
+    throw new Error(`状态为 ${String(context.execution.status)} 的 Execution 不能中断`);
+  }
+  const {
+    finishedAt: _finishedAt,
+    failureCode: _failureCode,
+    ...executionWithoutTerminalState
+  } = context.execution;
+  const nextExecution = {
+    ...executionWithoutTerminalState,
+    status: "interrupted",
+    streamVersion: context.executionStreamVersion + 1,
+    updatedAt: now,
+  };
+  await appendEvent(client, hmacKey, context, {
+    aggregateType: "execution", aggregateId: context.executionId,
+    expectedStreamVersion: context.executionStreamVersion, type: "execution.interrupted",
+    actorId: `worker:${workerId}`, correlationId,
+    publicPayload: {
+      workspaceId: context.workspaceId,
+      jobId,
+      status: "interrupted",
+      reason: failure.message,
+      fencingToken,
     },
   }, now);
   await putProjection(
@@ -515,6 +633,7 @@ export class PostgresWorkerStore {
             return undefined;
           }
           const context = await loadExecutionContext(client, prior);
+          const genericContext = await loadGenericJobContext(client, prior);
           if (await settleTerminalJobBeforeClaim(
             client,
             this.#hmacKey,
@@ -551,7 +670,18 @@ export class PostgresWorkerStore {
             fencingToken,
             occurredAt,
           );
+          await recordClaim(
+            client,
+            this.#hmacKey,
+            genericContext,
+            prior,
+            workerId,
+            leaseExpiresAt,
+            fencingToken,
+            occurredAt,
+          );
           if (context) await flushTenantHead(client, context);
+          if (genericContext) await flushTenantHead(client, genericContext);
           await client.query("commit");
           return rowToJob(row);
         } catch (error) {
@@ -582,6 +712,7 @@ export class PostgresWorkerStore {
       await client.query("begin");
       const row = await this.#ownedLeasedJob(client, jobId, workerId, fencingToken, occurredAt);
       const context = await loadExecutionContext(client, row);
+      const genericContext = await loadGenericJobContext(client, row);
       const changed = await client.query(status === "completed" ? `
         update mn_v2.jobs set status = 'completed', result_json = $1::jsonb,
           failure_json = null, lease_owner = null, lease_expires_at = null,
@@ -597,7 +728,19 @@ export class PostgresWorkerStore {
       `, [JSON.stringify(value), occurredAt, jobId, workerId, fencingToken]);
       if (changed.rowCount !== 1) throw new StaleFencingTokenError(jobId);
       await recordTerminal(client, this.#hmacKey, context, row, workerId, fencingToken, status, value, occurredAt);
+      await recordTerminal(
+        client,
+        this.#hmacKey,
+        genericContext,
+        row,
+        workerId,
+        fencingToken,
+        status,
+        value,
+        occurredAt,
+      );
       if (context) await flushTenantHead(client, context);
+      if (genericContext) await flushTenantHead(client, genericContext);
       await client.query("commit");
     } catch (error) {
       await client.query("rollback");
@@ -623,6 +766,7 @@ export class PostgresWorkerStore {
       await client.query("begin");
       const row = await this.#ownedLeasedJob(client, jobId, workerId, fencingToken, occurredAt);
       const context = await loadExecutionContext(client, row);
+      const genericContext = await loadGenericJobContext(client, row);
       const changed = await client.query(`
         update mn_v2.jobs set lease_expires_at = $1::timestamptz, updated_at = $2::timestamptz
         where job_id = $3 and status = 'leased' and lease_owner = $4 and fencing_token = $5
@@ -630,7 +774,72 @@ export class PostgresWorkerStore {
       `, [leaseExpiresAt, occurredAt, jobId, workerId, fencingToken]);
       if (changed.rowCount !== 1) throw new StaleFencingTokenError(jobId);
       await recordRenewal(client, this.#hmacKey, context, row, workerId, leaseExpiresAt, fencingToken, occurredAt);
+      await recordRenewal(
+        client,
+        this.#hmacKey,
+        genericContext,
+        row,
+        workerId,
+        leaseExpiresAt,
+        fencingToken,
+        occurredAt,
+      );
       if (context) await flushTenantHead(client, context);
+      if (genericContext) await flushTenantHead(client, genericContext);
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async interruptJob(jobId, workerId, fencingToken, reason, now) {
+    const occurredAt = iso(now);
+    if (typeof reason !== "string" || !reason.trim()) throw new TypeError("中断原因不能为空");
+    const failure = {
+      code: "EXECUTION_INTERRUPTED",
+      message: reason,
+      retryable: false,
+    };
+    const client = await this.#pool.connect();
+    try {
+      await client.query("begin");
+      const row = await this.#ownedLeasedJob(client, jobId, workerId, fencingToken, occurredAt);
+      const context = await loadExecutionContext(client, row);
+      const genericContext = await loadGenericJobContext(client, row);
+      const changed = await client.query(`
+        update mn_v2.jobs set status = 'failed', failure_json = $1::jsonb,
+          result_json = null, lease_owner = null, lease_expires_at = null,
+          updated_at = $2::timestamptz
+        where job_id = $3 and status = 'leased' and lease_owner = $4 and fencing_token = $5
+          and lease_expires_at > $2::timestamptz
+      `, [JSON.stringify(failure), occurredAt, jobId, workerId, fencingToken]);
+      if (changed.rowCount !== 1) throw new StaleFencingTokenError(jobId);
+      await recordInterrupted(
+        client,
+        this.#hmacKey,
+        context,
+        row,
+        workerId,
+        fencingToken,
+        failure,
+        occurredAt,
+      );
+      await recordTerminal(
+        client,
+        this.#hmacKey,
+        genericContext,
+        row,
+        workerId,
+        fencingToken,
+        "failed",
+        failure,
+        occurredAt,
+      );
+      if (context) await flushTenantHead(client, context);
+      if (genericContext) await flushTenantHead(client, genericContext);
       await client.query("commit");
     } catch (error) {
       await client.query("rollback");

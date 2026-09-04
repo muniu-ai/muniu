@@ -5,6 +5,7 @@ import test from "node:test";
 
 import { computeEventHmac } from "@mn/storage";
 
+import { PostgresKernelStore } from "../lib/postgres-kernel-store.mjs";
 import { PostgresWorkerStore } from "../lib/postgres-worker-store.mjs";
 
 const startedAt = "2025-01-02T03:04:05.000Z";
@@ -27,15 +28,18 @@ class WorkerFixtureClient {
   snapshot;
   job;
 
-  constructor({ kind = "agent.execution.run" } = {}) {
+  constructor({ kind = "agent.execution.run", projected = kind === "agent.execution.run" } = {}) {
+    const payload = kind === "coding.sandbox.cleanup"
+      ? { reconciliationExecutionId: "execution-a" }
+      : kind === "system.noop"
+        ? {}
+        : { executionId: "execution-a", message: "开始" };
     this.job = {
       job_id: "job-a",
       tenant_id: "tenant-a",
       workspace_id: "workspace-a",
       kind,
-      payload_json: kind === "system.noop"
-        ? {}
-        : { executionId: "execution-a", message: "开始" },
+      payload_json: payload,
       status: "available",
       attempts: 0,
       available_at: startedAt,
@@ -58,7 +62,7 @@ class WorkerFixtureClient {
       createdAt: startedAt,
       updatedAt: startedAt,
     });
-    if (kind === "agent.execution.run") {
+    if (projected) {
       this.projections.set("job:job-a", {
         id: "job-a",
         tenantId: "tenant-a",
@@ -180,6 +184,39 @@ class WorkerFixtureClient {
     }
     if (normalized.startsWith("select next_position, previous_digest from mn_v2.tenant_heads")) {
       return { rows: [{ next_position: this.position, previous_digest: this.previousDigest }], rowCount: 1 };
+    }
+    if (normalized.startsWith("select aggregate_type, aggregate_id, stream_version from mn_v2.stream_heads")) {
+      return {
+        rows: [...this.streams].map(([key, stream_version]) => {
+          const separator = key.indexOf(":");
+          return {
+            aggregate_type: key.slice(0, separator),
+            aggregate_id: key.slice(separator + 1),
+            stream_version,
+          };
+        }),
+        rowCount: this.streams.size,
+      };
+    }
+    if (normalized.startsWith("select namespace, projection_key, value_json from mn_v2.projections")) {
+      return {
+        rows: [...this.projections].map(([key, value_json]) => {
+          const separator = key.indexOf(":");
+          return {
+            namespace: key.slice(0, separator),
+            projection_key: key.slice(separator + 1),
+            value_json: clone(value_json),
+          };
+        }),
+        rowCount: this.projections.size,
+      };
+    }
+    if (normalized.startsWith("select idempotency_key, request_hash, response_json, created_at")) {
+      return { rows: [], rowCount: 0 };
+    }
+    if (normalized.startsWith("select job_id, status, lease_owner, lease_expires_at, fencing_token")) {
+      const leased = this.job.status === "leased" ? [clone(this.job)] : [];
+      return { rows: leased, rowCount: leased.length };
     }
     if (normalized.startsWith("select stream_version, value_json from mn_v2.projections")) {
       const value = this.projections.get(`${parameters[1]}:${parameters[2]}`);
@@ -442,6 +479,26 @@ test("Agent Job 失败受 fencing 保护并同步 Job 与 Execution", async () =
   assert.deepEqual(client.events.slice(-2).map(({ type }) => type), ["job.failed", "execution.failed"]);
 });
 
+test("Agent Job 中断原子推进 Job failed 与 Execution interrupted", async () => {
+  const client = new WorkerFixtureClient();
+  const store = fixtureStore(client);
+  await store.claimJob("worker-a", startedAt);
+  await store.interruptJob(
+    "job-a",
+    "worker-a",
+    1,
+    "Worker 已停止",
+    "2025-01-02T03:04:07.000Z",
+  );
+  assert.equal(client.job.status, "failed");
+  assert.equal(projection(client, "job", "job-a").status, "failed");
+  assert.equal(projection(client, "job", "job-a").failure.code, "EXECUTION_INTERRUPTED");
+  assert.equal(projection(client, "execution", "execution-a").status, "interrupted");
+  assert.deepEqual(client.events.slice(-2).map(({ type }) => type), [
+    "job.failed", "execution.interrupted",
+  ]);
+});
+
 test("未知外部副作用在同一事务终止 Agent Job 并创建人工核对项", async () => {
   const client = new WorkerFixtureClient();
   const store = fixtureStore(client);
@@ -463,6 +520,127 @@ test("未知外部副作用在同一事务终止 Agent Job 并创建人工核对
     "job.lease_renewed", "job.failed", "execution.needs_reconciliation",
   ]);
   assert.ok(client.outbox.some(({ topic }) => topic === "execution.reconciliation_required"));
+});
+
+test("带投影的 generic Job 在领取、续租与完成时原子推进生命周期", async () => {
+  const client = new WorkerFixtureClient({ kind: "coding.sandbox.cleanup", projected: true });
+  const store = fixtureStore(client);
+
+  const job = await store.claimJob("worker-a", startedAt);
+  assert.equal(job.status, "leased");
+  assert.equal(job.fencingToken, 1);
+  assert.deepEqual(projection(client, "job", "job-a"), {
+    id: "job-a",
+    tenantId: "tenant-a",
+    workspaceId: "workspace-a",
+    kind: "coding.sandbox.cleanup",
+    payload: { reconciliationExecutionId: "execution-a" },
+    status: "leased",
+    attempts: 1,
+    availableAt: startedAt,
+    leaseOwner: "worker-a",
+    leaseExpiresAt: "2025-01-02T03:04:35.000Z",
+    fencingToken: 1,
+    idempotencyKey: "execution-a:generation:1",
+    streamVersion: 2,
+    createdAt: startedAt,
+    updatedAt: startedAt,
+  });
+  assert.equal(projection(client, "execution", "execution-a").status, "queued");
+  const kernelStore = new PostgresKernelStore({
+    pool: {
+      connect: async () => client,
+      query: client.query.bind(client),
+    },
+    hmacKey,
+    now: () => startedAt,
+  });
+  await kernelStore.transact("tenant-a", (transaction) => {
+    transaction.assertJobLease({
+      jobId: "job-a",
+      workerId: "worker-a",
+      fencingToken: 1,
+      occurredAt: "2025-01-02T03:04:06.000Z",
+    });
+  });
+
+  await store.renewJobLease("job-a", "worker-a", 1, "2025-01-02T03:04:10.000Z");
+  assert.equal(projection(client, "job", "job-a").streamVersion, 3);
+  assert.equal(projection(client, "job", "job-a").leaseExpiresAt, "2025-01-02T03:04:40.000Z");
+
+  await store.completeJob(
+    "job-a",
+    "worker-a",
+    1,
+    { executionId: "execution-a", status: "cleaned" },
+    "2025-01-02T03:04:11.000Z",
+  );
+  assert.equal(client.job.status, "completed");
+  assert.equal(projection(client, "job", "job-a").status, "completed");
+  assert.equal(projection(client, "job", "job-a").streamVersion, 4);
+  assert.deepEqual(projection(client, "job", "job-a").result, {
+    executionId: "execution-a",
+    status: "cleaned",
+  });
+  assert.equal(projection(client, "execution", "execution-a").status, "queued");
+  assert.deepEqual(client.events.map(({ type }) => type), [
+    "job.leased", "job.lease_renewed", "job.completed",
+  ]);
+  assert.deepEqual(client.outbox.map(({ topic }) => topic), [
+    "job.leased", "job.lease_renewed", "job.completed",
+  ]);
+});
+
+test("带投影的 generic Job 失败与中断都受 fencing 保护并同步投影", async (context) => {
+  await context.test("失败", async () => {
+    const client = new WorkerFixtureClient({ kind: "coding.sandbox.cleanup", projected: true });
+    const store = fixtureStore(client);
+    await store.claimJob("worker-a", startedAt);
+    await assert.rejects(
+      () => store.failJob(
+        "job-a",
+        "worker-a",
+        0,
+        { code: "STALE" },
+        "2025-01-02T03:04:06.000Z",
+      ),
+      (error) => error?.code === "STALE_FENCING_TOKEN",
+    );
+    await store.failJob(
+      "job-a",
+      "worker-a",
+      1,
+      { code: "JOB_EXECUTION_FAILED", message: "cleanup failed", retryable: true },
+      "2025-01-02T03:04:07.000Z",
+    );
+    assert.equal(client.job.status, "failed");
+    assert.equal(projection(client, "job", "job-a").status, "failed");
+    assert.equal(projection(client, "job", "job-a").failure.code, "JOB_EXECUTION_FAILED");
+    assert.equal(projection(client, "execution", "execution-a").status, "queued");
+    assert.deepEqual(client.events.map(({ type }) => type), ["job.leased", "job.failed"]);
+  });
+
+  await context.test("中断", async () => {
+    const client = new WorkerFixtureClient({ kind: "coding.sandbox.cleanup", projected: true });
+    const store = fixtureStore(client);
+    await store.claimJob("worker-a", startedAt);
+    await store.interruptJob(
+      "job-a",
+      "worker-a",
+      1,
+      "Worker 已停止",
+      "2025-01-02T03:04:07.000Z",
+    );
+    assert.equal(client.job.status, "failed");
+    assert.equal(projection(client, "job", "job-a").status, "failed");
+    assert.deepEqual(projection(client, "job", "job-a").failure, {
+      code: "EXECUTION_INTERRUPTED",
+      message: "Worker 已停止",
+      retryable: false,
+    });
+    assert.equal(projection(client, "execution", "execution-a").status, "queued");
+    assert.deepEqual(client.events.map(({ type }) => type), ["job.leased", "job.failed"]);
+  });
 });
 
 test("无 executionId 的系统 Job 只推进物理状态", async () => {
