@@ -1,5 +1,5 @@
 {
-  "name": "@mn/worker",
+  "name": "@mn/host",
   "version": "0.2.0",
   "private": true,
   "license": "Apache-2.0",
@@ -13,15 +13,20 @@
       "import": "./dist/index.js"
     }
   },
+  "bin": {
+    "mn-host": "./dist/main.js"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsc -p tsconfig.test.json && node --test dist-test/test/worker-v2.test.js",
-    "dev": "npm run build && node dist/index.js"
+    "test": "tsc -p tsconfig.test.json && node --test dist-test/test/**/*.test.js"
   },
   "dependencies": {
+    "@deepseek-ai/cordis": "4.0.1",
     "@mn/agent-runtime": "0.2.0",
     "@mn/contracts": "0.2.0",
+    "@mn/kernel": "0.2.0",
+    "@mn/plugin-sdk": "0.2.0",
     "@mn/storage": "0.2.0"
   }
 }
