@@ -143,6 +143,106 @@ test("本地组合根执行 BYOK Agent turn，结果在 SQLite 重启后仍可�
   }
 });
 
+test("follow_up 按 FIFO 进入下一 turn，steer 只在下一模型边界注入", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "muniu-local-runtime-inbox-"));
+  const secrets = new FixtureSecrets();
+  const requests: ModelRequest[] = [];
+  let firstModelStarted!: () => void;
+  let releaseFirstModel!: () => void;
+  const firstStarted = new Promise<void>((resolve) => { firstModelStarted = resolve; });
+  const firstRelease = new Promise<void>((resolve) => { releaseFirstModel = resolve; });
+  const invoke: ByokModelInvoker = async ({ request }) => {
+    requests.push(request);
+    if (requests.length === 1) {
+      firstModelStarted();
+      await firstRelease;
+      return { text: "第一轮完成", toolCalls: [] };
+    }
+    return { text: "第二轮已按引导处理", toolCalls: [] };
+  };
+  let host: AgentOsHost | undefined;
+  try {
+    host = await startLocalAgentOsHost({
+      stateRoot: directory,
+      port: 0,
+      secretStore: secrets,
+      modelInvoker: invoke,
+      workerIdleDelayMs: 1,
+      modelProbe: async ({ preset }) => ({
+        models: preset.suggestedModels,
+        defaultModel: preset.suggestedModels[0]!,
+      }),
+    });
+    const workspace = (await body(await host.dispatch(jsonRequest("/v2/workspaces", {
+      name: "持久收件箱", viewMode: "professional", pluginIds: ["opc"],
+    }, "inbox-workspace")))).data;
+    const pendingModel = (await body(await host.dispatch(jsonRequest("/v2/model-connections", {
+      presetId: "deepseek", apiKey: "fixture-byok-key", displayName: "DeepSeek",
+    }, "inbox-model")))).data;
+    const model = (await body(await host.dispatch(jsonRequest(
+      `/v2/model-connections/${pendingModel.id}/probe`,
+      { expectedStreamVersion: pendingModel.streamVersion },
+      "inbox-model-probe",
+    )))).data;
+    const thread = (await body(await host.dispatch(jsonRequest(
+      `/v2/workspaces/${workspace.id}/threads`,
+      { subject: "验证后续指令", pluginId: "opc" },
+      "inbox-thread",
+    )))).data;
+    const execution = (await body(await host.dispatch(jsonRequest(
+      `/v2/workspaces/${workspace.id}/threads/${thread.id}/turns`,
+      {
+        expectedStreamVersion: thread.streamVersion,
+        message: "先整理支持证据",
+        agentDefinitionId: "opc.opportunity-validator",
+        modelBindingId: model.id,
+      },
+      "inbox-turn",
+    )))).data;
+    await firstStarted;
+
+    const turnsPath = `/v2/workspaces/${workspace.id}/threads/${thread.id}/turns`;
+    const running = (await body(await host.dispatch(new Request(`http://host.test${turnsPath}`))))
+      .data.turns[0].execution;
+    assert.equal(running.status, "running");
+    const followed = await host.dispatch(jsonRequest(
+      `/v2/executions/${execution.id}/commands`,
+      {
+        expectedStreamVersion: running.streamVersion,
+        command: "follow_up",
+        message: "再整理反证",
+      },
+      "inbox-follow-up",
+    ));
+    assert.equal(followed.status, 202, JSON.stringify(await followed.clone().json()));
+    const followedExecution = (await body(followed)).data;
+    const steered = await host.dispatch(jsonRequest(
+      `/v2/executions/${execution.id}/commands`,
+      {
+        expectedStreamVersion: followedExecution.streamVersion,
+        command: "steer",
+        message: "优先指出证据缺口",
+      },
+      "inbox-steer",
+    ));
+    assert.equal(steered.status, 202, JSON.stringify(await steered.clone().json()));
+    releaseFirstModel();
+
+    const completed = await waitForCompletedTurn(host, turnsPath);
+    assert.equal(completed.turns[0].execution.status, "completed");
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0]?.messages.at(-1)?.content, "先整理支持证据");
+    assert.equal(requests[0]?.messages.some((message) => message.content.startsWith("[steer]")), false);
+    assert.equal(requests[1]?.messages.filter((message) => message.role === "user").at(-1)?.content, "再整理反证");
+    assert.ok(requests[1]?.messages.some((message) =>
+      message.role === "system" && message.content === "[steer] 优先指出证据缺口"));
+  } finally {
+    releaseFirstModel?.();
+    await host?.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("关闭本地 Host 会中断在途模型后再关闭 SQLite", async () => {
   const directory = await mkdtemp(join(tmpdir(), "muniu-local-runtime-stop-"));
   const secrets = new FixtureSecrets();
