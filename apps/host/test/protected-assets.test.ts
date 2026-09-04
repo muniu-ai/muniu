@@ -113,6 +113,7 @@ test("受保护附件先写密文 CAS，再提交独立 wrapped DEK，并在授�
     identityResolver: (incoming: Request) => ({
       tenantId: "tenant-a",
       principalId: incoming.headers.get("X-Principal") ?? "owner-a",
+      organizationRoles: ["organization_admin"],
     }),
     now: () => "2026-09-04T09:00:00.000Z",
     id: (kind: string) => `${kind}-${++id}`,
