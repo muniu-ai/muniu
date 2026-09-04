@@ -22,7 +22,9 @@ import type {
   Execution,
   ExecutionAuthority,
   ExternalCodingRunnerId,
+  Job,
   Thread,
+  Workspace,
 } from "@mn/contracts";
 import { CODING_RUNNER_CONFIGURATION_NAMESPACE } from "@mn/contracts";
 import { AgentOsKernel, sha256 } from "@mn/kernel";
@@ -33,6 +35,7 @@ import { SqliteStorage } from "@mn/storage";
 
 import {
   AgentOsWorker,
+  createCodingSandboxCleanupWorkerHandler,
   createKernelAgentTurnHandler,
   type ByokModelInvoker,
 } from "../src/index.js";
@@ -208,6 +211,31 @@ test("Worker 拒绝 npm/shebang 包装器并给出原生 macOS CLI 安装指引"
   assert.deepEqual(await readdir(fixture.sandboxRoot), []);
 });
 
+test("Worker 在 claim 后重读工作区并拒绝已停用的外部 Runner 插件", {
+  skip: !SANDBOX_AVAILABLE,
+}, async (t) => {
+  const fixture = await externalFixture(t, "completed");
+  await fixture.store.transact("local", (transaction) => {
+    const workspace = transaction.getProjection<Workspace>("workspace", "workspace-1");
+    assert.ok(workspace);
+    transaction.putProjection("workspace", workspace.id, {
+      ...workspace,
+      activePluginIds: ["coding"],
+      streamVersion: workspace.streamVersion + 1,
+      updatedAt: NOW,
+    });
+  });
+
+  assert.deepEqual(await fixture.worker.pollOnce(), { status: "failed", jobId: "job-1" });
+  const state = await fixture.store.transact("local", (transaction) => ({
+    execution: transaction.getProjection<Execution>("execution", "execution-1"),
+    approvals: transaction.listProjections<Approval>("approval"),
+  }));
+  assert.equal(state.execution?.status, "failed");
+  assert.equal(state.approvals.length, 0);
+  assert.deepEqual(await readdir(fixture.sandboxRoot).catch(() => []), []);
+});
+
 test("Worker 发现已确认 Runner 的摘要变化时失败关闭，不启动进程", {
   skip: !SANDBOX_AVAILABLE,
 }, async (t) => {
@@ -283,6 +311,100 @@ test("外部 Runner 超过 Execution 时限后终止进程并保留人工核对�
   assert.equal((await readdir(fixture.sandboxRoot)).length, 1);
 });
 
+test("用户取消外部 Runner 后持久化 Coding cancelled 并清理隔离资源", {
+  skip: !SANDBOX_AVAILABLE,
+}, async (t) => {
+  const fixture = await externalFixture(t, "hang");
+  const polling = fixture.worker.pollOnce();
+  const approval = await waitForApproval(fixture.store, []);
+  await fixture.kernel.decideApproval(
+    "local", "local-owner", "approve-cancel-runner", approval.id,
+    approval.streamVersion, "approve_once",
+  );
+  await waitForExternalInvocation(fixture.store);
+  const running = await fixture.store.transact("local", (transaction) =>
+    transaction.getProjection<Execution>("execution", "execution-1"));
+  assert.ok(running);
+  await fixture.kernel.commandExecution(
+    "local",
+    "local-owner",
+    "cancel-external-runner",
+    running.id,
+    running.streamVersion,
+    "cancel",
+  );
+
+  assert.deepEqual(await polling, { status: "cancelled", jobId: "job-1" });
+  const state = await fixture.store.transact("local", (transaction) => ({
+    execution: transaction.getProjection<Execution>("execution", "execution-1"),
+    task: transaction.getProjection<CodingTask>("coding.task", "task-1"),
+    run: transaction.getProjection<any>("coding.execution", "execution-1"),
+  }));
+  assert.equal(state.execution?.status, "cancelled");
+  assert.equal(state.task?.status, "cancelled");
+  assert.equal(state.run?.status, "cancelled");
+  assert.equal(state.run?.externalInvocation.status, "settled");
+  assert.deepEqual(await readdir(fixture.sandboxRoot), []);
+});
+
+test("候选审批期间取消也会收敛 Coding 投影并关闭审批收件箱", {
+  skip: !SANDBOX_AVAILABLE,
+}, async (t) => {
+  const fixture = await externalFixture(t, "completed");
+  const polling = fixture.worker.pollOnce();
+  const runnerApproval = await waitForApproval(fixture.store, []);
+  await fixture.kernel.decideApproval(
+    "local", "local-owner", "approve-before-review-cancel", runnerApproval.id,
+    runnerApproval.streamVersion, "approve_once",
+  );
+  const candidateApproval = await waitForApproval(fixture.store, [runnerApproval.id]);
+  const waiting = await fixture.store.transact("local", (transaction) =>
+    transaction.getProjection<Execution>("execution", "execution-1"));
+  assert.ok(waiting);
+  await fixture.kernel.commandExecution(
+    "local", "local-owner", "cancel-candidate-review", waiting.id,
+    waiting.streamVersion, "cancel",
+  );
+
+  assert.deepEqual(await polling, { status: "cancelled", jobId: "job-1" });
+  const state = await fixture.store.transact("local", (transaction) => ({
+    task: transaction.getProjection<CodingTask>("coding.task", "task-1"),
+    run: transaction.getProjection<any>("coding.execution", "execution-1"),
+    approval: transaction.getProjection<Approval>("approval", candidateApproval.id),
+    inbox: transaction.getProjection<any>("inbox", `approval:${candidateApproval.id}`),
+  }));
+  assert.equal(state.task?.status, "cancelled");
+  assert.equal(state.run?.status, "cancelled");
+  assert.equal(state.approval?.status, "expired");
+  assert.equal(state.inbox?.status, "resolved");
+  assert.deepEqual(await readdir(fixture.sandboxRoot), []);
+});
+
+test("人工核对后由持久化受 fencing 保护的 Job 幂等清理 sandbox", {
+  skip: !SANDBOX_AVAILABLE,
+}, async (t) => {
+  const fixture = await externalFixture(t, "unknown");
+  const original = fixture.worker.pollOnce();
+  const approval = await waitForApproval(fixture.store, []);
+  await fixture.kernel.decideApproval(
+    "local", "local-owner", "approve-cleanup-fixture", approval.id,
+    approval.streamVersion, "approve_once",
+  );
+  assert.deepEqual(await original, { status: "needs_reconciliation", jobId: "job-1" });
+  assert.equal((await readdir(fixture.sandboxRoot)).length, 1);
+  await enqueueSandboxCleanup(fixture.store);
+
+  assert.deepEqual(await fixture.worker.pollOnce(), { status: "completed", jobId: "cleanup-job-1" });
+  assert.deepEqual(await readdir(fixture.sandboxRoot), []);
+  const state = await fixture.store.transact("local", (transaction) => ({
+    run: transaction.getProjection<any>("coding.execution", "execution-1"),
+    job: transaction.getProjection<Job>("job", "cleanup-job-1"),
+  }));
+  assert.equal(state.run?.externalInvocation.cleanupStatus, "cleaned");
+  assert.equal(state.job?.status, "completed");
+  assert.equal((await fixture.store.getJob("cleanup-job-1"))?.status, "completed");
+});
+
 async function externalFixture(
   t: test.TestContext,
   terminal: "completed" | "unknown" | "hang",
@@ -339,6 +461,12 @@ async function externalFixture(
     approvalKernel: kernel,
     codingSandboxRoot: sandboxRoot,
     approvalPollIntervalMs: 2,
+    controlPollIntervalMs: 2,
+    now: () => NOW,
+  });
+  const cleanupHandler = createCodingSandboxCleanupWorkerHandler({
+    store,
+    sandboxRoot,
     now: () => NOW,
   });
   const worker = new AgentOsWorker({
@@ -350,9 +478,12 @@ async function externalFixture(
       pluginLockDigest: "same",
       expectedPluginLockDigest: "same",
     },
-    handlers: { "agent.execution.run": handler },
+    handlers: {
+      "agent.execution.run": handler,
+      "coding.sandbox.cleanup": cleanupHandler,
+    },
     tenantId: "local",
-    kinds: ["agent.execution.run"],
+    kinds: ["agent.execution.run", "coding.sandbox.cleanup"],
     now: () => new Date(NOW),
   });
   return {
@@ -460,6 +591,19 @@ async function seed(
     createdAt: NOW,
     updatedAt: NOW,
   };
+  const workspace: Workspace = {
+    id: "workspace-1",
+    tenantId: "local",
+    name: "External Runner Fixture",
+    viewMode: "professional",
+    activePluginIds: [
+      "coding",
+      runnerId === "claude-cli" ? "runner-claude-cli" : "runner-codex-cli",
+    ],
+    streamVersion: 0,
+    createdAt: NOW,
+    updatedAt: NOW,
+  };
   const job = {
     id: "job-1",
     tenantId: "local",
@@ -476,6 +620,7 @@ async function seed(
     updatedAt: NOW,
   } as const;
   await store.transact("local", (transaction) => {
+    transaction.putProjection("workspace", workspace.id, workspace);
     transaction.putProjection("thread", thread.id, thread);
     transaction.putProjection("execution", execution.id, execution);
     transaction.putProjection("authority", authority.id, authority);
@@ -519,6 +664,85 @@ async function waitForApproval(
     await new Promise((resolve) => setTimeout(resolve, 2));
   }
   throw new Error("等待 Runner 批准超时");
+}
+
+async function waitForExternalInvocation(store: SqliteStorage): Promise<void> {
+  for (let attempt = 0; attempt < 1_000; attempt += 1) {
+    const started = await store.transact("local", (transaction) =>
+      transaction.getProjection<any>("coding.execution", "execution-1")
+        ?.externalInvocation?.status === "started");
+    if (started) return;
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+  throw new Error("等待外部 Runner 启动检查点超时");
+}
+
+async function enqueueSandboxCleanup(store: SqliteStorage): Promise<void> {
+  await store.transact("local", (transaction) => {
+    const run = transaction.getProjection<any>("coding.execution", "execution-1");
+    assert.ok(run?.externalInvocation);
+    const nextRun = {
+      ...run,
+      externalInvocation: {
+        ...run.externalInvocation,
+        cleanupStatus: "pending",
+        cleanupJobId: "cleanup-job-1",
+        updatedAt: NOW,
+      },
+      streamVersion: run.streamVersion + 1,
+      updatedAt: NOW,
+    };
+    transaction.putProjection("coding.execution", "execution-1", nextRun);
+    transaction.appendEvent({
+      tenantId: "local",
+      aggregateType: "coding.execution",
+      aggregateId: "execution-1",
+      expectedStreamVersion: run.streamVersion,
+      type: "coding.reconciliation_decided",
+      actorId: "local-owner",
+      executionId: "execution-1",
+      generation: 1,
+      correlationId: "coding:execution-1:cleanup",
+      publicPayload: { workspaceId: "workspace-1", cleanupJobId: "cleanup-job-1" },
+    });
+    const job: Job = {
+      id: "cleanup-job-1",
+      tenantId: "local",
+      workspaceId: "workspace-1",
+      kind: "coding.sandbox.cleanup",
+      payload: { reconciliationExecutionId: "execution-1" },
+      status: "available",
+      attempts: 0,
+      availableAt: NOW,
+      fencingToken: 0,
+      idempotencyKey: "coding:execution-1:cleanup",
+      streamVersion: 1,
+      createdAt: NOW,
+      updatedAt: NOW,
+    };
+    transaction.putProjection("job", job.id, job);
+    transaction.appendEvent({
+      tenantId: "local",
+      aggregateType: "job",
+      aggregateId: job.id,
+      expectedStreamVersion: 0,
+      type: "job.available",
+      actorId: "local-owner",
+      executionId: "execution-1",
+      generation: 1,
+      correlationId: "coding:execution-1:cleanup",
+      publicPayload: { workspaceId: "workspace-1", kind: job.kind },
+    });
+    transaction.putJob({
+      id: job.id,
+      tenantId: job.tenantId,
+      workspaceId: job.workspaceId,
+      kind: job.kind,
+      payload: job.payload,
+      availableAt: job.availableAt,
+      idempotencyKey: job.idempotencyKey,
+    });
+  });
 }
 
 async function compileRunnerBinary(

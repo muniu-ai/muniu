@@ -603,7 +603,7 @@ export class AgentOsKernel {
         expectedStreamVersion, type: `execution.${nextStatus}`, actorId, executionId,
         generation: next.generation, publicPayload: { previousStatus: execution.status, status: nextStatus },
       });
-      if (command === "resume") {
+      if (command === "resume" || command === "cancel") {
         for (const approval of transaction.listProjections<Approval>("approval")) {
           if (approval.executionId !== executionId || approval.status !== "pending") continue;
           const expired: Approval = {
@@ -627,10 +627,14 @@ export class AgentOsKernel {
             generation: next.generation,
             publicPayload: {
               toolCallId: approval.toolCallId,
-              reason: "execution_resumed_with_new_generation",
+              reason: command === "resume"
+                ? "execution_resumed_with_new_generation"
+                : "execution_cancelled",
             },
           });
         }
+      }
+      if (command === "resume") {
         const jobId = this.nextId("job");
         const job: Job = {
           id: jobId,

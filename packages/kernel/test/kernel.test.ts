@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import test from "node:test";
 import {
+  type Approval,
   type Execution,
   type ExecutionAuthority,
   type MemoryRecord,
@@ -410,14 +411,18 @@ test("只读工具可自动执行，高影响操作进入审批收件箱", async
       assert.equal(cancelled.status, "cancelled");
       await assert.rejects(
         kernel.decideApproval(
-          "local", "local-owner", "stale-decision", stale.approval.id, 1, "approve_once",
+          "local", "local-owner", "stale-decision", stale.approval.id, 2, "approve_once",
         ),
-        /不再等待批准/,
+        /已经处理/,
       );
       const stillCancelled = await store.transact("local", (transaction) =>
         transaction.getProjection<Execution>("execution", execution.id));
       assert.equal(stillCancelled?.status, "cancelled");
       assert.equal(stillCancelled?.streamVersion, 6);
+      const expiredApproval = await store.transact("local", (transaction) =>
+        transaction.getProjection<Approval>("approval", stale.approval.id));
+      assert.equal(expiredApproval?.status, "expired");
+      assert.equal((await kernel.listInbox("local")).length, 0);
     }
   }
 });

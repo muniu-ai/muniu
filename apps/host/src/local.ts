@@ -4,6 +4,7 @@ import { FileCas, MacOsKeychainKeyProvider, SqliteStorage } from "@mn/storage";
 import { createNodePublicWebReader } from "@mn/plugin-opc";
 import {
   AgentOsWorker,
+  createCodingSandboxCleanupWorkerHandler,
   createKernelAgentTurnHandler,
   runWorkerLoop,
   type ByokModelInvoker,
@@ -104,6 +105,11 @@ export async function startLocalAgentOsHost(options: StartLocalHostOptions = {})
     acceptsSecretReference: (reference) => reference.startsWith("keychain://muniu.v2/"),
     ...(options.now ? { now: options.now } : {}),
   });
+  const sandboxCleanupHandler = createCodingSandboxCleanupWorkerHandler({
+    store,
+    sandboxRoot: join(paths.root, "sandboxes", "coding"),
+    ...(options.now ? { now: options.now } : {}),
+  });
   const worker = new AgentOsWorker({
     id: options.workerId ?? `local-${process.pid}`,
     store,
@@ -113,9 +119,12 @@ export async function startLocalAgentOsHost(options: StartLocalHostOptions = {})
       pluginLockDigest: LOCAL_WORKER_LOCK,
       expectedPluginLockDigest: LOCAL_WORKER_LOCK,
     },
-    handlers: { "agent.execution.run": turnHandler },
+    handlers: {
+      "agent.execution.run": turnHandler,
+      "coding.sandbox.cleanup": sandboxCleanupHandler,
+    },
     tenantId: "local",
-    kinds: ["agent.execution.run"],
+    kinds: ["agent.execution.run", "coding.sandbox.cleanup"],
   });
   workerLoop = runWorkerLoop(worker, {
     signal: stopWorker.signal,

@@ -33,6 +33,7 @@ import type {
   RunnerBinaryIdentityV1,
   Thread,
   ToolCallIntent,
+  Workspace,
 } from "@mn/contracts";
 import { CODING_RUNNER_CONFIGURATION_NAMESPACE } from "@mn/contracts";
 import {
@@ -98,6 +99,19 @@ interface StoredCandidate extends Candidate {
   readonly createdAt: string;
 }
 
+interface ExternalInvocationState {
+  readonly runnerId: ExternalCodingRunnerId;
+  readonly attempt: number;
+  readonly identityDigest: string;
+  readonly sandboxPath: string;
+  readonly runnerArtifactPath: string;
+  readonly status: "started" | "settled" | "outcome_unknown";
+  readonly cleanupStatus?: "pending" | "cleaned";
+  readonly cleanedAt?: string;
+  readonly startedAt: string;
+  readonly updatedAt: string;
+}
+
 interface StoredCodingRun {
   readonly executionId: string;
   readonly generation: number;
@@ -107,15 +121,7 @@ interface StoredCodingRun {
   readonly controlPlane: CodingControlPlaneCommitment;
   readonly baseRevision: string;
   readonly runnerId: "builtin" | ExternalCodingRunnerId;
-  readonly externalInvocation?: {
-    readonly runnerId: ExternalCodingRunnerId;
-    readonly attempt: number;
-    readonly identityDigest: string;
-    readonly sandboxPath: string;
-    readonly status: "started" | "settled" | "outcome_unknown";
-    readonly startedAt: string;
-    readonly updatedAt: string;
-  };
+  readonly externalInvocation?: ExternalInvocationState;
   readonly result?: CodingExecutionResult;
   readonly approvalIntent?: ToolCallIntent;
   readonly streamVersion: number;
@@ -210,6 +216,13 @@ export interface CodingExecutionWorkerOptions {
   readonly sandboxExecutable?: string;
   readonly acceptsSecretReference?: (reference: string) => boolean;
   readonly approvalPollIntervalMs?: number;
+  readonly now?: () => string;
+}
+
+export interface CodingSandboxCleanupWorkerOptions {
+  readonly store: KernelStore;
+  readonly sandboxRoot: string;
+  readonly sandboxExecutable?: string;
   readonly now?: () => string;
 }
 
@@ -408,7 +421,7 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
     let preserveForReconciliation = true;
     try {
       const registeredRunners = runnerId === "builtin" ? [builtinRunner] : [builtinRunner, runner];
-      const result = await new CodingExecutionEngine({
+      const engineResult = await new CodingExecutionEngine({
         runners: registeredRunners,
         now: () => Date.parse(now()),
       })
@@ -423,7 +436,12 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
           externalRunnerConfirmed: runnerId !== "builtin",
           limits: { maxDurationMs: state.authority.budget.maxDurationMs },
         });
-      if (context.signal.aborted) throw new Error("Coding 执行已中断");
+      if (context.signal.aborted && !isUserCancellation(context.signal)) {
+        throw new Error("Coding 执行已中断");
+      }
+      const result = isUserCancellation(context.signal)
+        ? cancelledCodingResult(engineResult)
+        : engineResult;
       const approvalIntent = result.status === "waiting_approval"
         ? acceptanceIntent(state.execution, state.authority, state.repository, result, now())
         : undefined;
@@ -455,6 +473,74 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
   };
 }
 
+export function createCodingSandboxCleanupWorkerHandler(
+  options: CodingSandboxCleanupWorkerOptions,
+) {
+  const now = options.now ?? (() => new Date().toISOString());
+  const sandbox = new MacOsCodingSandbox({
+    root: options.sandboxRoot,
+    executable: options.sandboxExecutable ?? DEFAULT_SANDBOX_EXECUTABLE,
+  });
+  return async (job: StoredJob, context: CodingWorkerJobContext): Promise<JsonValue> => {
+    if (job.kind !== "coding.sandbox.cleanup") {
+      throw new Error("Coding sandbox 清理 Job 类型无效");
+    }
+    const workspaceId = job.workspaceId;
+    if (!workspaceId) throw new Error("Coding sandbox 清理 Job 缺少工作区");
+    const executionId = payloadString(job.payload, "reconciliationExecutionId");
+    const store = fencedCodingStore(options.store, job, context, now);
+    const invocation = await store.transact(job.tenantId, (transaction) => {
+      const run = transaction.getProjection<StoredCodingRun>("coding.execution", executionId);
+      if (!run?.externalInvocation) throw new Error("人工核对没有可清理的外部 Runner 记录");
+      return run.externalInvocation;
+    });
+    if (invocation.cleanupStatus === "cleaned") {
+      return { executionId, status: "cleaned" };
+    }
+    await sandbox.cleanupReconciliationArtifacts(invocation);
+    await store.transact(job.tenantId, (transaction) => {
+      const current = transaction.getProjection<StoredCodingRun>("coding.execution", executionId);
+      if (!current?.externalInvocation) throw new Error("外部 Runner 清理检查点不存在");
+      if (current.externalInvocation.cleanupStatus === "cleaned") return;
+      if (current.externalInvocation.sandboxPath !== invocation.sandboxPath
+        || current.externalInvocation.runnerArtifactPath !== invocation.runnerArtifactPath
+        || current.externalInvocation.identityDigest !== invocation.identityDigest) {
+        throw new Error("外部 Runner 清理资源已变化，拒绝删除");
+      }
+      const occurredAt = now();
+      const next: StoredCodingRun = {
+        ...current,
+        externalInvocation: {
+          ...current.externalInvocation,
+          cleanupStatus: "cleaned",
+          cleanedAt: occurredAt,
+          updatedAt: occurredAt,
+        },
+        streamVersion: current.streamVersion + 1,
+        updatedAt: occurredAt,
+      };
+      transaction.putProjection("coding.execution", executionId, next);
+      transaction.appendEvent({
+        tenantId: job.tenantId,
+        aggregateType: "coding.execution",
+        aggregateId: executionId,
+        expectedStreamVersion: current.streamVersion,
+        type: "coding.sandbox_cleanup_completed",
+        actorId: `worker:${context.workerId}`,
+        executionId,
+        generation: current.generation,
+        correlationId: `coding:${executionId}:${current.generation}:cleanup`,
+        publicPayload: {
+          workspaceId,
+          status: "cleaned",
+          fencingToken: context.fencingToken,
+        },
+      });
+    });
+    return { executionId, status: "cleaned" };
+  };
+}
+
 async function settlePersistedResult(input: {
   readonly options: CodingExecutionWorkerOptions;
   readonly job: StoredJob;
@@ -482,10 +568,31 @@ async function settlePersistedResult(input: {
     type: "tool/intent",
     payload: input.run.approvalIntent as unknown as JsonObject,
   });
-  const authorization = await input.approval.authorize(
-    input.run.approvalIntent,
-    input.context.signal,
-  );
+  let authorization: Awaited<ReturnType<ToolApprovalPort["authorize"]>>;
+  try {
+    authorization = await input.approval.authorize(
+      input.run.approvalIntent,
+      input.context.signal,
+    );
+  } catch (error) {
+    const cancelledByUser = isUserCancellation(input.context.signal)
+      || await input.options.store.transact(input.job.tenantId, (transaction) =>
+        transaction.getProjection<Execution>("execution", input.state.execution.id)?.status
+          === "cancelled");
+    if (!cancelledByUser) throw error;
+    const cancelled = await persistCodingDecision(
+      input.options.store,
+      input.job.tenantId,
+      input.state,
+      cancelledCodingResult(result),
+      input.now(),
+    );
+    throw new CodingWorkerOutcomeError(
+      input.state.execution.id,
+      "cancelled",
+      cancelled.nextStep,
+    );
+  }
   if (authorization.mode === "auto") {
     throw new Error("特权候选批准不能自动放行");
   }
@@ -519,6 +626,7 @@ interface CodingState {
   readonly task: CodingTask;
   readonly repository: VersionedRepository;
   readonly model: StoredModelConnection;
+  readonly workspace?: Workspace;
   readonly runnerConfiguration?: CodingRunnerConfigurationV1;
 }
 
@@ -550,6 +658,9 @@ async function loadCodingState(
     );
     if (!model) throw new Error("模型连接不存在");
     const runnerId = execution.runnerId ?? "builtin";
+    const workspace = runnerId === "builtin"
+      ? undefined
+      : transaction.getProjection<Workspace>("workspace", execution.workspaceId);
     const runnerConfiguration = runnerId === "builtin"
       ? undefined
       : transaction.getProjection<CodingRunnerConfigurationV1>(
@@ -563,6 +674,7 @@ async function loadCodingState(
       task,
       repository,
       model,
+      ...(workspace ? { workspace } : {}),
       ...(runnerConfiguration ? { runnerConfiguration } : {}),
     };
   });
@@ -597,6 +709,14 @@ function assertCodingState(job: StoredJob, state: CodingState): void {
     throw new Error(`Coding Runner 不受支持：${String(runnerId)}`);
   }
   if (runnerId !== "builtin") {
+    const pluginId = runnerPluginId(runnerId);
+    if (!state.workspace
+      || state.workspace.tenantId !== job.tenantId
+      || state.workspace.id !== state.execution.workspaceId
+      || !state.workspace.activePluginIds.includes("coding")
+      || !state.workspace.activePluginIds.includes(pluginId)) {
+      throw new Error(`工作区未启用外部 Runner 插件：${pluginId}`);
+    }
     const configuration = state.runnerConfiguration;
     if (!configuration
       || configuration.tenantId !== job.tenantId
@@ -790,6 +910,7 @@ class ExternalCodingRunner implements ManagedCodingRunner {
       throw knownRunnerFailure(error);
     }
     await this.#authorizeAndCheckpoint("start");
+    await this.#assertRunnerPluginActive();
     try {
       await this.#options.sandbox.verifyRunnerArtifact(
         this.#artifact!,
@@ -909,6 +1030,7 @@ class ExternalCodingRunner implements ManagedCodingRunner {
       throw knownRunnerFailure(error);
     }
     await this.#authorizeAndCheckpoint("resume");
+    await this.#assertRunnerPluginActive();
     try {
       await this.#options.sandbox.verifyRunnerArtifact(
         this.#artifact!,
@@ -1000,6 +1122,7 @@ class ExternalCodingRunner implements ManagedCodingRunner {
       attempt: this.#sequence,
       identityDigest: this.#options.configuration.identityDigest,
       sandboxPath: this.#sandboxPath,
+      runnerArtifactPath: this.#artifact.identity.realPath,
       occurredAt: this.#options.now(),
     });
     this.#hasCheckpoint = true;
@@ -1040,6 +1163,22 @@ class ExternalCodingRunner implements ManagedCodingRunner {
     }
   }
 
+  async #assertRunnerPluginActive(): Promise<void> {
+    const pluginId = runnerPluginId(this.id);
+    const active = await this.#options.store.transact(this.#options.tenantId, (transaction) => {
+      const workspace = transaction.getProjection<Workspace>(
+        "workspace",
+        this.#options.execution.workspaceId,
+      );
+      return workspace?.tenantId === this.#options.tenantId
+        && workspace.activePluginIds.includes("coding")
+        && workspace.activePluginIds.includes(pluginId);
+    });
+    if (!active) {
+      throw new RunnerKnownFailureError(`工作区未启用外部 Runner 插件：${pluginId}`);
+    }
+  }
+
   #verify(candidate: Candidate, controlPlane: CodingControlPlaneCommitment) {
     return verifySandboxCandidate({
       candidate,
@@ -1077,6 +1216,10 @@ function runnerToolId(runnerId: ExternalCodingRunnerId): string {
   return runnerId === "claude-cli" ? "runner.claude.execute" : "runner.codex.execute";
 }
 
+function runnerPluginId(runnerId: ExternalCodingRunnerId): string {
+  return runnerId === "claude-cli" ? "runner-claude-cli" : "runner-codex-cli";
+}
+
 function runnerDisplayName(runnerId: ExternalCodingRunnerId): string {
   return runnerId === "claude-cli" ? "Claude CLI" : "Codex CLI";
 }
@@ -1085,6 +1228,23 @@ function knownRunnerFailure(error: unknown): RunnerKnownFailureError {
   return error instanceof RunnerKnownFailureError
     ? error
     : new RunnerKnownFailureError(safeMessage(error));
+}
+
+function isUserCancellation(signal: AbortSignal): boolean {
+  return signal.aborted && signal.reason === "cancelled";
+}
+
+function cancelledCodingResult(result: CodingExecutionResult): CodingExecutionResult {
+  const {
+    approval: _approval,
+    deliverable: _deliverable,
+    ...base
+  } = result;
+  return {
+    ...base,
+    status: "cancelled",
+    nextStep: "Execution 已由用户取消，候选隔离目录已清理",
+  };
 }
 
 function externalRunnerInput(
@@ -1589,13 +1749,34 @@ class MacOsCodingSandbox {
   }
 
   async cleanupRunnerArtifact(artifact: StagedRunnerArtifact): Promise<void> {
+    await this.#cleanupRunnerArtifactPath(artifact.identity.realPath);
+  }
+
+  async cleanupReconciliationArtifacts(invocation: ExternalInvocationState): Promise<void> {
+    await this.cleanup(invocation.sandboxPath);
+    await this.#cleanupRunnerArtifactPath(invocation.runnerArtifactPath);
+  }
+
+  async #cleanupRunnerArtifactPath(artifactPath: string): Promise<void> {
     const root = await this.#initialize();
-    assertWithin(root, artifact.rootPath, "Runner 制品目录");
-    if (!basename(artifact.rootPath).startsWith("runner-")) {
+    if (!isAbsolute(artifactPath) || basename(artifactPath) !== "runner") {
+      throw new Error("Runner 制品路径结构无效");
+    }
+    const artifactRoot = resolve(artifactPath, "..");
+    assertWithin(root, artifactRoot, "Runner 制品目录");
+    if (!basename(artifactRoot).startsWith("runner-")) {
       throw new Error("Runner 制品目录结构无效");
     }
-    await chmod(artifact.rootPath, 0o700).catch(() => undefined);
-    await rm(artifact.rootPath, { recursive: true, force: true });
+    const info = await lstat(artifactRoot).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (!info) return;
+    if (!info.isDirectory() || info.isSymbolicLink()) {
+      throw new Error("Runner 制品目录类型无效");
+    }
+    await chmod(artifactRoot, 0o700);
+    await rm(artifactRoot, { recursive: true, force: true });
   }
 
   async diff(repositoryPath: string): Promise<string> {
@@ -1790,6 +1971,7 @@ async function persistExternalInvocationStarted(input: {
   readonly attempt: number;
   readonly identityDigest: string;
   readonly sandboxPath: string;
+  readonly runnerArtifactPath: string;
   readonly occurredAt: string;
 }): Promise<void> {
   await input.store.transact(input.tenantId, (transaction) => {
@@ -1811,6 +1993,7 @@ async function persistExternalInvocationStarted(input: {
         attempt: input.attempt,
         identityDigest: input.identityDigest,
         sandboxPath: input.sandboxPath,
+        runnerArtifactPath: input.runnerArtifactPath,
         status: "started",
         startedAt: input.occurredAt,
         updatedAt: input.occurredAt,
@@ -1852,6 +2035,22 @@ async function persistCodingResult(input: {
   readonly now: string;
 }): Promise<StoredCodingRun> {
   return input.store.transact(input.tenantId, (transaction) => {
+    const liveExecution = transaction.getProjection<Execution>(
+      "execution",
+      input.state.execution.id,
+    );
+    if (!liveExecution || liveExecution.generation !== input.state.execution.generation) {
+      throw new Error("Coding Execution 已变化，拒绝提交过期结果");
+    }
+    if (input.result.status === "cancelled") {
+      if (liveExecution.status !== "cancelled") {
+        throw new Error("只有已取消的 Execution 可持久化 Coding 取消结果");
+      }
+    } else if (input.result.status === "failed" && liveExecution.status === "failed") {
+      // 拒绝审批会先由内核终结 Execution，Coding 投影仍必须原子收敛。
+    } else if (liveExecution.status !== "running" && liveExecution.status !== "waiting_approval") {
+      throw new Error(`Coding Execution 已进入 ${liveExecution.status}，拒绝提交后续结果`);
+    }
     const current = transaction.getProjection<StoredCodingRun>(
       "coding.execution",
       input.state.execution.id,
@@ -2032,6 +2231,18 @@ async function persistCodingDecision(
   occurredAt: string,
 ): Promise<CodingExecutionResult> {
   return store.transact(tenantId, (transaction) => {
+    const liveExecution = transaction.getProjection<Execution>("execution", state.execution.id);
+    if (!liveExecution || liveExecution.generation !== state.execution.generation) {
+      throw new Error("Coding Execution 已变化，拒绝提交过期审批结果");
+    }
+    if (result.status === "completed" && liveExecution.status !== "running") {
+      throw new Error(`Coding Execution 已进入 ${liveExecution.status}，拒绝批准候选`);
+    }
+    if (result.status === "cancelled"
+      && liveExecution.status !== "cancelled"
+      && liveExecution.status !== "failed") {
+      throw new Error(`Coding Execution 已进入 ${liveExecution.status}，拒绝取消候选`);
+    }
     const current = transaction.getProjection<StoredCodingRun>("coding.execution", state.execution.id);
     if (!current?.result) throw new Error("Coding 审批检查点不存在");
     if (current.result.status === "completed" || current.result.status === "cancelled") {
