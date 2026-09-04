@@ -86,7 +86,19 @@ export function SettingsPage({ workspace, memories, api, onModeChanged, onMemori
 }
 
 export function AgentsPage() { return <StaticPage eyebrow="默认折叠" title="Agents" detail="查看 Agent 的职责、Skill、工具和预算。Builtin Agent 是 Coding 的默认 Runner。" icon={<Users />} />; }
-export function IntegrationsPage() { return <StaticPage eyebrow="受控连接" title="集成" detail="模型密钥保存在 Keychain。外部 Runner 与第三方插件必须单独确认。" icon={<ShieldCheck />} />; }
+export function IntegrationsPage() {
+  return <div className="page-stack">
+    <PageTitle eyebrow="受控连接" title="集成" detail="模型、外部 Runner 与产品插件分别授权，变更后重新确认。" />
+    <section className="panel settings-section">
+      <PanelHeading title="模型与 Runner" />
+      <div className="governance-note"><ShieldCheck size={20} /><p>模型密钥只保存在 v2 Keychain。Claude 和 Codex Runner 会固定可执行文件的绝对路径、版本和摘要；文件变化后不会继续沿用原确认。</p></div>
+    </section>
+    <section className="panel settings-section">
+      <PanelHeading title="插件信任边界" />
+      <div className="governance-note"><AlertCircle size={20} /><p>生产插件与 Host 同进程运行，能获得宿主进程可见的能力，不是安全沙箱。Execution Authority 只能约束 Agent 和经内核调用的工具，无法约束恶意插件直接使用进程能力。只安装来源、签名、版本、权限和摘要均已核对的插件。</p></div>
+    </section>
+  </div>;
+}
 
 function StaticPage({ eyebrow, title, detail, icon }: { readonly eyebrow: string; readonly title: string; readonly detail: string; readonly icon: React.ReactNode }) {
   return <div className="page-stack"><PageTitle eyebrow={eyebrow} title={title} detail={detail} /><section className="panel static-callout"><span>{icon}</span><h3>保持最小权限</h3><p>只有工作区明确启用的能力才能参与执行。高影响操作始终进入审批。</p></section></div>;

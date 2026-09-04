@@ -283,6 +283,10 @@ async function verifyCoding(page, requestLog) {
   await expectText(page, "高级执行设置");
   await page.getByText("高级执行设置").click();
   await expectText(page, "Harness 摘要");
+  await page.getByRole("button", { name: "集成" }).click();
+  await expectText(page, "与 Host 同进程运行");
+  await expectText(page, "不是安全沙箱");
+  await expectText(page, "无法约束恶意插件直接使用进程能力");
   const workspacePaths = requestLog.filter((entry) => /^\/v2\/workspaces\/[^/]+$/.test(entry.path) || entry.path === "/v2/plugins/coding/tasks");
   if (workspacePaths.length === 0) throw new Error("专业视图没有使用统一 v2 接口");
 }
