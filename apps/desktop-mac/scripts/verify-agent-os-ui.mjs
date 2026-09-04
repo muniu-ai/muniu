@@ -335,8 +335,9 @@ async function verifyCoding(page, requestLog) {
   await expectText(page, "模型凭据失效");
   await expectText(page, "重新连接模型后，等待中的任务才能继续");
   await expectText(page, "外部 Runner 结果待核对");
-  await expectText(page, "尚无可用于标记完成的权威 Gate 与 CodeEvidence");
+  await expectText(page, "选择标记完成后，将先对保留候选运行权威 Gate；不会重放外部 Runner");
   await expectText(page, "0 个候选 · 0 次 Gate");
+  await page.getByRole("button", { name: "验证保留结果并标记完成" }).waitFor();
   if ((await page.locator("body").innerText()).includes("/private/var/tmp")) {
     throw new Error("人工核对卡泄露了内部执行路径");
   }

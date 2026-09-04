@@ -96,7 +96,18 @@ export interface CodingReconciliationView {
     readonly codeEvidenceDigest?: string;
     readonly summary: string;
   };
+  readonly newCall: {
+    readonly allowed: boolean;
+    readonly summary: string;
+  };
   readonly availableDecisions: readonly CodingReconciliationDecision[];
+}
+
+export interface CodingReconciliationDecisionResult {
+  readonly decision: CodingReconciliationDecision;
+  readonly status: "settled" | "verification_pending";
+  readonly cleanupJobId?: string;
+  readonly verificationJobId?: string;
 }
 
 export interface DeliverableSummary {

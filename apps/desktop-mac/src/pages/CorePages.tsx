@@ -81,11 +81,13 @@ export function InboxPage({ workspaceId, summary, api, onChanged }: { readonly w
   async function reconcile(detail: CodingReconciliationView, decision: CodingReconciliationDecision) {
     setBusyId(detail.executionId); setNotice(undefined);
     try {
-      await api.decideCodingReconciliation(detail, decision);
-      setNotice(decision === "terminate"
+      const result = await api.decideCodingReconciliation(detail, decision);
+      setNotice(result.status === "verification_pending"
+        ? "验证请求已提交，正在对保留结果运行权威 Gate；不会重放外部 Runner"
+        : decision === "terminate"
         ? "旧调用已终止，隔离资源正在清理"
         : decision === "mark_completed"
-          ? "已依据权威证据标记完成，隔离资源正在清理"
+          ? "保留结果已通过权威 Gate，隔离资源正在清理"
           : "旧调用已终止，全新调用已经入队");
       await Promise.all([refreshInbox(), onChanged()]);
     } catch (error) {
@@ -118,10 +120,10 @@ function ReconciliationCard({ item, detail, busy, onDecide }: { readonly item: I
     <header><span className="pill risk"><AlertCircle size={13} />结果未知</span><span className="expiry">{detail.runnerId === "claude-cli" ? "Claude Runner" : "Codex Runner"}</span></header>
     <h3>{item.title}</h3><p className="intent">{item.summary}</p>
     <dl><div><dt>任务</dt><dd>{detail.taskTitle}</dd></div><div><dt>保留结果</dt><dd>{detail.evidence.candidateCount} 个候选 · {detail.evidence.gateCount} 次 Gate</dd></div></dl>
-    <div className="governance-note"><ShieldCheck size={18} /><p>{detail.evidence.summary}<br />下一步：{detail.nextStep}</p></div>
+    <div className="governance-note"><ShieldCheck size={18} /><p>{detail.evidence.summary}<br />下一步：{detail.nextStep}{!detail.newCall.allowed && <><br />新调用：{detail.newCall.summary}</>}</p></div>
     <footer>
       <button className="danger-button" disabled={busy || !detail.availableDecisions.includes("terminate")} onClick={() => void onDecide(detail, "terminate")}>终止旧调用</button>
-      {detail.availableDecisions.includes("mark_completed") && <button className="secondary-button" disabled={busy} onClick={() => void onDecide(detail, "mark_completed")}>依据证据标记完成</button>}
+      {detail.availableDecisions.includes("mark_completed") && <button className="secondary-button" disabled={busy} onClick={() => void onDecide(detail, "mark_completed")}>验证保留结果并标记完成</button>}
       {detail.availableDecisions.includes("create_new_call") && <button className="primary-button" disabled={busy} onClick={() => void onDecide(detail, "create_new_call")}>创建全新调用</button>}
     </footer>
   </article>;

@@ -4,6 +4,7 @@ import type {
   ApiFailure,
   AssetSummary,
   CodingReconciliationDecision,
+  CodingReconciliationDecisionResult,
   CodingReconciliationView,
   CodingTaskSummary,
   DeliverableSummary,
@@ -200,7 +201,7 @@ export class AgentOsClient {
     reconciliation: CodingReconciliationView,
     decision: CodingReconciliationDecision,
   ) {
-    return this.request<unknown>(
+    return this.request<CodingReconciliationDecisionResult>(
       `/v2/plugins/coding/executions/${encodeURIComponent(reconciliation.executionId)}/reconciliation-decisions`,
       {
         method: "POST",
