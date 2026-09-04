@@ -38,7 +38,7 @@ runtimeLocks:
   engineDigest: 154c96a544775b9ef837aebc67909886a33f41f6f01537b24337049464f6265f
   pluginDigest: 14dc9ad11d121d0362398acb6579582157f079c06067eb09e10d22d35a11bb78
 
-# 可选的镜像内第三方插件仓库。入口模块必须与索引同目录，且先验签再执行。
+# 可选的镜像内第三方插件仓库。索引只引用完整签名包归档，包内入口验签后加载。
 pluginRepository:
   enabled: false
   indexFile: ""

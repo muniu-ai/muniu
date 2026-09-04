@@ -8,6 +8,7 @@ import type { OrganizationRole, PluginManifestV1 } from "@mn/contracts";
 import { InMemoryKernelStore } from "@mn/kernel";
 import {
   createSignedRegistryMetadata,
+  createPluginPackageArchive,
   sha256Hex,
   signPluginManifest,
   type PluginDefinitionV1,
@@ -474,6 +475,15 @@ export default (manifest) => ({
   }
 });
 `, "utf8");
+  const uiSource = Buffer.from("export const screen = 'research';\n", "utf8");
+  const cliSource = Buffer.from("export const commands = ['summarize'];\n", "utf8");
+  const workerSource = Buffer.from("export const handlers = {};\n", "utf8");
+  const packageBytes = createPluginPackageArchive({
+    "./dist/host.mjs": { content: source },
+    "./dist/ui.mjs": { content: uiSource },
+    "./dist/cli.mjs": { content: cliSource },
+    "./dist/worker.mjs": { content: workerSource },
+  });
   const root = generateKeyPairSync("ed25519");
   const release = generateKeyPairSync("ed25519");
   const metadata = createSignedRegistryMetadata({
@@ -496,13 +506,18 @@ export default (manifest) => ({
     engineApi: "0.2.0",
     displayName: "企业研究助手",
     description: "镜像内签名插件",
-    entrypoints: { host: "./research.mjs" },
+    entrypoints: {
+      host: "./dist/host.mjs",
+      ui: "./dist/ui.mjs",
+      cli: "./dist/cli.mjs",
+      worker: "./dist/worker.mjs",
+    },
     contributes: {
       routes: ["research.home"], navigation: [], widgets: [], commands: ["summarize"],
       agents: [], skills: [], workflows: [], tools: [], memorySchemas: [],
     },
     permissions: [], dataNamespace: "research", eventSchemas: {}, projections: [], dependencies: [],
-    packageSha256: sha256Hex(source),
+    packageSha256: sha256Hex(packageBytes),
     signature: { algorithm: "Ed25519", keyId: "release-1", value: "pending" },
     release: {
       sequence: 9,
@@ -514,11 +529,11 @@ export default (manifest) => ({
   } satisfies PluginManifestV1, release.privateKey);
   const indexFile = join(directory, "index.json");
   const rootsFile = join(directory, "trusted-roots.json");
-  await writeFile(join(directory, "research.mjs"), source);
+  await writeFile(join(directory, "research.mnplugin.json"), packageBytes);
   await writeFile(indexFile, JSON.stringify({
     schemaVersion: 1,
     metadata,
-    releases: [{ manifest, packagePath: "research.mjs" }],
+    releases: [{ manifest, packagePath: "research.mnplugin.json" }],
   }));
   await writeFile(rootsFile, JSON.stringify({
     schemaVersion: 1,
@@ -536,6 +551,15 @@ export default (manifest) => ({
       now: () => new Date(NOW),
     });
     assert.equal((globalThis as any)[evaluationKey], 0, "读取索引不得执行插件代码");
+    assert.deepEqual(
+      Buffer.from((await loaded.pluginRepository.readEntrypoint("research", "2.0.0", "ui"))!),
+      uiSource,
+    );
+    assert.deepEqual(
+      Buffer.from((await loaded.pluginRepository.readEntrypoint("research", "2.0.0", "worker"))!),
+      workerSource,
+    );
+    assert.equal((globalThis as any)[evaluationKey], 0, "读取非 Host 入口不得执行插件代码");
     const host = await createAgentOsHost({
       profile: "enterprise",
       store: new InMemoryKernelStore(),
@@ -557,7 +581,10 @@ export default (manifest) => ({
     await host.close();
 
     (globalThis as any)[evaluationKey] = 0;
-    await writeFile(join(directory, "research.mjs"), Buffer.concat([source, Buffer.from("\n// tampered\n")]));
+    await writeFile(
+      join(directory, "research.mnplugin.json"),
+      Buffer.concat([packageBytes, Buffer.from("\n")]),
+    );
     await assert.rejects(createEnterpriseFilePluginRepository({
       indexFile,
       trustedRootsFile: rootsFile,

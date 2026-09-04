@@ -7,6 +7,7 @@ import { assertPluginManifestShape, type PluginManifestV1 } from "@mn/contracts"
 import {
   cloneJson,
   canonicalJson,
+  openVerifiedPluginPackage,
   sha256Hex,
   verifyPluginArtifact,
   verifyRegistryMetadata,
@@ -82,17 +83,9 @@ export async function createEnterpriseFilePluginRepository(
   });
   const releases = await Promise.all(index.releases.map(async (release): Promise<LocalSignedPluginRelease> => {
     assertPluginManifestShape(release.manifest);
-    const unsupportedEntrypoints = Object.entries(release.manifest.entrypoints)
-      .filter(([kind, entry]) => kind !== "host" && entry !== undefined)
-      .map(([kind]) => kind);
-    if (unsupportedEntrypoints.length > 0) {
-      throw new Error(
-        `企业文件仓库当前只加载 Host 入口；插件 ${release.manifest.id} 还声明了 ${unsupportedEntrypoints.join(", ")}`,
-      );
-    }
     const packagePath = resolvePackagePath(baseDirectory, release.packagePath, release.manifest);
     const packageBytes = Uint8Array.from(await readFile(packagePath));
-    verifyPluginArtifact({
+    const artifact = verifyPluginArtifact({
       manifest: release.manifest,
       packageBytes,
       registry: offlineRegistry,
@@ -105,18 +98,21 @@ export async function createEnterpriseFilePluginRepository(
       },
       packageMetadata: release.packageMetadata,
     });
+    openVerifiedPluginPackage({ artifact, packageBytes });
+    const loadEntrypoint = verifiedEntrypointLoader({
+      metadata: index.metadata,
+      trustedRoots,
+      manifest: release.manifest,
+      packageBytes,
+      packageMetadata: release.packageMetadata,
+      now,
+    });
     return {
       manifest: cloneJson(release.manifest),
       packageBytes,
       ...(release.packageMetadata ? { packageMetadata: cloneJson(release.packageMetadata) } : {}),
-      loadDefinition: verifiedModuleLoader({
-        metadata: index.metadata,
-        trustedRoots,
-        manifest: release.manifest,
-        packageBytes,
-        packageMetadata: release.packageMetadata,
-        now,
-      }),
+      loadDefinition: verifiedModuleLoader(release.manifest, loadEntrypoint),
+      loadEntrypoint,
     };
   }));
   const snapshot: LocalSignedPluginRepositorySnapshot = {
@@ -139,44 +135,64 @@ export async function createEnterpriseFilePluginRepository(
   };
 }
 
-function verifiedModuleLoader(input: {
+function verifiedEntrypointLoader(input: {
   readonly metadata: RegistryMetadataV1;
   readonly trustedRoots: readonly TrustedRegistryRoot[];
   readonly manifest: PluginManifestV1;
   readonly packageBytes: Uint8Array;
   readonly packageMetadata?: PluginPackageMetadataV1;
   readonly now: () => Date;
-}): () => Promise<PluginDefinitionV1> {
+}): (kind: "host" | "worker" | "ui" | "cli") => Promise<Uint8Array | undefined> {
+  const loaded = new Map<string, Promise<Uint8Array | undefined>>();
+  return (kind) => {
+    let result = loaded.get(kind);
+    if (!result) {
+      result = (async () => {
+        const checkedAt = input.now();
+        const registry = verifyRegistryMetadata(input.metadata, input.trustedRoots, {
+          now: checkedAt,
+          operation: "offline_start",
+          minimumSequence: input.metadata.sequence,
+        });
+        const artifact = verifyPluginArtifact({
+          manifest: input.manifest,
+          packageBytes: input.packageBytes,
+          registry,
+          now: checkedAt,
+          operation: "offline_start",
+          installedRelease: {
+            sequence: input.manifest.release.sequence,
+            version: input.manifest.version,
+            packageSha256: input.manifest.packageSha256,
+          },
+          packageMetadata: input.packageMetadata,
+        });
+        return openVerifiedPluginPackage({ artifact, packageBytes: input.packageBytes })
+          .readEntrypoint(kind);
+      })();
+      loaded.set(kind, result);
+    }
+    return result.then((bytes) => bytes ? Uint8Array.from(bytes) : undefined);
+  };
+}
+
+function verifiedModuleLoader(
+  manifest: PluginManifestV1,
+  loadEntrypoint: (kind: "host" | "worker" | "ui" | "cli") => Promise<Uint8Array | undefined>,
+): () => Promise<PluginDefinitionV1> {
   let loaded: Promise<PluginDefinitionV1> | undefined;
   return () => {
     loaded ??= (async () => {
-      const checkedAt = input.now();
-      const registry = verifyRegistryMetadata(input.metadata, input.trustedRoots, {
-        now: checkedAt,
-        operation: "offline_start",
-        minimumSequence: input.metadata.sequence,
-      });
-      verifyPluginArtifact({
-        manifest: input.manifest,
-        packageBytes: input.packageBytes,
-        registry,
-        now: checkedAt,
-        operation: "offline_start",
-        installedRelease: {
-          sequence: input.manifest.release.sequence,
-          version: input.manifest.version,
-          packageSha256: input.manifest.packageSha256,
-        },
-        packageMetadata: input.packageMetadata,
-      });
-      const source = Buffer.from(input.packageBytes).toString("base64");
+      const bytes = await loadEntrypoint("host");
+      if (!bytes) throw new Error(`插件 ${manifest.id} 没有 Host 入口`);
+      const source = Buffer.from(bytes).toString("base64");
       const module = await import(`data:text/javascript;base64,${source}`);
       if (typeof module.default !== "function") {
-        throw new Error(`插件 ${input.manifest.id} 的 Host 模块必须默认导出定义工厂`);
+        throw new Error(`插件 ${manifest.id} 的 Host 模块必须默认导出定义工厂`);
       }
-      const definition = await module.default(cloneJson(input.manifest));
+      const definition = await module.default(cloneJson(manifest));
       if (!isObject(definition)) {
-        throw new Error(`插件 ${input.manifest.id} 的 Host 定义无效`);
+        throw new Error(`插件 ${manifest.id} 的 Host 定义无效`);
       }
       return definition as unknown as PluginDefinitionV1;
     })();
@@ -190,10 +206,6 @@ function resolvePackagePath(
   manifest: PluginManifestV1,
 ): string {
   const normalized = normalizeLocalPath(packagePath, "packagePath");
-  const hostEntrypoint = manifest.entrypoints.host;
-  if (!hostEntrypoint || normalizeLocalPath(hostEntrypoint, "host entrypoint") !== normalized) {
-    throw new Error(`插件 ${manifest.id} 的 packagePath 必须与 host entrypoint 一致`);
-  }
   const absolute = resolve(baseDirectory, normalized);
   const child = relative(baseDirectory, absolute);
   if (!child || child === ".." || child.startsWith(`..${posix.sep}`) || isAbsolute(child)) {

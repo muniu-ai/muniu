@@ -74,17 +74,22 @@ Agent OS 0.2 默认监听 `http://127.0.0.1:7318`。成功的 JSON 响应使用 
 | `DELETE` | `/v2/plugins/installations/{pluginId}` | `purgePlugin` | 必需 | 必需 |
 | `POST` | `/v2/workspaces/{workspaceId}/plugin-activations` | `activatePlugin` | 必需 | 必需 |
 | `DELETE` | `/v2/workspaces/{workspaceId}/plugin-activations/{pluginId}` | `deactivatePlugin` | 必需 | 必需 |
+| `GET` | `/v2/plugins/opc/opportunities` | `listOpcOpportunities` | — | — |
+| `POST` | `/v2/plugins/opc/opportunities` | `createOpcOpportunity` | 必需 | 必需 |
 | `GET` | `/v2/plugins/opc/opportunities/{opportunityId}` | `getOpcOpportunity` | — | — |
 | `POST` | `/v2/plugins/opc/opportunities/{opportunityId}/commands` | `commandOpcOpportunity` | 必需 | 必需 |
 | `GET` | `/v2/plugins/opc/opportunities/{opportunityId}/deliverables` | `previewOpcDeliverables` | — | — |
 | `POST` | `/v2/plugins/opc/opportunities/{opportunityId}/exports` | `exportOpcDeliverables` | 必需 | 必需 |
+| `POST` | `/v2/plugins/opc/samples/read-only` | `runOpcReadOnlySample` | 必需 | 必需 |
+| `POST` | `/v2/plugins/coding/repositories` | `createCodingRepository` | 必需 | 必需 |
+| `GET` | `/v2/plugins/coding/tasks` | `listCodingTasks` | — | — |
+| `POST` | `/v2/plugins/coding/tasks` | `createCodingTask` | 必需 | 必需 |
+| `POST` | `/v2/plugins/coding/samples/read-only` | `runCodingReadOnlySample` | 必需 | 必需 |
 | `GET` | `/v2/plugins/coding/runners` | `listCodingRunners` | — | — |
 | `POST` | `/v2/plugins/coding/runners/{runnerId}/inspections` | `inspectCodingRunner` | 必需 | — |
 | `POST` | `/v2/plugins/coding/runners/{runnerId}/confirmations` | `confirmCodingRunner` | 必需 | 必需 |
 | `GET` | `/v2/plugins/coding/executions/{executionId}/reconciliation` | `getCodingReconciliation` | — | — |
 | `POST` | `/v2/plugins/coding/executions/{executionId}/reconciliation-decisions` | `decideCodingReconciliation` | 必需 | 必需 |
-| `GET` | `/v2/plugins/{pluginId}/{path}` | `getPluginResource` | — | — |
-| `POST` | `/v2/plugins/{pluginId}/{path}` | `mutatePluginResource` | 必需 | 必需 |
 
 <!-- generated:contracts-routes:end -->
 

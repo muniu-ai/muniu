@@ -3,5 +3,6 @@ export * from "./contributions.js";
 export * from "./errors.js";
 export * from "./host.js";
 export * from "./lifecycle.js";
+export * from "./package.js";
 export * from "./registry.js";
 export * from "./resources.js";

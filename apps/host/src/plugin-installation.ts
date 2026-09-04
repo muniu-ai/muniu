@@ -52,6 +52,10 @@ export interface LocalSignedPluginRelease {
   readonly definition?: PluginDefinitionV1;
   /** 只会在 registry、manifest 与 package 摘要全部验证后调用。 */
   readonly loadDefinition?: () => Promise<PluginDefinitionV1>;
+  /** 返回整包验签后固定的非 Host 入口字节，供受信的 UI、CLI 或 Worker 组合根加载。 */
+  readonly loadEntrypoint?: (
+    kind: "host" | "worker" | "ui" | "cli",
+  ) => Promise<Uint8Array | undefined>;
   readonly packageMetadata?: PluginPackageMetadataV1;
 }
 
@@ -85,6 +89,17 @@ export class LocalSignedPluginRepository {
     const snapshot = await this.#source();
     if (!snapshot) return undefined;
     return cloneRepositorySnapshot(snapshot);
+  }
+
+  async readEntrypoint(
+    pluginId: string,
+    version: string,
+    kind: "host" | "worker" | "ui" | "cli",
+  ): Promise<Uint8Array | undefined> {
+    const snapshot = await this.read();
+    const release = snapshot?.releases.find((candidate) =>
+      candidate.manifest.id === pluginId && candidate.manifest.version === version);
+    return release?.loadEntrypoint?.(kind);
   }
 }
 

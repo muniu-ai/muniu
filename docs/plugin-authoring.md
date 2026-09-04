@@ -17,18 +17,17 @@ Agent OS 0.2 插件通过 `@mn/plugin-sdk` 贡献产品能力，通过 `@mn/cont
 
 ## 包结构
 
-插件包可以提供以下入口：
+插件发布物是一个 UTF-8 JSON 归档；归档本身的字节摘要写入 `packageSha256`，清单再整体使用 Ed25519 签名。归档内每个文件同时记录 SHA-256，Host 只有在仓库、清单、整包和全部声明资源都通过校验后，才读取入口字节。归档可以提供以下入口：
 
 ```text
 plugin/
-├── manifest.json
 ├── host.mjs
 ├── worker.mjs
 ├── ui.mjs
 └── cli.mjs
 ```
 
-入口是包内相对路径，只允许 `.js`、`.mjs`、`.css`、`.json` 或 `.sql`。禁止绝对路径、路径逃逸、安装 hook 和远程 JavaScript。
+入口是包内相对路径，只允许 `.js`、`.mjs`、`.css`、`.json` 或 `.sql`；Host、Worker 和 CLI 入口必须是 JavaScript 模块。归档拒绝重复路径、非规范 Base64、摘要不一致、缺失入口、绝对路径、路径逃逸、安装 hook 和远程 JavaScript。UI、CLI 与 Worker 组合根从同一个已验签归档读取各自入口，不直接 `import` 仓库路径。
 
 ## `PluginManifestV1`
 

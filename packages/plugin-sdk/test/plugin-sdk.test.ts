@@ -11,7 +11,9 @@ import {
   PluginPolicyError,
   assertResolvedPluginDependencies,
   assertPluginResource,
+  createPluginPackageArchive,
   createSignedRegistryMetadata,
+  openVerifiedPluginPackage,
   sha256Hex,
   signPluginManifest,
   verifyPluginArtifact,
@@ -250,6 +252,66 @@ test("生产资源必须是包内已验摘要资源，开发源持续暴露信�
       expectedSha256: "0".repeat(64),
     }),
     (error: unknown) => error instanceof PluginPolicyError && error.code === "RESOURCE_DIGEST_MISMATCH",
+  );
+});
+
+test("签名插件包绑定全部 Host、Worker、UI、CLI 与投影资源", () => {
+  const fixture = createFixture();
+  const host = Buffer.from("export default () => ({})");
+  const worker = Buffer.from("export const handlers = {};");
+  const ui = Buffer.from("export const view = 'research';");
+  const cli = Buffer.from("export const commands = [];");
+  const projection = Buffer.from("create table research_items(id text primary key);");
+  const packageBytes = createPluginPackageArchive({
+    "./dist/host.mjs": { content: host },
+    "./dist/worker.mjs": { content: worker },
+    "./dist/ui.mjs": { content: ui },
+    "./dist/cli.mjs": { content: cli },
+    "./projection/sqlite.sql": { content: projection },
+  });
+  const manifest = signPluginManifest({
+    ...fixture.manifest,
+    entrypoints: {
+      host: "./dist/host.mjs",
+      worker: "./dist/worker.mjs",
+      ui: "./dist/ui.mjs",
+      cli: "./dist/cli.mjs",
+    },
+    projections: [{ engine: "sqlite", namespace: "opc_v1", entry: "./projection/sqlite.sql" }],
+    packageSha256: sha256Hex(packageBytes),
+    signature: { ...fixture.manifest.signature, value: "pending" },
+  }, fixture.release.privateKey);
+  const registry = verifyRegistryMetadata(
+    fixture.registry,
+    [{ keyId: "root-1", publicKey: fixture.root.publicKey }],
+    { now: NOW, operation: "install" },
+  );
+  const artifact = verifyPluginArtifact({ manifest, packageBytes, registry, now: NOW, operation: "install" });
+  const opened = openVerifiedPluginPackage({ artifact, packageBytes });
+  assert.deepEqual(Buffer.from(opened.readEntrypoint("host")!), host);
+  assert.deepEqual(Buffer.from(opened.readEntrypoint("worker")!), worker);
+  assert.deepEqual(Buffer.from(opened.readEntrypoint("ui")!), ui);
+  assert.deepEqual(Buffer.from(opened.readEntrypoint("cli")!), cli);
+  assert.equal(opened.list().length, 5);
+
+  const missingPackage = createPluginPackageArchive({
+    "./dist/host.mjs": { content: host },
+  });
+  const missingManifest = signPluginManifest({
+    ...manifest,
+    packageSha256: sha256Hex(missingPackage),
+    signature: { ...manifest.signature, value: "pending" },
+  }, fixture.release.privateKey);
+  const missingArtifact = verifyPluginArtifact({
+    manifest: missingManifest,
+    packageBytes: missingPackage,
+    registry,
+    now: NOW,
+    operation: "install",
+  });
+  assert.throws(
+    () => openVerifiedPluginPackage({ artifact: missingArtifact, packageBytes: missingPackage }),
+    (error: unknown) => error instanceof PluginPolicyError && error.code === "PLUGIN_PACKAGE_INVALID",
   );
 });
 

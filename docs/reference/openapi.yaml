@@ -844,6 +844,33 @@ paths:
         default:
           $ref: "#/components/responses/Error"
       x-muniu-versioned: true
+  /v2/plugins/opc/opportunities:
+    get:
+      operationId: listOpcOpportunities
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+      x-muniu-versioned: false
+    post:
+      operationId: createOpcOpportunity
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VersionedMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        default:
+          $ref: "#/components/responses/Error"
+      x-muniu-versioned: true
   /v2/plugins/opc/opportunities/{opportunityId}:
     get:
       operationId: getOpcOpportunity
@@ -907,6 +934,90 @@ paths:
           required: true
           schema:
             type: string
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VersionedMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        default:
+          $ref: "#/components/responses/Error"
+      x-muniu-versioned: true
+  /v2/plugins/opc/samples/read-only:
+    post:
+      operationId: runOpcReadOnlySample
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VersionedMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        default:
+          $ref: "#/components/responses/Error"
+      x-muniu-versioned: true
+  /v2/plugins/coding/repositories:
+    post:
+      operationId: createCodingRepository
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VersionedMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        default:
+          $ref: "#/components/responses/Error"
+      x-muniu-versioned: true
+  /v2/plugins/coding/tasks:
+    get:
+      operationId: listCodingTasks
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+      x-muniu-versioned: false
+    post:
+      operationId: createCodingTask
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VersionedMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        default:
+          $ref: "#/components/responses/Error"
+      x-muniu-versioned: true
+  /v2/plugins/coding/samples/read-only:
+    post:
+      operationId: runCodingReadOnlySample
+      parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
@@ -1044,58 +1155,6 @@ paths:
         default:
           $ref: "#/components/responses/Error"
       x-muniu-versioned: true
-  /v2/plugins/{pluginId}/{path}:
-    get:
-      operationId: getPluginResource
-      parameters:
-        - in: path
-          name: pluginId
-          required: true
-          schema:
-            type: string
-        - in: path
-          name: path
-          required: true
-          schema:
-            type: string
-          description: 插件领域内的相对资源或命令路径
-      responses:
-        "200":
-          $ref: "#/components/responses/Success"
-        default:
-          $ref: "#/components/responses/Error"
-      x-muniu-versioned: false
-      x-muniu-greedy-path: true
-    post:
-      operationId: mutatePluginResource
-      parameters:
-        - in: path
-          name: pluginId
-          required: true
-          schema:
-            type: string
-        - in: path
-          name: path
-          required: true
-          schema:
-            type: string
-          description: 插件领域内的相对资源或命令路径
-        - $ref: "#/components/parameters/IdempotencyKey"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/VersionedMutation"
-      responses:
-        "200":
-          $ref: "#/components/responses/Success"
-        "409":
-          $ref: "#/components/responses/Conflict"
-        default:
-          $ref: "#/components/responses/Error"
-      x-muniu-versioned: true
-      x-muniu-greedy-path: true
 components:
   parameters:
     IdempotencyKey:
