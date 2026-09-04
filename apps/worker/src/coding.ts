@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import {
@@ -40,6 +40,7 @@ import type {
 } from "@mn/contracts";
 import { CODING_RUNNER_CONFIGURATION_NAMESPACE } from "@mn/contracts";
 import {
+  authorityAllowsIntent,
   sha256,
   type InboxItem,
   type KernelJobSettlementReceipt,
@@ -76,12 +77,22 @@ import {
   type ByokModelInvoker,
   type ByokProviderId,
 } from "./model-invoker.js";
+import {
+  CandidateOperationAbortedError,
+  copyCandidateTree,
+  inspectCandidateTree,
+  isCandidateOperationAborted,
+  runControlledCommand,
+  type CandidateTreeManifest,
+} from "./candidate-materializer.js";
 
 const MAX_TRACKED_FILES = 10_000;
 const MAX_INDEX_BYTES = 16 * 1024 * 1024;
 const MAX_MODEL_CONTEXT_BYTES = 512 * 1024;
 const MAX_PATCH_BYTES = 1024 * 1024;
 const TOOL_INTENT_TTL_MS = 5 * 60 * 1000;
+const CONTROLLED_GIT_TIMEOUT_MS = 30_000;
+const CANDIDATE_GATE_TIMEOUT_MS = 10_000;
 const GIT = "/usr/bin/git";
 const DEFAULT_SANDBOX_EXECUTABLE = "/usr/bin/sandbox-exec";
 
@@ -170,6 +181,13 @@ interface RepositorySnapshot {
 interface CandidateMaterial {
   readonly diff: string;
   readonly sandboxPath: string;
+  readonly materialization?: {
+    readonly rootPath: string;
+    readonly basePath: string;
+    readonly candidatePath: string;
+    readonly baseManifest: CandidateTreeManifest;
+    readonly candidateManifest: CandidateTreeManifest;
+  };
 }
 
 interface StagedRunnerArtifact {
@@ -490,8 +508,6 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
         ? acceptanceIntent(state.execution, state.authority, state.repository, result, now())
         : undefined;
       preserveForReconciliation = result.status === "needs_reconciliation";
-      await runner.cleanup(preserveForReconciliation);
-      cleanupCompleted = true;
       run = await persistCodingResult({
         store,
         tenantId: job.tenantId,
@@ -508,6 +524,14 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
           : undefined,
         now: now(),
       });
+      const deferredCleanup = run.externalInvocation?.cleanupStatus === "pending"
+        && Boolean(run.externalInvocation.cleanupJobId);
+      try {
+        await runner.cleanup(preserveForReconciliation || deferredCleanup);
+      } catch (error) {
+        if (!deferredCleanup) throw error;
+      }
+      cleanupCompleted = true;
     } finally {
       if (!cleanupCompleted) await runner.cleanup(preserveForReconciliation);
     }
@@ -619,7 +643,32 @@ export function createCodingReconciliationVerificationWorkerHandler(
       const workspace = execution
         ? transaction.getProjection<Workspace>("workspace", execution.workspaceId)
         : undefined;
-      return { execution, run, task, thread, workspace };
+      const authority = execution
+        ? transaction.getProjection<ExecutionAuthority>("authority", execution.authorityId)
+        : undefined;
+      const repository = run
+        ? transaction.getProjection<VersionedRepository>("coding.repository", run.repositoryId)
+        : undefined;
+      const model = execution
+        ? transaction.getProjection<StoredModelConnection>("modelConnection", execution.modelBindingId)
+        : undefined;
+      const runnerConfiguration = execution && run && run.runnerId !== "builtin"
+        ? transaction.getProjection<CodingRunnerConfigurationV1>(
+            CODING_RUNNER_CONFIGURATION_NAMESPACE,
+            `${execution.workspaceId}:${run.runnerId}`,
+          )
+        : undefined;
+      return {
+        execution,
+        run,
+        task,
+        thread,
+        workspace,
+        authority,
+        repository,
+        model,
+        runnerConfiguration,
+      };
     });
     if (state.execution?.status === "completed"
       && state.run?.externalInvocation?.verification?.status === "passed") {
@@ -646,8 +695,19 @@ export function createCodingReconciliationVerificationWorkerHandler(
       || state.thread.resourceRef.resourceId !== state.task.id) {
       throw new Error("Coding 人工核对验证状态不一致");
     }
+    assertReconciliationBindings({
+      tenantId: job.tenantId,
+      execution: state.execution,
+      run: state.run,
+      task: state.task,
+      authority: state.authority,
+      repository: state.repository,
+      model: state.model,
+      runnerConfiguration: state.runnerConfiguration,
+    });
     if (!state.workspace || state.workspace.tenantId !== job.tenantId
-      || !state.workspace.activePluginIds.includes("coding")) {
+      || !state.workspace.activePluginIds.includes("coding")
+      || !state.workspace.activePluginIds.includes(runnerPluginId(state.run.runnerId as ExternalCodingRunnerId))) {
       return persistReconciliationVerification({
         store,
         tenantId: job.tenantId,
@@ -657,24 +717,68 @@ export function createCodingReconciliationVerificationWorkerHandler(
         run: state.run,
         task: state.task,
         thread: state.thread,
+        authority: state.authority!,
+        repository: state.repository!,
+        model: state.model!,
+        runnerConfiguration: state.runnerConfiguration!,
         failureReason: "Coding 插件已停用，未执行保留候选验证",
         now: now(),
       });
     }
+    const runtime = new KernelProjectionRuntimeStore({
+      tenantId: job.tenantId,
+      store,
+      now,
+      id: (sequence) => `${executionId}:reconciliation-runtime:${sequence}`,
+    });
     let candidate: Candidate | undefined;
     let gate: GateResult | undefined;
     let evidence: CodeEvidence | undefined;
     let diff: string | undefined;
     let failureReason: string | undefined;
     try {
-      diff = await sandbox.recoverAndStageDiff(
+      const readIntent = createIntent({
+        execution: state.execution,
+        authority: state.authority!,
+        toolId: "coding.repository.read",
+        effectClass: "local_read",
+        intent: `固化人工核对候选 ${executionId}`,
+        normalizedArguments: {
+          repositoryId: state.repository!.id,
+          baseRevision: state.run.baseRevision,
+          repositoryIndexDigest: state.run.controlPlane.repositoryIndexDigest,
+          retainedSandboxPathDigest: sha256(state.run.externalInvocation.sandboxPath),
+          generation: state.execution.generation,
+          runnerIdentityDigest: state.run.externalInvocation.identityDigest,
+        },
+        resourceRefs: [{
+          namespace: "repository",
+          resourceId: state.repository!.id,
+          digest: state.run.controlPlane.repositoryIndexDigest,
+        }],
+        now: now(),
+      });
+      assertAutoAuthorizedReconciliationIntent(state.authority!, readIntent);
+      await runtime.append({
+        executionId,
+        type: "tool/intent",
+        payload: readIntent as unknown as JsonObject,
+      });
+      const material = await sandbox.materializeExternalCandidate(
         state.run.externalInvocation.sandboxPath,
         state.run.baseRevision,
+        context.signal,
       );
+      diff = material.diff;
       if (!diff.trim()) throw new Error("保留候选没有可审阅 Diff");
       if (Buffer.byteLength(diff, "utf8") > MAX_PATCH_BYTES) {
         throw new Error("保留候选 Diff 超过 1 MiB 验证上限");
       }
+      await recordToolResult(runtime, readIntent, {
+        baseTreeDigest: material.materialization!.baseManifest.digest,
+        candidateTreeDigest: material.materialization!.candidateManifest.digest,
+        diffDigest: hashBytes(Buffer.from(diff)),
+      });
       const candidateId = `${executionId}:generation:${state.execution.generation}:reconciliation:${state.run.externalInvocation.attempt}`;
       candidate = {
         id: candidateId,
@@ -690,8 +794,35 @@ export function createCodingReconciliationVerificationWorkerHandler(
           evidenceDigest: state.run.controlPlane.sandboxDigest,
         },
       };
-      const rawGate = await sandbox.verify(state.run.externalInvocation.sandboxPath);
-      const afterGate = await sandbox.diff(state.run.externalInvocation.sandboxPath);
+      const gateIntent = createIntent({
+        execution: state.execution,
+        authority: state.authority!,
+        toolId: "coding.gate.verify",
+        effectClass: "local_read",
+        intent: `验证人工核对候选 ${candidateId}`,
+        normalizedArguments: {
+          candidateId,
+          diffDigest: candidate.diffDigest,
+          baseTreeDigest: material.materialization!.baseManifest.digest,
+          candidateTreeDigest: material.materialization!.candidateManifest.digest,
+          generation: state.execution.generation,
+          runnerIdentityDigest: state.run.externalInvocation.identityDigest,
+        },
+        resourceRefs: [{
+          namespace: "repository",
+          resourceId: state.repository!.id,
+          digest: state.run.controlPlane.repositoryIndexDigest,
+        }],
+        now: now(),
+      });
+      assertAutoAuthorizedReconciliationIntent(state.authority!, gateIntent);
+      await runtime.append({
+        executionId,
+        type: "tool/intent",
+        payload: gateIntent as unknown as JsonObject,
+      });
+      const rawGate = await sandbox.verifyCandidate(material, context.signal);
+      const afterGate = await sandbox.currentCandidateDiff(material, context.signal);
       if (hashBytes(Buffer.from(afterGate)) !== candidate.diffDigest) {
         throw new Error("权威 Gate 执行期间保留候选已变化");
       }
@@ -699,8 +830,13 @@ export function createCodingReconciliationVerificationWorkerHandler(
         candidateId,
         diffDigest: candidate.diffDigest,
         sandboxDigest: state.run.controlPlane.sandboxDigest,
-        command: "git diff --check HEAD --",
+        command: gateCommand(material),
         ...rawGate,
+      });
+      await recordToolResult(runtime, gateIntent, {
+        candidateId,
+        status: rawGate.exitCode === 0 ? "passed" : "failed",
+        evidenceDigest: gateEvidenceDigest,
       });
       gate = {
         candidateId,
@@ -733,6 +869,7 @@ export function createCodingReconciliationVerificationWorkerHandler(
         failureReason = gate.reason;
       }
     } catch (error) {
+      if (context.signal.aborted || isCandidateOperationAborted(error)) throw error;
       failureReason = safeMessage(error);
     }
     return persistReconciliationVerification({
@@ -744,6 +881,10 @@ export function createCodingReconciliationVerificationWorkerHandler(
       run: state.run,
       task: state.task,
       thread: state.thread,
+      authority: state.authority!,
+      repository: state.repository!,
+      model: state.model!,
+      runnerConfiguration: state.runnerConfiguration!,
       ...(candidate && diff ? { candidate, diff } : {}),
       ...(gate ? { gate } : {}),
       ...(evidence ? { evidence } : {}),
@@ -957,6 +1098,97 @@ function assertCodingState(job: StoredJob, state: CodingState): void {
   }
 }
 
+function assertReconciliationBindings(input: {
+  readonly tenantId: string;
+  readonly execution: Execution;
+  readonly run: StoredCodingRun;
+  readonly task: CodingTask;
+  readonly authority?: ExecutionAuthority;
+  readonly repository?: VersionedRepository;
+  readonly model?: StoredModelConnection;
+  readonly runnerConfiguration?: CodingRunnerConfigurationV1;
+}): void {
+  const runnerId = input.run.runnerId;
+  if (runnerId !== "claude-cli" && runnerId !== "codex-cli") {
+    throw new Error("Coding 人工核对只接受显式外部 Runner");
+  }
+  const authority = input.authority;
+  if (!authority
+    || authority.tenantId !== input.tenantId
+    || authority.workspaceId !== input.execution.workspaceId
+    || authority.executionId !== input.execution.id
+    || authority.principalId !== input.execution.executionPrincipalId
+    || authority.commitment !== canonicalAuthorityCommitment(input.execution, authority, runnerId)
+    || !authority.toolIds.includes("coding.repository.read")
+    || !authority.toolIds.includes("coding.gate.verify")
+    || !authority.toolIds.includes(runnerToolId(runnerId))
+    || !authority.autoAllowedEffects.includes("local_read")) {
+    throw new Error("Coding 人工核对的 ExecutionAuthority 绑定无效");
+  }
+  const repository = input.repository;
+  if (!repository
+    || repository.workspaceId !== input.execution.workspaceId
+    || repository.id !== input.run.repositoryId
+    || repository.id !== input.task.repositoryId
+    || !isAbsolute(repository.rootRealPath)
+    || resolve(repository.rootRealPath) !== repository.rootRealPath) {
+    throw new Error("Coding 人工核对的 Repository 绑定无效");
+  }
+  const model = input.model;
+  if (!model
+    || model.id !== input.execution.modelBindingId
+    || model.tenantId !== input.tenantId
+    || model.status !== "ready"
+    || !model.defaultModel.trim()) {
+    throw new Error("Coding 人工核对的模型绑定无效");
+  }
+  const runnerConfiguration = input.runnerConfiguration;
+  if (!runnerConfiguration
+    || runnerConfiguration.id !== `${input.execution.workspaceId}:${runnerId}`
+    || runnerConfiguration.tenantId !== input.tenantId
+    || runnerConfiguration.workspaceId !== input.execution.workspaceId
+    || runnerConfiguration.runnerId !== runnerId
+    || runnerConfiguration.status !== "confirmed"
+    || runnerConfiguration.identityDigest !== sha256(runnerConfiguration.identity)
+    || runnerConfiguration.identityDigest !== input.run.externalInvocation?.identityDigest
+    || input.execution.runnerId !== runnerId) {
+    throw new Error("Coding 人工核对的 Runner 身份绑定无效");
+  }
+  const resourceDigest = input.run.controlPlane.repositoryIndexDigest;
+  if (!authority.dataScopes.some((scope) => scope.namespace === "repository"
+    && (scope.resourceId === "*" || scope.resourceId === repository.id)
+    && (scope.digest === undefined || scope.digest === resourceDigest))) {
+    throw new Error("Coding 人工核对超出 Repository 数据权限范围");
+  }
+}
+
+function canonicalAuthorityCommitment(
+  execution: Execution,
+  authority: ExecutionAuthority,
+  runnerId: ExternalCodingRunnerId,
+): string {
+  return sha256({
+    executionId: execution.id,
+    workspaceId: execution.workspaceId,
+    principalId: authority.principalId,
+    toolIds: authority.toolIds,
+    dataScopes: authority.dataScopes,
+    autoAllowedEffects: authority.autoAllowedEffects,
+    budget: authority.budget,
+    parentAuthorityId: authority.parentAuthorityId,
+    runnerId,
+  });
+}
+
+function assertAutoAuthorizedReconciliationIntent(
+  authority: ExecutionAuthority,
+  intent: ToolCallIntent,
+): void {
+  if (authorityAllowsIntent(authority, intent) !== "auto") {
+    throw new Error("Coding 人工核对只执行已由 ExecutionAuthority 自动允许的只读工具");
+  }
+}
+
 async function loadCodingRun(
   store: KernelStore,
   tenantId: string,
@@ -992,7 +1224,7 @@ async function inspectRepositoryControlled(input: {
     now: input.now(),
   });
   await authorizeTool(input.runtime, input.approval, intent, input.signal);
-  const snapshot = await inspectRepository(input.repository, actual);
+  const snapshot = await inspectRepository(input.repository, actual, input.signal);
   await recordToolResult(input.runtime, intent, {
     baseRevision: snapshot.baseRevision,
     repositoryIndexDigest: snapshot.index.digest,
@@ -1004,27 +1236,62 @@ async function inspectRepositoryControlled(input: {
 async function inspectRepository(
   repository: VersionedRepository,
   actualPath: string,
+  signal: AbortSignal,
 ): Promise<RepositorySnapshot> {
-  const topLevel = (await git(actualPath, ["rev-parse", "--show-toplevel"])).stdout.trim();
+  const topLevel = (await git(actualPath, ["rev-parse", "--show-toplevel"], signal)).stdout.trim();
   if (topLevel !== actualPath) throw new Error("仓库路径不是 Git 工作树根目录");
-  const status = (await git(actualPath, ["status", "--porcelain=v1", "--untracked-files=all"])).stdout;
-  if (status.trim()) throw new Error("仓库存在未提交变更；为避免覆盖用户工作，已拒绝执行");
-  const baseRevision = (await git(actualPath, ["rev-parse", "HEAD"])).stdout.trim();
+  const baseRevision = (await git(actualPath, ["rev-parse", "HEAD"], signal)).stdout.trim();
   if (!/^[0-9a-f]{40,64}$/u.test(baseRevision)) throw new Error("无法固定仓库基础版本");
-  const tracked = (await git(actualPath, ["ls-files", "-z"])).stdout.split("\0").filter(Boolean);
-  if (tracked.length > MAX_TRACKED_FILES) throw new Error("仓库跟踪文件数量超过受控读取上限");
+  const tree = parseGitTree((await git(actualPath, [
+    "ls-tree", "-r", "-z", "--full-tree", baseRevision,
+  ], signal)).stdout);
+  const index = parseGitIndex((await git(actualPath, ["ls-files", "--stage", "-z"], signal)).stdout);
+  const untracked = (await git(actualPath, [
+    "ls-files", "--others", "--exclude-standard", "-z",
+  ], signal)).stdout.split("\0").filter(Boolean);
+  if (untracked.length > 0) {
+    throw new Error("仓库存在未提交的未跟踪文件；为避免覆盖用户工作，已拒绝执行");
+  }
+  if (tree.size > MAX_TRACKED_FILES) throw new Error("仓库跟踪文件数量超过受控读取上限");
+  if (index.size !== tree.size || [...tree].some(([path, entry]) => {
+    const indexed = index.get(path);
+    return !indexed || indexed.stage !== 0 || indexed.mode !== entry.mode || indexed.oid !== entry.oid;
+  })) {
+    throw new Error("仓库索引与固定 HEAD 不一致；为避免覆盖用户工作，已拒绝执行");
+  }
   const entries: Array<{ path: string; digest: string; byteLength: number }> = [];
   const context: string[] = [];
   let totalBytes = 0;
   let contextBytes = 0;
-  for (const path of tracked) {
+  for (const [path, treeEntry] of tree) {
+    if (signal.aborted) throw new CandidateOperationAbortedError();
     assertRelativeRepositoryPath(path);
     const absolute = join(actualPath, path);
     const stat = await lstat(absolute);
-    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`仓库包含不受支持的文件类型：${path}`);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1
+      || (treeEntry.mode !== "100644" && treeEntry.mode !== "100755")) {
+      throw new Error(`仓库包含不受支持的文件类型：${path}`);
+    }
     const actualFile = await realpath(absolute);
     assertWithin(actualPath, actualFile, "跟踪文件");
-    const content = await readFile(actualFile);
+    const handle = await open(actualFile, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    let content: Buffer;
+    try {
+      const before = await handle.stat();
+      content = await handle.readFile();
+      const after = await handle.stat();
+      if (!sameFileInfo(before, after) || !after.isFile() || after.isSymbolicLink()
+        || after.nlink !== 1) {
+        throw new Error(`仓库文件在受控读取期间发生变化：${path}`);
+      }
+    } finally {
+      await handle.close();
+    }
+    if (signal.aborted) throw new CandidateOperationAbortedError();
+    if (gitBlobOid(content, baseRevision.length) !== treeEntry.oid
+      || ((stat.mode & 0o111) !== 0) !== (treeEntry.mode === "100755")) {
+      throw new Error(`仓库跟踪文件与固定 HEAD 不一致：${path}`);
+    }
     totalBytes += content.byteLength;
     if (totalBytes > MAX_INDEX_BYTES) throw new Error("仓库索引内容超过受控读取上限");
     entries.push({ path, digest: hashBytes(content), byteLength: content.byteLength });
@@ -1116,9 +1383,10 @@ class ExternalCodingRunner implements ManagedCodingRunner {
       }
       this.#sequence = 1;
       await this.#assertSourceUnchanged();
-      this.#sandboxPath = await this.#options.sandbox.createWorkingCopy(
+      this.#sandboxPath = await this.#options.sandbox.createExternalWorkingCopy(
         this.#options.snapshot,
         this.#sequence,
+        this.#options.signal,
       );
       this.#artifact = await this.#options.sandbox.stageRunnerBinary(
         this.#options.configuration.identity,
@@ -1132,6 +1400,7 @@ class ExternalCodingRunner implements ManagedCodingRunner {
       await this.#options.sandbox.verifyRunnerArtifact(
         this.#artifact!,
         this.#options.configuration.identity.version,
+        this.#options.signal,
       );
     } catch (error) {
       throw knownRunnerFailure(error);
@@ -1228,14 +1497,19 @@ class ExternalCodingRunner implements ManagedCodingRunner {
         yield { type: "result", status: effectiveStatus, ...(result.reason ? { reason: result.reason } : {}) };
         return;
       }
-      const diff = await this.#options.sandbox.stageAndDiff(this.#sandboxPath);
+      const material = await this.#options.sandbox.materializeExternalCandidate(
+        this.#sandboxPath,
+        this.#options.snapshot.baseRevision,
+        this.#options.signal,
+      );
+      const diff = material.diff;
       if (!diff.trim()) {
         yield { type: "result", status: "failed", reason: "Runner 已完成，但没有生成可审阅 Diff" };
         return;
       }
       const candidateId = `${this.#options.execution.id}:generation:${this.#options.execution.generation}:candidate:${this.#sequence}`;
       const diffDigest = hashBytes(Buffer.from(diff));
-      this.material.set(candidateId, { diff, sandboxPath: this.#sandboxPath });
+      this.material.set(candidateId, material);
       yield {
         type: "candidate",
         candidate: {
@@ -1276,6 +1550,7 @@ class ExternalCodingRunner implements ManagedCodingRunner {
       await this.#options.sandbox.verifyRunnerArtifact(
         this.#artifact!,
         this.#options.configuration.identity.version,
+        this.#options.signal,
       );
     } catch (error) {
       throw knownRunnerFailure(error);
@@ -1410,7 +1685,11 @@ class ExternalCodingRunner implements ManagedCodingRunner {
 
   async #assertSourceUnchanged(): Promise<void> {
     const actual = await realpath(this.#options.snapshot.realPath);
-    const current = await inspectRepository(this.#options.snapshot.repository, actual);
+    const current = await inspectRepository(
+      this.#options.snapshot.repository,
+      actual,
+      this.#options.signal,
+    );
     if (current.realPath !== this.#options.snapshot.realPath
       || current.baseRevision !== this.#options.snapshot.baseRevision
       || current.index.digest !== this.#options.controlPlane.repositoryIndexDigest) {
@@ -1502,6 +1781,12 @@ function cancelledCodingResult(result: CodingExecutionResult): CodingExecutionRe
   };
 }
 
+function gateCommand(material: CandidateMaterial): string {
+  return material.materialization
+    ? "git diff --no-index --check --binary --no-ext-diff --no-textconv --no-prefix -- a b"
+    : "git diff --check HEAD --";
+}
+
 function externalRunnerInput(
   options: ExternalCodingRunnerOptions,
   input: string,
@@ -1556,16 +1841,16 @@ async function verifySandboxCandidate(input: {
     now: input.now(),
   });
   await authorizeTool(input.runtime, input.approval, intent, input.signal);
-  const currentDiff = await input.sandbox.diff(material.sandboxPath);
+  const currentDiff = await input.sandbox.currentCandidateDiff(material, input.signal);
   if (hashBytes(Buffer.from(currentDiff)) !== input.candidate.diffDigest) {
     throw new Error("Gate 执行前隔离目录中的 Diff 已变化");
   }
-  const gate = await input.sandbox.verify(material.sandboxPath);
+  const gate = await input.sandbox.verifyCandidate(material, input.signal);
   const evidenceDigest = sha256({
     candidateId: input.candidate.id,
     diffDigest: input.candidate.diffDigest,
     sandboxDigest: input.controlPlane.sandboxDigest,
-    command: "git diff --check HEAD --",
+    command: gateCommand(material),
     ...gate,
   });
   await recordToolResult(input.runtime, intent, {
@@ -1710,7 +1995,12 @@ class BuiltinCodingRunner implements ManagedCodingRunner {
     });
     await authorizeTool(this.#options.runtime, this.#options.approval, intent, this.#options.signal);
     if (hashBytes(Buffer.from(patch)) !== patchDigest) throw new Error("Diff 在执行前已变化");
-    const applied = await this.#options.sandbox.applyPatch(this.#options.snapshot, patch, sequence);
+    const applied = await this.#options.sandbox.applyPatch(
+      this.#options.snapshot,
+      patch,
+      sequence,
+      this.#options.signal,
+    );
     const candidateId = `${this.#options.execution.id}:generation:${this.#options.execution.generation}:candidate:${sequence}`;
     await recordToolResult(this.#options.runtime, intent, {
       candidateId,
@@ -1754,7 +2044,11 @@ class BuiltinCodingRunner implements ManagedCodingRunner {
       now: this.#options.now(),
     });
     await authorizeTool(this.#options.runtime, this.#options.approval, intent, this.#options.signal);
-    const snapshot = await inspectRepository(this.#options.snapshot.repository, actual);
+    const snapshot = await inspectRepository(
+      this.#options.snapshot.repository,
+      actual,
+      this.#options.signal,
+    );
     await recordToolResult(this.#options.runtime, intent, {
       baseRevision: snapshot.baseRevision,
       repositoryIndexDigest: snapshot.index.digest,
@@ -1783,16 +2077,19 @@ class BuiltinCodingRunner implements ManagedCodingRunner {
       now: this.#options.now(),
     });
     await authorizeTool(this.#options.runtime, this.#options.approval, intent, this.#options.signal);
-    const currentDiff = await this.#options.sandbox.diff(material.sandboxPath);
+    const currentDiff = await this.#options.sandbox.currentCandidateDiff(
+      material,
+      this.#options.signal,
+    );
     if (hashBytes(Buffer.from(currentDiff)) !== candidate.diffDigest) {
       throw new Error("Gate 执行前隔离目录中的 Diff 已变化");
     }
-    const gate = await this.#options.sandbox.verify(material.sandboxPath);
+    const gate = await this.#options.sandbox.verifyCandidate(material, this.#options.signal);
     const evidenceDigest = sha256({
       candidateId: candidate.id,
       diffDigest: candidate.diffDigest,
       sandboxDigest: controlPlane.sandboxDigest,
-      command: "git diff --check HEAD --",
+      command: gateCommand(material),
       ...gate,
     });
     await recordToolResult(this.#options.runtime, intent, {
@@ -1860,10 +2157,11 @@ class MacOsCodingSandbox {
       }),
       harnessDigest: sha256({ version: "coding-harness-v2", gates: ["git.diff-check"], maxRepairs: 3 }),
       sandboxDigest: sha256({
-        version: "macos-sandbox-exec-v1",
+        version: "macos-sandbox-exec-v2",
         executable: this.#executable,
         root,
         writeScope: "candidate-directory",
+        candidateMaterialization: "worker-owned-no-index-v1",
         network: runnerId === "builtin" ? "denied" : "external-runner-provider-access",
         runnerId,
         fallback: "forbidden",
@@ -1872,20 +2170,25 @@ class MacOsCodingSandbox {
     };
   }
 
-  async applyPatch(snapshot: RepositorySnapshot, patch: string, sequence: number) {
-    const repositoryPath = await this.createWorkingCopy(snapshot, sequence);
+  async applyPatch(
+    snapshot: RepositorySnapshot,
+    patch: string,
+    sequence: number,
+    signal: AbortSignal,
+  ) {
+    const repositoryPath = await this.createWorkingCopy(snapshot, sequence, signal);
     const candidateRoot = resolve(repositoryPath, "..");
     const patchPath = join(candidateRoot, "candidate.patch");
     await writeFile(patchPath, patch, { encoding: "utf8", flag: "wx", mode: 0o600 });
     await requireSuccess(await this.#run(candidateRoot, repositoryPath, [
       "-c", "core.hooksPath=/dev/null",
       "apply", "--check", "--index", "--whitespace=nowarn", patchPath,
-    ]), "候选 Diff 无法安全应用");
+    ], signal), "候选 Diff 无法安全应用");
     await requireSuccess(await this.#run(candidateRoot, repositoryPath, [
       "-c", "core.hooksPath=/dev/null",
       "apply", "--index", "--whitespace=nowarn", patchPath,
-    ]), "候选 Diff 应用失败");
-    const diff = await this.diff(repositoryPath);
+    ], signal), "候选 Diff 应用失败");
+    const diff = await this.diff(repositoryPath, signal);
     if (!diff.trim()) throw new Error("模型没有生成可审阅的代码变更");
     return {
       diff,
@@ -1894,7 +2197,11 @@ class MacOsCodingSandbox {
     };
   }
 
-  async createWorkingCopy(snapshot: RepositorySnapshot, sequence: number): Promise<string> {
+  async createWorkingCopy(
+    snapshot: RepositorySnapshot,
+    sequence: number,
+    signal: AbortSignal,
+  ): Promise<string> {
     const root = await this.#initialize();
     const prefix = `${safePathPart(snapshot.repository.id)}-${sequence}-`;
     const candidateRoot = await mkdtemp(join(root, prefix));
@@ -1907,15 +2214,118 @@ class MacOsCodingSandbox {
       "clone", "--no-local", "--no-hardlinks", "--no-checkout", "--quiet",
       snapshot.realPath,
       repositoryPath,
-    ]), "隔离仓库创建失败");
+    ], signal), "隔离仓库创建失败");
     await requireSuccess(await this.#run(candidateRoot, repositoryPath, [
       "-c", "core.hooksPath=/dev/null",
       "-c", "core.fsmonitor=false",
       "checkout", "--detach", "--quiet", snapshot.baseRevision,
-    ]), "固定基础版本失败");
+    ], signal), "固定基础版本失败");
     const actualRepository = await realpath(repositoryPath);
     this.#candidateBaseRevisions.set(actualRepository, snapshot.baseRevision);
     return actualRepository;
+  }
+
+  async createExternalWorkingCopy(
+    snapshot: RepositorySnapshot,
+    sequence: number,
+    signal: AbortSignal,
+  ): Promise<string> {
+    const repositoryPath = await this.createWorkingCopy(snapshot, sequence, signal);
+    const materializationRoot = await this.#materializationRoot(repositoryPath, true);
+    try {
+      await writeFile(join(materializationRoot, "metadata.json"), `${JSON.stringify({
+        protocol: "mn-untrusted-candidate-v1",
+        repositoryPathDigest: sha256(repositoryPath),
+        baseRevision: snapshot.baseRevision,
+      })}\n`, { flag: "wx", mode: 0o600 });
+      await copyCandidateTree({
+        sourceRoot: repositoryPath,
+        targetRoot: join(materializationRoot, "baseline"),
+        signal,
+        ignoreRootGit: true,
+      });
+      return repositoryPath;
+    } catch (error) {
+      await rm(materializationRoot, { recursive: true, force: true });
+      await this.cleanup(repositoryPath);
+      throw error;
+    }
+  }
+
+  async materializeExternalCandidate(
+    repositoryPath: string,
+    expectedBaseRevision: string,
+    signal: AbortSignal,
+  ): Promise<CandidateMaterial> {
+    const materializationRoot = await this.#materializationRoot(repositoryPath, false);
+    const metadata = await this.#readMaterializationMetadata(
+      materializationRoot,
+      repositoryPath,
+      expectedBaseRevision,
+      signal,
+    );
+    if (metadata.baseRevision !== expectedBaseRevision) {
+      throw new Error("候选固化基础版本与 Execution 检查点不一致");
+    }
+    const snapshotRoot = await mkdtemp(join(materializationRoot, "snapshot-"));
+    assertWithin(materializationRoot, snapshotRoot, "Worker 候选快照");
+    const basePath = join(snapshotRoot, "a");
+    const candidatePath = join(snapshotRoot, "b");
+    try {
+      const baseManifest = await copyCandidateTree({
+        sourceRoot: join(materializationRoot, "baseline"),
+        targetRoot: basePath,
+        signal,
+      });
+      const candidateManifest = await copyCandidateTree({
+        sourceRoot: repositoryPath,
+        targetRoot: candidatePath,
+        signal,
+        ignoreRootGit: true,
+      });
+      const diff = await this.#canonicalNoIndexDiff(snapshotRoot, signal);
+      if (Buffer.byteLength(diff, "utf8") > MAX_PATCH_BYTES) {
+        throw new Error("候选 Diff 超过 1 MiB 验证上限");
+      }
+      return {
+        diff,
+        sandboxPath: repositoryPath,
+        materialization: {
+          rootPath: snapshotRoot,
+          basePath,
+          candidatePath,
+          baseManifest,
+          candidateManifest,
+        },
+      };
+    } catch (error) {
+      await rm(snapshotRoot, { recursive: true, force: true });
+      throw error;
+    }
+  }
+
+  async currentCandidateDiff(material: CandidateMaterial, signal: AbortSignal): Promise<string> {
+    if (!material.materialization) return this.diff(material.sandboxPath, signal);
+    await this.#assertMaterializedCandidate(material, signal);
+    return this.#canonicalNoIndexDiff(material.materialization.rootPath, signal);
+  }
+
+  async verifyCandidate(material: CandidateMaterial, signal: AbortSignal): Promise<CommandResult> {
+    if (!material.materialization) return this.verify(material.sandboxPath, signal);
+    await this.#assertMaterializedCandidate(material, signal);
+    const result = await this.#runMaterializedGit(
+      material.materialization.rootPath,
+      [
+        "diff", "--no-index", "--check", "--binary", "--no-ext-diff", "--no-textconv",
+        "--no-prefix", "--", "a", "b",
+      ],
+      signal,
+      CANDIDATE_GATE_TIMEOUT_MS,
+    );
+    await this.#assertMaterializedCandidate(material, signal);
+    return result.exitCode <= 1
+      ? { exitCode: 0, stdout: result.stdout, stderr: result.stderr }
+      : result;
   }
 
   async stageRunnerBinary(confirmed: RunnerBinaryIdentityV1): Promise<StagedRunnerArtifact> {
@@ -1981,6 +2391,7 @@ class MacOsCodingSandbox {
   async verifyRunnerArtifact(
     artifact: StagedRunnerArtifact,
     expectedVersion: string,
+    signal: AbortSignal,
   ): Promise<void> {
     const root = await this.#initialize();
     const current = await inspectStagedRunnerIdentity(artifact.identity);
@@ -1993,7 +2404,7 @@ class MacOsCodingSandbox {
       ["-p", this.#runnerProbeProfile(), current.realPath, "--version"],
       artifact.rootPath,
       { TMPDIR: "/dev/null" },
-      5_000,
+      { signal, timeoutMs: 5_000 },
     );
     await requireSuccess(result, "Runner 版本探测失败");
     const version = `${result.stdout}\n${result.stderr}`.trim().split(/\r?\n/u)[0]?.slice(0, 256) ?? "";
@@ -2039,26 +2450,9 @@ class MacOsCodingSandbox {
     await rm(artifactRoot, { recursive: true, force: true });
   }
 
-  async recoverAndStageDiff(repositoryPath: string, expectedBaseRevision: string): Promise<string> {
+  async diff(repositoryPath: string, signal: AbortSignal): Promise<string> {
     const candidateRoot = await this.#candidateRoot(repositoryPath);
-    const actualRepository = await realpath(repositoryPath);
-    if (actualRepository !== repositoryPath || !/^[0-9a-f]{40,64}$/u.test(expectedBaseRevision)) {
-      throw new Error("保留候选路径或基础版本无效");
-    }
-    const info = await lstat(actualRepository);
-    if (!info.isDirectory() || info.isSymbolicLink()) throw new Error("保留候选目录类型无效");
-    const head = await this.#run(candidateRoot, actualRepository, ["rev-parse", "HEAD"]);
-    await requireSuccess(head, "读取保留候选基础版本失败");
-    if (head.stdout.trim() !== expectedBaseRevision) {
-      throw new Error("保留候选基础版本已变化");
-    }
-    this.#candidateBaseRevisions.set(actualRepository, expectedBaseRevision);
-    return this.stageAndDiff(actualRepository);
-  }
-
-  async diff(repositoryPath: string): Promise<string> {
-    const candidateRoot = await this.#candidateRoot(repositoryPath);
-    const head = await this.#run(candidateRoot, repositoryPath, ["rev-parse", "HEAD"]);
+    const head = await this.#run(candidateRoot, repositoryPath, ["rev-parse", "HEAD"], signal);
     await requireSuccess(head, "读取候选基础版本失败");
     if (head.stdout.trim() !== this.#candidateBaseRevisions.get(repositoryPath)) {
       throw new Error("候选仓库基础版本已变化，拒绝产生 Diff");
@@ -2066,27 +2460,17 @@ class MacOsCodingSandbox {
     const result = await this.#run(candidateRoot, repositoryPath, [
       "-c", "core.hooksPath=/dev/null",
       "diff", "--binary", "--no-ext-diff", "--no-color", "HEAD", "--",
-    ]);
+    ], signal);
     await requireSuccess(result, "读取候选 Diff 失败");
     return result.stdout;
   }
 
-  async stageAndDiff(repositoryPath: string): Promise<string> {
-    const candidateRoot = await this.#candidateRoot(repositoryPath);
-    await requireSuccess(await this.#run(candidateRoot, repositoryPath, [
-      "-c", "core.hooksPath=/dev/null",
-      "-c", "core.autocrlf=false",
-      "add", "-A", "--",
-    ]), "无法固定候选仓库的新增与删除文件");
-    return this.diff(repositoryPath);
-  }
-
-  async verify(repositoryPath: string): Promise<CommandResult> {
+  async verify(repositoryPath: string, signal: AbortSignal): Promise<CommandResult> {
     const candidateRoot = await this.#candidateRoot(repositoryPath);
     return this.#run(candidateRoot, repositoryPath, [
       "-c", "core.hooksPath=/dev/null",
       "diff", "--check", "HEAD", "--",
-    ]);
+    ], signal);
   }
 
   async externalLauncher(
@@ -2178,6 +2562,13 @@ class MacOsCodingSandbox {
     if (basename(repositoryPath) !== "repository") throw new Error("候选仓库目录结构无效");
     this.#candidateBaseRevisions.delete(repositoryPath);
     await rm(candidateRoot, { recursive: true, force: true });
+    const materializedBase = join(root, "materialized");
+    const materializationRoot = join(materializedBase, basename(candidateRoot));
+    assertWithin(materializedBase, materializationRoot, "候选固化目录");
+    await rm(materializationRoot, { recursive: true, force: true });
+    await rmdir(materializedBase).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "ENOENT" && error.code !== "ENOTEMPTY") throw error;
+    });
   }
 
   async #initialize(): Promise<string> {
@@ -2213,6 +2604,131 @@ class MacOsCodingSandbox {
     });
   }
 
+  async #materializationRoot(repositoryPath: string, create: boolean): Promise<string> {
+    const root = await this.#initialize();
+    const candidateRoot = await this.#candidateRoot(repositoryPath);
+    const base = join(root, "materialized");
+    const materializationRoot = join(base, basename(candidateRoot));
+    assertWithin(base, materializationRoot, "候选固化目录");
+    if (create) {
+      await mkdir(base, { recursive: true, mode: 0o700 });
+      await mkdir(materializationRoot, { mode: 0o700 });
+    }
+    const actual = await realpath(materializationRoot);
+    if (actual !== materializationRoot) throw new Error("候选固化目录真实路径已变化");
+    const info = await lstat(actual);
+    if (!info.isDirectory() || info.isSymbolicLink()) throw new Error("候选固化目录类型无效");
+    return actual;
+  }
+
+  async #readMaterializationMetadata(
+    materializationRoot: string,
+    repositoryPath: string,
+    expectedBaseRevision: string,
+    signal: AbortSignal,
+  ): Promise<{ readonly baseRevision: string }> {
+    if (signal.aborted) throw new CandidateOperationAbortedError();
+    const metadataPath = join(materializationRoot, "metadata.json");
+    const handle = await open(metadataPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    let serialized: string;
+    try {
+      const before = await handle.stat();
+      serialized = await handle.readFile("utf8");
+      const after = await handle.stat();
+      if (!before.isFile() || !sameFileInfo(before, after)) {
+        throw new Error("候选固化元数据在读取期间发生变化");
+      }
+    } finally {
+      await handle.close();
+    }
+    if (signal.aborted) throw new CandidateOperationAbortedError();
+    const value = JSON.parse(serialized) as {
+      readonly protocol?: unknown;
+      readonly repositoryPathDigest?: unknown;
+      readonly baseRevision?: unknown;
+    };
+    if (value.protocol !== "mn-untrusted-candidate-v1"
+      || value.repositoryPathDigest !== sha256(repositoryPath)
+      || value.baseRevision !== expectedBaseRevision) {
+      throw new Error("候选固化元数据与 Execution 检查点不一致");
+    }
+    return { baseRevision: expectedBaseRevision };
+  }
+
+  async #canonicalNoIndexDiff(snapshotRoot: string, signal: AbortSignal): Promise<string> {
+    const result = await this.#runMaterializedGit(
+      snapshotRoot,
+      [
+        "diff", "--no-index", "--binary", "--no-ext-diff", "--no-textconv", "--no-prefix",
+        "--", "a", "b",
+      ],
+      signal,
+      CANDIDATE_GATE_TIMEOUT_MS,
+    );
+    if (result.exitCode > 1) {
+      await requireSuccess(result, "无法生成候选 canonical Diff");
+    }
+    return result.stdout;
+  }
+
+  async #assertMaterializedCandidate(
+    material: CandidateMaterial,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const state = material.materialization;
+    if (!state) throw new Error("候选缺少 Worker 固化快照");
+    const root = await this.#initialize();
+    assertWithin(join(root, "materialized"), state.rootPath, "Worker 候选快照");
+    if (resolve(state.rootPath, "a") !== state.basePath
+      || resolve(state.rootPath, "b") !== state.candidatePath) {
+      throw new Error("Worker 候选快照目录结构无效");
+    }
+    const [baseManifest, candidateManifest] = await Promise.all([
+      inspectCandidateTree({ root: state.basePath, signal }),
+      inspectCandidateTree({ root: state.candidatePath, signal }),
+    ]);
+    if (baseManifest.digest !== state.baseManifest.digest
+      || baseManifest.fileCount !== state.baseManifest.fileCount
+      || baseManifest.totalBytes !== state.baseManifest.totalBytes
+      || candidateManifest.digest !== state.candidateManifest.digest
+      || candidateManifest.fileCount !== state.candidateManifest.fileCount
+      || candidateManifest.totalBytes !== state.candidateManifest.totalBytes) {
+      throw new Error("Worker 候选快照在 Gate 前发生变化");
+    }
+  }
+
+  async #runMaterializedGit(
+    snapshotRoot: string,
+    gitArguments: readonly string[],
+    signal: AbortSignal,
+    timeoutMs: number,
+  ): Promise<CommandResult> {
+    const root = await this.#initialize();
+    assertWithin(join(root, "materialized"), snapshotRoot, "Worker 候选快照");
+    const actual = await realpath(snapshotRoot);
+    if (actual !== snapshotRoot) throw new Error("Worker 候选快照真实路径已变化");
+    const tmp = join(snapshotRoot, "tmp");
+    await mkdir(tmp, { mode: 0o700 }).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "EEXIST") throw error;
+    });
+    const profile = this.#profile(snapshotRoot, false);
+    return command(
+      this.#executable,
+      ["-p", profile, GIT, ...gitArguments],
+      snapshotRoot,
+      {
+        TMPDIR: tmp,
+        GIT_DIR: "/dev/null",
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_CONFIG_SYSTEM: "/dev/null",
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_ATTR_NOSYSTEM: "1",
+        GIT_PAGER: "cat",
+      },
+      { signal, timeoutMs, maxBufferBytes: 2 * MAX_PATCH_BYTES },
+    );
+  }
+
   #assertSupervisionPath(root: string, statePath: string): void {
     if (!isAbsolute(statePath) || basename(statePath) !== "state.json") {
       throw new Error("Runner 监督状态路径无效");
@@ -2232,7 +2748,12 @@ class MacOsCodingSandbox {
     return resolve(actual, "..");
   }
 
-  #run(candidateRoot: string, cwd: string | undefined, gitArguments: readonly string[]) {
+  #run(
+    candidateRoot: string,
+    cwd: string | undefined,
+    gitArguments: readonly string[],
+    signal: AbortSignal,
+  ) {
     const root = this.#realRoot;
     if (!root) throw new Error("Coding sandbox 尚未初始化");
     assertWithin(root, candidateRoot, "候选目录");
@@ -2240,7 +2761,11 @@ class MacOsCodingSandbox {
     return command(this.#executable, ["-p", profile, GIT, ...gitArguments], cwd, {
       TMPDIR: join(candidateRoot, "tmp"),
       GIT_CONFIG_GLOBAL: join(candidateRoot, "empty.gitconfig"),
-    });
+      GIT_CONFIG_SYSTEM: "/dev/null",
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_ATTR_NOSYSTEM: "1",
+      GIT_PAGER: "cat",
+    }, { signal, timeoutMs: CONTROLLED_GIT_TIMEOUT_MS });
   }
 
   #profile(candidateRoot: string, allowNetwork: boolean): string {
@@ -2278,6 +2803,10 @@ async function persistReconciliationVerification(input: {
   readonly run: StoredCodingRun;
   readonly task: CodingTask;
   readonly thread: Thread;
+  readonly authority: ExecutionAuthority;
+  readonly repository: VersionedRepository;
+  readonly model: StoredModelConnection;
+  readonly runnerConfiguration: CodingRunnerConfigurationV1;
   readonly candidate?: Candidate;
   readonly diff?: string;
   readonly gate?: GateResult;
@@ -2289,6 +2818,20 @@ async function persistReconciliationVerification(input: {
     const execution = transaction.getProjection<Execution>("execution", input.execution.id);
     const run = transaction.getProjection<StoredCodingRun>("coding.execution", input.execution.id);
     const task = transaction.getProjection<CodingTask>("coding.task", input.task.id);
+    const thread = transaction.getProjection<Thread>("thread", input.thread.id);
+    const authority = transaction.getProjection<ExecutionAuthority>("authority", input.execution.authorityId);
+    const repository = transaction.getProjection<VersionedRepository>(
+      "coding.repository",
+      input.repository.id,
+    );
+    const model = transaction.getProjection<StoredModelConnection>(
+      "modelConnection",
+      input.execution.modelBindingId,
+    );
+    const runnerConfiguration = transaction.getProjection<CodingRunnerConfigurationV1>(
+      CODING_RUNNER_CONFIGURATION_NAMESPACE,
+      input.runnerConfiguration.id,
+    );
     if (execution?.status === "completed"
       && run?.externalInvocation?.verification?.status === "passed") {
       return { executionId: execution.id, status: "completed" };
@@ -2300,8 +2843,31 @@ async function persistReconciliationVerification(input: {
       || run.externalInvocation?.status !== "outcome_unknown"
       || run.externalInvocation.verification?.status !== "pending"
       || run.externalInvocation.verification.jobId !== input.job.id
-      || !task || task.status !== "needs_reconciliation") {
+      || !task || task.status !== "needs_reconciliation"
+      || !thread || thread.workspaceId !== execution.workspaceId
+      || thread.resourceRef?.namespace !== "coding.task"
+      || thread.resourceRef.resourceId !== task.id) {
       throw new Error("Coding 人工核对验证提交时状态已变化");
+    }
+    assertReconciliationBindings({
+      tenantId: input.tenantId,
+      execution,
+      run,
+      task,
+      authority,
+      repository,
+      model,
+      runnerConfiguration,
+    });
+    if (authority!.commitment !== input.authority.commitment
+      || authority!.streamVersion !== input.authority.streamVersion
+      || repository!.rootRealPath !== input.repository.rootRealPath
+      || repository!.streamVersion !== input.repository.streamVersion
+      || model!.id !== input.model.id
+      || model!.defaultModel !== input.model.defaultModel
+      || runnerConfiguration!.identityDigest !== input.runnerConfiguration.identityDigest
+      || runnerConfiguration!.streamVersion !== input.runnerConfiguration.streamVersion) {
+      throw new Error("Coding 人工核对验证绑定在 Gate 期间发生变化");
     }
     const passed = Boolean(input.candidate && input.diff && input.gate?.status === "passed"
       && input.gate.authoritative && input.gate.evidenceDigest && input.evidence
@@ -2454,7 +3020,7 @@ async function persistReconciliationVerification(input: {
     });
 
     const cleanupJob = passed
-      ? reconciliationCleanupJob(input, execution, run)
+      ? codingCleanupJob(input, execution, run)
       : undefined;
     const { evidence: _oldEvidence, approval: _oldApproval, deliverable: _oldDeliverable, ...resultSource }
       = run.result;
@@ -2618,7 +3184,7 @@ async function persistReconciliationVerification(input: {
   });
 }
 
-function reconciliationCleanupJob(
+function codingCleanupJob(
   input: { readonly tenantId: string; readonly now: string },
   execution: Execution,
   run: StoredCodingRun,
@@ -2643,6 +3209,52 @@ function reconciliationCleanupJob(
     createdAt: input.now,
     updatedAt: input.now,
   };
+}
+
+function enqueueCodingCleanupJob(
+  transaction: KernelTransaction,
+  cleanupJob: Job,
+  execution: Execution,
+  actorId: string,
+  occurredAt: string,
+): void {
+  transaction.putProjection("job", cleanupJob.id, cleanupJob);
+  transaction.appendEvent({
+    tenantId: cleanupJob.tenantId,
+    aggregateType: "job",
+    aggregateId: cleanupJob.id,
+    expectedStreamVersion: 0,
+    type: "job.available",
+    actorId,
+    executionId: execution.id,
+    generation: execution.generation,
+    correlationId: `coding:${execution.id}:${execution.generation}:cleanup`,
+    publicPayload: {
+      workspaceId: execution.workspaceId,
+      jobId: cleanupJob.id,
+      kind: cleanupJob.kind,
+    },
+  });
+  transaction.putJob({
+    id: cleanupJob.id,
+    tenantId: cleanupJob.tenantId,
+    workspaceId: cleanupJob.workspaceId,
+    kind: cleanupJob.kind,
+    payload: cleanupJob.payload,
+    availableAt: cleanupJob.availableAt,
+    idempotencyKey: cleanupJob.idempotencyKey,
+  });
+  transaction.putOutbox({
+    id: `outbox:${cleanupJob.id}`,
+    tenantId: cleanupJob.tenantId,
+    topic: "job.available",
+    payload: {
+      workspaceId: execution.workspaceId,
+      jobId: cleanupJob.id,
+      kind: cleanupJob.kind,
+    },
+    availableAt: occurredAt,
+  });
 }
 
 async function persistRunning(
@@ -2819,6 +3431,15 @@ async function persistCodingResult(input: {
         receipt: settleCodingJob(transaction, input.job, input.context, current.result, input.now),
       };
     }
+    const cleanupJob = current.externalInvocation
+      && result.status !== "needs_reconciliation"
+      && input.runnerTerminationConfirmed
+      ? codingCleanupJob(
+          { tenantId: input.tenantId, now: input.now },
+          liveExecution,
+          current,
+        )
+      : undefined;
     let taskVersion = input.state.task.streamVersion;
     for (const candidate of result.candidates) {
       const material = input.material.get(candidate.id);
@@ -2956,6 +3577,10 @@ async function persistCodingResult(input: {
             ? "outcome_unknown" as const
             : "settled" as const,
           terminationStatus: input.runnerTerminationConfirmed ? "confirmed" : "unconfirmed",
+          ...(cleanupJob ? {
+            cleanupStatus: "pending" as const,
+            cleanupJobId: cleanupJob.id,
+          } : {}),
           updatedAt: input.now,
         },
       } : {}),
@@ -2980,6 +3605,15 @@ async function persistCodingResult(input: {
         status: result.status,
       },
     });
+    if (cleanupJob) {
+      enqueueCodingCleanupJob(
+        transaction,
+        cleanupJob,
+        liveExecution,
+        input.state.execution.executionPrincipalId,
+        input.now,
+      );
+    }
     return {
       run: next,
       receipt: settleCodingJob(transaction, input.job, input.context, result, input.now),
@@ -3271,6 +3905,56 @@ function assertRelativeRepositoryPath(path: string): void {
   }
 }
 
+function parseGitTree(serialized: string): ReadonlyMap<string, {
+  readonly mode: string;
+  readonly oid: string;
+}> {
+  const entries = new Map<string, { readonly mode: string; readonly oid: string }>();
+  for (const record of serialized.split("\0")) {
+    if (!record) continue;
+    const separator = record.indexOf("\t");
+    const metadata = separator < 0 ? "" : record.slice(0, separator);
+    const path = separator < 0 ? "" : record.slice(separator + 1);
+    const match = /^(100644|100755) blob ([0-9a-f]{40,64})$/u.exec(metadata);
+    assertRelativeRepositoryPath(path);
+    if (!match?.[1] || !match[2] || entries.has(path)) {
+      throw new Error(`固定 HEAD 包含不支持的对象：${path || "<unknown>"}`);
+    }
+    entries.set(path, { mode: match[1], oid: match[2] });
+  }
+  return entries;
+}
+
+function parseGitIndex(serialized: string): ReadonlyMap<string, {
+  readonly mode: string;
+  readonly oid: string;
+  readonly stage: number;
+}> {
+  const entries = new Map<string, { readonly mode: string; readonly oid: string; readonly stage: number }>();
+  for (const record of serialized.split("\0")) {
+    if (!record) continue;
+    const separator = record.indexOf("\t");
+    const metadata = separator < 0 ? "" : record.slice(0, separator);
+    const path = separator < 0 ? "" : record.slice(separator + 1);
+    const match = /^(100644|100755|120000|160000) ([0-9a-f]{40,64}) ([0-3])$/u.exec(metadata);
+    assertRelativeRepositoryPath(path);
+    if (!match?.[1] || !match[2] || match[3] === undefined || entries.has(path)) {
+      throw new Error(`Git 索引包含不支持的条目：${path || "<unknown>"}`);
+    }
+    entries.set(path, { mode: match[1], oid: match[2], stage: Number(match[3]) });
+  }
+  return entries;
+}
+
+function gitBlobOid(content: Uint8Array, objectIdLength: number): string {
+  const algorithm = objectIdLength === 40 ? "sha1" : objectIdLength === 64 ? "sha256" : undefined;
+  if (!algorithm) throw new Error("Git 对象摘要格式不受支持");
+  return createHash(algorithm)
+    .update(`blob ${content.byteLength}\0`, "utf8")
+    .update(content)
+    .digest("hex");
+}
+
 function assertWithin(root: string, target: string, label: string): void {
   const path = relative(root, target);
   if (!path || (!path.startsWith(`..${sep}`) && path !== ".." && !isAbsolute(path))) return;
@@ -3345,12 +4029,25 @@ async function inspectStagedRunnerIdentity(
   }
 }
 
-function git(cwd: string, arguments_: readonly string[]): Promise<CommandResult> {
+function git(
+  cwd: string,
+  arguments_: readonly string[],
+  signal: AbortSignal,
+): Promise<CommandResult> {
   return command(GIT, [
     "-c", "core.hooksPath=/dev/null",
     "-c", "core.fsmonitor=false",
+    "-c", "core.untrackedCache=false",
+    "-c", "diff.external=",
     ...arguments_,
-  ], cwd).then(async (result) => {
+  ], cwd, {
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_SYSTEM: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_ATTR_NOSYSTEM: "1",
+    GIT_OPTIONAL_LOCKS: "0",
+    GIT_PAGER: "cat",
+  }, { signal, timeoutMs: CONTROLLED_GIT_TIMEOUT_MS }).then(async (result) => {
     await requireSuccess(result, `Git ${arguments_[0] ?? "命令"} 失败`);
     return result;
   });
@@ -3361,32 +4058,26 @@ function command(
   arguments_: readonly string[],
   cwd?: string,
   environment: Readonly<Record<string, string>> = {},
-  timeoutMs?: number,
+  options?: {
+    readonly signal?: AbortSignal;
+    readonly timeoutMs?: number;
+    readonly maxBufferBytes?: number;
+  },
 ): Promise<CommandResult> {
-  return new Promise((resolveCommand, rejectCommand) => {
-    execFile(executable, [...arguments_], {
-      ...(cwd ? { cwd } : {}),
-      encoding: "utf8",
-      maxBuffer: 32 * 1024 * 1024,
-      ...(timeoutMs ? { timeout: timeoutMs, killSignal: "SIGKILL" as const } : {}),
-      env: {
-        PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
-        GIT_CONFIG_GLOBAL: "/dev/null",
-        GIT_CONFIG_NOSYSTEM: "1",
-        LC_ALL: "C",
-        ...environment,
-      },
-    }, (error, stdout, stderr) => {
-      if (!error) {
-        resolveCommand({ exitCode: 0, stdout, stderr });
-        return;
-      }
-      if (typeof error.code === "number") {
-        resolveCommand({ exitCode: error.code, stdout, stderr });
-        return;
-      }
-      rejectCommand(new Error("受控命令无法启动", { cause: error }));
-    });
+  const signal = options?.signal ?? new AbortController().signal;
+  return runControlledCommand({
+    executable,
+    arguments: arguments_,
+    ...(cwd ? { cwd } : {}),
+    environment: {
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_SYSTEM: "/dev/null",
+      GIT_CONFIG_NOSYSTEM: "1",
+      ...environment,
+    },
+    signal,
+    timeoutMs: options?.timeoutMs ?? CONTROLLED_GIT_TIMEOUT_MS,
+    ...(options?.maxBufferBytes ? { maxBufferBytes: options.maxBufferBytes } : {}),
   });
 }
 

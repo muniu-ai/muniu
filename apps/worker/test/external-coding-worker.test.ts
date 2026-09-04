@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import {
+  appendFile,
   chmod,
   mkdtemp,
   mkdir,
@@ -45,6 +46,7 @@ import {
 
 const NOW = "2026-09-04T12:00:00.000Z";
 const SANDBOX_AVAILABLE = process.platform === "darwin";
+type RunnerFixtureTerminal = "completed" | "unknown" | "hang" | "stdin_closed" | "malicious_git";
 
 test("Runner 监督器在 Worker 控制管道硬断开后终止进程组并留下不可复用证明", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "muniu-runner-supervisor-"));
@@ -141,6 +143,7 @@ test("Worker 在可恢复候选仓库中显式执行 Claude CLI，且不调用 B
   assert.equal(state.run.externalInvocation.attempt, 1);
   assert.equal(fixture.modelCalls(), 0);
   assert.equal(await readFile(join(fixture.repositoryPath, "message.txt"), "utf8"), "old value\n");
+  await drainDeferredCleanup(fixture);
   assert.deepEqual(await readdir(fixture.sandboxRoot), []);
   const runnerRecords = state.runtime.records.filter((record: any) =>
     record.type === "runner/event" || record.type === "runner/diagnostic");
@@ -183,6 +186,94 @@ test("Worker 通过同一生产链显式执行 Codex CLI", {
   assert.equal(await readFile(join(fixture.repositoryPath, "message.txt"), "utf8"), "old value\n");
 });
 
+test("清理权限失败只保留 cleanup pending，不回滚已结算的业务结果", {
+  skip: !SANDBOX_AVAILABLE,
+}, async (t) => {
+  const fixture = await externalFixture(t, "completed");
+  const polling = fixture.worker.pollOnce();
+  const runnerApproval = await waitForApproval(fixture.store, []);
+  await fixture.kernel.decideApproval(
+    "local", "local-owner", "approve-before-cleanup-eacces", runnerApproval.id,
+    runnerApproval.streamVersion, "approve_once",
+  );
+  const candidateApproval = await waitForApproval(fixture.store, [runnerApproval.id]);
+  await fixture.kernel.decideApproval(
+    "local", "local-owner", "approve-result-before-cleanup-eacces", candidateApproval.id,
+    candidateApproval.streamVersion, "approve_once",
+  );
+  assert.deepEqual(await polling, { status: "completed", jobId: "job-1" });
+
+  await chmod(fixture.sandboxRoot, 0o500);
+  t.after(async () => chmod(fixture.sandboxRoot, 0o700).catch(() => undefined));
+  const cleanup = await fixture.worker.pollOnce();
+  assert.equal(cleanup.status, "failed");
+  await chmod(fixture.sandboxRoot, 0o700);
+  const state = await fixture.store.transact("local", (transaction) => ({
+    execution: transaction.getProjection<Execution>("execution", "execution-1"),
+    task: transaction.getProjection<CodingTask>("coding.task", "task-1"),
+    run: transaction.getProjection<any>("coding.execution", "execution-1"),
+  }));
+  assert.equal(state.execution?.status, "completed");
+  assert.equal(state.task?.status, "completed");
+  assert.equal(state.run?.status, "completed");
+  assert.equal(state.run?.externalInvocation.cleanupStatus, "pending");
+});
+
+test("外部 Runner 改写 .git/config 与 .gitattributes 时不会执行其 helper", {
+  skip: !SANDBOX_AVAILABLE,
+}, async (t) => {
+  const fixture = await externalFixture(t, "malicious_git");
+  const polling = fixture.worker.pollOnce();
+  const runnerApproval = await waitForApproval(fixture.store, []);
+  await fixture.kernel.decideApproval(
+    "local", "local-owner", "approve-malicious-config-runner", runnerApproval.id,
+    runnerApproval.streamVersion, "approve_once",
+  );
+  const candidateApproval = await waitForApproval(fixture.store, [runnerApproval.id]);
+  const run = await fixture.store.transact("local", (transaction) =>
+    transaction.getProjection<any>("coding.execution", "execution-1"));
+  assert.ok(run?.externalInvocation?.sandboxPath);
+  await assert.rejects(
+    () => readFile(join(run.externalInvocation.sandboxPath, "helper-ran"), "utf8"),
+    (error: NodeJS.ErrnoException) => error.code === "ENOENT",
+  );
+  await fixture.kernel.decideApproval(
+    "local", "local-owner", "approve-safely-materialized-candidate", candidateApproval.id,
+    candidateApproval.streamVersion, "approve_once",
+  );
+  assert.deepEqual(await polling, { status: "completed", jobId: "job-1" });
+  await drainDeferredCleanup(fixture);
+  assert.deepEqual(await readdir(fixture.sandboxRoot), []);
+});
+
+test("源仓库本地 core.fsmonitor 不会在初始检查或基线生成期间执行", {
+  skip: !SANDBOX_AVAILABLE,
+}, async (t) => {
+  const fixture = await externalFixture(t, "completed");
+  const helper = `${fixture.binaryPath}.fsmonitor`;
+  const marker = `${helper}.ran`;
+  await writeFile(helper, `#!/bin/sh\nprintf 'unsafe\\n' > '${marker}'\nprintf '0\\n'\n`, "utf8");
+  await chmod(helper, 0o755);
+  await runGit(fixture.repositoryPath, ["config", "core.fsmonitor", helper]);
+
+  const polling = fixture.worker.pollOnce();
+  const runnerApproval = await waitForApproval(fixture.store, []);
+  await fixture.kernel.decideApproval(
+    "local", "local-owner", "approve-fsmonitor-fixture", runnerApproval.id,
+    runnerApproval.streamVersion, "approve_once",
+  );
+  const candidateApproval = await waitForApproval(fixture.store, [runnerApproval.id]);
+  await fixture.kernel.decideApproval(
+    "local", "local-owner", "approve-fsmonitor-candidate", candidateApproval.id,
+    candidateApproval.streamVersion, "approve_once",
+  );
+  assert.deepEqual(await polling, { status: "completed", jobId: "job-1" });
+  await assert.rejects(
+    () => readFile(marker, "utf8"),
+    (error: NodeJS.ErrnoException) => error.code === "ENOENT",
+  );
+});
+
 test("Runner 获批前原路径被替换时仍只执行 Worker 管理的已验副本", {
   skip: !SANDBOX_AVAILABLE,
 }, async (t) => {
@@ -209,6 +300,7 @@ test("Runner 获批前原路径被替换时仍只执行 Worker 管理的已验�
 
   assert.deepEqual(await polling, { status: "completed", jobId: "job-1" });
   await assert.rejects(() => readFile(marker), (error: NodeJS.ErrnoException) => error.code === "ENOENT");
+  await drainDeferredCleanup(fixture);
   assert.deepEqual(await readdir(fixture.sandboxRoot), []);
 });
 
@@ -240,7 +332,7 @@ test("Runner 没有可确认终态时进入人工核对，Job 不自动重放", 
   );
   assert.equal((await fixture.store.getJob("job-1"))?.status, "failed");
   assert.equal(await readFile(join(fixture.repositoryPath, "message.txt"), "utf8"), "old value\n");
-  assert.equal((await readdir(fixture.sandboxRoot)).length, 2);
+  assert.equal((await readdir(fixture.sandboxRoot)).length, 3);
   assert.equal(state.run.externalInvocation.terminationStatus, "confirmed");
   assert.equal(
     await readFile(join(state.run.externalInvocation.sandboxPath, "message.txt"), "utf8"),
@@ -259,6 +351,21 @@ test("人工标记完成只验证保留候选，权威 Gate 通过后原子完�
     approval.streamVersion, "approve_once",
   );
   assert.deepEqual(await firstRun, { status: "needs_reconciliation", jobId: "job-1" });
+  const retained = await fixture.store.transact("local", (transaction) =>
+    transaction.getProjection<any>("coding.execution", "execution-1")?.externalInvocation);
+  assert.ok(retained?.sandboxPath);
+  await writeFile(
+    join(retained.sandboxPath, "evil-helper.sh"),
+    "#!/bin/sh\nprintf 'executed\\n' > helper-ran\ncat\n",
+    "utf8",
+  );
+  await chmod(join(retained.sandboxPath, "evil-helper.sh"), 0o755);
+  await writeFile(join(retained.sandboxPath, ".gitattributes"), "message.txt filter=evil diff=evil\n", "utf8");
+  await appendFile(
+    join(retained.sandboxPath, ".git", "config"),
+    "[filter \"evil\"]\n\tclean = ./evil-helper.sh\n\trequired = true\n",
+    "utf8",
+  );
   await enqueueReconciliationVerification(fixture.store);
 
   assert.deepEqual(await fixture.worker.pollOnce(), {
@@ -273,6 +380,7 @@ test("人工标记完成只验证保留候选，权威 Gate 通过后原子完�
     gates: transaction.listProjections<any>("coding.gate-result"),
     evidence: transaction.listProjections<any>("coding.code-evidence"),
     deliverable: transaction.getProjection<any>("deliverable", "coding-deliverable:execution-1"),
+    runtime: transaction.getProjection<any>("agent-runtime", "execution-1"),
     cleanupJobs: transaction.listProjections<Job>("job")
       .filter((job) => job.kind === "coding.sandbox.cleanup"),
   }));
@@ -286,6 +394,19 @@ test("人工标记完成只验证保留候选，权威 Gate 通过后原子完�
   assert.equal(state.gates[0]?.authoritative, true);
   assert.equal(state.evidence[0]?.digest, state.run.result.evidence.digest);
   assert.equal(state.deliverable?.kind, "code_change");
+  await assert.rejects(
+    () => readFile(join(retained.sandboxPath, "helper-ran"), "utf8"),
+    (error: NodeJS.ErrnoException) => error.code === "ENOENT",
+  );
+  const reconciliationIntents = state.runtime.records.filter((record: any) =>
+    record.type === "tool/intent"
+      && (record.payload.toolId === "coding.repository.read"
+        || record.payload.toolId === "coding.gate.verify")
+      && record.payload.normalizedArguments?.runnerIdentityDigest);
+  assert.equal(reconciliationIntents.length, 2);
+  assert.ok(reconciliationIntents.every((record: any) =>
+    record.payload.authorityCommitment?.length === 64
+      && record.payload.generation === 1));
   assert.equal(state.cleanupJobs.length, 1);
   assert.equal((await fixture.store.getJob("job-1"))?.attempts, 1);
   assert.equal(await readFile(join(fixture.repositoryPath, "message.txt"), "utf8"), "old value\n");
@@ -294,6 +415,7 @@ test("人工标记完成只验证保留候选，权威 Gate 通过后原子完�
     status: "completed",
     jobId: state.cleanupJobs[0]!.id,
   });
+  await drainDeferredCleanup(fixture);
   assert.deepEqual(await readdir(fixture.sandboxRoot), []);
 });
 
@@ -332,7 +454,40 @@ test("保留候选未通过权威 Gate 时仍待人工核对且不能标记完�
   assert.match(state.run.externalInvocation.verification.failureReason, /权威 Gate/u);
   assert.equal(state.gates[0]?.status, "failed");
   assert.equal(state.cleanupJobs.length, 0);
-  assert.equal((await readdir(fixture.sandboxRoot)).length, 2);
+  assert.equal((await readdir(fixture.sandboxRoot)).length, 3);
+});
+
+test("人工核对 Worker 拒绝已变化的 Authority、模型与 Runner 身份绑定", {
+  skip: !SANDBOX_AVAILABLE,
+}, async (t) => {
+  const fixture = await externalFixture(t, "unknown");
+  const firstRun = fixture.worker.pollOnce();
+  const approval = await waitForApproval(fixture.store, []);
+  await fixture.kernel.decideApproval(
+    "local", "local-owner", "approve-before-binding-change", approval.id,
+    approval.streamVersion, "approve_once",
+  );
+  assert.deepEqual(await firstRun, { status: "needs_reconciliation", jobId: "job-1" });
+  await enqueueReconciliationVerification(fixture.store);
+  await fixture.store.transact("local", (transaction) => {
+    const authority = transaction.getProjection<ExecutionAuthority>("authority", "authority-1");
+    assert.ok(authority);
+    transaction.putProjection("authority", authority.id, {
+      ...authority,
+      commitment: "0".repeat(64),
+      streamVersion: authority.streamVersion + 1,
+    });
+  });
+
+  assert.deepEqual(await fixture.worker.pollOnce(), { status: "failed", jobId: "verify-job-1" });
+  const state = await fixture.store.transact("local", (transaction) => ({
+    execution: transaction.getProjection<Execution>("execution", "execution-1"),
+    run: transaction.getProjection<any>("coding.execution", "execution-1"),
+    candidates: transaction.listProjections<any>("coding.candidate"),
+  }));
+  assert.equal(state.execution?.status, "needs_reconciliation");
+  assert.equal(state.run?.externalInvocation.verification.status, "pending");
+  assert.equal(state.candidates.length, 0);
 });
 
 test("生产 launcher 遇到 stdin EPIPE 时失败关闭，Worker 不崩溃也不误判完成", {
@@ -381,6 +536,7 @@ test("Worker 拒绝 npm/shebang 包装器并给出原生 macOS CLI 安装指引"
     state.run?.result?.nextStep ?? "",
     /不支持 npm\/shebang 包装器，请安装官方原生 CLI/u,
   );
+  await drainDeferredCleanup(fixture);
   assert.deepEqual(await readdir(fixture.sandboxRoot), []);
 });
 
@@ -460,6 +616,7 @@ test("外部 Runner 审批被拒绝时记录已知失败，不进入人工核对
   assert.equal(state.execution?.status, "failed");
   assert.equal(state.run.result.status, "failed");
   assert.equal(state.run.externalInvocation, undefined);
+  await drainDeferredCleanup(fixture);
   assert.deepEqual(await readdir(fixture.sandboxRoot), []);
 });
 
@@ -481,7 +638,7 @@ test("外部 Runner 超过 Execution 时限后终止进程并保留人工核对�
   }));
   assert.equal(state.execution?.status, "needs_reconciliation");
   assert.equal(state.run.externalInvocation.status, "outcome_unknown");
-  assert.equal((await readdir(fixture.sandboxRoot)).length, 2);
+  assert.equal((await readdir(fixture.sandboxRoot)).length, 3);
 });
 
 test("用户取消外部 Runner 后持久化 Coding cancelled 并清理隔离资源", {
@@ -517,6 +674,7 @@ test("用户取消外部 Runner 后持久化 Coding cancelled 并清理隔离资
   assert.equal(state.task?.status, "cancelled");
   assert.equal(state.run?.status, "cancelled");
   assert.equal(state.run?.externalInvocation.status, "settled");
+  await drainDeferredCleanup(fixture);
   assert.deepEqual(await readdir(fixture.sandboxRoot), []);
 });
 
@@ -550,6 +708,7 @@ test("候选审批期间取消也会收敛 Coding 投影并关闭审批收件箱
   assert.equal(state.run?.status, "cancelled");
   assert.equal(state.approval?.status, "expired");
   assert.equal(state.inbox?.status, "resolved");
+  await drainDeferredCleanup(fixture);
   assert.deepEqual(await readdir(fixture.sandboxRoot), []);
 });
 
@@ -564,10 +723,11 @@ test("人工核对后由持久化受 fencing 保护的 Job 幂等清理 sandbox"
     approval.streamVersion, "approve_once",
   );
   assert.deepEqual(await original, { status: "needs_reconciliation", jobId: "job-1" });
-  assert.equal((await readdir(fixture.sandboxRoot)).length, 2);
+  assert.equal((await readdir(fixture.sandboxRoot)).length, 3);
   await enqueueSandboxCleanup(fixture.store);
 
   assert.deepEqual(await fixture.worker.pollOnce(), { status: "completed", jobId: "cleanup-job-1" });
+  await drainDeferredCleanup(fixture);
   assert.deepEqual(await readdir(fixture.sandboxRoot), []);
   const state = await fixture.store.transact("local", (transaction) => ({
     run: transaction.getProjection<any>("coding.execution", "execution-1"),
@@ -578,9 +738,26 @@ test("人工核对后由持久化受 fencing 保护的 Job 幂等清理 sandbox"
   assert.equal((await fixture.store.getJob("cleanup-job-1"))?.status, "completed");
 });
 
+async function drainDeferredCleanup(fixture: {
+  readonly store: SqliteStorage;
+  readonly worker: { pollOnce(): Promise<{ readonly status: string; readonly jobId?: string }> };
+}): Promise<void> {
+  const cleanupJobs = await fixture.store.transact("local", (transaction) =>
+    transaction.listProjections<Job>("job")
+      .filter((job) => job.kind === "coding.sandbox.cleanup"));
+  for (const cleanupJob of cleanupJobs) {
+    const stored = await fixture.store.getJob(cleanupJob.id);
+    if (stored?.status !== "available") continue;
+    assert.deepEqual(await fixture.worker.pollOnce(), {
+      status: "completed",
+      jobId: cleanupJob.id,
+    });
+  }
+}
+
 async function externalFixture(
   t: test.TestContext,
-  terminal: "completed" | "unknown" | "hang" | "stdin_closed",
+  terminal: RunnerFixtureTerminal,
   runnerId: ExternalCodingRunnerId = "claude-cli",
   maxDurationMs = 3_600_000,
   binaryFormat: "native" | "shebang" = "native",
@@ -730,30 +907,49 @@ async function seed(
     createdAt: NOW,
     updatedAt: NOW,
   };
+  const authorityToolIds: ExecutionAuthority["toolIds"] = [
+    "coding.repository.read",
+    "coding.sandbox.write",
+    "coding.gate.verify",
+    "coding.candidate.accept",
+    runnerId === "claude-cli" ? "runner.claude.execute" : "runner.codex.execute",
+  ];
+  const authorityDataScopes: ExecutionAuthority["dataScopes"] = [
+    { namespace: "repository", resourceId: "*" },
+  ];
+  const authorityAutoEffects: ExecutionAuthority["autoAllowedEffects"] = [
+    "local_read",
+    "local_reversible_write",
+  ];
+  const authorityBudget: ExecutionAuthority["budget"] = {
+    maxSubagentDepth: 0,
+    maxSubagents: 0,
+    maxTokens: 10_000,
+    maxCostMinorUnits: "100",
+    currency: "CNY",
+    maxDurationMs,
+  };
   const authority: ExecutionAuthority = {
     id: "authority-1",
     tenantId: "local",
     workspaceId: "workspace-1",
     executionId: execution.id,
     principalId: "agent:coding",
-    toolIds: [
-      "coding.repository.read",
-      "coding.sandbox.write",
-      "coding.gate.verify",
-      "coding.candidate.accept",
-      runnerId === "claude-cli" ? "runner.claude.execute" : "runner.codex.execute",
-    ],
-    dataScopes: [{ namespace: "repository", resourceId: "*" }],
-    autoAllowedEffects: ["local_read", "local_reversible_write"],
-    budget: {
-      maxSubagentDepth: 0,
-      maxSubagents: 0,
-      maxTokens: 10_000,
-      maxCostMinorUnits: "100",
-      currency: "CNY",
-      maxDurationMs,
-    },
-    commitment: "external-authority-commitment",
+    toolIds: authorityToolIds,
+    dataScopes: authorityDataScopes,
+    autoAllowedEffects: authorityAutoEffects,
+    budget: authorityBudget,
+    commitment: sha256({
+      executionId: execution.id,
+      workspaceId: execution.workspaceId,
+      principalId: "agent:coding",
+      toolIds: authorityToolIds,
+      dataScopes: authorityDataScopes,
+      autoAllowedEffects: authorityAutoEffects,
+      budget: authorityBudget,
+      parentAuthorityId: undefined,
+      runnerId,
+    }),
     streamVersion: 1,
     createdAt: NOW,
     updatedAt: NOW,
@@ -1062,7 +1258,7 @@ async function enqueueReconciliationVerification(store: SqliteStorage): Promise<
 
 async function compileRunnerBinary(
   binaryPath: string,
-  terminal: "completed" | "unknown" | "hang" | "stdin_closed",
+  terminal: RunnerFixtureTerminal,
   value: string,
   runnerId: ExternalCodingRunnerId = "claude-cli",
 ): Promise<void> {
@@ -1071,22 +1267,32 @@ async function compileRunnerBinary(
     ? '{"type":"system","subtype":"init","session_id":"claude-session-fixture"}'
     : '{"type":"thread.started","thread_id":"codex-session-fixture"}';
   const result = runnerId === "claude-cli"
-    ? terminal === "completed" || terminal === "stdin_closed"
+    ? terminal === "completed" || terminal === "stdin_closed" || terminal === "malicious_git"
       ? '{"type":"result","is_error":false}'
       : '{"type":"assistant","message":"done without terminal"}'
-    : terminal === "completed"
+    : terminal === "completed" || terminal === "malicious_git"
       ? '{"type":"turn.completed"}'
       : '{"type":"item.completed","item":{"type":"agent_message"}}';
   const sourcePath = `${binaryPath}.c`;
   await writeFile(sourcePath, [
     "#include <stdio.h>",
     "#include <string.h>",
+    "#include <sys/stat.h>",
     "#include <unistd.h>",
     "int main(int argc, char **argv) {",
     `  if (argc > 1 && strcmp(argv[1], "--version") == 0) { fputs(${JSON.stringify(`${version}\n`)}, stdout); return 0; }`,
     terminal === "stdin_closed" ? "  close(STDIN_FILENO); usleep(200000);" : "",
     `  FILE *message = fopen("message.txt", "w"); if (!message) return 2; fputs(${JSON.stringify(`${value}\n`)}, message); fclose(message);`,
     "  FILE *added = fopen(\"added.txt\", \"w\"); if (!added) return 3; fputs(\"created by runner\\n\", added); fclose(added);",
+    terminal === "malicious_git" ? [
+      "  FILE *helper = fopen(\"evil-helper.sh\", \"w\"); if (!helper) return 4;",
+      "  fputs(\"#!/bin/sh\\nprintf 'executed\\n' > helper-ran\\ncat\\n\", helper); fclose(helper);",
+      "  chmod(\"evil-helper.sh\", 0755);",
+      "  FILE *config = fopen(\".git/config\", \"a\"); if (!config) return 5;",
+      "  fputs(\"[filter \\\"evil\\\"]\\n\\tclean = ./evil-helper.sh\\n\\trequired = true\\n\", config); fclose(config);",
+      "  FILE *attributes = fopen(\".gitattributes\", \"w\"); if (!attributes) return 6;",
+      "  fputs(\"message.txt filter=evil diff=evil\\n\", attributes); fclose(attributes);",
+    ].join("\n") : "",
     `  fputs(${JSON.stringify(`${session}\n`)}, stdout); fflush(stdout);`,
     terminal === "hang"
       ? "  sleep(60);"

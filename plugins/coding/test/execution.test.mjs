@@ -163,6 +163,21 @@ test("Gate、Evidence 和 Sandbox 缺失时失败关闭", async (t) => {
   });
 });
 
+test("Gate 的租约中断不会被降格为普通检查失败", async () => {
+  const runner = fakeRunner([[{ type: "candidate", candidate: candidate(1) }]]);
+  const interrupted = new Error("lease lost");
+  interrupted.name = "AbortError";
+  await assert.rejects(
+    new CodingExecutionEngine({ runners: [runner] }).execute({
+      task: task(),
+      controlPlane: controlPlane(),
+      gateVerifier: { async verify() { throw interrupted; } },
+    }),
+    (error) => error === interrupted,
+  );
+  assert.equal(runner.state.resumes, 0);
+});
+
 test("等待审批的持久结果可在恢复后完成，且不会重新执行 Runner", async () => {
   const runner = fakeRunner([[{ type: "candidate", candidate: {
     ...candidate(1),

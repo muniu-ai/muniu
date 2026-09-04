@@ -201,6 +201,7 @@ export class CodingExecutionEngine {
         explicitlySelected: runner.external,
       });
     } catch (error) {
+      if (isExecutionInterruption(error)) throw error;
       return outcome(
         input,
         runnerId,
@@ -230,6 +231,7 @@ export class CodingExecutionEngine {
           }
         }
       } catch (error) {
+        if (isExecutionInterruption(error)) throw error;
         return outcome(input, runnerId, limits, candidates, gates, "needs_reconciliation", undefined,
           `Runner 事件流中断：${safeMessage(error)}`);
       }
@@ -323,6 +325,7 @@ export class CodingExecutionEngine {
           explicitlySelected: runner.external,
         });
       } catch (error) {
+        if (isExecutionInterruption(error)) throw error;
         const known = error instanceof RunnerKnownFailureError;
         return outcome(input, runnerId, limits, candidates, gates,
           known ? "failed" : "needs_reconciliation", undefined,
@@ -341,6 +344,7 @@ async function verifyFailClosed(
   try {
     report = await verifier.verify(candidate, controlPlane);
   } catch (error) {
+    if (isExecutionInterruption(error)) throw error;
     return immutable({
       candidateId: candidate.id,
       status: "failed",
@@ -396,6 +400,10 @@ async function verifyFailClosed(
     evidenceDigest: report.evidenceDigest,
     checks: [...report.checks],
   });
+}
+
+function isExecutionInterruption(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
 }
 
 function sandboxFailure(candidate: Candidate, expectedDigest: string): GateResult {
