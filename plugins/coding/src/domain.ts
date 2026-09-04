@@ -136,6 +136,47 @@ export interface CodeEvidence {
   readonly digest: string;
 }
 
+export interface RepositoryAggregate {
+  readonly repository: Repository;
+  readonly streamVersion: number;
+}
+
+export interface ServiceAggregate {
+  readonly service: Service;
+  readonly streamVersion: number;
+}
+
+export interface CodingTaskAggregate {
+  readonly task: CodingTask;
+  readonly specs: readonly Spec[];
+  readonly candidates: readonly Candidate[];
+  readonly gateResults: readonly GateResult[];
+  readonly codeEvidence: readonly CodeEvidence[];
+  readonly streamVersion: number;
+}
+
+export function createRepository(input: Repository): Repository {
+  requireText(input.id, "仓库 ID");
+  requireText(input.workspaceId, "工作区 ID");
+  requireText(input.name, "仓库名称");
+  if (!input.rootRealPath.startsWith("/") || input.rootRealPath.includes("\0")) {
+    throw new Error("仓库根目录必须是已经解析的绝对路径");
+  }
+  if (input.vcs !== "git") throw new Error("Coding 0.2 仅支持 Git 仓库");
+  return immutable({ ...input });
+}
+
+export function createService(input: Service): Service {
+  requireText(input.id, "服务 ID");
+  requireText(input.repositoryId, "仓库 ID");
+  requireText(input.name, "服务名称");
+  if (input.paths.length === 0) throw new Error("服务必须包含至少一个仓库相对路径");
+  const paths = [...input.paths];
+  for (const path of paths) assertRepositoryRelativePath(path);
+  if (new Set(paths).size !== paths.length) throw new Error("服务不能包含重复路径");
+  return immutable({ ...input, paths });
+}
+
 export interface CreateSpecInput {
   readonly id: string;
   readonly taskId: string;
@@ -171,6 +212,14 @@ export function reviseSpec(
   input: Pick<CreateSpecInput, "id" | "body" | "createdAt"> &
     Partial<Pick<CreateSpecInput, "title" | "acceptanceCriteria">>,
 ): Spec {
+  requireText(input.id, "Spec ID");
+  requireText(input.body, "Spec 内容");
+  if (input.title !== undefined) requireText(input.title, "Spec 标题");
+  if (input.acceptanceCriteria !== undefined
+    && (input.acceptanceCriteria.length === 0
+      || input.acceptanceCriteria.some((item) => !item.trim()))) {
+    throw new Error("Spec 必须包含可检查的验收条件");
+  }
   if (input.id === previous.id) throw new Error("Spec 修订必须使用新的 ID");
   return immutable({
     id: input.id,
@@ -264,6 +313,7 @@ export function advanceCodingTask(
   return immutable({
     ...task,
     stage: nextStage,
+    status: nextStage === "learn" ? "completed" : task.status,
     streamVersion: task.streamVersion + 1,
     updatedAt,
   });
@@ -274,6 +324,11 @@ export function createCandidate(
   runnerId: string,
   input: Omit<Candidate, "taskId" | "runnerId">,
 ): Candidate {
+  requireText(input.id, "候选 ID");
+  requireText(taskId, "任务 ID");
+  requireText(runnerId, "Runner ID");
+  requireText(input.baseRevision, "基础版本");
+  requireText(input.summary, "候选摘要");
   assertSha256(input.diffDigest, "候选 Diff");
   if (!Number.isSafeInteger(input.sequence) || input.sequence < 1) throw new Error("候选序号无效");
   return immutable({
@@ -284,7 +339,34 @@ export function createCandidate(
   });
 }
 
+export function createGateResult(input: GateResult): GateResult {
+  requireText(input.candidateId, "候选 ID");
+  if (input.checks.length === 0) throw new Error("Gate 必须包含至少一项检查");
+  const checkIds = new Set<string>();
+  for (const check of input.checks) {
+    requireText(check.id, "Gate 检查 ID");
+    requireText(check.summary, "Gate 检查摘要");
+    if (checkIds.has(check.id)) throw new Error(`Gate 包含重复检查 ${check.id}`);
+    checkIds.add(check.id);
+  }
+  if (input.evidenceDigest !== undefined) assertSha256(input.evidenceDigest, "Gate Evidence");
+  if (input.status === "passed") {
+    if (!input.authoritative || !input.evidenceDigest) {
+      throw new Error("Gate 通过必须包含权威证据");
+    }
+    if (input.checks.some((check) => check.status !== "passed")) {
+      throw new Error("Gate 检查未全部通过时不能标记为通过");
+    }
+  } else if (input.checks.every((check) => check.status === "passed") && !input.reason?.trim()) {
+    throw new Error("Gate 标记为失败时必须包含失败检查或原因");
+  }
+  return immutable({ ...input, checks: input.checks.map((check) => ({ ...check })) });
+}
+
 export function createCodeEvidence(input: Omit<CodeEvidence, "digest">): CodeEvidence {
+  requireText(input.taskId, "任务 ID");
+  requireText(input.candidateId, "候选 ID");
+  requireText(input.runnerId, "Runner ID");
   for (const [label, value] of [
     ["Spec", input.specDigest],
     ["Governance", input.governanceDigest],
