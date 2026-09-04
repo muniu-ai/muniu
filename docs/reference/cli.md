@@ -34,7 +34,9 @@
   mn code runners --workspace <工作区 ID>
   mn code runner inspect claude-cli --workspace <工作区 ID> --path /绝对路径/claude
   mn code runner confirm claude-cli --workspace <工作区 ID> --path /绝对路径/claude --binary-version <人工核实版本> --sha256 <摘要> --version <配置版本>
-  mn ask <任务> --workspace <工作区 ID> --thread <会话 ID> --runner claude-cli
+  mn ask <问题> --workspace <工作区 ID>
+  mn ask <问题> --workspace <工作区 ID> --opportunity <机会标题关键词>
+  mn ask <Coding 任务> --workspace <工作区 ID> --thread <会话 ID> --runner claude-cli
   mn code reconcile <执行 ID> terminate
 ```
 
@@ -56,15 +58,19 @@ mn setup \
 
 ```bash
 mn ask "整理证据缺口并给出下一步" \
+  --workspace WORKSPACE_ID
+
+mn ask "生成非诱导访谈问题" \
   --workspace WORKSPACE_ID \
-  --thread THREAD_ID \
-  --version STREAM_VERSION
+  --opportunity "设计师增长"
 
 mn inbox --workspace WORKSPACE_ID
 mn resume EXECUTION_ID --version STREAM_VERSION
 ```
 
-`ask` 提交新 turn，`resume` 只恢复 `paused` 或 `interrupted` 的执行。审批与 `needs_reconciliation` 应在收件箱中明确处理，不能用 `resume` 绕过。
+`ask` 会优先选择带机会或 Coding 任务资源引用的最近会话，并自动使用当前 stream version。`--opportunity` 按机会标题匹配 OPC 会话；如果匹配不唯一，CLI 只显示业务标题并要求缩小范围。专业用法仍可以用 `--thread` 和 `--version` 显式指定。
+
+`resume` 只恢复 `paused` 或 `interrupted` 的执行。审批与 `needs_reconciliation` 应在收件箱中明确处理，不能用 `resume` 绕过。
 
 Coding 会话默认使用 `builtin`。只有显式传入 `--runner claude-cli` 或 `--runner codex-cli` 时，Host 才会选择外部 Runner；其他插件的会话拒绝该参数。
 

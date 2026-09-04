@@ -2,6 +2,7 @@
 
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { createAgentOsHost } from "../../host/dist/index.js";
+import { KernelProjectionRuntimeStore } from "../../../packages/agent-runtime/dist/index.js";
 import { InMemoryKernelStore } from "../../../packages/kernel/dist/index.js";
 import { InMemoryKeyProvider } from "../../../packages/storage/dist/index.js";
 
@@ -48,11 +49,18 @@ const host = await createAgentOsHost({
 });
 
 if (mode !== "onboarding") await seedWorkspace(mode);
+const simulatedExecutions = new Set();
+const agentSimulation = mode === "opc"
+  ? setInterval(() => void simulateOpcAgent(), 50)
+  : undefined;
 await host.listen({ port });
 process.stdout.write("READY\n");
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
-  process.on(signal, () => { void host.close().finally(() => process.exit(0)); });
+  process.on(signal, () => {
+    if (agentSimulation) clearInterval(agentSimulation);
+    void host.close().finally(() => process.exit(0));
+  });
 }
 
 async function seedWorkspace(seedMode) {
@@ -63,6 +71,14 @@ async function seedWorkspace(seedMode) {
       ? ["runner-codex-cli", "coding", "opc"]
       : ["opc", "coding"],
   }, "seed-workspace");
+  const pendingModel = await mutate("/v2/model-connections", {
+    presetId: "deepseek",
+    apiKey: "fixture-key",
+    displayName: "DeepSeek",
+  }, "seed-model");
+  await mutate(`/v2/model-connections/${pendingModel.id}/probe`, {
+    expectedStreamVersion: pendingModel.streamVersion,
+  }, "seed-model-probe");
   const opportunity = await mutate("/v2/plugins/opc/opportunities", {
     workspaceId: workspace.id,
     expectedStreamVersion: 0,
@@ -99,6 +115,71 @@ async function seedWorkspace(seedMode) {
     }, "seed-view", "PATCH");
   }
 
+}
+
+async function simulateOpcAgent() {
+  const queued = await store.transact("local", (transaction) =>
+    transaction.listProjections("execution").filter((execution) =>
+      execution.pluginId === "opc"
+      && execution.status === "queued"
+      && !simulatedExecutions.has(execution.id)));
+  for (const execution of queued) {
+    simulatedExecutions.add(execution.id);
+    try {
+      const running = await host.kernel.commandExecution(
+        "local",
+        "worker:desktop-fixture",
+        `fixture-start:${execution.id}`,
+        execution.id,
+        execution.streamVersion,
+        "start",
+      );
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const runtime = new KernelProjectionRuntimeStore({
+        tenantId: "local",
+        store,
+        now,
+        id: (sequence) => `fixture-runtime-${execution.id}-${sequence}`,
+      });
+      await runtime.append({
+        executionId: execution.id,
+        type: "session/entry",
+        payload: {
+          role: "assistant",
+          content: "已按当前机会整理三个验证问题：问题是否高频发生、现有替代方案是否失效、客户是否愿意承诺下一步。",
+          turn: 1,
+          modelVisible: true,
+        },
+      });
+      await host.kernel.commandExecution(
+        "local",
+        "worker:desktop-fixture",
+        `fixture-complete:${execution.id}`,
+        execution.id,
+        running.streamVersion,
+        "complete",
+      );
+      await store.transact("local", (transaction) => {
+        transaction.appendEvent({
+          tenantId: "local",
+          aggregateType: "fixture.agent-result",
+          aggregateId: execution.id,
+          expectedStreamVersion: 0,
+          type: "fixture.agent_result_ready",
+          actorId: "worker:desktop-fixture",
+          executionId: execution.id,
+          generation: execution.generation,
+          correlationId: `fixture-result:${execution.id}`,
+          publicPayload: {
+            workspaceId: execution.workspaceId,
+            threadId: execution.threadId,
+          },
+        });
+      });
+    } catch (error) {
+      process.stderr.write(`OPC Agent fixture 执行失败：${error instanceof Error ? error.message : String(error)}\n`);
+    }
+  }
 }
 
 async function seedFailure(workspaceId) {
@@ -178,6 +259,13 @@ async function seedReconciliation(workspaceId) {
         sandboxPath: "/private/var/tmp/muniu/candidate-fixture/repository",
         runnerArtifactPath: "/private/var/tmp/muniu/runner-fixture/runner",
         status: "outcome_unknown",
+        supervision: {
+          protocol: "mn-runner-supervisor-v1",
+          statePath: "/private/var/tmp/muniu/runner-fixture/state.json",
+          tokenDigest: digest("fixture-supervision-token"),
+        },
+        terminationStatus: "confirmed",
+        terminatedAt: now(),
         startedAt: now(),
         updatedAt: now(),
       },
@@ -234,7 +322,6 @@ async function seedApproval(workspaceId) {
     subject: "公开资料研究",
     pluginId: "opc",
   });
-  const commitment = digest({ workspaceId, tools: ["opc.public-web.read"] });
   const execution = await host.kernel.createExecution("local", "local-owner", "seed-execution", {
     workspaceId,
     threadId: thread.id,
@@ -256,9 +343,11 @@ async function seedApproval(workspaceId) {
         currency: "CNY",
         maxDurationMs: 3_600_000,
       },
-      commitment,
     },
   });
+  const authority = await store.transact("local", (transaction) =>
+    transaction.getProjection("authority", execution.authorityId));
+  if (!authority) throw new Error("审批 fixture 缺少执行权限");
   await host.kernel.requestToolApproval("local", "agent:opc", "seed-approval", {
     id: "fixture-tool-call",
     executionId: execution.id,
@@ -271,7 +360,7 @@ async function seedApproval(workspaceId) {
     argumentsDigest: digest({ url: "https://example.com/case" }),
     resourceRefs: [{ namespace: "web", resourceId: "https://example.com/case" }],
     resourcesDigest: digest(["https://example.com/case"]),
-    authorityCommitment: commitment,
+    authorityCommitment: authority.commitment,
     expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
   });
 }

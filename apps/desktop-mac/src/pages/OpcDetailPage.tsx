@@ -13,6 +13,7 @@ import {
   Target,
 } from "lucide-react";
 import { AgentOsApiError, type AgentOsClient } from "../api";
+import { OpcAgentPanel } from "../components/OpcAgentPanel";
 import { Loading } from "../components/Status";
 import type {
   AssetSummary,
@@ -198,6 +199,8 @@ export function OpcDetailPage({ api, workspaceId, opportunityId, viewMode, onBac
       {error && <InlineError title={error.title} message={error.message} onDismiss={() => setError(undefined)} />}
     </div>}
 
+    <OpcAgentPanel api={api} workspaceId={workspaceId} opportunityId={opportunity.id} />
+
     <NextTask
       opportunity={opportunity}
       pendingCommitment={pendingCommitment}
@@ -208,6 +211,7 @@ export function OpcDetailPage({ api, workspaceId, opportunityId, viewMode, onBac
       uploadAsset={uploadAsset}
       onExport={exportDeliverables}
     />
+    <OpportunityLifecycle opportunity={opportunity} busy={busy} runCommand={runCommand} />
 
     <section className="opc-record-grid" aria-label="机会事实记录">
       <article className="opc-record-card">
@@ -221,6 +225,10 @@ export function OpcDetailPage({ api, workspaceId, opportunityId, viewMode, onBac
       <article className="opc-record-card">
         <header><SearchCheck size={17} /><div><strong>证据与反证</strong><small>{opportunity.signals.length} 条市场信号</small></div></header>
         <EvidenceRows opportunity={opportunity} />
+      </article>
+      <article className="opc-record-card">
+        <header><ClipboardCheck size={17} /><div><strong>非诱导访谈提纲</strong><small>围绕既往行为与真实成本</small></div></header>
+        <InterviewGuide deliverables={deliverables} />
       </article>
       <article className="opc-record-card">
         <header><FileText size={17} /><div><strong>访谈原文</strong><small>{opportunity.interviews.length} 份记录</small></div></header>
@@ -273,7 +281,43 @@ function NextTask({ opportunity, pendingCommitment, confirmedCommitment, deliver
     icon={<Download size={19} />} title="导出机会成果" detail="导出当前档案、访谈包、证据账本、反证、收费方案和决策记录。"
     button={`导出 ${deliverableCount} 项成果`} busy={busy} onClick={onExport}
   />;
+  if (opportunity.state === "paused") return <SimpleTask
+    icon={<Target size={19} />} title="恢复机会" detail={opportunity.pauseReason ? `暂停原因：${opportunity.pauseReason}` : "恢复后回到暂停前的阶段。"}
+    button="恢复机会" busy={busy} onClick={() => runCommand("resume", {}, "机会已恢复")}
+  />;
+  if (opportunity.state === "abandoned") return <section className="opc-next-task"><TaskHeading icon={<ClipboardCheck size={19} />} title="机会已放弃" detail={opportunity.abandonmentReason ?? "当前证据已保留，后续可创建新机会。"} /></section>;
   return <section className="opc-next-task"><TaskHeading icon={<ClipboardCheck size={19} />} title={stateLabels[opportunity.state]} detail="当前机会没有待执行的阶段操作。" /></section>;
+}
+
+function OpportunityLifecycle({ opportunity, busy, runCommand }: {
+  readonly opportunity: OpportunityDetail;
+  readonly busy: boolean;
+  readonly runCommand: RunCommand;
+}) {
+  const [reason, setReason] = useState("");
+  const [abandonConfirmed, setAbandonConfirmed] = useState(false);
+  if (opportunity.state === "decided" || opportunity.state === "abandoned") return null;
+  const canPause = opportunity.state !== "paused";
+
+  async function apply(command: "pause" | "abandon", successMessage: string) {
+    const saved = await runCommand(command, { reason: reason.trim() }, successMessage);
+    if (saved) {
+      setReason("");
+      setAbandonConfirmed(false);
+    }
+  }
+
+  return <details className="opc-lifecycle">
+    <summary>管理机会</summary>
+    <div>
+      <Field label="管理原因" value={reason} onChange={setReason} placeholder="记录暂停或放弃的原因" multiline rows={2} />
+      <footer>
+        {canPause && <button type="button" className="secondary-button" disabled={busy || !reason.trim()} onClick={() => void apply("pause", "机会已暂停")}>暂停机会</button>}
+        <label className="check-row"><input type="checkbox" checked={abandonConfirmed} onChange={(event) => setAbandonConfirmed(event.target.checked)} /><span><strong>确认放弃当前机会</strong><small>已有证据将保留，机会不能恢复</small></span></label>
+        <button type="button" className="danger-button" disabled={busy || !reason.trim() || !abandonConfirmed} onClick={() => void apply("abandon", "机会已放弃")}>放弃机会</button>
+      </footer>
+    </div>
+  </details>;
 }
 
 function FrameTask({ opportunity, busy, runCommand }: { readonly opportunity: OpportunityDetail; readonly busy: boolean; readonly runCommand: RunCommand }) {
@@ -597,6 +641,13 @@ function EvidenceRows({ opportunity }: { readonly opportunity: OpportunityDetail
     <strong>{signal.relationship === "support" ? "支持" : signal.relationship === "oppose" ? "反证" : "中立"}</strong>
     <small>{sourceLabel(signal.sourceKind)} · {formatDate(signal.observedAt)}</small><p>{signal.summary}</p>
   </div>)}</div>;
+}
+
+function InterviewGuide({ deliverables }: { readonly deliverables: readonly OpcDeliverablePreview[] }) {
+  const content = deliverables.find((item) => item.kind === "interview_pack")?.content.guide;
+  const guide = Array.isArray(content) ? content.filter((item): item is string => typeof item === "string") : [];
+  if (guide.length === 0) return <p className="opc-record-empty">提纲正在随机会档案更新</p>;
+  return <ol className="opc-interview-guide">{guide.map((question) => <li key={question}>{question}</li>)}</ol>;
 }
 
 function sourceLabel(source: string) {

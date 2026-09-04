@@ -1,5 +1,7 @@
 import type {
   AgentCatalog,
+  AgentExecutionSummary,
+  AgentThreadSummary,
   ActivitySummary,
   ApiFailure,
   AssetSummary,
@@ -17,6 +19,7 @@ import type {
   OpportunitySummary,
   PluginHealth,
   ProductPluginId,
+  ThreadTurnsView,
   ViewMode,
   WorkspaceMemberSummary,
   WorkspaceSummary,
@@ -107,6 +110,87 @@ export class AgentOsClient {
     return this.request<AgentCatalog>(
       `/v2/workspaces/${encodeURIComponent(workspaceId)}/agent-catalog`,
     );
+  }
+
+  threads(workspaceId: string) {
+    return this.request<readonly AgentThreadSummary[]>(
+      `/v2/workspaces/${encodeURIComponent(workspaceId)}/threads`,
+    );
+  }
+
+  threadTurns(workspaceId: string, threadId: string) {
+    return this.request<ThreadTurnsView>(
+      `/v2/workspaces/${encodeURIComponent(workspaceId)}/threads/${encodeURIComponent(threadId)}/turns`,
+    );
+  }
+
+  submitTurn(
+    workspaceId: string,
+    thread: Pick<AgentThreadSummary, "id" | "streamVersion">,
+    message: string,
+  ) {
+    return this.request<AgentExecutionSummary>(
+      `/v2/workspaces/${encodeURIComponent(workspaceId)}/threads/${encodeURIComponent(thread.id)}/turns`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          expectedStreamVersion: thread.streamVersion,
+          message,
+        }),
+      },
+    );
+  }
+
+  watchWorkspaceEvents(workspaceId: string, onChange: () => void): () => void {
+    const storageKey = `muniu:v2:event-cursor:${workspaceId}`;
+    let cursor = storedEventCursor(storageKey);
+    let source: EventSource | undefined;
+    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+    let stopped = false;
+    let consecutiveFailures = 0;
+
+    const connect = () => {
+      if (stopped) return;
+      const eventUrl = new URL(
+        `/v2/workspaces/${encodeURIComponent(workspaceId)}/events`,
+        this.baseUrl,
+      );
+      eventUrl.searchParams.set("after", String(cursor));
+      source = new EventSource(eventUrl);
+      source.addEventListener("open", () => { consecutiveFailures = 0; });
+      source.addEventListener("kernel", (event) => {
+        cursor = Math.max(cursor, reportedEventPosition(event) ?? cursor);
+        storeEventCursor(storageKey, cursor);
+        onChange();
+      });
+      source.addEventListener("cursor", (event) => {
+        const reported = reportedEventPosition(event);
+        if (reported === undefined) return;
+        const stateWasReset = reported < cursor;
+        cursor = reported;
+        storeEventCursor(storageKey, cursor);
+        if (stateWasReset) onChange();
+      });
+      source.addEventListener("error", () => {
+        source?.close();
+        source = undefined;
+        if (stopped) return;
+        consecutiveFailures += 1;
+        if (consecutiveFailures >= 2 && cursor > 0) {
+          cursor = 0;
+          storeEventCursor(storageKey, cursor);
+          onChange();
+        }
+        reconnectTimer = setTimeout(connect, Math.min(2_000, consecutiveFailures * 500));
+      });
+    };
+
+    connect();
+    return () => {
+      stopped = true;
+      source?.close();
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+    };
   }
 
   updateViewMode(workspace: WorkspaceSummary, viewMode: ViewMode) {
@@ -246,6 +330,24 @@ export class AgentOsClient {
       method: "POST", body: JSON.stringify({ workspaceId, expectedStreamVersion: 0, input }),
     });
   }
+}
+
+function reportedEventPosition(event: Event): number | undefined {
+  const candidate = Number((event as MessageEvent).lastEventId);
+  return Number.isSafeInteger(candidate) && candidate >= 0 ? candidate : undefined;
+}
+
+function storedEventCursor(storageKey: string): number {
+  try {
+    const candidate = Number(sessionStorage.getItem(storageKey) ?? "0");
+    return Number.isSafeInteger(candidate) && candidate >= 0 ? candidate : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function storeEventCursor(storageKey: string, cursor: number): void {
+  try { sessionStorage.setItem(storageKey, String(cursor)); } catch { return; }
 }
 
 const MEDIA_TYPES_BY_EXTENSION: Readonly<Record<string, string>> = {

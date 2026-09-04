@@ -55,7 +55,7 @@ try {
     if (url.origin !== apiUrl || ["HEAD", "OPTIONS"].includes(request.method())) return;
     let body = {};
     try { body = request.postDataJSON(); } catch { /* 请求体不是 JSON */ }
-    requests.push({ method: request.method(), path: url.pathname, body });
+    requests.push({ method: request.method(), path: url.pathname, search: url.search, body });
   });
   page.setDefaultTimeout(12_000);
   await page.goto(appUrl, { waitUntil: "domcontentloaded" });
@@ -147,6 +147,47 @@ async function verifyOpc(page, requestLog, hostUrl) {
   const summary = (await hostData(hostUrl, `/v2/plugins/opc/opportunities?workspaceId=${encodeURIComponent(workspace.id)}`))[0];
   await page.getByRole("button", { name: "查看档案" }).click();
   await expectText(page, "界定这项机会");
+  await expectText(page, "与 OPC Agent 一起推进");
+  await expectText(page, "请回忆最近一次遇到这个问题的具体经过。");
+  await page.getByLabel("给 OPC Agent 的消息").fill("请先列出当前最需验证的三个问题");
+  await page.getByRole("button", { name: "发送给 OPC Agent" }).click();
+  await expectText(page, "请先列出当前最需验证的三个问题");
+  await expectText(page, "已按当前机会整理三个验证问题");
+  const turnRequest = requestLog.find((entry) => entry.method === "POST" && entry.path.endsWith("/turns"));
+  if (!turnRequest || turnRequest.body.message !== "请先列出当前最需验证的三个问题"
+    || !Number.isInteger(turnRequest.body.expectedStreamVersion)) {
+    throw new Error(`OPC Agent 没有通过通用 turns 接口提交：${JSON.stringify(turnRequest)}`);
+  }
+  for (const hiddenField of ["threadId", "agentDefinitionId", "modelBindingId", "providerId", "modelId", "runnerId"]) {
+    if (hiddenField in turnRequest.body) throw new Error(`OPC Agent 提交不应包含 ${hiddenField}`);
+  }
+  if (!requestLog.some((entry) => entry.method === "GET" && entry.path.endsWith("/threads"))) {
+    throw new Error("OPC 档案没有按资源引用解析 Thread");
+  }
+  if (!requestLog.some((entry) => entry.method === "GET" && entry.path.endsWith("/turns"))) {
+    throw new Error("OPC 档案没有读取会话记录");
+  }
+  const initialEventStream = requestLog.find((entry) => entry.method === "GET" && entry.path.endsWith("/events"));
+  if (!initialEventStream) throw new Error("OPC 会话没有订阅工作区 SSE");
+  await page.waitForFunction(() => Object.keys(sessionStorage)
+    .filter((key) => key.startsWith("muniu:v2:event-cursor:"))
+    .some((key) => Number(sessionStorage.getItem(key)) > 0));
+
+  await page.getByRole("button", { name: "返回机会列表" }).click();
+  await page.getByRole("button", { name: "查看档案" }).click();
+  await expectText(page, "与 OPC Agent 一起推进");
+  await page.waitForTimeout(250);
+  const resumedEventStream = requestLog.find((entry) => entry.method === "GET"
+    && entry.path.endsWith("/events") && /^\?after=[1-9]\d*$/u.test(entry.search));
+  if (!resumedEventStream) throw new Error("OPC 会话重新进入时没有从已保存 SSE 游标续传");
+
+  await page.getByText("管理机会", { exact: true }).click();
+  await page.getByLabel("管理原因").fill("等待两位目标客户回复");
+  await page.getByRole("button", { name: "暂停机会" }).click();
+  await expectText(page, "暂停原因：等待两位目标客户回复");
+  await page.getByRole("button", { name: "恢复机会" }).click();
+  await expectText(page, "机会已恢复");
+
   await page.getByLabel("目标客户").fill("有 2–5 年经验的独立设计师");
   await page.getByLabel("客户问题").fill("收入依赖不稳定的转介绍");
   await page.getByLabel("可证伪假设").fill("3 位目标客户中至少 1 位愿意承诺付费试用");

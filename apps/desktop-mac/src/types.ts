@@ -1,3 +1,11 @@
+import type {
+  Execution,
+  Thread,
+  ThreadTurnSessionEntry as ContractThreadTurnEntry,
+  ThreadTurnsView as ContractThreadTurnsView,
+  ThreadTurnView as ContractThreadTurnView,
+} from "@mn/contracts";
+
 export type ViewMode = "business" | "professional";
 export type ProductPluginId = "opc" | "coding";
 
@@ -15,6 +23,13 @@ export interface WorkspaceMemberSummary {
   readonly workspaceRole: "owner" | "operator" | "reviewer" | "viewer";
   readonly streamVersion: number;
 }
+
+export type AgentThreadSummary = Thread;
+export type AgentExecutionStatus = Execution["status"];
+export type AgentExecutionSummary = Execution;
+export type ThreadTurnEntry = ContractThreadTurnEntry;
+export type ThreadTurnView = ContractThreadTurnView;
+export type ThreadTurnsView = ContractThreadTurnsView;
 
 export interface AgentCatalog {
   readonly agents: readonly AgentCatalogAgent[];
@@ -191,6 +206,9 @@ export interface OpportunityDetail {
   readonly streamVersion: number;
   readonly createdAt: string;
   readonly updatedAt: string;
+  readonly stateBeforePause?: Exclude<OpportunityState, "paused" | "abandoned">;
+  readonly pauseReason?: string;
+  readonly abandonmentReason?: string;
   readonly hypotheses: readonly OpportunityHypothesis[];
   readonly signals: readonly OpportunitySignal[];
   readonly interviews: readonly OpportunityInterview[];

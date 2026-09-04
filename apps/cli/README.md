@@ -18,6 +18,8 @@ mn backup ...
 
 `setup` 负责视图、插件、模型与工作区设置；`inbox` 汇总审批、Agent 问题、凭据失效、执行失败和人工核对。OPC 与 Coding 子命令只封装插件领域路由，不能绕过内核审批或代替人工确认。
 
+`mn ask <问题> --workspace <工作区 ID>` 会自动选择工作区最近的机会或 Coding 任务会话。有多个机会时，可用 `--opportunity <标题关键词>` 选择，无需查找 Thread ID。
+
 外部 Coding Runner 只支持官方原生安装提供的 macOS Mach-O CLI，不支持 npm 或 shebang wrapper。Host 确认阶段不会执行目标路径；确认后，Worker 才会把已确认制品复制到其管理的只读目录，并在受限环境中探测版本。
 
 完整参数、退出码和 JSON 格式见 [CLI 参考](../../docs/reference/cli.md)。

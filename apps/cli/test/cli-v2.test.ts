@@ -330,6 +330,167 @@ test("ask 仅在显式指定时发送外部 Coding Runner", async () => {
   });
 });
 
+test("ask 不需要会话 ID，自动使用工作区最近的业务会话", async () => {
+  const output = io();
+  const requests: CapturedRequest[] = [];
+  const fetch: typeof globalThis.fetch = async (input, init) => {
+    const request = await captureRequest(input, init);
+    requests.push(request);
+    if (request.method === "GET") {
+      return ok([
+        {
+          id: "thread-old",
+          subject: "旧机会",
+          pluginId: "opc",
+          resourceRef: { namespace: "opc.opportunity", resourceId: "opportunity-old" },
+          streamVersion: 3,
+          createdAt: "2026-09-01T08:00:00.000Z",
+          updatedAt: "2026-09-01T08:00:00.000Z",
+        },
+        {
+          id: "thread-current",
+          subject: "设计师访谈整理",
+          pluginId: "opc",
+          resourceRef: { namespace: "opc.opportunity", resourceId: "opportunity-current" },
+          streamVersion: 7,
+          createdAt: "2026-09-02T08:00:00.000Z",
+          updatedAt: "2026-09-04T08:00:00.000Z",
+        },
+      ]);
+    }
+    return ok({ id: "execution-1", status: "queued" }, 202);
+  };
+
+  assert.equal(await runCli([
+    "ask", "帮我列出当前证据缺口", "--workspace", "workspace-1",
+  ], { io: output, fetch, idempotencyKey: () => "ask-auto-key" }), 0);
+
+  assert.deepEqual(requests, [
+    { method: "GET", path: "/v2/workspaces/workspace-1/threads" },
+    {
+      method: "POST",
+      path: "/v2/workspaces/workspace-1/threads/thread-current/turns",
+      body: { expectedStreamVersion: 7, message: "帮我列出当前证据缺口" },
+      idempotencyKey: "ask-auto-key",
+    },
+  ]);
+  assert.deepEqual(output.out, ["已提交到 设计师访谈整理，结果会进入当前会话和成果页"]);
+});
+
+test("ask 可用机会标题选择 OPC 上下文，不暴露会话 ID", async () => {
+  const output = io();
+  const requests: CapturedRequest[] = [];
+  const fetch: typeof globalThis.fetch = async (input, init) => {
+    const request = await captureRequest(input, init);
+    requests.push(request);
+    if (request.method === "GET") {
+      return ok([
+        {
+          id: "thread-opc",
+          subject: "设计师增长机会",
+          pluginId: "opc",
+          resourceRef: { namespace: "opc.opportunity", resourceId: "opportunity-1" },
+          streamVersion: 4,
+          createdAt: "2026-09-01T08:00:00.000Z",
+          updatedAt: "2026-09-01T08:00:00.000Z",
+        },
+        {
+          id: "thread-code",
+          subject: "设计师增长页面",
+          pluginId: "coding",
+          resourceRef: { namespace: "coding.task", resourceId: "task-1" },
+          streamVersion: 9,
+          createdAt: "2026-09-03T08:00:00.000Z",
+          updatedAt: "2026-09-04T08:00:00.000Z",
+        },
+      ]);
+    }
+    return ok({ id: "execution-1", status: "queued" }, 202);
+  };
+
+  assert.equal(await runCli([
+    "ask", "生成访谈提纲", "--workspace", "workspace-1", "--opportunity", "增长机会",
+  ], { io: output, fetch }), 0);
+  assert.equal(requests[1]?.path, "/v2/workspaces/workspace-1/threads/thread-opc/turns");
+  assert.deepEqual(requests[1]?.body, { expectedStreamVersion: 4, message: "生成访谈提纲" });
+});
+
+test("ask 在机会标题不唯一时要求缩小范围，且不提交 turn", async () => {
+  const output = io();
+  let mutationCount = 0;
+  const fetch: typeof globalThis.fetch = async (input, init) => {
+    const request = await captureRequest(input, init);
+    if (request.method !== "GET") mutationCount += 1;
+    return ok([
+      {
+        id: "thread-1", subject: "设计师增长 A", pluginId: "opc",
+        resourceRef: { namespace: "opc.opportunity", resourceId: "opportunity-1" },
+        streamVersion: 2, createdAt: "2026-09-01T08:00:00.000Z", updatedAt: "2026-09-01T08:00:00.000Z",
+      },
+      {
+        id: "thread-2", subject: "设计师增长 B", pluginId: "opc",
+        resourceRef: { namespace: "opc.opportunity", resourceId: "opportunity-2" },
+        streamVersion: 3, createdAt: "2026-09-02T08:00:00.000Z", updatedAt: "2026-09-02T08:00:00.000Z",
+      },
+    ]);
+  };
+
+  assert.equal(await runCli([
+    "ask", "继续验证", "--workspace", "workspace-1", "--opportunity", "设计师增长",
+  ], { io: output, fetch }), 2);
+  assert.equal(mutationCount, 0);
+  assert.match(output.err[0] ?? "", /匹配到多个机会：设计师增长 A、设计师增长 B/u);
+  assert.doesNotMatch(output.err[0] ?? "", /thread-/u);
+});
+
+test("ask 指定 Runner 时自动选择最近的 Coding 会话", async () => {
+  const requests: CapturedRequest[] = [];
+  const fetch: typeof globalThis.fetch = async (input, init) => {
+    const request = await captureRequest(input, init);
+    requests.push(request);
+    if (request.method === "GET") {
+      return ok([
+        {
+          id: "thread-opc", subject: "更新的机会", pluginId: "opc",
+          resourceRef: { namespace: "opc.opportunity", resourceId: "opportunity-1" },
+          streamVersion: 8, createdAt: "2026-09-04T08:00:00.000Z", updatedAt: "2026-09-04T08:00:00.000Z",
+        },
+        {
+          id: "thread-code", subject: "修复事件游标", pluginId: "coding",
+          resourceRef: { namespace: "coding.task", resourceId: "task-1" },
+          streamVersion: 5, createdAt: "2026-09-02T08:00:00.000Z", updatedAt: "2026-09-02T08:00:00.000Z",
+        },
+      ]);
+    }
+    return ok({ id: "execution-code", status: "queued" }, 202);
+  };
+
+  assert.equal(await runCli([
+    "ask", "继续修复", "--workspace", "workspace-1", "--runner", "codex-cli",
+  ], { io: io(), fetch }), 0);
+  assert.equal(requests[1]?.path, "/v2/workspaces/workspace-1/threads/thread-code/turns");
+  assert.deepEqual(requests[1]?.body, {
+    expectedStreamVersion: 5,
+    message: "继续修复",
+    runnerId: "codex-cli",
+  });
+});
+
+test("ask 在工作区没有业务会话时给出可执行提示", async () => {
+  const output = io();
+  let mutationCount = 0;
+  const fetch: typeof globalThis.fetch = async (input, init) => {
+    const request = await captureRequest(input, init);
+    if (request.method !== "GET") mutationCount += 1;
+    return ok([]);
+  };
+  assert.equal(await runCli([
+    "ask", "从哪里开始", "--workspace", "workspace-empty",
+  ], { io: output, fetch }), 2);
+  assert.equal(mutationCount, 0);
+  assert.match(output.err[0] ?? "", /先捕获机会或创建 Coding 任务/u);
+});
+
 test("code runner 提供检查、人工确认与状态查询", async () => {
   const output = io();
   const requests: Array<CapturedRequest & { readonly search: string }> = [];

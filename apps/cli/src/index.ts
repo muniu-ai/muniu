@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { ApiErrorV2 } from "@mn/contracts";
+import type { ApiErrorV2, Thread } from "@mn/contracts";
 import {
   LocalBackupError,
   LocalSqliteBackup,
@@ -44,7 +44,9 @@ const HELP = `木牛 Agent OS 0.2
   mn code runners --workspace <工作区 ID>
   mn code runner inspect claude-cli --workspace <工作区 ID> --path /绝对路径/claude
   mn code runner confirm claude-cli --workspace <工作区 ID> --path /绝对路径/claude --binary-version <人工核实版本> --sha256 <摘要> --version <配置版本>
-  mn ask <任务> --workspace <工作区 ID> --thread <会话 ID> --runner claude-cli
+  mn ask <问题> --workspace <工作区 ID>
+  mn ask <问题> --workspace <工作区 ID> --opportunity <机会标题关键词>
+  mn ask <Coding 任务> --workspace <工作区 ID> --thread <会话 ID> --runner claude-cli
   mn code reconcile <执行 ID> terminate
 `;
 
@@ -79,6 +81,11 @@ interface CliResult {
   readonly data: unknown;
   readonly human: string;
 }
+
+type CliThread = Pick<
+  Thread,
+  "id" | "subject" | "pluginId" | "streamVersion" | "createdAt" | "updatedAt" | "archivedAt" | "resourceRef"
+>;
 
 class CliUsageError extends Error {
   constructor(message: string) {
@@ -294,25 +301,122 @@ async function setup(parsed: ParsedArguments, api: ApiClient): Promise<CliResult
 }
 
 async function ask(parsed: ParsedArguments, api: ApiClient): Promise<CliResult> {
-  assertAllowedFlags(parsed, ["workspace", "thread", "version", "runner"]);
+  assertAllowedFlags(parsed, ["workspace", "thread", "opportunity", "version", "runner"]);
   const message = parsed.positional.join(" ").trim();
   if (!message) throw new CliUsageError("请提供要提交的内容");
   const workspaceId = flag(parsed, "workspace", true)!;
-  const threadId = flag(parsed, "thread", true)!;
+  const explicitThreadId = flag(parsed, "thread");
+  const opportunity = flag(parsed, "opportunity")?.trim();
+  if (explicitThreadId && opportunity) {
+    throw new CliUsageError("--thread 和 --opportunity 不能同时使用");
+  }
   const runnerId = flag(parsed, "runner");
   if (runnerId !== undefined
     && runnerId !== "builtin" && runnerId !== "claude-cli" && runnerId !== "codex-cli") {
     throw new CliUsageError("--runner 只能是 builtin、claude-cli 或 codex-cli");
   }
+  if (opportunity && runnerId) {
+    throw new CliUsageError("机会会话不接受 --runner");
+  }
+  const selected = explicitThreadId
+    ? { id: explicitThreadId, streamVersion: integerFlag(parsed, "version", 1) }
+    : await resolveAskThread(api, workspaceId, opportunity, runnerId ? "coding" : undefined);
   const data = await api.mutate(
-    `/v2/workspaces/${encodeURIComponent(workspaceId)}/threads/${encodeURIComponent(threadId)}/turns`,
+    `/v2/workspaces/${encodeURIComponent(workspaceId)}/threads/${encodeURIComponent(selected.id)}/turns`,
     {
-      expectedStreamVersion: integerFlag(parsed, "version", 1),
+      expectedStreamVersion: flag(parsed, "version") === undefined
+        ? selected.streamVersion
+        : integerFlag(parsed, "version", selected.streamVersion),
       message,
       ...(runnerId ? { runnerId } : {}),
     },
   );
-  return { command: "ask", data, human: "已提交，结果会进入当前会话和成果页" };
+  return {
+    command: "ask",
+    data,
+    human: "subject" in selected
+      ? `已提交到 ${selected.subject}，结果会进入当前会话和成果页`
+      : "已提交，结果会进入当前会话和成果页",
+  };
+}
+
+async function resolveAskThread(
+  api: ApiClient,
+  workspaceId: string,
+  opportunity: string | undefined,
+  pluginId: "coding" | undefined,
+): Promise<CliThread> {
+  const threads = parseThreads(await api.get(
+    `/v2/workspaces/${encodeURIComponent(workspaceId)}/threads`,
+  )).filter((thread) => thread.archivedAt === undefined);
+  let candidates: readonly CliThread[];
+  if (opportunity) {
+    const keyword = opportunity.toLocaleLowerCase("zh-CN");
+    const opcThreads = threads.filter((thread) =>
+      thread.pluginId === "opc"
+      && thread.resourceRef?.namespace === "opc.opportunity");
+    const exact = opcThreads.filter((thread) => thread.subject.toLocaleLowerCase("zh-CN") === keyword);
+    candidates = exact.length > 0
+      ? exact
+      : opcThreads.filter((thread) => thread.subject.toLocaleLowerCase("zh-CN").includes(keyword));
+    if (candidates.length > 1) {
+      throw new CliUsageError(`匹配到多个机会：${candidates.map((thread) => thread.subject).join("、")}。请提供更完整的标题`);
+    }
+    if (candidates.length === 0) {
+      throw new CliUsageError(`未找到标题包含 ${opportunity} 的机会`);
+    }
+  } else {
+    const eligibleThreads = pluginId
+      ? threads.filter((thread) => thread.pluginId === pluginId)
+      : threads;
+    const resourceThreads = eligibleThreads.filter((thread) =>
+      thread.resourceRef?.namespace === "opc.opportunity"
+      || thread.resourceRef?.namespace === "coding.task");
+    candidates = resourceThreads.length > 0 ? resourceThreads : eligibleThreads;
+    if (candidates.length === 0) {
+      throw new CliUsageError(pluginId === "coding"
+        ? "工作区还没有 Coding 会话。请先创建 Coding 任务"
+        : "工作区还没有可用会话。请先捕获机会或创建 Coding 任务");
+    }
+  }
+  return [...candidates].sort((left, right) =>
+    right.updatedAt.localeCompare(left.updatedAt)
+    || right.createdAt.localeCompare(left.createdAt)
+    || left.subject.localeCompare(right.subject, "zh-CN")
+    || left.id.localeCompare(right.id))[0]!;
+}
+
+function parseThreads(value: unknown): readonly CliThread[] {
+  if (!Array.isArray(value)) throw new CliUsageError("Host 未返回有效的工作区会话");
+  return value.map((candidate) => {
+    if (typeof candidate !== "object" || candidate === null) {
+      throw new CliUsageError("Host 返回了无效的工作区会话");
+    }
+    const thread = candidate as Record<string, unknown>;
+    if (typeof thread.id !== "string" || !thread.id
+      || typeof thread.subject !== "string" || !thread.subject
+      || typeof thread.pluginId !== "string" || !thread.pluginId
+      || typeof thread.streamVersion !== "number" || !Number.isSafeInteger(thread.streamVersion)
+      || thread.streamVersion < 1
+      || typeof thread.createdAt !== "string" || typeof thread.updatedAt !== "string") {
+      throw new CliUsageError("Host 返回了无效的工作区会话");
+    }
+    const resourceRef = typeof thread.resourceRef === "object" && thread.resourceRef !== null
+      && "namespace" in thread.resourceRef && typeof thread.resourceRef.namespace === "string"
+      && "resourceId" in thread.resourceRef && typeof thread.resourceRef.resourceId === "string"
+      ? { namespace: thread.resourceRef.namespace, resourceId: thread.resourceRef.resourceId }
+      : undefined;
+    return {
+      id: thread.id,
+      subject: thread.subject,
+      pluginId: thread.pluginId,
+      streamVersion: thread.streamVersion,
+      createdAt: thread.createdAt,
+      updatedAt: thread.updatedAt,
+      ...(typeof thread.archivedAt === "string" ? { archivedAt: thread.archivedAt } : {}),
+      ...(resourceRef ? { resourceRef } : {}),
+    };
+  });
 }
 
 async function inbox(parsed: ParsedArguments, api: ApiClient): Promise<CliResult> {
