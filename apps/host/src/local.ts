@@ -1,10 +1,12 @@
 import { homedir } from "node:os";
 import { FileCas, SqliteStorage } from "@mn/storage";
+import { createNodePublicWebReader } from "@mn/plugin-opc";
 import {
   AgentOsWorker,
   createKernelAgentTurnHandler,
   runWorkerLoop,
   type ByokModelInvoker,
+  type OpcPublicWebReader,
 } from "@mn/worker";
 import {
   assertNoLegacyDaemon,
@@ -37,6 +39,7 @@ export interface StartLocalHostOptions extends Omit<
   readonly modelInvoker?: ByokModelInvoker;
   readonly workerId?: string;
   readonly workerIdleDelayMs?: number;
+  readonly opcPublicWebReader?: OpcPublicWebReader;
 }
 
 export async function startLocalAgentOsHost(options: StartLocalHostOptions = {}): Promise<AgentOsHost> {
@@ -87,6 +90,7 @@ export async function startLocalAgentOsHost(options: StartLocalHostOptions = {})
     store,
     secretStore,
     approvalKernel: host.kernel,
+    opcPublicWebReader: options.opcPublicWebReader ?? createNodePublicWebReader(),
     ...(options.modelInvoker ? { modelInvoker: options.modelInvoker } : {}),
     acceptsSecretReference: (reference) => reference.startsWith("keychain://muniu.v2/"),
     ...(options.now ? { now: options.now } : {}),

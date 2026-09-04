@@ -358,6 +358,10 @@ export interface ModelSecretReader {
   read(secretRef: string): Promise<string>;
 }
 
+export interface OpcPublicWebReader {
+  read(url: string): Promise<unknown>;
+}
+
 export interface AgentExecutionStore extends WorkerJobStore, KernelStore {}
 
 export interface KernelAgentTurnHandlerOptions {
@@ -366,6 +370,7 @@ export interface KernelAgentTurnHandlerOptions {
   readonly modelInvoker?: ByokModelInvoker;
   readonly approvalKernel?: ToolApprovalKernel;
   readonly approvalPollIntervalMs?: number;
+  readonly opcPublicWebReader?: OpcPublicWebReader;
   readonly acceptsSecretReference?: (reference: string) => boolean;
   readonly now?: () => string;
 }
@@ -402,7 +407,7 @@ export function createKernelAgentTurnHandler(
         throw new Error("模型密钥引用不属于当前运行环境");
       }
       const provider = providerId(state.model.presetId);
-      const tenantScope = AgentScope.tenant(job.tenantId);
+      const tenantScope = AgentScope.tenant(job.tenantId, state.execution.generation);
       const executionScope = tenantScope
         .createChild("workspace", state.execution.workspaceId)
         .createChild("thread", state.thread.id)
@@ -436,6 +441,29 @@ export function createKernelAgentTurnHandler(
           }
         },
       });
+      const toolIds: string[] = [];
+      if (state.execution.pluginId === "opc"
+        && state.authority.toolIds.includes("opc.public-web.read")
+        && options.opcPublicWebReader) {
+        const toolId = "opc.public-web.read";
+        executionScope.register("tool", {
+          id: toolId,
+          version: "0.2.0",
+          effectClass: "external_read",
+          prepare(arguments_) {
+            const url = publicWebUrl(arguments_.url);
+            return {
+              normalizedArguments: { url },
+              resourceRefs: [{ namespace: "web", resourceId: url }],
+            };
+          },
+          async execute(prepared) {
+            const url = publicWebUrl(prepared.normalizedArguments.url);
+            return jsonValue(await options.opcPublicWebReader!.read(url));
+          },
+        });
+        toolIds.push(toolId);
+      }
       return {
         executionId,
         scope: executionScope,
@@ -449,7 +477,7 @@ export function createKernelAgentTurnHandler(
           id: state.execution.agentDefinitionId,
           llmId,
           promptIds: [promptId],
-          toolIds: [],
+          toolIds,
         },
         authority: {
           commitment: state.authority.commitment,
@@ -472,6 +500,30 @@ export function createKernelAgentTurnHandler(
       };
     },
   });
+}
+
+function publicWebUrl(value: JsonValue | undefined): string {
+  if (typeof value !== "string" || !value.trim()) throw new Error("公开网页工具缺少 url");
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("公开网页工具的 url 无效");
+  }
+  if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password) {
+    throw new Error("公开网页工具只接受不含凭据的 HTTP 或 HTTPS 地址");
+  }
+  return url.href;
+}
+
+function jsonValue(value: unknown): JsonValue {
+  try {
+    const normalized = JSON.parse(JSON.stringify(value)) as unknown;
+    if (normalized === undefined) throw new Error("结果为空");
+    return normalized as JsonValue;
+  } catch {
+    throw new Error("工具结果不能持久化为 JSON");
+  }
 }
 
 function assertExecutionState(

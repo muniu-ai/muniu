@@ -144,7 +144,7 @@ function assertSubset<T>(child: readonly T[], parent: readonly T[], message: str
 function assertDataSubset(child: readonly ResourceRef[], parent: readonly ResourceRef[]): void {
   const allowed = (candidate: ResourceRef): boolean => parent.some((scope) =>
     scope.namespace === candidate.namespace &&
-    scope.resourceId === candidate.resourceId &&
+    (scope.resourceId === "*" || scope.resourceId === candidate.resourceId) &&
     (scope.digest === undefined || scope.digest === candidate.digest));
   if (child.some((scope) => !allowed(scope))) {
     throw new AuthorityAttenuationError("子 Agent 数据范围超出父 Agent");

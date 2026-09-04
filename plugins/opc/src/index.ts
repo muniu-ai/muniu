@@ -3,6 +3,7 @@ export * from "./deliverables.js";
 export * from "./errors.js";
 export * from "./events.js";
 export * from "./model.js";
+export * from "./node-web-read.js";
 export * from "./plugin.js";
 export * from "./reducer.js";
 export * from "./repository.js";

@@ -19,6 +19,7 @@ const CHILD_LEVELS: Readonly<Record<ScopeLevel, readonly ScopeLevel[]>> = {
 
 interface SharedScopeState {
   generation: number;
+  activated: boolean;
 }
 
 interface Registration<T extends ContributionResource = ContributionResource> {
@@ -112,14 +113,17 @@ export class AgentScope {
     };
   }
 
-  static tenant(tenantId: string): AgentScope {
+  static tenant(tenantId: string, initialGeneration = 1): AgentScope {
     if (tenantId.length === 0) throw new Error("tenant id 不能为空");
+    if (!Number.isSafeInteger(initialGeneration) || initialGeneration < 1) {
+      throw new Error("Scope 初始 generation 必须是正整数");
+    }
     return new AgentScope(
       "tenant",
       tenantId,
       { tenantId, subagentPath: [] },
       undefined,
-      { generation: 0 },
+      { generation: initialGeneration, activated: false },
     );
   }
 
@@ -148,7 +152,7 @@ export class AgentScope {
     if (previous !== undefined) this.#retiredContributions.push(previous.contribution);
     const token = Symbol(contribution.id);
     registrations.set(contribution.id, { token, contribution });
-    this.shared.generation += 1;
+    if (this.shared.activated) this.shared.generation += 1;
     let active = true;
     return {
       dispose: () => {
@@ -158,7 +162,7 @@ export class AgentScope {
         if (current?.token !== token) return;
         registrations.delete(contribution.id);
         this.#retiredContributions.push(contribution);
-        this.shared.generation += 1;
+        if (this.shared.activated) this.shared.generation += 1;
       },
     };
   }
@@ -179,6 +183,7 @@ export class AgentScope {
 
   resolveTurn(): TurnContributions {
     this.#assertActive();
+    this.shared.activated = true;
     const lineage: AgentScope[] = [];
     for (let current: AgentScope | undefined = this; current !== undefined; current = current.parent) {
       current.#assertActive();

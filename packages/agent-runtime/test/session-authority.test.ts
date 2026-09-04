@@ -5,12 +5,38 @@ import test from "node:test";
 
 import {
   DefaultSessionSurface,
+  assertToolAuthority,
   InMemoryRuntimeStore,
   PersistentInbox,
   PersistentSessionLog,
   SubagentAuthorityAllocator,
   type RuntimeAuthority,
 } from "../src/index.js";
+
+test("资源通配授权可限定 namespace，不放宽到其他数据域", () => {
+  const authority: RuntimeAuthority = {
+    commitment: "wildcard",
+    toolIds: ["opc.public-web.read"],
+    dataScopes: [{ namespace: "web", resourceId: "*" }],
+    effectClasses: ["external_read"],
+    budget: {
+      maxSubagentDepth: 0, maxSubagents: 0, maxTokens: 1_000,
+      maxCostMinorUnits: "0", currency: "CNY", maxDurationMs: 10_000,
+    },
+  };
+  assert.doesNotThrow(() => assertToolAuthority(
+    authority,
+    "opc.public-web.read",
+    "external_read",
+    [{ namespace: "web", resourceId: "https://example.com/research" }],
+  ));
+  assert.throws(() => assertToolAuthority(
+    authority,
+    "opc.public-web.read",
+    "external_read",
+    [{ namespace: "repository", resourceId: "*" }],
+  ), /数据范围/u);
+});
 
 test("持久 Inbox 按 FIFO 恢复 follow_up，并在模型边界一次消费 steer", async () => {
   const store = new InMemoryRuntimeStore();

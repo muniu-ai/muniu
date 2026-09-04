@@ -49,14 +49,19 @@ async function body(response: Response): Promise<any> {
 }
 
 async function waitForCompletedTurn(host: AgentOsHost, path: string): Promise<any> {
+  let latest: any;
   for (let attempt = 0; attempt < 200; attempt += 1) {
     const response = await host.dispatch(new Request(`http://host.test${path}`));
     assert.equal(response.status, 200);
     const view = (await body(response)).data;
+    latest = view;
     if (view.turns[0]?.execution.status === "completed") return view;
+    if (["failed", "cancelled", "needs_reconciliation"].includes(view.turns[0]?.execution.status)) {
+      throw new Error(`Execution 提前终止：${JSON.stringify(view.turns[0]?.execution)}`);
+    }
     await new Promise<void>((resolve) => setTimeout(resolve, 5));
   }
-  throw new Error("Execution 未在测试时限内完成");
+  throw new Error(`Execution 未在测试时限内完成：${JSON.stringify(latest?.turns?.[0]?.execution)}`);
 }
 
 test("本地组合根执行 BYOK Agent turn，结果在 SQLite 重启后仍可读取", async () => {
@@ -67,7 +72,7 @@ test("本地组合根执行 BYOK Agent turn，结果在 SQLite 重启后仍可�
     assert.equal(input.presetId, "deepseek");
     assert.equal(input.model, "deepseek-chat");
     assert.equal(input.apiKey, "fixture-byok-key");
-    assert.equal(input.request.availableToolIds.length, 0);
+    assert.deepEqual(input.request.availableToolIds, ["opc.public-web.read"]);
     assert.match(input.request.messages[0]?.content ?? "", /反证/u);
     assert.equal(input.request.messages.at(-1)?.content, "整理当前证据缺口");
     requests.push(input.request);
@@ -139,6 +144,95 @@ test("本地组合根执行 BYOK Agent turn，结果在 SQLite 重启后仍可�
   } finally {
     await first?.close();
     await second?.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("OPC Agent 通过统一 Runtime 和内核权限读取公开网页", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "muniu-local-runtime-web-"));
+  const secrets = new FixtureSecrets();
+  const requests: ModelRequest[] = [];
+  const reads: string[] = [];
+  const invoke: ByokModelInvoker = async ({ request }) => {
+    requests.push(request);
+    if (requests.length === 1) {
+      assert.deepEqual(request.availableToolIds, ["opc.public-web.read"]);
+      return {
+        text: "",
+        toolCalls: [{
+          id: "web-call-1",
+          toolId: "opc.public-web.read",
+          arguments: { url: "https://example.com/research" },
+          intent: "读取公开研究资料",
+        }],
+      };
+    }
+    assert.ok(request.messages.some((message) =>
+      message.role === "tool"
+      && message.name === "opc.public-web.read"
+      && message.content.includes("公开访谈证据")));
+    return { text: "已记录公开来源，并标记为支持信号。", toolCalls: [] };
+  };
+  let host: AgentOsHost | undefined;
+  try {
+    host = await startLocalAgentOsHost({
+      stateRoot: directory,
+      port: 0,
+      secretStore: secrets,
+      modelInvoker: invoke,
+      workerIdleDelayMs: 1,
+      opcPublicWebReader: {
+        async read(url) {
+          reads.push(url);
+          return {
+            finalUrl: url, status: 200, mediaType: "text/plain",
+            body: "公开访谈证据", byteLength: 24, redirects: 0,
+          };
+        },
+      },
+      modelProbe: async ({ preset }) => ({
+        models: preset.suggestedModels,
+        defaultModel: preset.suggestedModels[0]!,
+      }),
+    });
+    const workspace = (await body(await host.dispatch(jsonRequest("/v2/workspaces", {
+      name: "公开资料研究", viewMode: "professional", pluginIds: ["opc"],
+    }, "web-workspace")))).data;
+    const pendingModel = (await body(await host.dispatch(jsonRequest("/v2/model-connections", {
+      presetId: "deepseek", apiKey: "fixture-byok-key", displayName: "DeepSeek",
+    }, "web-model")))).data;
+    const model = (await body(await host.dispatch(jsonRequest(
+      `/v2/model-connections/${pendingModel.id}/probe`,
+      { expectedStreamVersion: pendingModel.streamVersion },
+      "web-model-probe",
+    )))).data;
+    const thread = (await body(await host.dispatch(jsonRequest(
+      `/v2/workspaces/${workspace.id}/threads`,
+      { subject: "公开资料", pluginId: "opc" },
+      "web-thread",
+    )))).data;
+    const submitted = await host.dispatch(jsonRequest(
+      `/v2/workspaces/${workspace.id}/threads/${thread.id}/turns`,
+      {
+        expectedStreamVersion: thread.streamVersion,
+        message: "读取公开资料并整理信号",
+        agentDefinitionId: "opc.opportunity-validator",
+        modelBindingId: model.id,
+      },
+      "web-turn",
+    ));
+    assert.equal(submitted.status, 202, JSON.stringify(await submitted.clone().json()));
+    const completed = await waitForCompletedTurn(
+      host,
+      `/v2/workspaces/${workspace.id}/threads/${thread.id}/turns`,
+    );
+    assert.deepEqual(reads, ["https://example.com/research"]);
+    assert.equal(requests.length, 2);
+    assert.deepEqual(completed.turns[0].entries.map((entry: any) => entry.role), [
+      "user", "tool", "assistant",
+    ]);
+  } finally {
+    await host?.close();
     await rm(directory, { recursive: true, force: true });
   }
 });
