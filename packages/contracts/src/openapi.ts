@@ -22,6 +22,7 @@ export const API_OPERATIONS_V2: readonly ApiOperationV2[] = [
   { method: "get", path: "/v2/workspaces/{workspaceId}/home", operationId: "getWorkspaceHome", mutation: false, versioned: false },
   { method: "get", path: "/v2/workspaces/{workspaceId}/threads", operationId: "listThreads", mutation: false, versioned: false },
   { method: "post", path: "/v2/workspaces/{workspaceId}/threads", operationId: "createThread", mutation: true, versioned: false },
+  { method: "get", path: "/v2/workspaces/{workspaceId}/threads/{threadId}/turns", operationId: "listThreadTurns", mutation: false, versioned: false },
   { method: "post", path: "/v2/workspaces/{workspaceId}/threads/{threadId}/turns", operationId: "createTurn", mutation: true, versioned: true },
   { method: "get", path: "/v2/workspaces/{workspaceId}/events", operationId: "streamWorkspaceEvents", mutation: false, versioned: false },
   { method: "post", path: "/v2/executions/{executionId}/commands", operationId: "commandExecution", mutation: true, versioned: true },

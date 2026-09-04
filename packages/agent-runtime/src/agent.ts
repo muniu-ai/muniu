@@ -135,6 +135,17 @@ export class AgentHandle {
     this.#abortController?.abort(reason);
   }
 
+  async interrupt(reason = "执行已中断"): Promise<void> {
+    if (TERMINAL_STATUSES.has(this.#status)
+      || this.#status === "needs_reconciliation"
+      || this.#status === "interrupted") return;
+    try {
+      await this.#transition("interrupted", reason);
+    } finally {
+      this.#abortController?.abort(reason);
+    }
+  }
+
   async resume(): Promise<void> {
     if (this.#status !== "paused" && this.#status !== "interrupted") {
       throw new AgentRuntimeError("resume 只接受 paused 或 interrupted 状态");
@@ -251,7 +262,9 @@ export class AgentHandle {
       }
     } catch (error: unknown) {
       this.#lastError = error;
-      if (this.#status === "cancelled" || this.#status === "needs_reconciliation") return;
+      if (this.#status === "cancelled"
+        || this.#status === "interrupted"
+        || this.#status === "needs_reconciliation") return;
       await this.#transition("failed", error instanceof Error ? error.message : "执行失败");
     }
   }

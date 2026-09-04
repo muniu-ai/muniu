@@ -114,6 +114,12 @@ test("OpenAPI 目录只有 v2，所有写操作要求幂等键", () => {
   assert.doesNotMatch(serialized, /\/v1(?:\/|\")/);
   assert.match(serialized, /\/v2\/setup/);
   assert.match(serialized, /\/v2\/workspaces\/\{workspaceId\}\/home/);
+  assert.equal(
+    (document.paths as Record<string, Record<string, unknown>>)[
+      "/v2/workspaces/{workspaceId}/threads/{threadId}/turns"
+    ]?.get !== undefined,
+    true,
+  );
   assert.match(serialized, /\/v2\/memories\/\{memoryId\}\/decisions/);
   assert.match(serialized, /\/v2\/plugins\/opc\/opportunities\/\{opportunityId\}\/commands/);
   assert.match(serialized, /\/v2\/plugins\/opc\/opportunities\/\{opportunityId\}\/exports/);

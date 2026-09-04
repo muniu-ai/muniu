@@ -86,6 +86,26 @@ export interface Execution extends VersionedEntity {
   readonly failureCode?: string;
 }
 
+export interface ThreadTurnSessionEntry {
+  readonly id: string;
+  readonly executionId: ExecutionId;
+  readonly role: "user" | "assistant" | "tool";
+  readonly content: string;
+  readonly turn: number;
+  readonly sequence: number;
+  readonly occurredAt: IsoDateTime;
+}
+
+export interface ThreadTurnView {
+  readonly execution: Execution;
+  readonly entries: readonly ThreadTurnSessionEntry[];
+}
+
+export interface ThreadTurnsView {
+  readonly threadId: ThreadId;
+  readonly turns: readonly ThreadTurnView[];
+}
+
 export interface AgentDefinition extends VersionedEntity {
   readonly pluginId: PluginId;
   readonly name: string;

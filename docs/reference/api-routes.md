@@ -39,6 +39,7 @@ Agent OS 0.2 默认监听 `http://127.0.0.1:7318`。成功的 JSON 响应使用 
 | `GET` | `/v2/workspaces/{workspaceId}/home` | `getWorkspaceHome` | — | — |
 | `GET` | `/v2/workspaces/{workspaceId}/threads` | `listThreads` | — | — |
 | `POST` | `/v2/workspaces/{workspaceId}/threads` | `createThread` | 必需 | — |
+| `GET` | `/v2/workspaces/{workspaceId}/threads/{threadId}/turns` | `listThreadTurns` | — | — |
 | `POST` | `/v2/workspaces/{workspaceId}/threads/{threadId}/turns` | `createTurn` | 必需 | 必需 |
 | `GET` | `/v2/workspaces/{workspaceId}/events` | `streamWorkspaceEvents` | — | — |
 | `POST` | `/v2/executions/{executionId}/commands` | `commandExecution` | 必需 | 必需 |

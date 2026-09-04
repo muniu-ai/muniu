@@ -1,5 +1,18 @@
-import type { JsonObject, JsonValue } from "@mn/contracts";
-import { AgentHandle, type AgentHandleOptions, type Awaitable } from "@mn/agent-runtime";
+import type {
+  Execution,
+  ExecutionAuthority,
+  JsonObject,
+  JsonValue,
+  Thread,
+} from "@mn/contracts";
+import {
+  AgentHandle,
+  AgentScope,
+  KernelProjectionRuntimeStore,
+  type AgentHandleOptions,
+  type Awaitable,
+  type RuntimeProjectionStore,
+} from "@mn/agent-runtime";
 import {
   JOB_LEASE_MILLISECONDS,
   StaleFencingTokenError,
@@ -7,6 +20,14 @@ import {
   type NeedsReconciliationInput,
   type StoredJob,
 } from "@mn/storage";
+import {
+  createByokModelInvoker,
+  ModelTransportError,
+  type ByokModelInvoker,
+  type ByokProviderId,
+} from "./model-invoker.js";
+
+export * from "./model-invoker.js";
 
 export const WORKER_LEASE_MILLISECONDS = JOB_LEASE_MILLISECONDS;
 
@@ -81,7 +102,7 @@ class WorkerLeaseLostError extends Error {
 export type WorkerPollResult =
   | { readonly status: "not_ready"; readonly issues: readonly WorkerReadinessIssue[] }
   | { readonly status: "idle" }
-  | { readonly status: "completed" | "failed" | "needs_reconciliation" | "lost_lease"; readonly jobId: string };
+  | { readonly status: "completed" | "failed" | "interrupted" | "needs_reconciliation" | "lost_lease"; readonly jobId: string };
 
 export interface AgentOsWorkerOptions {
   readonly id: string;
@@ -129,9 +150,10 @@ export class AgentOsWorker {
     return workerReadiness(this.#lock);
   }
 
-  async pollOnce(): Promise<WorkerPollResult> {
+  async pollOnce(stopSignal?: AbortSignal): Promise<WorkerPollResult> {
     const readiness = this.readiness();
     if (!readiness.ready) return { status: "not_ready", issues: readiness.issues };
+    if (stopSignal?.aborted) return { status: "idle" };
     const claimedAt = this.#now();
     const job = await this.#store.claimJob(this.#id, claimedAt.toISOString(), this.#claimOptions);
     if (!job) return { status: "idle" };
@@ -140,6 +162,9 @@ export class AgentOsWorker {
     const leaseExpiresAt = job.leaseExpiresAt
       ?? new Date(claimedAt.getTime() + WORKER_LEASE_MILLISECONDS).toISOString();
     const abort = new AbortController();
+    const stopCurrentJob = () => abort.abort(stopSignal?.reason ?? "Worker 正在停止");
+    stopSignal?.addEventListener("abort", stopCurrentJob, { once: true });
+    if (stopSignal?.aborted) stopCurrentJob();
     let renewalTimer: ReturnType<typeof setInterval> | undefined;
     let rejectLease: ((error: unknown) => void) | undefined;
     const leaseLost = new Promise<never>((_resolve, reject) => { rejectLease = reject; });
@@ -159,6 +184,7 @@ export class AgentOsWorker {
       await this.#store.completeJob(job.id, this.#id, job.fencingToken, result, this.#now().toISOString());
       return { status: "completed", jobId: job.id };
     } catch (error) {
+      if (stopSignal?.aborted) return { status: "interrupted", jobId: job.id };
       if (error instanceof WorkerLeaseLostError
         || error instanceof StaleFencingTokenError
         || (typeof error === "object" && error !== null && "code" in error && error.code === "STALE_FENCING_TOKEN")) {
@@ -188,6 +214,7 @@ export class AgentOsWorker {
       return this.#failKnown(job, "JOB_EXECUTION_FAILED", message, true);
     } finally {
       if (renewalTimer) clearInterval(renewalTimer);
+      stopSignal?.removeEventListener("abort", stopCurrentJob);
     }
   }
 
@@ -220,7 +247,7 @@ export async function runWorkerLoop(
     throw new TypeError("Worker 空闲轮询间隔必须是正整数毫秒");
   }
   while (!options.signal.aborted) {
-    const result = await worker.pollOnce();
+    const result = await worker.pollOnce(options.signal);
     await options.onResult?.(result);
     if (options.signal.aborted) break;
     if (result.status === "idle" || result.status === "not_ready") {
@@ -252,31 +279,222 @@ export function createAgentTurnHandler(options: AgentTurnHandlerOptions): Worker
       throw new Error("Job 的 executionId 与 Runtime 配置不一致");
     }
     const handle = await AgentHandle.open(handleOptions);
-    const cancelForLeaseLoss = () => {
-      void handle.cancel("Worker 租约已丢失");
+    if (handle.status === "completed") {
+      await handleOptions.scope.dispose();
+      return { executionId, status: "completed" };
+    }
+    if (handle.status === "needs_reconciliation") {
+      await handleOptions.scope.dispose();
+      throw new UnknownExternalSideEffectError(executionId);
+    }
+    if (handle.status === "paused" || handle.status === "interrupted") {
+      await handleOptions.scope.dispose();
+      throw new Error("Agent turn 已中断，需要显式恢复");
+    }
+    const interruptForWorkerStop = () => {
+      void handle.interrupt("Worker 已停止").catch(() => {});
     };
-    context.signal.addEventListener("abort", cancelForLeaseLoss, { once: true });
+    context.signal.addEventListener("abort", interruptForWorkerStop, { once: true });
     try {
       if (context.signal.aborted) {
-        await handle.cancel("Worker 租约已丢失");
+        await handle.interrupt("Worker 已停止");
       } else {
         await handle.followUp(message);
       }
       await handle.whenIdle();
     } finally {
-      context.signal.removeEventListener("abort", cancelForLeaseLoss);
+      context.signal.removeEventListener("abort", interruptForWorkerStop);
+      await handleOptions.scope.dispose();
     }
-    if (handle.status === "needs_reconciliation") {
+    const finalStatus: string = handle.status;
+    if (finalStatus === "needs_reconciliation") {
       throw new UnknownExternalSideEffectError(executionId);
     }
-    if (handle.status === "failed") {
+    if (finalStatus === "failed") {
       throw handle.lastError instanceof Error
         ? handle.lastError
         : new Error("Agent turn 执行失败");
     }
-    if (handle.status === "cancelled") throw new Error("Agent turn 已取消");
+    if (finalStatus === "interrupted") throw new Error("Agent turn 已中断");
+    if (finalStatus === "cancelled") throw new Error("Agent turn 已取消");
     return { executionId, status: handle.status };
   };
+}
+
+interface StoredModelConnection {
+  readonly id: string;
+  readonly tenantId: string;
+  readonly presetId: string;
+  readonly secretRef: string;
+  readonly defaultModel: string;
+  readonly status: "pending" | "ready" | "invalid";
+}
+
+export interface ModelSecretReader {
+  read(secretRef: string): Promise<string>;
+}
+
+export interface AgentExecutionStore extends WorkerJobStore, RuntimeProjectionStore {}
+
+export interface KernelAgentTurnHandlerOptions {
+  readonly store: AgentExecutionStore;
+  readonly secretStore: ModelSecretReader;
+  readonly modelInvoker?: ByokModelInvoker;
+  readonly acceptsSecretReference?: (reference: string) => boolean;
+  readonly now?: () => string;
+}
+
+export function createKernelAgentTurnHandler(
+  options: KernelAgentTurnHandlerOptions,
+): WorkerJobHandler {
+  const invokeModel = options.modelInvoker ?? createByokModelInvoker();
+  const acceptsSecretReference = options.acceptsSecretReference ?? (() => true);
+  return createAgentTurnHandler({
+    resolveOptions: async (job) => {
+      const executionId = requiredPayloadString(job.payload, "executionId");
+      const state = await options.store.transact(job.tenantId, (transaction) => {
+        const execution = transaction.getProjection<Execution>("execution", executionId);
+        if (!execution) throw new Error("Execution 不存在");
+        const authority = transaction.getProjection<ExecutionAuthority>("authority", execution.authorityId);
+        if (!authority) throw new Error("Execution Authority 不存在");
+        const thread = transaction.getProjection<Thread>("thread", execution.threadId);
+        if (!thread) throw new Error("Thread 不存在");
+        const model = transaction.getProjection<StoredModelConnection>(
+          "modelConnection",
+          execution.modelBindingId,
+        );
+        if (!model) throw new Error("模型连接不存在");
+        return { execution, authority, thread, model };
+      });
+      assertExecutionState(job, state.execution, state.authority, state.thread, state.model);
+      if (!acceptsSecretReference(state.model.secretRef)) {
+        throw new Error("模型密钥引用不属于当前运行环境");
+      }
+      const provider = providerId(state.model.presetId);
+      const tenantScope = AgentScope.tenant(job.tenantId);
+      const executionScope = tenantScope
+        .createChild("workspace", state.execution.workspaceId)
+        .createChild("thread", state.thread.id)
+        .createChild("execution", state.execution.id);
+      const promptId = `${state.execution.pluginId}.outcome`;
+      const llmId = `byok:${state.model.id}`;
+      executionScope.register("prompt", {
+        id: promptId,
+        render: () => productPrompt(state.execution.pluginId, state.thread.subject),
+      });
+      executionScope.register("llm", {
+        id: llmId,
+        complete: async (request, context) => {
+          let apiKey: string;
+          try {
+            apiKey = await options.secretStore.read(state.model.secretRef);
+          } catch {
+            throw new ModelTransportError("无法读取模型凭据");
+          }
+          try {
+            return await invokeModel({
+              presetId: provider,
+              model: state.model.defaultModel,
+              apiKey,
+              request,
+              signal: context.signal,
+            });
+          } catch (error) {
+            if (error instanceof ModelTransportError) throw error;
+            throw new ModelTransportError("模型调用失败");
+          }
+        },
+      });
+      return {
+        executionId,
+        scope: executionScope,
+        store: new KernelProjectionRuntimeStore({
+          tenantId: job.tenantId,
+          store: options.store,
+          ...(options.now ? { now: options.now } : {}),
+          id: (sequence) => `${executionId}:runtime:${sequence}`,
+        }),
+        definition: {
+          id: state.execution.agentDefinitionId,
+          llmId,
+          promptIds: [promptId],
+          toolIds: [],
+        },
+        authority: {
+          commitment: state.authority.commitment,
+          toolIds: state.authority.toolIds,
+          dataScopes: state.authority.dataScopes,
+          effectClasses: state.authority.autoAllowedEffects,
+          budget: state.authority.budget,
+        },
+        approval: {
+          async authorize() {
+            return { mode: "deny" as const, reason: "当前 Worker 未注册工具" };
+          },
+        },
+        ...(options.now ? { now: options.now } : {}),
+      };
+    },
+  });
+}
+
+function assertExecutionState(
+  job: StoredJob,
+  execution: Execution,
+  authority: ExecutionAuthority,
+  thread: Thread,
+  model: StoredModelConnection,
+): void {
+  if (execution.tenantId !== job.tenantId
+    || authority.tenantId !== job.tenantId
+    || thread.tenantId !== job.tenantId
+    || model.tenantId !== job.tenantId) {
+    throw new Error("Agent Job 不能跨租户读取执行配置");
+  }
+  if (execution.workspaceId !== job.workspaceId
+    || thread.workspaceId !== execution.workspaceId
+    || authority.workspaceId !== execution.workspaceId) {
+    throw new Error("Agent Job 的工作区配置不一致");
+  }
+  if (thread.id !== execution.threadId
+    || thread.pluginId !== execution.pluginId
+    || authority.executionId !== execution.id) {
+    throw new Error("Agent Job 的执行配置不一致");
+  }
+  const expectedAgent = execution.pluginId === "opc"
+    ? "opc.opportunity-validator"
+    : execution.pluginId === "coding"
+      ? "coding.builtin"
+      : undefined;
+  if (!expectedAgent || execution.agentDefinitionId !== expectedAgent) {
+    throw new Error("Agent 定义不受当前产品插件支持");
+  }
+  if (model.status !== "ready" || !model.defaultModel.trim()) {
+    throw new Error("模型连接尚未就绪");
+  }
+}
+
+function providerId(value: string): ByokProviderId {
+  if (value === "openai" || value === "deepseek" || value === "anthropic") return value;
+  throw new Error("模型厂商预设不受支持");
+}
+
+function productPrompt(pluginId: string, subject: string): string {
+  if (pluginId === "opc") {
+    return [
+      "你是木牛 OPC 机会验证 Agent。",
+      `当前会话主题：${subject}。`,
+      "输出可审阅的阶段成果，分别列出支持证据、反证、证据缺口和下一次人工行动。",
+      "未经人工确认的 commitment 或 paid 证据，不得声称机会已经验证。",
+      "当前执行未注册网页、外联、发布、报价或支付工具，不得声称已经调用这些能力。",
+    ].join("\n");
+  }
+  return [
+    "你是木牛 Coding Agent。",
+    `当前任务主题：${subject}。`,
+    "输出可审阅的任务结论、建议变更、检查项、风险和下一步。",
+    "当前执行未注册仓库、sandbox 或 Gate 工具，不得声称已经修改代码或运行检查。",
+  ].join("\n");
 }
 
 function requiredPayloadString(payload: JsonObject, field: string): string {

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { Context } from "@deepseek-ai/cordis";
+import { KernelProjectionRuntimeStore, type RuntimeRecord } from "@mn/agent-runtime";
 import {
   apiError,
   createOpenApiDocument,
@@ -12,6 +13,8 @@ import {
   type JsonValue,
   type MemoryRecord,
   type Thread,
+  type ThreadTurnSessionEntry,
+  type ThreadTurnsView,
   type Workspace,
   type WorkspaceMembership,
 } from "@mn/contracts";
@@ -106,6 +109,8 @@ export interface AgentOsHostOptions {
   readonly protectedPayloadKeys?: ProtectedPayloadKeyDestroyer;
   /** 默认由 profile 决定：本地 Keychain，企业 Vault/KMS。 */
   readonly acceptsModelSecretReference?: (reference: string) => boolean;
+  /** 组合根用于先停止共享同一 Store 的 Worker。 */
+  readonly beforeStoreClose?: () => Promise<void>;
 }
 
 export interface ListenOptions {
@@ -244,6 +249,76 @@ function projectionGet<T>(store: KernelStore, tenantId: string, namespace: strin
   return store.transact(tenantId, (transaction) => transaction.getProjection<T>(namespace, id));
 }
 
+interface SubmittedSessionEntry {
+  readonly id: string;
+  readonly tenantId: string;
+  readonly workspaceId: string;
+  readonly threadId: string;
+  readonly executionId: string;
+  readonly role: "user";
+  readonly message: string;
+  readonly generation: number;
+  readonly createdAt: string;
+}
+
+async function threadTurns(
+  store: KernelStore,
+  tenantId: string,
+  threadId: string,
+): Promise<ThreadTurnsView> {
+  const executions = (await projectionList<Execution>(store, tenantId, "execution"))
+    .filter((execution) => execution.threadId === threadId)
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
+  const submittedEntries = await projectionList<SubmittedSessionEntry>(store, tenantId, "session-log-entry");
+  const runtime = new KernelProjectionRuntimeStore({ tenantId, store });
+  return {
+    threadId,
+    turns: await Promise.all(executions.map(async (execution) => {
+      const runtimeEntries = (await runtime.readExecution(execution.id))
+        .filter((record) => record.type === "session/entry")
+        .map(runtimeSessionEntry)
+        .filter((entry): entry is ThreadTurnSessionEntry => entry !== undefined);
+      const submitted = submittedEntries
+        .filter((entry) => entry.executionId === execution.id && entry.threadId === threadId)
+        .filter((entry) => !runtimeEntries.some((runtimeEntry) =>
+          runtimeEntry.role === "user" && runtimeEntry.content === entry.message))
+        .map((entry): ThreadTurnSessionEntry => ({
+          id: entry.id,
+          executionId: entry.executionId,
+          role: "user",
+          content: entry.message,
+          turn: 1,
+          sequence: 0,
+          occurredAt: entry.createdAt,
+        }));
+      return {
+        execution,
+        entries: [...submitted, ...runtimeEntries]
+          .sort((left, right) => left.sequence - right.sequence || left.id.localeCompare(right.id)),
+      };
+    })),
+  };
+}
+
+function runtimeSessionEntry(record: RuntimeRecord): ThreadTurnSessionEntry | undefined {
+  const role = record.payload.role;
+  if (role !== "user" && role !== "assistant" && role !== "tool") return undefined;
+  const content = record.payload.content;
+  const turn = record.payload.turn;
+  if (typeof content !== "string" || !Number.isSafeInteger(turn)) {
+    throw new Error("Session Log 记录无效");
+  }
+  return {
+    id: record.id,
+    executionId: record.executionId,
+    role,
+    content,
+    turn: turn as number,
+    sequence: record.sequence,
+    occurredAt: record.occurredAt,
+  };
+}
+
 async function authorizedWorkspace(
   store: KernelStore,
   tenantId: string,
@@ -375,6 +450,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
     agentOsProfile: profile,
   }));
   let server: Server | undefined;
+  let closePromise: Promise<void> | undefined;
   const inFlightAsyncMutations = new Map<string, Promise<unknown>>();
   const allowedOrigins = new Set([...DESKTOP_ORIGINS, ...(options.allowedOrigins ?? [])]);
 
@@ -533,6 +609,16 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         return json(thread, 201, traceId);
       }
       const turnMatch = url.pathname.match(/^\/v2\/workspaces\/([^/]+)\/threads\/([^/]+)\/turns$/u);
+      if (turnMatch && request.method === "GET") {
+        const workspaceId = decodeURIComponent(turnMatch[1]!);
+        const threadId = decodeURIComponent(turnMatch[2]!);
+        await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId);
+        const thread = await projectionGet<Thread>(options.store, TENANT_ID, "thread", threadId);
+        if (!thread || thread.workspaceId !== workspaceId) {
+          throw new KernelError("THREAD_NOT_FOUND", "会话不存在", "刷新工作区会话");
+        }
+        return json(await threadTurns(options.store, TENANT_ID, threadId), 200, traceId);
+      }
       if (turnMatch && request.method === "POST") {
         const body = await readBody(request);
         const workspaceId = decodeURIComponent(turnMatch[1]!);
@@ -1134,13 +1220,17 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
       return { host, port: typeof address === "object" && address ? address.port : port };
     },
     async close() {
-      if (server) {
-        await new Promise<void>((resolve, reject) => server!.close((error) => error ? reject(error) : resolve()));
-        server = undefined;
-      }
-      await context.fiber.dispose();
-      const close = (options.store as { close?: () => Promise<void> }).close;
-      if (close) await close.call(options.store);
+      closePromise ??= (async () => {
+        if (server) {
+          await new Promise<void>((resolve, reject) => server!.close((error) => error ? reject(error) : resolve()));
+          server = undefined;
+        }
+        await options.beforeStoreClose?.();
+        await context.fiber.dispose();
+        const close = (options.store as { close?: () => Promise<void> }).close;
+        if (close) await close.call(options.store);
+      })();
+      await closePromise;
     },
   };
 }

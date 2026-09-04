@@ -276,6 +276,37 @@ test("cancel 中止在途模型；resume 只接受 paused 或 interrupted", asyn
   }
 });
 
+test("Worker 停止会把在途模型标记为 interrupted", async () => {
+  const store = new InMemoryRuntimeStore();
+  const scope = executionScope();
+  let started!: () => void;
+  const modelStarted = new Promise<void>((resolve) => { started = resolve; });
+  scope.register("llm", {
+    id: "main",
+    complete: async (_request, context) => {
+      started();
+      await new Promise<void>((_resolve, reject) => {
+        context.signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      });
+      return { text: "不可达", toolCalls: [] };
+    },
+  });
+  const handle = await AgentHandle.open({
+    executionId: "execution-a",
+    scope,
+    store,
+    definition: { id: "assistant", llmId: "main", promptIds: [] },
+    authority,
+    approval: approveAuthorizedTools,
+  });
+  await handle.followUp("开始");
+  await modelStarted;
+  await handle.interrupt("Worker 已停止");
+  await handle.whenIdle();
+  assert.equal(handle.status, "interrupted");
+  assert.equal((await store.readExecution("execution-a")).at(-1)?.payload.status, "interrupted");
+});
+
 test("不确定外部副作用进入 needs_reconciliation，重启后不自动重放", async () => {
   const store = new InMemoryRuntimeStore();
   const scope = executionScope();

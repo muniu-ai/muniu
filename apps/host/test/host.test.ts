@@ -327,6 +327,13 @@ test("thread turn 只接受插件 Agent 与已连接模型，并原子排入 Wor
   assert.equal(authority.commitment.length, 64);
   assert.equal(store.readJobs("local")[0]?.payload.executionId, execution.id);
   assert.equal(store.readOutbox("local")[0]?.topic, "job.available");
+  const turns = await responseJson(await host.dispatch(new Request(
+    `http://host.test/v2/workspaces/${workspace.id}/threads/${thread.id}/turns`,
+  )));
+  assert.equal(turns.data.turns[0].execution.status, "queued");
+  assert.deepEqual(turns.data.turns[0].entries.map((entry: any) => [entry.role, entry.content]), [
+    ["user", "整理证据缺口"],
+  ]);
 
   const replay = await host.dispatch(jsonRequest(
     `/v2/workspaces/${workspace.id}/threads/${thread.id}/turns`, requestBody, "turn-submit",

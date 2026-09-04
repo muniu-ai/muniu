@@ -157,6 +157,25 @@ paths:
           $ref: "#/components/responses/Error"
       x-muniu-versioned: false
   /v2/workspaces/{workspaceId}/threads/{threadId}/turns:
+    get:
+      operationId: listThreadTurns
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: threadId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+      x-muniu-versioned: false
     post:
       operationId: createTurn
       parameters:
