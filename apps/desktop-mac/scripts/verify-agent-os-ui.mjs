@@ -275,6 +275,10 @@ async function verifyCoding(page, requestLog) {
   await expectText(page, "检查");
   await expectText(page, "审批");
   await expectText(page, "下一步");
+  await page.getByRole("button", { name: "打开任务" }).click();
+  await expectText(page, "Coding 任务");
+  await page.getByRole("button", { name: "返回任务列表" }).click();
+  await expectText(page, "统一 Agent OS API");
   if ((await page.locator("body").innerText()).includes("Harness 摘要")) throw new Error("经营视图不应显示 Harness");
   await page.getByTitle("技术配置").click();
   await page.getByRole("button", { name: "设置" }).click();

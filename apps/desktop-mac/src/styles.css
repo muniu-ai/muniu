@@ -385,6 +385,11 @@ pre { overflow: auto; padding: 10px; border-radius: 7px; color: #dce5dc; backgro
 .coding-icon { display: grid; width: 37px; height: 37px; flex: 0 0 auto; place-items: center; border-radius: 10px; color: var(--blue); background: var(--blue-soft); }
 .coding-card header .quiet-button { margin-left: auto; }
 .coding-result-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 17px; }
+.coding-detail-hero h1 { margin: 0; font-size: 23px; letter-spacing: -.03em; }
+.coding-detail-next { display: flex; gap: 14px; align-items: center; padding: 14px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.coding-detail-next span { display: flex; gap: 6px; align-items: center; color: var(--blue); font-size: 10px; font-weight: 750; }
+.coding-detail-next strong { font-size: 12px; }
+.coding-detail > .coding-result-grid { margin-top: 0; }
 .coding-result-grid > section { min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 9px; }
 .diff-summary, .approval-summary { display: flex; gap: 8px; align-items: flex-start; color: var(--blue); }
 .diff-summary p, .approval-summary p { margin: 1px 0 0; color: #59635b; font-size: 11px; line-height: 1.45; }
