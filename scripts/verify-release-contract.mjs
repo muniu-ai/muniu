@@ -22,7 +22,7 @@ async function readJson(rootDir, relativePath) {
 
 async function readWorkspacePackages(rootDir) {
   const workspaces = [];
-  for (const parent of ["apps", "packages"]) {
+  for (const parent of ["apps", "packages", "plugins"]) {
     const entries = await readdir(path.join(rootDir, parent), { withFileTypes: true });
     for (const entry of entries.filter((candidate) => candidate.isDirectory()).sort((a, b) => a.name.localeCompare(b.name))) {
       const relativePath = `${parent}/${entry.name}/package.json`;

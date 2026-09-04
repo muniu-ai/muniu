@@ -1,6 +1,6 @@
 image:
   repository: ghcr.io/muniu-ai/muniu
-  tag: 0.1.1
+  tag: 0.2.0
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
@@ -13,38 +13,33 @@ serviceAccount:
   name: ""
   automountServiceAccountToken: false
 
-api:
+host:
   replicas: 2
-  host: 0.0.0.0
+  bind: 0.0.0.0
   port: 7318
-  trustedCa:
-    existingSecret: ""
-    key: ca.crt
-    mountPath: /etc/muniu/model-ca
   resources:
     requests: { cpu: 250m, memory: 512Mi }
     limits: { cpu: "2", memory: 2Gi }
 
 worker:
-  # Enable after supplying the machine JWT and a shared PVC. Each claim gets a
-  # separate candidate Pod; fixtureMode only swaps the model executor for the
-  # deterministic acceptance implementation.
-  enabled: false
-  fixtureMode: false
+  enabled: true
   replicas: 2
-  capacity: 1
-  claimTtlMs: 30000
-  # Must describe the executable tool set actually present in the Worker and
-  # compatible with the active governance command allowlist.
-  tools: [node, npm]
+  leaseMs: 30000
+  fixtureMode: false
+  handlerModule: /opt/muniu/scripts/enterprise-worker-handlers.mjs
   resources:
     requests: { cpu: 250m, memory: 512Mi }
     limits: { cpu: "2", memory: 2Gi }
-  authExistingSecret: muniu-worker-auth
-  authTokenKey: token
 
-corsAllowlist: []
-enterpriseProjectRoots: ["/workspaces"]
+runtimeLocks:
+  engineDigest: 154c96a544775b9ef837aebc67909886a33f41f6f01537b24337049464f6265f
+  pluginDigest: 14dc9ad11d121d0362398acb6579582157f079c06067eb09e10d22d35a11bb78
+
+retention:
+  businessDays: 365
+  executionDays: 90
+  deliverableDays: 365
+  auditDays: 730
 
 service:
   type: ClusterIP
@@ -62,8 +57,8 @@ ingress:
   tls: []
 
 autoscaling:
-  api:
-    enabled: true
+  host:
+    enabled: false
     minReplicas: 2
     maxReplicas: 10
     targetCPUUtilizationPercentage: 70
@@ -85,14 +80,7 @@ networkPolicy:
   dnsNamespaceSelector:
     matchLabels:
       kubernetes.io/metadata.name: kube-system
-  # Standard NetworkPolicy egress rules for PostgreSQL, S3, OIDC/JWKS and
-  # OTLP destinations. Keep this explicit because policies cannot allow DNS
-  # names portably. Production values must narrow these selectors/CIDRs.
-  apiEgress: []
-  # Kubernetes API ClusterIP CIDR(s), normally a single /32. Both the API
-  # authority and Worker controller need these destinations; candidate Pods
-  # never do. CNIs that enforce after Service DNAT also require the API server
-  # endpoint CIDR and target port.
+  runtimeEgress: []
   kubernetesApiEgress: []
   kubernetesApiPorts: [443]
 
@@ -109,45 +97,47 @@ containerSecurityContext:
   capabilities: { drop: ["ALL"] }
 
 postgres:
-  existingSecret: muniu-postgres
+  schema: mn_v2
+  existingSecret: muniu-postgres-v2
   urlKey: url
+  poolSize: 10
+
+eventIntegrity:
+  existingSecret: muniu-event-integrity-v2
+  hmacKey: hmac-key
 
 s3:
-  endpointUrl: ""
+  endpoint: ""
   bucket: ""
   region: us-east-1
-  prefix: muniu
-  existingSecret: muniu-s3
+  prefix: v2/
+  existingSecret: muniu-s3-v2
   accessKeyIdKey: access-key-id
   secretAccessKeyKey: secret-access-key
-  agentAttachmentKeyKey: agent-attachment-key
   sessionTokenKey: session-token
-  kmsKeyId: ""
 
 oidc:
   issuer: ""
-  audience: muniu
+  audience: muniu-v2
   jwksUrl: ""
 
-otlp:
-  endpoint: ""
-  serviceName: mn-api
+vault:
+  address: ""
+  kvMount: secret
+  namespace: ""
+  existingSecret: ""
+  tokenKey: token
+  annotations: {}
 
-standardPackTrust:
-  existingSecret: muniu-standard-pack-trust
-  key: trust.json
+telemetry:
+  enabled: false
 
 sandbox:
   driver: kubernetes
-  image: ghcr.io/muniu-ai/muniu-sandbox:0.1.1
+  image: ghcr.io/muniu-ai/muniu-sandbox:0.2.0
   imageDigest: ""
-  attestationExistingSecret: muniu-sandbox-attestation
-  attestationKey: key
   serviceAccountName: ""
-  automountServiceAccountToken: false
   runtimeClassName: ""
-  networkPolicy: default-deny
-  hostPathAllowed: false
   sharedWorkspace:
     create: true
     existingClaim: ""
@@ -155,11 +145,6 @@ sandbox:
     accessModes: [ReadWriteMany]
     size: 20Gi
     mountPath: /work/sandboxes
-
-vault:
-  address: ""
-  role: ""
-  annotations: {}
 
 extraEnv: []
 nodeSelector: {}

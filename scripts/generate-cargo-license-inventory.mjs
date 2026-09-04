@@ -12,7 +12,7 @@ import {
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const lockPath = path.join(root, "apps/desktop-mac/src-tauri/Cargo.lock");
 const inventoryPath = path.join(root, "THIRD_PARTY_CARGO_LICENSES.json");
-const userAgent = "muniu-license-inventory/0.1 (https://github.com/muniu-ai/muniu)";
+const userAgent = "muniu-license-inventory/0.2 (https://github.com/muniu-ai/muniu)";
 
 const lockText = await readFile(lockPath, "utf8");
 const locked = parseCargoLockRegistryPackages(lockText);

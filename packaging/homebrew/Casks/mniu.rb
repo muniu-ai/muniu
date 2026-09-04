@@ -1,5 +1,5 @@
 cask "mniu" do
-  version "0.1.1"
+  version "0.2.0"
   # REPLACE_WITH_RELEASE_SHA256 before publishing.
   sha256 "0000000000000000000000000000000000000000000000000000000000000000"
 
@@ -7,7 +7,7 @@ cask "mniu" do
       verified: "github.com/muniu-ai/muniu/"
   name "Muniu"
   name "木牛"
-  desc "AI coding agent control plane for Claude Code and Codex CLI"
+  desc "Local-first Agent OS for opportunity validation and coding work"
   homepage "https://github.com/muniu-ai/muniu"
 
   depends_on macos: :monterey
@@ -17,8 +17,7 @@ cask "mniu" do
   uninstall quit: "dev.muniu.desktop"
 
   zap trash: [
-    "~/.muniu",
-    "~/.mniu",
+    "~/.muniu/v2",
     "~/Library/Application Support/dev.muniu.desktop",
     "~/Library/Preferences/dev.muniu.desktop.plist",
   ]

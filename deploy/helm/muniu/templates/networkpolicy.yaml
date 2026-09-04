@@ -7,9 +7,7 @@ spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/instance: {{ .Release.Name }}
-  policyTypes:
-    - Ingress
-    - Egress
+  policyTypes: [Ingress, Egress]
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -19,100 +17,63 @@ spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/instance: {{ .Release.Name }}
-  policyTypes:
-    - Egress
+  policyTypes: [Egress]
   egress:
     - to:
         - namespaceSelector:
 {{ toYaml .Values.networkPolicy.dnsNamespaceSelector | nindent 12 }}
       ports:
-        - protocol: UDP
-          port: 53
-        - protocol: TCP
-          port: 53
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "muniu.fullname" . }}-api-ingress
+  name: {{ include "muniu.fullname" . }}-host-ingress
 spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/instance: {{ .Release.Name }}
-      app.kubernetes.io/component: api
-  policyTypes:
-    - Ingress
+      app.kubernetes.io/component: host
+  policyTypes: [Ingress]
   ingress:
     - from:
         - namespaceSelector:
 {{ toYaml .Values.networkPolicy.ingressNamespaceSelector | nindent 12 }}
       ports:
-        - protocol: TCP
-          port: {{ .Values.api.port }}
-{{- with .Values.networkPolicy.apiEgress }}
+        - { protocol: TCP, port: {{ .Values.host.port }} }
+{{- if not .Values.networkPolicy.runtimeEgress }}{{- fail "networkPolicy.runtimeEgress is required" }}{{- end }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "muniu.fullname" $ }}-api-external-egress
+  name: {{ include "muniu.fullname" . }}-runtime-egress
 spec:
   podSelector:
     matchLabels:
-      app.kubernetes.io/instance: {{ $.Release.Name }}
-      app.kubernetes.io/component: api
-  policyTypes:
-    - Egress
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes: [Egress]
   egress:
-{{ toYaml . | nindent 4 }}
-{{- end }}
-{{- if eq .Values.sandbox.driver "kubernetes" }}
-{{- if not .Values.networkPolicy.kubernetesApiEgress }}{{- fail "networkPolicy.kubernetesApiEgress is required for sandbox.driver=kubernetes" }}{{- end }}
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: {{ include "muniu.fullname" . }}-kubernetes-api-egress
-spec:
-  podSelector:
-    matchExpressions:
-      - key: app.kubernetes.io/instance
-        operator: In
-        values: [{{ .Release.Name }}]
-      - key: app.kubernetes.io/component
-        operator: In
-        values: [api, worker]
-  policyTypes:
-    - Egress
-  egress:
-    - to:
-{{ toYaml .Values.networkPolicy.kubernetesApiEgress | nindent 8 }}
-      ports:
-{{- range .Values.networkPolicy.kubernetesApiPorts }}
-        - protocol: TCP
-          port: {{ . }}
-{{- end }}
+{{ toYaml .Values.networkPolicy.runtimeEgress | nindent 4 }}
 {{- if .Values.worker.enabled }}
+{{- if not .Values.networkPolicy.kubernetesApiEgress }}{{- fail "networkPolicy.kubernetesApiEgress is required" }}{{- end }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "muniu.fullname" . }}-worker-api-egress
+  name: {{ include "muniu.fullname" . }}-worker-kubernetes-egress
 spec:
   podSelector:
     matchLabels:
       app.kubernetes.io/instance: {{ .Release.Name }}
       app.kubernetes.io/component: worker
-  policyTypes:
-    - Egress
+  policyTypes: [Egress]
   egress:
     - to:
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/instance: {{ .Release.Name }}
-              app.kubernetes.io/component: api
+{{ toYaml .Values.networkPolicy.kubernetesApiEgress | nindent 8 }}
       ports:
-        - protocol: TCP
-          port: {{ .Values.api.port }}
+{{- range .Values.networkPolicy.kubernetesApiPorts }}
+        - { protocol: TCP, port: {{ . }} }
 {{- end }}
 {{- end }}
 ---
@@ -124,7 +85,5 @@ spec:
   podSelector:
     matchLabels:
       muniu.ai/component: candidate-sandbox
-  policyTypes:
-    - Ingress
-    - Egress
+  policyTypes: [Ingress, Egress]
 {{- end }}

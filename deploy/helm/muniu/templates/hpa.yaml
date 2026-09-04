@@ -1,4 +1,4 @@
-{{- range $component, $config := dict "api" .Values.autoscaling.api "worker" .Values.autoscaling.worker }}
+{{- range $component, $config := dict "host" .Values.autoscaling.host "worker" .Values.autoscaling.worker }}
 {{- if and $config.enabled (or (ne $component "worker") $.Values.worker.enabled) }}
 ---
 apiVersion: autoscaling/v2

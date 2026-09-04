@@ -1,5 +1,5 @@
 {{- if .Values.podDisruptionBudget.enabled }}
-{{- range $component := list "api" "worker" }}
+{{- range $component := list "host" "worker" }}
 {{- if or (ne $component "worker") $.Values.worker.enabled }}
 ---
 apiVersion: policy/v1

@@ -1,9 +1,9 @@
 apiVersion: v2
 name: muniu
-description: Muniu enterprise API and worker control plane
+description: 木牛 Agent OS 0.2 企业 Host 与 Worker
 type: application
-version: 0.1.1
-appVersion: 0.1.1
+version: 0.2.0
+appVersion: 0.2.0
 home: https://github.com/muniu-ai/muniu
 sources:
   - https://github.com/muniu-ai/muniu

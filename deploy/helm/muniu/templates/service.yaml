@@ -5,5 +5,5 @@ metadata:
   labels: {{- include "muniu.labels" . | nindent 4 }}
 spec:
   type: {{ .Values.service.type }}
-  selector: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: api }
+  selector: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: host }
   ports: [{ name: http, port: {{ .Values.service.port }}, targetPort: http }]

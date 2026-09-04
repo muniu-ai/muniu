@@ -253,7 +253,7 @@ export function validateAttributionPolicy({ notice, thirdParty, provenance }) {
 }
 
 function workspaceManifestForSource(sourcePath) {
-  const match = /^(packages|apps)\/([^/]+)\//u.exec(sourcePath);
+  const match = /^(packages|apps|plugins)\/([^/]+)\//u.exec(sourcePath);
   return match === null ? undefined : `${match[1]}/${match[2]}/package.json`;
 }
 

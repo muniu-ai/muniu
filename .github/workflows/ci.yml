@@ -70,20 +70,6 @@ jobs:
     name: Node build, typecheck, tests, enterprise fixture
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: mn
-          POSTGRES_PASSWORD: mn-e2e-only
-          POSTGRES_DB: mn_enterprise
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U mn -d mn_enterprise"
-          --health-interval 2s
-          --health-timeout 3s
-          --health-retries 30
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -104,14 +90,10 @@ jobs:
       - run: npm run docs:build
       - run: helm version --short
       - run: npm run verify:helm
-      - run: npm run test:coverage:agent
       - run: npm test
-      - name: Run PostgreSQL integration suites serially
-        env:
-          MN_TEST_POSTGRES_URL: postgresql://mn:mn-e2e-only@127.0.0.1:5432/mn_enterprise
-        run: >-
-          node --test --test-concurrency=1
-          apps/api/dist-test/test/*Postgres.test.js
+      - run: node --test scripts/test/deployment-v2.test.mjs
+      - run: node --test scripts/test/enterprise-runtime.test.mjs scripts/test/postgres-kernel-store.test.mjs
+      - run: docker compose -f docker-compose.enterprise.yml config --quiet
       - run: npm run verify:enterprise-fixture
 
   kubernetes-sandbox:
@@ -123,6 +105,9 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
       - name: Install pinned Kind
         env:
           GOBIN: ${{ runner.temp }}/bin
@@ -152,8 +137,8 @@ jobs:
       - run: npm run verify:mac-release
       - run: npm run typecheck:desktop
       - run: npm run build:desktop
-      - name: Build and smoke-test ignored desktop sidecars
-        run: npm run build:daemon-sidecar
+      - name: Build ignored mn-host sidecar
+        run: npm run build:host-sidecar
       - run: cargo check --locked
         working-directory: apps/desktop-mac/src-tauri
       - run: cargo test --locked

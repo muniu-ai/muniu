@@ -29,10 +29,15 @@ spec:
       containers:
         - name: migrate
           image: {{ include "muniu.image" . }}
-          args: ["apps/api/dist/migrate.js"]
+          args: ["scripts/migrate-v2.mjs"]
           securityContext: {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           env:
+            - { name: MN_POSTGRES_SCHEMA, value: mn_v2 }
+            - { name: MN_ENGINE_LOCK_DIGEST, value: {{ .Values.runtimeLocks.engineDigest | quote }} }
+            - { name: MN_PLUGIN_LOCK_DIGEST, value: {{ .Values.runtimeLocks.pluginDigest | quote }} }
             - name: MN_POSTGRES_URL
               valueFrom: { secretKeyRef: { name: {{ .Values.postgres.existingSecret }}, key: {{ .Values.postgres.urlKey }} } }
+            - name: MN_EVENT_HMAC_KEY
+              valueFrom: { secretKeyRef: { name: {{ .Values.eventIntegrity.existingSecret }}, key: {{ .Values.eventIntegrity.hmacKey }} } }
           volumeMounts: [{ name: tmp, mountPath: /tmp }]
       volumes: [{ name: tmp, emptyDir: {} }]

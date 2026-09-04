@@ -31,8 +31,8 @@ export function validateReleaseContract(input, options = {}) {
   const failures = [];
   const version = input.rootPackage?.version;
 
-  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u.test(version ?? "")) {
-    failures.push(`root package version must be semantic, received ${String(version)}`);
+  if (!/^0\.2\.\d+(?:-[0-9A-Za-z.-]+)?$/u.test(version ?? "")) {
+    failures.push(`root package version must be an Agent OS 0.2 release, received ${String(version)}`);
   }
   requireRepository(failures, input.rootPackage?.repository, "root package");
   if (input.rootPackage?.packageManager !== `npm@${NPM_VERSION}`) {
@@ -98,10 +98,11 @@ export function validateReleaseContract(input, options = {}) {
     [`NODE_VERSION: ${NODE_VERSION}`, "pinned Node version"],
     [`NPM_VERSION: ${NPM_VERSION}`, "pinned npm version"],
     ["IMAGE: ghcr.io/muniu-ai/muniu", "canonical GHCR image"],
-    ["npm run build:daemon-sidecar", "macOS Desktop daemon build"],
-    ["postgres:", "PostgreSQL service"],
-    ["MN_TEST_POSTGRES_URL:", "PostgreSQL integration environment"],
-    ["apps/api/dist-test/test/*Postgres.test.js", "PostgreSQL integration suites"],
+    ["npm run build:host-sidecar", "macOS Desktop Host build"],
+    ["node --test scripts/test/deployment-v2.test.mjs", "deployment contract tests"],
+    ["docker compose -f docker-compose.enterprise.yml config --quiet", "enterprise Compose validation"],
+    ["npm run verify:enterprise-fixture", "enterprise fixture"],
+    ["scripts/verify-kind-sandbox.sh", "Kind recovery fixture"],
     ['npm run verify:release -- --tag "${RELEASE_TAG}"', "tag/version contract gate"],
     ["git archive --format=tar.gz", "source archive"],
     ["npm sbom --sbom-format spdx --omit=dev", "production dependency SBOM"],
@@ -126,8 +127,7 @@ export function validateReleaseContract(input, options = {}) {
     `muniu-v${version}.tar.gz`,
     `muniu-v${version}.spdx.json`,
     `ghcr.io/muniu-ai/muniu:v${version}`,
-    "macOS Desktop 只完成构建验证",
-    `v${version} 不发布或启用桌面运行时 updater`
+    "Agent OS 0.2"
   ]) {
     requireText(failures, technicalDesign, expected, "technical design release boundary");
   }

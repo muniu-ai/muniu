@@ -412,6 +412,36 @@ test("workspace source license policy permits MIT only for exact provenance-back
   assert.equal(failures.some((failure) => /unlisted\.ts has an unlisted DeepSeek MIT notice/u.test(failure)), true);
 });
 
+test("workspace source license policy maps plugin provenance to its manifest", () => {
+  const provenance = [
+    "schemaVersion: 2",
+    "upstream:",
+    "  approvedSourceCommits:",
+    "    - 47f943859bef60e4160492346772ded9b24f765a",
+    "    - 141eb6fef83422698aef7a981029e843e8161534",
+    "files:",
+    "  - upstreamPath: packages/core/agent-loop/src/agent.ts",
+    "    localPath: plugins/coding/src/react-driver.ts",
+    "    upstreamCommit: 141eb6fef83422698aef7a981029e843e8161534",
+    "    mode: adapted",
+    "    summary: Coding plugin loop adaptation."
+  ].join("\n");
+  const source = [
+    "/*",
+    " * 141eb6fef83422698aef7a981029e843e8161534.",
+    " * Original path: packages/core/agent-loop/src/agent.ts",
+    " * Copyright (c) 2026 DeepSeek",
+    " * SPDX-License-Identifier: MIT",
+    " */"
+  ].join("\n");
+
+  assert.deepEqual(validateWorkspaceSourceLicenses({
+    manifests: [{ path: "plugins/coding/package.json", license: "Apache-2.0 AND MIT" }],
+    provenance,
+    sourceFiles: [{ path: "plugins/coding/src/react-driver.ts", text: source }]
+  }), []);
+});
+
 test("workspace source license policy fails closed on bad provenance metadata and headers", () => {
   const failures = validateWorkspaceSourceLicenses({
     manifests: [{ path: "packages/agent-kernel/package.json", license: "Apache-2.0 AND MIT" }],

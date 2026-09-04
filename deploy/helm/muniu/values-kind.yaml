@@ -1,30 +1,19 @@
 image:
-  repository: localhost:5001/muniu-kind
+  repository: muniu-kind
   tag: ci
-  pullPolicy: Always
+  pullPolicy: Never
 
-api:
-  replicas: 1
-  trustedCa:
-    existingSecret: muniu-kind-fixture-tls
-    key: tls.crt
-    mountPath: /etc/muniu/fixture-model-ca
+host:
+  replicas: 2
 
 worker:
-  enabled: false
-  fixtureMode: false
+  enabled: true
   replicas: 2
-  capacity: 1
-  claimTtlMs: 15000
-  # The deterministic fixture exercises node/npm. The broader declaration is
-  # needed to match the built-in multi-language governance policy under test.
-  tools: [npm, pnpm, yarn, node, npx, tsc, vitest, go, cargo, pytest, python, git]
-
-corsAllowlist: [http://127.0.0.1:4173]
-enterpriseProjectRoots: [/work/sandboxes]
+  leaseMs: 30000
+  fixtureMode: true
 
 autoscaling:
-  api: { enabled: false }
+  host: { enabled: false }
   worker: { enabled: false }
 
 podDisruptionBudget:
@@ -38,52 +27,41 @@ networkPolicy:
       kubernetes.io/metadata.name: muniu-kind
   kubernetesApiEgress:
     - ipBlock: { cidr: 10.96.0.1/32 }
-    # Calico enforces this egress rule after Service DNAT in the one-node Kind
-    # topology, where the API endpoint is the first Kind-network container.
     - ipBlock: { cidr: 172.18.0.2/32 }
   kubernetesApiPorts: [443, 6443]
-  apiEgress:
+  runtimeEgress:
     - to:
         - podSelector:
-            matchLabels: { muniu.ai/adapter: "true" }
+            matchLabels: { muniu.ai/runtime-dependency: "true" }
       ports:
         - { protocol: TCP, port: 5432 }
         - { protocol: TCP, port: 9000 }
         - { protocol: TCP, port: 8080 }
-        - { protocol: TCP, port: 8443 }
 
 postgres:
-  existingSecret: muniu-postgres
+  existingSecret: muniu-postgres-v2
+
+eventIntegrity:
+  existingSecret: muniu-event-integrity-v2
 
 s3:
-  endpointUrl: http://muniu-kind-minio:9000
-  bucket: muniu-kind
+  endpoint: http://muniu-kind-minio:9000
+  bucket: muniu-kind-v2
   region: us-east-1
-  prefix: kind-failover
-  existingSecret: muniu-s3
+  prefix: v2/kind-failover/
+  existingSecret: muniu-s3-v2
 
 oidc:
   issuer: http://muniu-kind-fixture:8080
-  audience: muniu-kind
+  audience: muniu-kind-v2
   jwksUrl: http://muniu-kind-fixture:8080/jwks.json
-
-otlp:
-  endpoint: http://muniu-kind-fixture:8080/otlp
-  serviceName: muniu-kind-api
-
-standardPackTrust:
-  existingSecret: muniu-standard-pack-trust
 
 sandbox:
   driver: kubernetes
   image: localhost:5001/muniu-kind:ci
   imageDigest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-  attestationExistingSecret: muniu-sandbox-attestation
   runtimeClassName: muniu-sandbox
   sharedWorkspace:
     create: false
     existingClaim: muniu-kind-sandboxes
     mountPath: /work/sandboxes
-
-extraEnv:
-  - { name: NODE_EXTRA_CA_CERTS, value: /etc/muniu/fixture-model-ca/ca.crt }

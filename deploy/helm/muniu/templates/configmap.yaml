@@ -1,6 +1,11 @@
-{{- if ne .Values.sandbox.driver "kubernetes" }}{{- fail "the Kubernetes chart requires sandbox.driver=kubernetes" }}{{- end }}
-{{- if not (regexMatch "^[a-f0-9]{64}$" .Values.sandbox.imageDigest) }}{{- fail "sandbox.imageDigest must be 64 lowercase hexadecimal characters" }}{{- end }}
-{{- if and (not .Values.sandbox.sharedWorkspace.create) (not .Values.sandbox.sharedWorkspace.existingClaim) }}{{- fail "sandbox.sharedWorkspace.existingClaim is required when create=false" }}{{- end }}
+{{- if ne .Values.postgres.schema "mn_v2" }}{{- fail "postgres.schema must be mn_v2" }}{{- end }}
+{{- if not (regexMatch "^v2/" .Values.s3.prefix) }}{{- fail "s3.prefix must remain under v2/" }}{{- end }}
+{{- if ne (int .Values.worker.leaseMs) 30000 }}{{- fail "worker.leaseMs must be 30000" }}{{- end }}
+{{- if .Values.telemetry.enabled }}{{- fail "telemetry must remain disabled by default" }}{{- end }}
+{{- if not (regexMatch "^[a-f0-9]{64}$" .Values.runtimeLocks.engineDigest) }}{{- fail "runtimeLocks.engineDigest must be a SHA-256 digest" }}{{- end }}
+{{- if not (regexMatch "^[a-f0-9]{64}$" .Values.runtimeLocks.pluginDigest) }}{{- fail "runtimeLocks.pluginDigest must be a SHA-256 digest" }}{{- end }}
+{{- if or (lt (int .Values.retention.businessDays) 1) (lt (int .Values.retention.executionDays) 1) (lt (int .Values.retention.deliverableDays) 1) (lt (int .Values.retention.auditDays) 1) }}{{- fail "all retention policies must be configured" }}{{- end }}
+{{- if and .Values.worker.enabled (ne .Values.sandbox.driver "kubernetes") }}{{- fail "enterprise worker requires sandbox.driver=kubernetes" }}{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -8,27 +13,35 @@ metadata:
   labels: {{- include "muniu.labels" . | nindent 4 }}
 data:
   MN_RUNTIME_PROFILE: enterprise
-  MN_API_HOST: {{ .Values.api.host | quote }}
-  MN_API_PORT: {{ .Values.api.port | quote }}
-  MN_WORKSPACE_ROOT: /tmp/muniu-worktrees
-  MN_CORS_ALLOWLIST: {{ required "corsAllowlist is required" (join "," .Values.corsAllowlist) | quote }}
-  MN_ENTERPRISE_PROJECT_ROOTS: {{ join "," .Values.enterpriseProjectRoots | quote }}
+  MN_HOST_BIND: {{ .Values.host.bind | quote }}
+  MN_HOST_PORT: {{ .Values.host.port | quote }}
+  MN_POSTGRES_SCHEMA: mn_v2
+  MN_POSTGRES_POOL_SIZE: {{ .Values.postgres.poolSize | quote }}
+  MN_S3_ENDPOINT: {{ required "s3.endpoint is required" .Values.s3.endpoint | quote }}
+  MN_S3_BUCKET: {{ required "s3.bucket is required" .Values.s3.bucket | quote }}
+  MN_S3_REGION: {{ .Values.s3.region | quote }}
+  MN_S3_PREFIX: {{ .Values.s3.prefix | quote }}
+  MN_JOB_LEASE_MS: {{ .Values.worker.leaseMs | quote }}
+  MN_WORKER_HANDLER_MODULE: {{ .Values.worker.handlerModule | quote }}
+  MN_WORKER_FIXTURE_MODE: {{ .Values.worker.fixtureMode | quote }}
+  MN_ENGINE_LOCK_DIGEST: {{ .Values.runtimeLocks.engineDigest | quote }}
+  MN_PLUGIN_LOCK_DIGEST: {{ .Values.runtimeLocks.pluginDigest | quote }}
+  MN_EXPECTED_ENGINE_LOCK_DIGEST: {{ .Values.runtimeLocks.engineDigest | quote }}
+  MN_EXPECTED_PLUGIN_LOCK_DIGEST: {{ .Values.runtimeLocks.pluginDigest | quote }}
+  MN_RETENTION_BUSINESS_DAYS: {{ .Values.retention.businessDays | quote }}
+  MN_RETENTION_EXECUTION_DAYS: {{ .Values.retention.executionDays | quote }}
+  MN_RETENTION_DELIVERABLE_DAYS: {{ .Values.retention.deliverableDays | quote }}
+  MN_RETENTION_AUDIT_DAYS: {{ .Values.retention.auditDays | quote }}
   MN_OIDC_ISSUER: {{ required "oidc.issuer is required" .Values.oidc.issuer | quote }}
   MN_OIDC_AUDIENCE: {{ required "oidc.audience is required" .Values.oidc.audience | quote }}
   MN_OIDC_JWKS_URL: {{ required "oidc.jwksUrl is required" .Values.oidc.jwksUrl | quote }}
-  MN_OTEL_EXPORTER_OTLP_ENDPOINT: {{ required "otlp.endpoint is required" .Values.otlp.endpoint | quote }}
-  MN_OTEL_SERVICE_NAME: {{ .Values.otlp.serviceName | quote }}
-  MN_ARTIFACT_REMOTE_STORE_TYPE: s3
-  MN_ARTIFACT_REMOTE_STORE_ENDPOINT_URL: {{ required "s3.endpointUrl is required" .Values.s3.endpointUrl | quote }}
-  MN_ARTIFACT_REMOTE_STORE_BUCKET: {{ required "s3.bucket is required" .Values.s3.bucket | quote }}
-  MN_ARTIFACT_OBJECT_STORE_LOCAL_BACKEND_PATH: /tmp/muniu-artifact-mirror
-  MN_ARTIFACT_S3_REGION: {{ .Values.s3.region | quote }}
-  MN_ARTIFACT_REMOTE_STORE_PREFIX: {{ .Values.s3.prefix | quote }}
-  MN_AGENT_SESSION_KMS_KEY_ID: {{ .Values.s3.kmsKeyId | quote }}
-  MN_STANDARD_PACK_TRUST_FILE: /etc/muniu/trust/trust.json
+  MN_VAULT_ADDR: {{ .Values.vault.address | quote }}
+  MN_VAULT_KV_MOUNT: {{ .Values.vault.kvMount | quote }}
+  MN_VAULT_NAMESPACE: {{ .Values.vault.namespace | quote }}
+  MN_TELEMETRY_ENABLED: "false"
+  MN_SANDBOX_RUNTIME_DRIVER: kubernetes
   MN_ENTERPRISE_SANDBOX_IMAGE: {{ .Values.sandbox.image | quote }}
   MN_ENTERPRISE_SANDBOX_IMAGE_DIGEST: {{ required "sandbox.imageDigest is required" .Values.sandbox.imageDigest | quote }}
-  MN_SANDBOX_RUNTIME_DRIVER: {{ .Values.sandbox.driver | quote }}
   MN_KUBERNETES_NAMESPACE: {{ .Release.Namespace | quote }}
   MN_KUBERNETES_SHARED_VOLUME_CLAIM: {{ include "muniu.sharedWorkspaceClaimName" . | quote }}
   MN_KUBERNETES_SHARED_ROOT: {{ .Values.sandbox.sharedWorkspace.mountPath | quote }}

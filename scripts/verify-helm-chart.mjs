@@ -1,153 +1,76 @@
+#!/usr/bin/env node
 // SPDX-License-Identifier: Apache-2.0
 
 import { spawnSync } from "node:child_process";
 
 const chart = "deploy/helm/muniu";
-const values = `${chart}/values-ci.yaml`;
+const ciValues = `${chart}/values-ci.yaml`;
 const kindValues = `${chart}/values-kind.yaml`;
 
-function helm(args, expectSuccess = true) {
+function helm(args, success = true) {
   const result = spawnSync("helm", args, { encoding: "utf8" });
-  const output = `${result.stdout ?? ""}${result.stderr ?? ""}${
-    result.error ? `${result.error.message}\n` : ""
-  }`;
-  if (expectSuccess && result.status !== 0) {
-    throw new Error(`helm ${args.join(" ")} failed:\n${output}`);
-  }
-  if (!expectSuccess && result.status === 0) {
-    throw new Error(`helm ${args.join(" ")} unexpectedly succeeded`);
+  const output = `${result.stdout ?? ""}${result.stderr ?? ""}${result.error?.message ?? ""}`;
+  if (success !== (result.status === 0)) {
+    throw new Error(`helm ${args.join(" ")} ${success ? "失败" : "意外成功"}\n${output}`);
   }
   return output;
 }
 
-helm(["lint", chart, "--values", values]);
-const rendered = helm(["template", "muniu", chart, "--values", values]);
-if (!rendered.includes("name: muniu-api")) {
-  throw new Error("default chart does not render the API deployment");
-}
-if (rendered.includes("app.kubernetes.io/component: worker")) {
-  throw new Error("default chart unexpectedly renders Worker resources");
-}
-if (!rendered.includes("name: muniu-api-external-egress")) {
-  throw new Error("CI chart values do not render the explicit API egress policy");
-}
-
-const production = helm([
-  "template",
-  "muniu",
-  chart,
-  "--values",
-  values,
-  "--set",
-  "worker.enabled=true"
-]);
-if (!production.includes("name: muniu-worker\n") || !production.includes("- --sandbox-driver\n            - kubernetes")) {
-  throw new Error("production chart does not render the Kubernetes Worker");
-}
-if (production.includes("            - --mock\n")) {
-  throw new Error("production Worker unexpectedly uses the fixture executor");
-}
+helm(["lint", chart, "--values", ciValues]);
+const rendered = helm(["template", "muniu", chart, "--values", ciValues]);
 for (const required of [
-  "name: muniu-migrate",
-  'helm.sh/hook-weight: "-10"',
-  "serviceAccountName: muniu-migrate",
-  "name: muniu-candidate",
+  "name: muniu-host",
+  "name: muniu-worker",
+  "replicas: 2",
+  "scripts/enterprise-host.mjs",
+  "scripts/enterprise-worker.mjs",
+  "scripts/migrate-v2.mjs",
+  "path: /v2/readiness",
+  "path: /v2/health",
+  "MN_POSTGRES_SCHEMA: mn_v2",
+  "MN_JOB_LEASE_MS: \"30000\"",
+  "MN_S3_PREFIX: \"v2/\"",
+  "MN_EXPECTED_ENGINE_LOCK_DIGEST",
+  "MN_EXPECTED_PLUGIN_LOCK_DIGEST",
+  "MN_TELEMETRY_ENABLED: \"false\"",
+  "app.kubernetes.io/component: host",
   "name: muniu-worker-sandbox-controller",
-  "name: muniu-api-sandbox-authority",
-  'resources: ["pods/exec"]',
-  "name: muniu-sandbox-workspaces",
-  "name: MN_KUBERNETES_RUNTIME_CLASS",
-  "name: MN_WORKER_TOOLS",
   "name: muniu-sandbox-default-deny",
-  "name: muniu-kubernetes-api-egress",
-  "name: muniu-worker-api-egress"
 ]) {
-  if (!production.includes(required)) {
-    throw new Error(`production chart is missing Kubernetes boundary: ${required}`);
-  }
+  if (!rendered.includes(required)) throw new Error(`Helm 输出缺少：${required}`);
 }
-if (!/kind: ServiceAccount[\s\S]*?name: muniu-migrate[\s\S]*?automountServiceAccountToken: false/u.test(production)) {
-  throw new Error("migration hook must own a tokenless pre-install ServiceAccount");
+for (const forbidden of ["apps/api", "mn-api", "app.kubernetes.io/component: api"]) {
+  if (rendered.includes(forbidden)) throw new Error(`Helm 输出仍包含旧控制面：${forbidden}`);
 }
-if (!production.includes("name: MN_API_INSTANCE_ID") ||
-    !production.includes("fieldPath: metadata.name")) {
-  throw new Error("production API does not bind durable ownership to its Pod identity");
+if ((rendered.match(/strategy:\s*(?:\n\s+type:\s*Recreate|\{\s*type:\s*Recreate\s*\})/gu) ?? []).length < 2) {
+  throw new Error("Host 和 Worker 必须拒绝混合版本滚动升级");
 }
-if (!production.includes("name: MN_WORKER_INSTANCE_ID") ||
-    !production.includes("fieldPath: metadata.name")) {
-  throw new Error("production Workers do not bind queue ownership to their Pod identity");
-}
-if (!production.includes("name: HOME") ||
-    !production.includes("value: /opt/muniu") ||
-    !production.includes("mountPath: /opt/muniu/.muniu")) {
-  throw new Error("production API HOME must resolve inside the writable state mount");
-}
-if (!production.includes("MN_WORKSPACE_ROOT: /tmp/muniu-worktrees") ||
-    !production.includes("mountPath: /tmp")) {
-  throw new Error("production API workspace must resolve inside the writable tmp mount");
-}
-if (!/name: muniu-candidate[\s\S]*?automountServiceAccountToken: false/u.test(production)) {
-  throw new Error("candidate ServiceAccount must not mount a Kubernetes token");
-}
-if (/\bhostPath\s*:/u.test(production)) {
-  throw new Error("production chart must not render hostPath volumes");
+if (/\bhostPath\s*:/u.test(rendered)) throw new Error("生产 chart 不得挂载 hostPath");
+
+for (const [setting, expected] of [
+  ["postgres.schema=public", "postgres.schema must be mn_v2"],
+  ["s3.prefix=legacy/", "s3.prefix must remain under v2/"],
+  ["worker.leaseMs=29999", "worker.leaseMs must be 30000"],
+  ["telemetry.enabled=true", "telemetry must remain disabled"],
+  ["retention.auditDays=0", "all retention policies must be configured"],
+  ["runtimeLocks.engineDigest=latest", "runtimeLocks.engineDigest must be a SHA-256 digest"],
+]) {
+  const output = helm(["template", "muniu", chart, "--values", ciValues, "--set", setting], false);
+  if (!output.includes(expected)) throw new Error(`${setting} 未按预期 fail closed`);
 }
 
-const invalidDriver = helm([
-  "template",
-  "muniu",
-  chart,
-  "--values",
-  values,
-  "--set",
-  "sandbox.driver=docker"
-], false);
-if (!invalidDriver.includes("requires sandbox.driver=kubernetes")) {
-  throw new Error("unsupported in-cluster Docker driver did not fail closed");
-}
-
-const fixture = helm([
-  "template",
-  "muniu",
-  chart,
-  "--values",
-  values,
-  "--set",
-  "worker.enabled=true",
-  "--set",
-  "worker.fixtureMode=true"
-]);
-if (!fixture.includes("            - --mock\n")) {
-  throw new Error("fixture Worker does not explicitly use the mock executor");
-}
-
-const kind = helm([
-  "template",
-  "muniu",
-  chart,
-  "--namespace",
-  "muniu-kind",
-  "--values",
-  kindValues,
-  "--set",
-  "api.replicas=2",
-  "--set",
-  "worker.enabled=true"
-]);
+const kind = helm(["template", "muniu", chart, "--namespace", "muniu-kind", "--values", kindValues]);
 for (const required of [
-  "name: muniu-postgres",
+  "secretKeyRef: { name: muniu-postgres-v2, key: url }",
+  "name: muniu-event-integrity-v2",
   "http://muniu-kind-minio:9000",
-  "http://muniu-kind-fixture:8080",
-  "NODE_EXTRA_CA_CERTS",
-  "secretName: muniu-kind-fixture-tls",
-  "port: 8443",
+  "http://muniu-kind-fixture:8080/jwks.json",
+  "MN_S3_PREFIX: \"v2/kind-failover/\"",
   "claimName: muniu-kind-sandboxes",
   "cidr: 172.18.0.2/32",
-  "port: 6443"
+  "port: 6443",
 ]) {
-  if (!kind.includes(required)) {
-    throw new Error(`Kind profile is missing the enterprise fixture binding: ${required}`);
-  }
+  if (!kind.includes(required)) throw new Error(`Kind values 缺少：${required}`);
 }
 
-console.log("Helm chart verification passed");
+process.stdout.write("Helm v2 部署契约通过\n");

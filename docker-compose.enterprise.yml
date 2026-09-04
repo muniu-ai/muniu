@@ -1,4 +1,54 @@
-name: mn-enterprise-e2e
+name: mn-v2-enterprise
+
+x-locks: &locks
+  MN_ENGINE_LOCK_DIGEST: 154c96a544775b9ef837aebc67909886a33f41f6f01537b24337049464f6265f
+  MN_PLUGIN_LOCK_DIGEST: 14dc9ad11d121d0362398acb6579582157f079c06067eb09e10d22d35a11bb78
+  MN_EXPECTED_ENGINE_LOCK_DIGEST: 154c96a544775b9ef837aebc67909886a33f41f6f01537b24337049464f6265f
+  MN_EXPECTED_PLUGIN_LOCK_DIGEST: 14dc9ad11d121d0362398acb6579582157f079c06067eb09e10d22d35a11bb78
+
+x-runtime-environment: &runtime-environment
+  <<: *locks
+  MN_RUNTIME_PROFILE: enterprise
+  MN_POSTGRES_URL: postgres://mn:mn-e2e-only@postgres:5432/mn_enterprise
+  MN_POSTGRES_SCHEMA: mn_v2
+  MN_EVENT_HMAC_KEY: ZW50ZXJwcmlzZS1lMmUtaG1hYy1maXh0dXJlLWtleS0wMg==
+  MN_S3_ENDPOINT: http://minio:9000
+  MN_S3_BUCKET: mn-v2-artifacts
+  MN_S3_REGION: us-east-1
+  MN_S3_PREFIX: v2/
+  MN_S3_ACCESS_KEY_ID: mn-e2e
+  MN_S3_SECRET_ACCESS_KEY: mn-e2e-secret-only
+  MN_RETENTION_BUSINESS_DAYS: "365"
+  MN_RETENTION_EXECUTION_DAYS: "90"
+  MN_RETENTION_DELIVERABLE_DAYS: "365"
+  MN_RETENTION_AUDIT_DAYS: "730"
+  MN_JOB_LEASE_MS: "30000"
+  MN_TELEMETRY_ENABLED: "false"
+  MN_OIDC_ISSUER: http://jwks:8080
+  MN_OIDC_AUDIENCE: mn-v2-enterprise
+  MN_OIDC_JWKS_URL: http://jwks:8080/jwks.json
+
+x-runtime: &runtime
+  image: mn-agent-os:0.2-enterprise-fixture
+  build:
+    context: .
+    dockerfile: Dockerfile
+  read_only: true
+  tmpfs:
+    - /tmp:size=64m,mode=1777
+  security_opt:
+    - no-new-privileges:true
+  networks: [mn-v2]
+
+x-runtime-dependencies: &runtime-dependencies
+  postgres:
+    condition: service_healthy
+  minio-init:
+    condition: service_completed_successfully
+  migrate:
+    condition: service_completed_successfully
+  jwks:
+    condition: service_healthy
 
 services:
   postgres:
@@ -10,14 +60,14 @@ services:
     ports:
       - "55432:5432"
     volumes:
-      - mn-enterprise-postgres:/var/lib/postgresql/data
+      - mn-v2-postgres:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U mn -d mn_enterprise"]
       interval: 2s
       timeout: 3s
       retries: 30
       start_period: 5s
-    networks: [mn-enterprise, mn-host]
+    networks: [mn-v2]
 
   minio:
     image: minio/minio:RELEASE.2025-04-22T22-12-26Z
@@ -27,70 +77,124 @@ services:
       MINIO_ROOT_PASSWORD: mn-e2e-secret-only
     ports:
       - "59000:9000"
-      - "59001:9001"
     volumes:
-      - mn-enterprise-minio:/data
+      - mn-v2-minio:/data
     healthcheck:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
       interval: 2s
       timeout: 3s
       retries: 30
       start_period: 5s
-    networks: [mn-enterprise, mn-host]
+    networks: [mn-v2]
 
   minio-init:
     image: minio/mc:RELEASE.2025-04-16T18-13-26Z
     depends_on:
       minio:
         condition: service_healthy
-    entrypoint:
-      - /bin/sh
-      - -ec
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
       - |
-        mc alias set local http://minio:9000 mn-e2e mn-e2e-secret-only
-        mc mb --ignore-existing local/mn-artifacts
-        mc anonymous set none local/mn-artifacts
+        mc alias set fixture http://minio:9000 mn-e2e mn-e2e-secret-only
+        mc mb --ignore-existing fixture/mn-v2-artifacts
+        mc anonymous set none fixture/mn-v2-artifacts
     restart: "no"
-    networks: [mn-enterprise]
+    networks: [mn-v2]
 
   jwks:
-    image: node:22-alpine
-    working_dir: /fixture
-    command: ["node", "infra/jwks-server.mjs"]
+    <<: *runtime
+    command: ["scripts/jwks-fixture.mjs"]
     environment:
       JWKS_PORT: "8080"
       JWKS_ISSUER: http://jwks:8080
-      JWKS_AUDIENCE: mn-enterprise
+      JWKS_AUDIENCE: mn-v2-enterprise
     ports:
       - "59080:8080"
-    volumes:
-      - ./examples/microservice-repo:/fixture:ro
-    read_only: true
-    tmpfs:
-      - /tmp:size=16m,mode=1777
-    security_opt:
-      - no-new-privileges:true
     healthcheck:
-      test:
-        [
-          "CMD",
-          "node",
-          "-e",
-          "fetch('http://127.0.0.1:8080/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
-        ]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 2s
       timeout: 3s
       retries: 30
-      start_period: 3s
-    networks: [mn-enterprise, mn-host]
+    networks: [mn-v2]
+
+  migrate:
+    <<: *runtime
+    command: ["scripts/migrate-v2.mjs"]
+    environment: *runtime-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    restart: "no"
+
+  host-a:
+    <<: *runtime
+    command: ["scripts/enterprise-host.mjs"]
+    environment:
+      <<: *runtime-environment
+      MN_HOST_INSTANCE_ID: host-a
+      MN_HOST_BIND: 0.0.0.0
+      MN_HOST_PORT: "7318"
+    depends_on: *runtime-dependencies
+    ports:
+      - "17318:7318"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:7318/v2/readiness').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  host-b:
+    <<: *runtime
+    command: ["scripts/enterprise-host.mjs"]
+    environment:
+      <<: *runtime-environment
+      MN_HOST_INSTANCE_ID: host-b
+      MN_HOST_BIND: 0.0.0.0
+      MN_HOST_PORT: "7318"
+    depends_on: *runtime-dependencies
+    ports:
+      - "17319:7318"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:7318/v2/readiness').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  worker-a:
+    <<: *runtime
+    command: ["scripts/enterprise-worker.mjs"]
+    environment:
+      <<: *runtime-environment
+      MN_WORKER_INSTANCE_ID: worker-a
+      MN_WORKER_FIXTURE_MODE: "true"
+    depends_on: *runtime-dependencies
+    healthcheck:
+      test: ["CMD", "node", "-e", "const s=require('node:fs').statSync('/tmp/mn-worker-ready');process.exit(Date.now()-s.mtimeMs<5000?0:1)"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  worker-b:
+    <<: *runtime
+    command: ["scripts/enterprise-worker.mjs"]
+    environment:
+      <<: *runtime-environment
+      MN_WORKER_INSTANCE_ID: worker-b
+      MN_WORKER_FIXTURE_MODE: "true"
+    depends_on: *runtime-dependencies
+    healthcheck:
+      test: ["CMD", "node", "-e", "const s=require('node:fs').statSync('/tmp/mn-worker-ready');process.exit(Date.now()-s.mtimeMs<5000?0:1)"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
 
 volumes:
-  mn-enterprise-postgres:
-  mn-enterprise-minio:
+  mn-v2-postgres:
+  mn-v2-minio:
 
 networks:
-  mn-enterprise:
+  mn-v2:
     driver: bridge
     internal: true
-  mn-host:
-    driver: bridge
