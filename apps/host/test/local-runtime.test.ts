@@ -220,8 +220,10 @@ test("关闭本地 Host 会中断在途模型后再关闭 SQLite", async () => {
         .find((candidate) => candidate.payload.executionId === executionId),
     }));
     assert.equal(state.runtime.records.at(-1).payload.status, "interrupted");
-    assert.equal(state.execution.status, "running");
-    assert.equal(state.job.status, "leased");
+    assert.equal(state.execution.status, "interrupted");
+    assert.equal(state.execution.finishedAt, undefined);
+    assert.equal(state.job.status, "failed");
+    assert.equal(state.job.failure.code, "EXECUTION_INTERRUPTED");
     await inspected.close();
   } finally {
     await host?.close();

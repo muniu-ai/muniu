@@ -39,6 +39,7 @@ class FakeStore implements WorkerJobStore {
   claimed: StoredJob | undefined = job();
   completed: Array<[string, number, JsonValue]> = [];
   failed: Array<[string, number, JsonObject]> = [];
+  interrupted: Array<[string, number, string]> = [];
   reconciliations: string[] = [];
   renewals = 0;
   renewFailure: unknown;
@@ -46,6 +47,9 @@ class FakeStore implements WorkerJobStore {
   async claimJob() { this.claims += 1; const value = this.claimed; this.claimed = undefined; return value; }
   async completeJob(id: string, _worker: string, token: number, result: JsonValue) { this.completed.push([id, token, result]); }
   async failJob(id: string, _worker: string, token: number, failure: JsonObject) { this.failed.push([id, token, failure]); }
+  async interruptJob(id: string, _worker: string, token: number, reason: string) {
+    this.interrupted.push([id, token, reason]);
+  }
   async renewJobLease() {
     this.renewals += 1;
     if (this.renewFailure !== undefined) throw this.renewFailure;
@@ -119,6 +123,7 @@ test("停止信号中断在途 handler，且不提交未知结果", async () => 
   assert.deepEqual(await polling, { status: "interrupted", jobId: "job-1" });
   assert.equal(store.completed.length, 0);
   assert.equal(store.failed.length, 0);
+  assert.deepEqual(store.interrupted, [["job-1", 7, "Worker 已停止"]]);
 });
 
 test("续租失败先作废执行结果，再通知 handler 取消", async () => {

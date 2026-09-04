@@ -812,6 +812,39 @@ export class SqliteStorage implements StoragePort {
     }
   }
 
+  async interruptJob(
+    jobId: string,
+    workerId: string,
+    fencingToken: number,
+    reason: string,
+    now: string
+  ): Promise<void> {
+    this.#assertOpen();
+    validTimestamp(now);
+    if (!reason.trim()) throw new TypeError("中断原因不能为空");
+    this.#database.exec("begin immediate");
+    try {
+      const job = this.#ownedLeasedJob(jobId, workerId, fencingToken, now);
+      const failure: JsonObject = {
+        code: "EXECUTION_INTERRUPTED",
+        message: reason,
+        retryable: false
+      };
+      const change = this.#database.prepare(`
+        update jobs set status = 'failed', failure_json = ?, result_json = null,
+          lease_owner = null, lease_expires_at = null, updated_at = ?
+        where job_id = ? and status = 'leased' and lease_owner = ? and fencing_token = ?
+          and lease_expires_at > ?
+      `).run(JSON.stringify(failure), now, jobId, workerId, fencingToken, now);
+      if (Number(change.changes) !== 1) throw new StaleFencingTokenError(jobId);
+      this.#recordAgentJobInterrupted(job, workerId, fencingToken, failure, now);
+      this.#database.exec("commit");
+    } catch (error) {
+      this.#database.exec("rollback");
+      throw error;
+    }
+  }
+
   #ownedLeasedJob(
     jobId: string,
     workerId: string,
@@ -1147,6 +1180,108 @@ export class SqliteStorage implements StoragePort {
         jobId: String(job.job_id),
         status: outcome,
         ...(outcome === "failed" ? { failureCode } : {})
+      }
+    }, now);
+    this.#putProjectionValue(
+      context.tenantId,
+      "execution",
+      context.executionId,
+      executionStreamVersion + 1,
+      updatedExecution,
+      now
+    );
+  }
+
+  #recordAgentJobInterrupted(
+    job: RecordRow,
+    workerId: string,
+    fencingToken: number,
+    failure: JsonObject,
+    now: string
+  ): void {
+    const context = this.#agentJobContext(job);
+    if (!context) return;
+    const jobStreamVersion = requiredSafeInteger(
+      context.jobProjection.streamVersion,
+      "Job streamVersion"
+    );
+    if (context.jobProjection.status !== "leased"
+      || context.jobProjection.leaseOwner !== workerId
+      || context.jobProjection.fencingToken !== fencingToken) {
+      throw new Error("Agent Job 租约与查询投影不一致");
+    }
+    const {
+      leaseOwner: _leaseOwner,
+      leaseExpiresAt: _leaseExpiresAt,
+      result: _priorResult,
+      failure: _priorFailure,
+      ...jobWithoutLease
+    } = context.jobProjection;
+    const updatedJob: JsonObject = {
+      ...jobWithoutLease,
+      status: "failed",
+      failure,
+      streamVersion: jobStreamVersion + 1,
+      updatedAt: now
+    };
+    this.#appendEvent({
+      tenantId: context.tenantId,
+      aggregateType: "job",
+      aggregateId: String(job.job_id),
+      expectedStreamVersion: jobStreamVersion,
+      type: "job.failed",
+      actorId: `worker:${workerId}`,
+      executionId: context.executionId,
+      generation: context.generation,
+      correlationId: `job:${String(job.job_id)}:fence:${fencingToken}`,
+      publicPayload: {
+        workspaceId: context.workspaceId,
+        executionId: context.executionId,
+        status: "failed",
+        failureCode: "EXECUTION_INTERRUPTED",
+        fencingToken
+      }
+    }, now);
+    this.#putProjectionValue(
+      context.tenantId,
+      "job",
+      String(job.job_id),
+      jobStreamVersion + 1,
+      updatedJob,
+      now
+    );
+
+    if (context.execution.status !== "running"
+      && context.execution.status !== "waiting_approval") {
+      throw new Error(`状态为 ${String(context.execution.status)} 的 Execution 不能中断`);
+    }
+    const executionStreamVersion = requiredSafeInteger(
+      context.execution.streamVersion,
+      "Execution streamVersion"
+    );
+    const { finishedAt: _finishedAt, failureCode: _failureCode, ...executionBase } = context.execution;
+    const updatedExecution: JsonObject = {
+      ...executionBase,
+      status: "interrupted",
+      streamVersion: executionStreamVersion + 1,
+      updatedAt: now
+    };
+    this.#appendEvent({
+      tenantId: context.tenantId,
+      aggregateType: "execution",
+      aggregateId: context.executionId,
+      expectedStreamVersion: executionStreamVersion,
+      type: "execution.interrupted",
+      actorId: `worker:${workerId}`,
+      executionId: context.executionId,
+      generation: context.generation,
+      correlationId: `job:${String(job.job_id)}:fence:${fencingToken}`,
+      publicPayload: {
+        workspaceId: context.workspaceId,
+        jobId: String(job.job_id),
+        status: "interrupted",
+        reason: requiredString(failure.message, "中断原因"),
+        fencingToken
       }
     }, now);
     this.#putProjectionValue(

@@ -124,6 +124,13 @@ export interface StoragePort {
     failure: JsonObject,
     now: string
   ): Promise<void>;
+  interruptJob?(
+    jobId: string,
+    workerId: string,
+    fencingToken: number,
+    reason: string,
+    now: string
+  ): Promise<void>;
   markNeedsReconciliation(executionId: string, input: NeedsReconciliationInput): Promise<void>;
   getJob(jobId: string): Promise<StoredJob | undefined>;
   close(): Promise<void>;

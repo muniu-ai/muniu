@@ -70,6 +70,7 @@ export interface WorkerJobStore {
   claimJob(workerId: string, now: string, options?: JobClaimOptions): Promise<StoredJob | undefined>;
   completeJob(jobId: string, workerId: string, fencingToken: number, result: JsonValue, now: string): Promise<void>;
   failJob(jobId: string, workerId: string, fencingToken: number, failure: JsonObject, now: string): Promise<void>;
+  interruptJob(jobId: string, workerId: string, fencingToken: number, reason: string, now: string): Promise<void>;
   renewJobLease(jobId: string, workerId: string, fencingToken: number, now: string): Promise<void>;
   markNeedsReconciliation(executionId: string, input: NeedsReconciliationInput): Promise<void>;
 }
@@ -184,7 +185,25 @@ export class AgentOsWorker {
       await this.#store.completeJob(job.id, this.#id, job.fencingToken, result, this.#now().toISOString());
       return { status: "completed", jobId: job.id };
     } catch (error) {
-      if (stopSignal?.aborted) return { status: "interrupted", jobId: job.id };
+      if (stopSignal?.aborted) {
+        try {
+          await this.#store.interruptJob(
+            job.id,
+            this.#id,
+            job.fencingToken,
+            "Worker 已停止",
+            this.#now().toISOString(),
+          );
+          return { status: "interrupted", jobId: job.id };
+        } catch (interruptError) {
+          if (interruptError instanceof StaleFencingTokenError
+            || (typeof interruptError === "object" && interruptError !== null
+              && "code" in interruptError && interruptError.code === "STALE_FENCING_TOKEN")) {
+            return { status: "lost_lease", jobId: job.id };
+          }
+          throw interruptError;
+        }
+      }
       if (error instanceof WorkerLeaseLostError
         || error instanceof StaleFencingTokenError
         || (typeof error === "object" && error !== null && "code" in error && error.code === "STALE_FENCING_TOKEN")) {
