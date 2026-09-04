@@ -37,6 +37,7 @@ let stopping = false;
 let finalized = false;
 let childSpawned: Promise<boolean> = Promise.resolve(false);
 let stopOperation: Promise<void> | undefined;
+let groupTermination: Promise<boolean> | undefined;
 const control = new Socket({ fd: 3, readable: true, writable: false });
 control.resume();
 control.once("end", () => { void stop("parent_disconnected"); });
@@ -83,7 +84,14 @@ try {
   process.stdin.pipe(child.stdin!);
   child.stdin!.once("error", () => { void stop("runner_stdin_failed"); });
   child.stdout!.pipe(process.stdout, { end: false });
-  void runnerClosed.then(({ reason }) => runningStateWritten.then(() => finish("terminated", reason)));
+  void runnerClosed.then(async ({ reason }) => {
+    await runningStateWritten;
+    const terminated = child?.pid ? await ensureRunnerGroupStopped(child.pid) : true;
+    await finish(
+      terminated ? "terminated" : "unconfirmed",
+      terminated ? reason : `${reason}:process_group_alive`,
+    );
+  });
   await runningStateWritten;
   if (stopping) await stop("parent_disconnected_before_spawn");
 } catch (error) {
@@ -99,13 +107,25 @@ async function stop(reason: string): Promise<void> {
       await finish("terminated", reason);
       return;
     }
-    signalRunner(child.pid, "SIGTERM");
-    if (await waitForClose(child, 500)) return;
-    signalRunner(child.pid, "SIGKILL");
-    if (await waitForClose(child, 500)) return;
-    await finish("unconfirmed", `${reason}:sigkill_timeout`);
+    const terminated = await ensureRunnerGroupStopped(child.pid);
+    await finish(
+      terminated ? "terminated" : "unconfirmed",
+      terminated ? reason : `${reason}:sigkill_timeout`,
+    );
   })();
   return stopOperation;
+}
+
+function ensureRunnerGroupStopped(pid: number): Promise<boolean> {
+  groupTermination ??= terminateRunnerGroup(pid);
+  return groupTermination;
+}
+
+async function terminateRunnerGroup(pid: number): Promise<boolean> {
+  signalRunner(pid, "SIGTERM");
+  if (await waitForProcessGroupGone(pid, 500)) return true;
+  signalRunner(pid, "SIGKILL");
+  return waitForProcessGroupGone(pid, 500);
 }
 
 async function finish(status: "terminated" | "unconfirmed", reason: string): Promise<void> {
@@ -146,24 +166,30 @@ function signalRunner(pid: number, signal: "SIGTERM" | "SIGKILL"): void {
     process.kill(process.platform === "win32" ? pid : -pid, signal);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    if (code !== "ESRCH") throw error;
+    if (code !== "ESRCH" && code !== "EPERM") throw error;
   }
 }
 
-function waitForClose(process_: ChildProcess, milliseconds: number): Promise<boolean> {
-  if (process_.exitCode !== null || process_.signalCode !== null) return Promise.resolve(true);
-  return new Promise((resolveWait) => {
-    const timer = setTimeout(() => {
-      process_.removeListener("close", onClose);
-      resolveWait(false);
-    }, milliseconds);
-    timer.unref();
-    const onClose = () => {
-      clearTimeout(timer);
-      resolveWait(true);
-    };
-    process_.once("close", onClose);
-  });
+async function waitForProcessGroupGone(pid: number, milliseconds: number): Promise<boolean> {
+  const deadline = Date.now() + milliseconds;
+  while (Date.now() < deadline) {
+    if (!processGroupExists(pid)) return true;
+    await delay(20);
+  }
+  return !processGroupExists(pid);
+}
+
+function processGroupExists(pid: number): boolean {
+  try {
+    process.kill(process.platform === "win32" ? pid : -pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
 }
 
 async function writeState(state: SupervisorState): Promise<void> {
