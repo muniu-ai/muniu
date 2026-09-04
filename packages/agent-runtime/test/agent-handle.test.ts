@@ -10,6 +10,7 @@ import {
   UnknownToolOutcomeError,
   type LlmContribution,
   type ModelRequest,
+  type ModelToolCall,
   type RuntimeAuthority,
   type RuntimeRecordInput,
   type ToolApprovalPort,
@@ -115,6 +116,7 @@ test("模型上下文和工具承诺均先持久化再产生外部调用", async
   assert.deepEqual(Object.keys(intent?.payload ?? {}).sort(), [
     "argumentsDigest",
     "authorityCommitment",
+    "boundary",
     "effectClass",
     "expiresAt",
     "generation",
@@ -125,6 +127,7 @@ test("模型上下文和工具承诺均先持久化再产生外部调用", async
     "toolCallId",
     "toolId",
     "toolVersion",
+    "turn",
   ]);
 });
 
@@ -585,4 +588,292 @@ test("执行前复核期间发生 HMR 会使批准失效", async () => {
   await handle.whenIdle();
   assert.equal(executions, 0);
   assert.equal(handle.status, "failed");
+});
+
+test("等待审批时重启会从已落盘响应续接，且不重发模型请求或重复已完成工具", async () => {
+  const store = new InMemoryRuntimeStore();
+  const scope = executionScope();
+  let modelCalls = 0;
+  let reads = 0;
+  let publishes = 0;
+  let approvalStarted!: () => void;
+  const waiting = new Promise<void>((resolve) => { approvalStarted = resolve; });
+
+  scope.register("prompt", { id: "system", render: () => "只执行已批准的操作" });
+  scope.register("llm", {
+    id: "main",
+    async complete(request) {
+      modelCalls += 1;
+      if (modelCalls === 1) {
+        return {
+          text: "先读后发",
+          toolCalls: [
+            { id: "read", toolId: "file.read", arguments: { path: "README.md" } },
+            { id: "publish", toolId: "web.publish", arguments: { body: "draft" } },
+          ] as readonly ModelToolCall[],
+        };
+      }
+      assert.match(request.messages.map((message) => message.content).join("\n"), /已读取/u);
+      assert.match(request.messages.map((message) => message.content).join("\n"), /published/u);
+      return { text: "完成", toolCalls: [] };
+    },
+  });
+  scope.register("tool", {
+    id: "file.read",
+    version: "1.0.0",
+    effectClass: "local_read",
+    prepare: (arguments_) => ({
+      normalizedArguments: arguments_,
+      resourceRefs: [{ namespace: "workspace", resourceId: "repository" }],
+    }),
+    async execute() { reads += 1; return { text: "已读取" }; },
+  });
+  scope.register("tool", {
+    id: "web.publish",
+    version: "1.0.0",
+    effectClass: "external_side_effect",
+    prepare: (arguments_) => ({
+      normalizedArguments: arguments_,
+      resourceRefs: [{ namespace: "web", resourceId: "target" }],
+    }),
+    async execute() { publishes += 1; return { published: true }; },
+  });
+
+  const first = await AgentHandle.open({
+    executionId: "execution-a",
+    scope,
+    store,
+    definition: { id: "assistant", llmId: "main", promptIds: ["system"] },
+    authority,
+    approval: {
+      async authorize(intent) {
+        if (intent.effectClass === "local_read") return { mode: "auto", intent };
+        approvalStarted();
+        return new Promise(() => {});
+      },
+    },
+  });
+  await first.followUp("发布草稿");
+  await waiting;
+  assert.equal(first.status, "waiting_approval");
+  assert.equal(modelCalls, 1);
+  assert.equal(reads, 1);
+  assert.equal(publishes, 0);
+
+  const recovered = await AgentHandle.open({
+    executionId: "execution-a",
+    scope,
+    store,
+    definition: { id: "assistant", llmId: "main", promptIds: ["system"] },
+    authority,
+    approval: approveAuthorizedTools,
+  });
+  await recovered.whenIdle();
+
+  assert.equal(recovered.status, "completed");
+  assert.equal(modelCalls, 2);
+  assert.equal(reads, 1);
+  assert.equal(publishes, 1);
+  const records = await store.readExecution("execution-a");
+  const modelRequests = records.filter((record) => record.type === "model/request");
+  assert.equal(modelRequests.length, 2);
+  assert.deepEqual(modelRequests.map((record) => record.payload.boundary), [1, 2]);
+  assert.equal(records.filter((record) => record.type === "tool/intent").length, 2);
+  assert.equal(records.filter((record) => record.type === "tool/result").length, 2);
+});
+
+test("等待审批时重启后拒绝会失败，且不会重发模型请求或执行工具", async () => {
+  const store = new InMemoryRuntimeStore();
+  const scope = executionScope();
+  let modelCalls = 0;
+  let executions = 0;
+  let approvalStarted!: () => void;
+  const waiting = new Promise<void>((resolve) => { approvalStarted = resolve; });
+  scope.register("llm", {
+    id: "main",
+    async complete() {
+      modelCalls += 1;
+      return { text: "发布", toolCalls: [{ id: "publish", toolId: "web.publish", arguments: {} }] };
+    },
+  });
+  scope.register("tool", {
+    id: "web.publish",
+    version: "1.0.0",
+    effectClass: "external_side_effect",
+    prepare: (arguments_) => ({
+      normalizedArguments: arguments_,
+      resourceRefs: [{ namespace: "web", resourceId: "target" }],
+    }),
+    async execute() { executions += 1; return { published: true }; },
+  });
+  const options = {
+    executionId: "execution-a",
+    scope,
+    store,
+    definition: { id: "assistant", llmId: "main", promptIds: [] },
+    authority,
+  } as const;
+  const first = await AgentHandle.open({
+    ...options,
+    approval: {
+      async authorize() {
+        approvalStarted();
+        return new Promise(() => {});
+      },
+    },
+  });
+  await first.followUp("发布");
+  await waiting;
+
+  const recovered = await AgentHandle.open({
+    ...options,
+    approval: { async authorize() { return { mode: "deny", reason: "审核拒绝" }; } },
+  });
+  await recovered.whenIdle();
+
+  assert.equal(recovered.status, "failed");
+  assert.match(String(recovered.lastError), /审核拒绝/u);
+  assert.equal(modelCalls, 1);
+  assert.equal(executions, 0);
+  const records = await store.readExecution("execution-a");
+  assert.equal(records.filter((record) => record.type === "model/request").length, 1);
+  assert.equal(records.filter((record) => record.type === "tool/result").length, 0);
+});
+
+test("恢复等待审批的工具会复核固定代次、工具、参数、资源、权限和期限", async (t) => {
+  const scenarios = [
+    "generation",
+    "toolVersion",
+    "effectClass",
+    "arguments",
+    "resources",
+    "authority",
+    "expiry",
+  ] as const;
+
+  for (const scenario of scenarios) {
+    await t.test(scenario, async () => {
+      const store = new InMemoryRuntimeStore();
+      const scope = executionScope();
+      let toolVersion = "1.0.0";
+      let effectClass: ToolContribution["effectClass"] = "external_side_effect";
+      let normalizedBody = "draft";
+      let resourceId = "target";
+      let executions = 0;
+      let approvalStarted!: () => void;
+      const waiting = new Promise<void>((resolve) => { approvalStarted = resolve; });
+      scope.register("llm", {
+        id: "main",
+        async complete() {
+          return {
+            text: "发布",
+            toolCalls: [{ id: "publish", toolId: "web.publish", arguments: { body: "draft" } }],
+          };
+        },
+      });
+      scope.register("tool", {
+        id: "web.publish",
+        get version() { return toolVersion; },
+        get effectClass() { return effectClass; },
+        prepare: () => ({
+          normalizedArguments: { body: normalizedBody },
+          resourceRefs: [{ namespace: "web", resourceId }],
+        }),
+        async execute() { executions += 1; return { published: true }; },
+      });
+      const fixedNow = "2026-09-04T10:00:00.000Z";
+      const first = await AgentHandle.open({
+        executionId: "execution-a",
+        scope,
+        store,
+        definition: { id: "assistant", llmId: "main", promptIds: [] },
+        authority,
+        approval: {
+          async authorize() {
+            approvalStarted();
+            return new Promise(() => {});
+          },
+        },
+        now: () => fixedNow,
+      });
+      await first.followUp("发布");
+      await waiting;
+
+      if (scenario === "generation") {
+        scope.register("prompt", { id: "changed", render: () => "变更" });
+      } else if (scenario === "toolVersion") {
+        toolVersion = "2.0.0";
+      } else if (scenario === "effectClass") {
+        effectClass = "financial";
+      } else if (scenario === "arguments") {
+        normalizedBody = "changed";
+      } else if (scenario === "resources") {
+        resourceId = "changed";
+      }
+
+      const recovered = await AgentHandle.open({
+        executionId: "execution-a",
+        scope,
+        store,
+        definition: { id: "assistant", llmId: "main", promptIds: [] },
+        authority: scenario === "authority"
+          ? { ...authority, commitment: "authority-v2" }
+          : authority,
+        approval: approveAuthorizedTools,
+        now: () => scenario === "expiry" ? "2026-09-04T10:06:00.000Z" : fixedNow,
+      });
+      await recovered.whenIdle();
+
+      assert.equal(recovered.status, "failed");
+      assert.equal(executions, 0);
+    });
+  }
+});
+
+test("批准后非幂等副作用在结果落盘前崩溃，重启进入人工核对且不重放", async () => {
+  const store = new InMemoryRuntimeStore();
+  const scope = executionScope();
+  let executions = 0;
+  let executionStarted!: () => void;
+  const started = new Promise<void>((resolve) => { executionStarted = resolve; });
+  scope.register("llm", {
+    id: "main",
+    async complete() {
+      return { text: "发布", toolCalls: [{ id: "publish", toolId: "web.publish", arguments: {} }] };
+    },
+  });
+  scope.register("tool", {
+    id: "web.publish",
+    version: "1.0.0",
+    effectClass: "external_side_effect",
+    prepare: (arguments_) => ({
+      normalizedArguments: arguments_,
+      resourceRefs: [{ namespace: "web", resourceId: "target" }],
+    }),
+    execute: async () => {
+      executions += 1;
+      executionStarted();
+      return new Promise(() => {});
+    },
+  });
+  const options = {
+    executionId: "execution-a",
+    scope,
+    store,
+    definition: { id: "assistant", llmId: "main", promptIds: [] },
+    authority,
+    approval: approveAuthorizedTools,
+  } as const;
+  const first = await AgentHandle.open(options);
+  await first.followUp("发布");
+  await started;
+  assert.equal(first.status, "running");
+
+  const recovered = await AgentHandle.open(options);
+  await recovered.whenIdle();
+
+  assert.equal(recovered.status, "needs_reconciliation");
+  assert.equal(executions, 1);
+  const records = await store.readExecution("execution-a");
+  assert.equal(records.filter((record) => record.type === "tool/outcome_unknown").length, 1);
 });

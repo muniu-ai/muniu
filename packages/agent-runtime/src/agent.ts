@@ -13,6 +13,11 @@ import {
   snapshotRuntimeAuthority,
   SubagentAuthorityAllocator,
 } from "./authority.js";
+import {
+  findUnresolvedToolIntentRecords,
+  parseWaitingApprovalRecovery,
+  type WaitingApprovalRecovery,
+} from "./approval-recovery.js";
 import { PersistentInbox } from "./inbox.js";
 import type { AgentScope, TurnContributions } from "./scope.js";
 import { DefaultSessionSurface, PersistentSessionLog } from "./session.js";
@@ -45,6 +50,15 @@ const NON_REPLAYABLE_EFFECTS = new Set<ToolEffectClass>([
   "unknown",
 ]);
 const DEFAULT_TOOL_INTENT_TTL_MS = 5 * 60_000;
+
+interface TurnRuntime {
+  readonly turn: number;
+  readonly generation: number;
+  readonly contributions: TurnContributions;
+  readonly llm: LlmContribution;
+  readonly availableToolIds: readonly string[];
+  readonly prompts: readonly string[];
+}
 
 export class UnknownToolOutcomeError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -194,6 +208,18 @@ export class AgentHandle {
     const records = await this.#store.readExecution(this.#executionId);
     this.#turn = records.filter((record) => record.type === "turn/started").length;
     this.#status = latestStatus(records) ?? "queued";
+    if (this.#status === "waiting_approval") {
+      const recovery = parseWaitingApprovalRecovery(records, this.#executionId, this.#definition);
+      if (recovery.turn !== this.#turn) {
+        throw new AgentRuntimeError("等待审批的工具调用不属于当前 turn");
+      }
+      const drain = this.#resumeWaitingApproval(recovery);
+      this.#drainPromise = drain;
+      void drain.catch(() => {}).finally(() => {
+        if (this.#drainPromise === drain) this.#drainPromise = undefined;
+      });
+      return;
+    }
     if (this.#status !== "running") return;
 
     const unresolved = unresolvedToolIntents(records)
@@ -213,6 +239,55 @@ export class AgentHandle {
       return;
     }
     await this.#transition("interrupted", "进程中断，需要显式恢复");
+  }
+
+  async #resumeWaitingApproval(recovery: WaitingApprovalRecovery): Promise<void> {
+    try {
+      this.#abortController = new AbortController();
+      const pendingCall = recovery.calls[recovery.pendingCallIndex];
+      if (pendingCall === undefined) throw new AgentRuntimeError("持久化工具续点不存在");
+      await this.#authorizeAndExecute(
+        pendingCall,
+        recovery.intent,
+        pendingCall.arguments,
+        recovery.turn,
+        false,
+      );
+      if (this.#status !== "running") return;
+
+      const contributions = this.#scope.resolveTurn();
+      if (contributions.generation !== recovery.generation) {
+        throw new AgentRuntimeError("恢复审批后插件代次已变化，必须重新请求批准");
+      }
+      const availableToolIds = this.#availableToolIds(contributions);
+      if (!sameStringList(availableToolIds, recovery.availableToolIds)) {
+        throw new AgentRuntimeError("恢复审批后工具范围已变化，必须重新请求批准");
+      }
+      for (let index = recovery.pendingCallIndex + 1; index < recovery.calls.length; index += 1) {
+        const call = recovery.calls[index];
+        if (call === undefined) throw new AgentRuntimeError("持久化工具调用不存在");
+        if (!availableToolIds.includes(call.toolId)) {
+          throw new AgentRuntimeError(`工具 ${call.toolId} 不在本 turn 的可用范围内`);
+        }
+        await this.#executeTool(call, contributions, recovery.turn, recovery.boundary);
+        if (this.#status !== "running") return;
+      }
+
+      const llm = requiredContribution(contributions, "llm", this.#definition.llmId);
+      await this.#runModelBoundaries({
+        turn: recovery.turn,
+        generation: recovery.generation,
+        contributions,
+        llm,
+        availableToolIds,
+        prompts: recovery.prompts,
+      }, recovery.boundary + 1);
+      if (this.#status === "running") await this.#drain();
+    } catch (error: unknown) {
+      this.#lastError = error;
+      if (this.#status === "cancelled" || this.#status === "needs_reconciliation") return;
+      await this.#transition("failed", error instanceof Error ? error.message : "执行失败");
+    }
   }
 
   #assertCanQueue(command: "follow_up" | "steer"): void {
@@ -292,23 +367,34 @@ export class AgentHandle {
       });
     }));
 
-    for (let boundary = 1; boundary <= this.#maxModelBoundariesPerTurn; boundary += 1) {
+    await this.#runModelBoundaries({
+      turn,
+      generation: contributions.generation,
+      contributions,
+      llm,
+      availableToolIds,
+      prompts,
+    }, 1);
+  }
+
+  async #runModelBoundaries(runtime: TurnRuntime, firstBoundary: number): Promise<void> {
+    for (let boundary = firstBoundary; boundary <= this.#maxModelBoundariesPerTurn; boundary += 1) {
       if (this.#status !== "running") return;
-      await this.#appendSteersAtBoundary(turn);
+      await this.#appendSteersAtBoundary(runtime.turn);
       const request: ModelRequest = {
         executionId: this.#executionId,
         agentId: this.#definition.id,
-        generation: contributions.generation,
+        generation: runtime.generation,
         messages: [
-          ...prompts.map((content): ModelMessage => ({ role: "system", content })),
+          ...runtime.prompts.map((content): ModelMessage => ({ role: "system", content })),
           ...await this.#sessionLog.modelView(this.#surface),
         ],
-        availableToolIds,
+        availableToolIds: runtime.availableToolIds,
       };
 
-      await this.#persistModelRequest(request, boundary);
-      const response = await llm.complete(request, {
-        signal: this.#abortController.signal,
+      await this.#persistModelRequest(request, boundary, runtime.prompts);
+      const response = await runtime.llm.complete(request, {
+        signal: this.#abortController?.signal ?? AbortSignal.abort("执行已结束"),
         scope: this.#scope.identity,
       });
       if (this.#status !== "running") return;
@@ -316,9 +402,9 @@ export class AgentHandle {
         executionId: this.#executionId,
         type: "model/response",
         payload: {
-          turn,
+          turn: runtime.turn,
           boundary,
-          generation: contributions.generation,
+          generation: runtime.generation,
           text: response.text,
           toolCalls: response.toolCalls.map((call) => ({
             id: call.id,
@@ -329,21 +415,21 @@ export class AgentHandle {
         },
       });
       if (response.text.length > 0) {
-        await this.#sessionLog.append({ role: "assistant", content: response.text, turn });
+        await this.#sessionLog.append({ role: "assistant", content: response.text, turn: runtime.turn });
       }
       if (response.toolCalls.length === 0) {
         await this.#store.append({
           executionId: this.#executionId,
           type: "turn/completed",
-          payload: { turn, generation: contributions.generation },
+          payload: { turn: runtime.turn, generation: runtime.generation },
         });
         return;
       }
       for (const call of response.toolCalls) {
-        if (!availableToolIds.includes(call.toolId)) {
+        if (!runtime.availableToolIds.includes(call.toolId)) {
           throw new AgentRuntimeError(`工具 ${call.toolId} 不在本 turn 的可用范围内`);
         }
-        await this.#executeTool(call, contributions, turn);
+        await this.#executeTool(call, runtime.contributions, runtime.turn, boundary);
         if (this.#status !== "running") return;
       }
     }
@@ -366,7 +452,11 @@ export class AgentHandle {
     }
   }
 
-  async #persistModelRequest(request: ModelRequest, boundary: number): Promise<void> {
+  async #persistModelRequest(
+    request: ModelRequest,
+    boundary: number,
+    prompts: readonly string[],
+  ): Promise<void> {
     await this.#store.append({
       executionId: this.#executionId,
       type: "model/request",
@@ -375,6 +465,9 @@ export class AgentHandle {
         boundary,
         generation: request.generation,
         agentId: request.agentId,
+        llmId: this.#definition.llmId,
+        promptIds: this.#definition.promptIds,
+        prompts,
         messages: request.messages.map((message) => ({ ...message })),
         availableToolIds: request.availableToolIds,
       },
@@ -385,6 +478,7 @@ export class AgentHandle {
     call: ModelToolCall,
     contributions: TurnContributions,
     turn: number,
+    boundary: number,
   ): Promise<void> {
     const tool = requiredContribution(contributions, "tool", call.toolId);
     const context = {
@@ -437,11 +531,30 @@ export class AgentHandle {
         generation: intent.generation,
         authorityCommitment: intent.authorityCommitment,
         expiresAt: intent.expiresAt,
+        turn,
+        boundary,
       },
     });
 
+    await this.#authorizeAndExecute(call, intent, originalArguments, turn, true);
+  }
+
+  async #authorizeAndExecute(
+    call: ModelToolCall,
+    intent: ToolCallIntent,
+    originalArguments: JsonObject,
+    turn: number,
+    enterApprovalWait: boolean,
+  ): Promise<void> {
+    const context = {
+      executionId: this.#executionId,
+      generation: intent.generation,
+      signal: this.#abortController?.signal ?? AbortSignal.abort("执行已结束"),
+      scope: this.#scope.identity,
+      authority: this.#authority,
+    };
     const requiresManualApproval = !isPotentiallyAutoApprovable(intent.effectClass);
-    if (requiresManualApproval) {
+    if (requiresManualApproval && enterApprovalWait) {
       await this.#transition("waiting_approval", "工具调用等待人工批准");
     }
     const approvalSignal = context.signal;
@@ -470,7 +583,10 @@ export class AgentHandle {
     if (currentContributions.generation !== intent.generation) {
       throw new AgentRuntimeError("批准后插件代次已变化，必须重新请求批准");
     }
-    const currentTool = requiredContribution(currentContributions, "tool", call.toolId);
+    if (call.toolId !== intent.toolId) {
+      throw new AgentRuntimeError("持久化模型响应与工具调用意图不一致");
+    }
+    const currentTool = requiredContribution(currentContributions, "tool", intent.toolId);
     if (currentTool.version !== intent.toolVersion || currentTool.effectClass !== intent.effectClass) {
       throw new AgentRuntimeError("批准后工具版本或副作用类型已变化，必须重新请求批准");
     }
@@ -521,7 +637,7 @@ export class AgentHandle {
             toolCallId: call.id,
             toolId: currentTool.id,
             effectClass: currentTool.effectClass,
-            generation: contributions.generation,
+            generation: intent.generation,
             message: error.message,
           },
         });
@@ -536,7 +652,7 @@ export class AgentHandle {
       payload: {
         toolCallId: call.id,
         toolId: currentTool.id,
-        generation: contributions.generation,
+        generation: intent.generation,
         result,
       },
     });
@@ -635,12 +751,7 @@ function unresolvedToolIntents(records: readonly RuntimeRecord[]): readonly {
   readonly toolCallId: string;
   readonly effectClass: ToolEffectClass;
 }[] {
-  const closed = new Set(records
-    .filter((record) => record.type === "tool/result" || record.type === "tool/outcome_unknown")
-    .map((record) => stringField(record.payload, "toolCallId")));
-  return records
-    .filter((record) => record.type === "tool/intent")
-    .filter((record) => !closed.has(stringField(record.payload, "toolCallId")))
+  return findUnresolvedToolIntentRecords(records)
     .map((intent) => {
       const effectClass = stringField(intent.payload, "effectClass");
       if (!isToolEffectClass(effectClass)) throw new AgentRuntimeError("持久化工具副作用类型无效");
@@ -678,6 +789,10 @@ function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   const record = value as Record<string, unknown>;
   return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(",")}}`;
+}
+
+function sameStringList(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 function jsonText(value: JsonValue): string {
