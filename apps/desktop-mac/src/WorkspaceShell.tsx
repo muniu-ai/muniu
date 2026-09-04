@@ -45,6 +45,8 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces }: Wor
   const [memories, setMemories] = useState<readonly MemorySummary[]>([]);
   const [opportunities, setOpportunities] = useState<readonly OpportunitySummary[]>([]);
   const [codingTasks, setCodingTasks] = useState<readonly CodingTaskSummary[]>([]);
+  const [selectedOpportunityId, setSelectedOpportunityId] = useState<string>();
+  const [selectedCodingTaskId, setSelectedCodingTaskId] = useState<string>();
   const [health, setHealth] = useState<readonly PluginHealth[]>([]);
   const [coreLoading, setCoreLoading] = useState(true);
   const [coreError, setCoreError] = useState<string>();
@@ -97,8 +99,8 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces }: Wor
   const paletteItems = useMemo<readonly PaletteItem[]>(() => [
     { id: "home", kind: "命令", title: "打开首页", action: () => setPage("home") },
     { id: "inbox", kind: "命令", title: "打开收件箱", detail: `${home.approvals.length} 项待处理`, action: () => setPage("inbox") },
-    ...opportunities.map((item) => ({ id: `opportunity:${item.id}`, kind: "机会" as const, title: item.title, detail: item.nextAction, action: () => setPage("opc") })),
-    ...codingTasks.map((item) => ({ id: `task:${item.id}`, kind: "Coding 任务" as const, title: item.title, detail: item.status, action: () => setPage("coding") })),
+    ...opportunities.map((item) => ({ id: `opportunity:${item.id}`, kind: "机会" as const, title: item.title, detail: item.nextAction, action: () => { setSelectedOpportunityId(item.id); setPage("opc"); } })),
+    ...codingTasks.map((item) => ({ id: `task:${item.id}`, kind: "Coding 任务" as const, title: item.title, detail: item.status, action: () => { setSelectedCodingTaskId(item.id); setPage("coding"); } })),
     ...deliverables.map((item) => ({ id: `deliverable:${item.id}`, kind: "成果" as const, title: item.title, detail: item.outcome, action: () => setPage("deliverables") })),
     { id: "skill:opc", kind: "Skill", title: "验证创业机会", detail: "输出机会验证档案", action: () => setPage("opc") },
     { id: "skill:coding", kind: "Skill", title: "实现并验证代码变更", detail: "输出差异与代码证据", action: () => setPage("coding") },
@@ -119,7 +121,7 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces }: Wor
   }
 
   function selectWorkspace(next: WorkspaceSummary) {
-    setWorkspace(next); setCapturePlugin(next.activePluginIds[0] ?? "opc"); setPage("home");
+    setWorkspace(next); setCapturePlugin(next.activePluginIds[0] ?? "opc"); setSelectedOpportunityId(undefined); setSelectedCodingTaskId(undefined); setPage("home");
   }
 
   function updateWorkspace(next: WorkspaceSummary) {
@@ -170,8 +172,8 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces }: Wor
         {page === "agents" && <AgentsPage />}
         {page === "integrations" && <IntegrationsPage />}
         {page === "settings" && <SettingsPage workspace={workspace} memories={memories} api={api} onModeChanged={updateWorkspace} onMemoriesChanged={() => void refreshCore()} />}
-        {page === "opc" && <PluginBoundary pluginName="OPC"><OpcPage api={api} workspaceId={workspace.id} items={opportunities} loading={opcLoading} error={opcError} viewMode={workspace.viewMode} onRetry={() => void refreshOpc()} onChanged={async () => { await Promise.all([refreshOpc(), refreshCore()]); }} /></PluginBoundary>}
-        {page === "coding" && <PluginBoundary pluginName="Coding"><CodingPage items={codingTasks} loading={codingLoading} error={codingError} viewMode={workspace.viewMode} onRetry={() => void refreshCoding()} /></PluginBoundary>}
+        {page === "opc" && <PluginBoundary pluginName="OPC"><OpcPage api={api} workspaceId={workspace.id} items={opportunities} selectedId={selectedOpportunityId} onSelect={setSelectedOpportunityId} loading={opcLoading} error={opcError} viewMode={workspace.viewMode} onRetry={() => void refreshOpc()} onChanged={async () => { await Promise.all([refreshOpc(), refreshCore()]); }} /></PluginBoundary>}
+        {page === "coding" && <PluginBoundary pluginName="Coding"><CodingPage items={codingTasks} selectedId={selectedCodingTaskId} onSelect={setSelectedCodingTaskId} loading={codingLoading} error={codingError} viewMode={workspace.viewMode} onRetry={() => void refreshCoding()} /></PluginBoundary>}
       </div>
     </main>
     <CommandPalette open={paletteOpen} items={paletteItems} onClose={() => setPaletteOpen(false)} />
