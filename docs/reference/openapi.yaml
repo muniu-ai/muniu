@@ -596,6 +596,30 @@ paths:
         default:
           $ref: "#/components/responses/Error"
       x-muniu-versioned: false
+  /v2/plugins/installations/{pluginId}:
+    patch:
+      operationId: updatePlugin
+      parameters:
+        - in: path
+          name: pluginId
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VersionedMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        default:
+          $ref: "#/components/responses/Error"
+      x-muniu-versioned: true
   /v2/workspaces/{workspaceId}/plugin-activations:
     post:
       operationId: activatePlugin

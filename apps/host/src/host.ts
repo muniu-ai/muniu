@@ -36,6 +36,7 @@ import {
   PluginContributionHost,
   PluginPolicyError,
   type PluginDefinitionV1,
+  type PluginExecutionControl,
 } from "@mn/plugin-sdk";
 import {
   CursorExpiredError,
@@ -66,6 +67,7 @@ import {
   LocalProductionPluginInstaller,
   LocalSignedPluginRepository,
   type PluginInstallerPort,
+  type ProductionPluginProjectionManager,
   type TrustedRegistryRoot,
 } from "./plugin-installation.js";
 import type { ModelSecretStore } from "./secrets.js";
@@ -103,6 +105,10 @@ export interface AgentOsHostOptions {
   /** 本地生产仓库只暴露组合根已经加载的签名制品，不访问远程 JavaScript。 */
   readonly pluginRepository?: LocalSignedPluginRepository;
   readonly trustedPluginRoots?: readonly TrustedRegistryRoot[];
+  /** 生产更新先通过此端口排空该插件的 Execution。 */
+  readonly pluginExecutionControl?: PluginExecutionControl;
+  /** 投影先在独立命名空间重放；activate 在 Kernel 事务内原子切换。 */
+  readonly pluginProjections?: ProductionPluginProjectionManager;
   readonly readiness?: () => EnterpriseReadiness | Promise<EnterpriseReadiness>;
   readonly now?: () => string;
   readonly id?: (kind: string) => string;
@@ -682,6 +688,8 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
       trustedRoots: options.trustedPluginRoots ?? [],
       contributions: plugins,
       now,
+      ...(options.pluginExecutionControl ? { executionControl: options.pluginExecutionControl } : {}),
+      ...(options.pluginProjections ? { projections: options.pluginProjections } : {}),
     })
     : undefined);
   await pluginInstaller?.initialize?.();
@@ -886,6 +894,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         if (!definition) {
           throw new PluginPolicyError("PLUGIN_NOT_INSTALLED", `插件 ${thread.pluginId} 不可用`, "安装插件后重试");
         }
+        pluginInstaller?.assertCanStartExecution?.(thread.pluginId);
         const requestedAgent = stringField(body, "agentDefinitionId", false);
         const agentDefinition = requestedAgent
           ? definition.contributions.agents.find((agent) => agent.id === requestedAgent)
@@ -1345,6 +1354,28 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         });
         return json(result, 201, traceId);
       }
+      const pluginInstallationMatch = url.pathname.match(/^\/v2\/plugins\/installations\/([^/]+)$/u);
+      if (pluginInstallationMatch && request.method === "PATCH") {
+        if (!pluginInstaller?.update) {
+          throw new KernelError("PLUGIN_REGISTRY_UNAVAILABLE", "插件更新暂不可用", "检查签名仓库连接");
+        }
+        const pluginId = decodeURIComponent(pluginInstallationMatch[1]!);
+        const body = await readBody(request);
+        const result = await idempotentAsyncOperation({
+          store: options.store,
+          tenantId: TENANT_ID,
+          key: mutationKey as string,
+          scope: `http.plugin.update:${pluginId}`,
+          request: body,
+          now,
+          inFlight: inFlightAsyncMutations,
+          work: () => pluginInstaller!.update!(pluginId, body, {
+            idempotencyKey: mutationKey as string,
+            idempotencyScope: `http.plugin.update:${pluginId}`,
+          }),
+        });
+        return json(result, 200, traceId);
+      }
       const activationMatch = url.pathname.match(/^\/v2\/workspaces\/([^/]+)\/plugin-activations$/u);
       if (activationMatch && request.method === "POST") {
         const body = await readBody(request);
@@ -1514,6 +1545,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         await ensurePluginsActive(TENANT_ID, workspace);
         const pluginId = decodeURIComponent(pluginMatch[1]!);
         const commandId = decodeURIComponent(pluginMatch[2]!);
+        pluginInstaller?.assertCanStartExecution?.(pluginId);
         const commandInput = Object.fromEntries(Object.entries(body)
           .filter(([key]) => key !== "workspaceId")) as JsonObject;
         const result = await idempotentAsyncOperation({

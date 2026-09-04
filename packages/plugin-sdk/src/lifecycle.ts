@@ -1,5 +1,5 @@
 import type { PluginManifestV1 } from "@mn/contracts";
-import { cloneJson, deepFreeze } from "./canonical.js";
+import { canonicalJson, cloneJson, deepFreeze } from "./canonical.js";
 import { PluginPolicyError } from "./errors.js";
 import {
   assertDevelopmentSource,
@@ -524,6 +524,16 @@ function assertUpgrade(current: InstalledPluginRecord, artifact: VerifiedPluginA
     || artifact.manifest.release.sequence <= current.manifest.release.sequence
     || artifact.registrySequence < current.registrySequence) {
     throw policy("PLUGIN_UPGRADE_INVALID", "插件升级未提高发布序号或仓库序号回退", "选择更高发布序号");
+  }
+  for (const [eventType, schema] of Object.entries(current.manifest.eventSchemas)) {
+    const nextSchema = artifact.manifest.eventSchemas[eventType];
+    if (nextSchema === undefined || canonicalJson(nextSchema) !== canonicalJson(schema)) {
+      throw policy(
+        "PLUGIN_UPGRADE_INVALID",
+        `插件升级重定义或删除了已有事件类型 ${eventType}`,
+        "保留已有事件 schema，并用新的事件类型表达变更",
+      );
+    }
   }
 }
 

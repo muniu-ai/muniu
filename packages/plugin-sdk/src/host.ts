@@ -19,6 +19,7 @@ export interface ContributionHostAuditEvent {
   readonly action:
     | "official_registered"
     | "verified_registered"
+    | "verified_replaced"
     | "activated"
     | "deactivated"
     | "plugin_fault";
@@ -83,29 +84,45 @@ export class PluginContributionHost implements ProductPluginHostV1 {
   }
 
   registerVerified(artifact: VerifiedPluginArtifact, definition: PluginDefinitionV1): void {
-    assertVerifiedPluginArtifact(artifact);
-    assertPluginDefinition(definition);
-    if (definition.official) {
-      throw new PluginPolicyError(
-        "PLUGIN_DEFINITION_INVALID",
-        `签名仓库插件 ${definition.id} 不得冒充官方预装插件`,
-        "将 official 设为 false",
-      );
-    }
-    if (!definition.manifest
-      || canonicalJson(definition.manifest) !== canonicalJson(artifact.manifest)) {
-      throw new PluginPolicyError(
-        "PLUGIN_DEFINITION_INVALID",
-        `插件 ${definition.id} 的运行定义与已验签清单不一致`,
-        "绑定同一份已验签清单后重新安装",
-      );
-    }
+    this.#assertVerifiedDefinition(artifact, definition);
     this.#register(definition);
     this.#recordAudit(
       definition.id,
       undefined,
       "verified_registered",
       `已注册本地验签插件 ${definition.id} ${definition.version}`,
+    );
+  }
+
+  /**
+   * 在制品、执行和投影已经由组合根完成校验与切换后，更换进程内贡献定义。
+   * 保留工作区激活集合和注册顺序，避免升级改变导航排序。
+   */
+  replaceVerified(artifact: VerifiedPluginArtifact, definition: PluginDefinitionV1): void {
+    this.#assertVerifiedDefinition(artifact, definition);
+    const registered = this.#definitions.get(definition.id);
+    if (!registered || registered.definition.official) {
+      throw new PluginPolicyError(
+        "PLUGIN_NOT_INSTALLED",
+        `签名仓库插件 ${definition.id} 尚未注册`,
+        "先安装插件后再更新",
+      );
+    }
+    for (const active of this.#workspacePlugins.values()) {
+      if (active.has(definition.id)) {
+        this.#assertNoRouteCollisions(active, definition, definition.id);
+      }
+    }
+    this.#definitions.set(definition.id, {
+      definition,
+      registrationOrder: registered.registrationOrder,
+    });
+    this.#faults.delete(definition.id);
+    this.#recordAudit(
+      definition.id,
+      undefined,
+      "verified_replaced",
+      `已切换本地验签插件 ${definition.id} ${definition.version}`,
     );
   }
 
@@ -276,9 +293,14 @@ export class PluginContributionHost implements ProductPluginHostV1 {
     });
   }
 
-  #assertNoRouteCollisions(active: ReadonlySet<string>, candidate: PluginDefinitionV1): void {
+  #assertNoRouteCollisions(
+    active: ReadonlySet<string>,
+    candidate: PluginDefinitionV1,
+    replacingPluginId?: string,
+  ): void {
     const occupied = new Map<string, string>();
     for (const { definition } of this.#orderedDefinitions()) {
+      if (definition.id === replacingPluginId) continue;
       if (!active.has(definition.id)) continue;
       for (const route of definition.contributions.routes) {
         occupied.set(normalizeRoute(route.path), definition.id);
@@ -293,6 +315,29 @@ export class PluginContributionHost implements ProductPluginHostV1 {
           "修改插件路由后重新启用",
         );
       }
+    }
+  }
+
+  #assertVerifiedDefinition(
+    artifact: VerifiedPluginArtifact,
+    definition: PluginDefinitionV1,
+  ): void {
+    assertVerifiedPluginArtifact(artifact);
+    assertPluginDefinition(definition);
+    if (definition.official) {
+      throw new PluginPolicyError(
+        "PLUGIN_DEFINITION_INVALID",
+        `签名仓库插件 ${definition.id} 不得冒充官方预装插件`,
+        "将 official 设为 false",
+      );
+    }
+    if (!definition.manifest
+      || canonicalJson(definition.manifest) !== canonicalJson(artifact.manifest)) {
+      throw new PluginPolicyError(
+        "PLUGIN_DEFINITION_INVALID",
+        `插件 ${definition.id} 的运行定义与已验签清单不一致`,
+        "绑定同一份已验签清单后重试",
+      );
     }
   }
 

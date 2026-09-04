@@ -63,6 +63,7 @@ Agent OS 0.2 默认监听 `http://127.0.0.1:7318`。成功的 JSON 响应使用 
 | `POST` | `/v2/model-connections/{connectionId}/probe` | `probeModelConnection` | 必需 | 必需 |
 | `POST` | `/v2/plugins/installations` | `installPlugin` | 必需 | — |
 | `GET` | `/v2/plugins/installations` | `listPluginInstallations` | — | — |
+| `PATCH` | `/v2/plugins/installations/{pluginId}` | `updatePlugin` | 必需 | 必需 |
 | `POST` | `/v2/workspaces/{workspaceId}/plugin-activations` | `activatePlugin` | 必需 | 必需 |
 | `GET` | `/v2/plugins/opc/opportunities/{opportunityId}` | `getOpcOpportunity` | — | — |
 | `POST` | `/v2/plugins/opc/opportunities/{opportunityId}/commands` | `commandOpcOpportunity` | 必需 | 必需 |

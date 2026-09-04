@@ -69,7 +69,9 @@ function createFixture() {
       required: false,
     }],
     dataNamespace: "opc",
-    eventSchemas: {},
+    eventSchemas: {
+      "opc.signal.v1": { type: "object", required: ["signalId"] },
+    },
     projections: [
       { engine: "sqlite", namespace: "opc_v1", entry: "./projection/sqlite.sql" },
     ],
@@ -314,6 +316,33 @@ test("升级先排空并重放新投影，再在同一事务切换", async () =>
     ["drain:opc", "replay:opc__0_3_0__13", "switch:opc__0_3_0__13"],
   );
   assert.equal(store.read("opc")?.manifest.version, "0.3.0");
+
+  const incompatibleBytes = Buffer.from("official opc package v0.4");
+  const incompatibleManifest = signPluginManifest({
+    ...nextManifest,
+    version: "0.4.0",
+    packageSha256: sha256Hex(incompatibleBytes),
+    eventSchemas: {
+      "opc.signal.v1": { type: "string" },
+    },
+    release: { ...nextManifest.release, sequence: 14 },
+  }, fixture.release.privateKey);
+  const incompatibleArtifact = verifyPluginArtifact({
+    manifest: incompatibleManifest,
+    packageBytes: incompatibleBytes,
+    registry,
+    now: NOW,
+    operation: "update",
+    installedRelease: {
+      sequence: nextManifest.release.sequence,
+      version: nextManifest.version,
+      packageSha256: nextManifest.packageSha256,
+    },
+  });
+  await assert.rejects(
+    () => lifecycle.upgradeVerified(incompatibleArtifact),
+    (error: unknown) => error instanceof PluginPolicyError && error.code === "PLUGIN_UPGRADE_INVALID",
+  );
 
   lifecycle.recordPluginEvent("opc");
   await assert.rejects(

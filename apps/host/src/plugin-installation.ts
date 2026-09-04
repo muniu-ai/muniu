@@ -1,10 +1,17 @@
 import { randomUUID } from "node:crypto";
 import type {
+  Execution,
   JsonObject,
   PluginInstallation,
   PluginManifestV1,
 } from "@mn/contracts";
-import { KernelError, sha256, type KernelStore } from "@mn/kernel";
+import {
+  KernelError,
+  StreamVersionConflictError,
+  sha256,
+  type KernelStore,
+  type KernelTransaction,
+} from "@mn/kernel";
 import {
   InMemoryPluginStateStore,
   PluginContributionHost,
@@ -17,6 +24,7 @@ import {
   verifyRegistryMetadata,
   type InstalledPluginRecord,
   type PluginDefinitionV1,
+  type PluginExecutionControl,
   type PluginPackageMetadataV1,
   type RegistryMetadataV1,
   type ResolvedPluginDependency,
@@ -96,12 +104,29 @@ export interface PluginInstallerPort {
   list?(): Promise<readonly PluginInstallation[]>;
   isInstalled?(pluginId: string): boolean;
   install(input: JsonObject, context?: PluginInstallContext): Promise<PluginInstallation>;
+  update?(pluginId: string, input: JsonObject, context?: PluginInstallContext): Promise<PluginInstallation>;
   activate?(pluginId: string): Promise<PluginInstallation>;
+  assertCanStartExecution?(pluginId: string): void;
 }
 
 export interface PluginInstallContext {
   readonly idempotencyKey: string;
   readonly idempotencyScope: string;
+}
+
+export interface PreparedProductionProjectionUpgrade {
+  readonly namespace: string;
+  /** 与 installation、plugin lock 和升级事件在同一 Kernel 事务内切换。 */
+  activate(transaction: KernelTransaction): void;
+  discard(): Promise<void> | void;
+}
+
+export interface ProductionPluginProjectionManager {
+  replayAndValidate(input: {
+    readonly pluginId: string;
+    readonly manifest: PluginManifestV1;
+    readonly namespace: string;
+  }): Promise<PreparedProductionProjectionUpgrade>;
 }
 
 export interface LocalProductionPluginInstallerOptions {
@@ -112,6 +137,8 @@ export interface LocalProductionPluginInstallerOptions {
   readonly tenantId?: string;
   readonly actorId?: string;
   readonly now?: () => string;
+  readonly executionControl?: PluginExecutionControl;
+  readonly projections?: ProductionPluginProjectionManager;
 }
 
 export class LocalProductionPluginInstaller implements PluginInstallerPort {
@@ -122,7 +149,10 @@ export class LocalProductionPluginInstaller implements PluginInstallerPort {
   readonly #tenantId: string;
   readonly #actorId: string;
   readonly #now: () => string;
+  readonly #executionControl: PluginExecutionControl;
+  readonly #projections?: ProductionPluginProjectionManager;
   readonly #available = new Set<string>();
+  readonly #startingBlocked = new Set<string>();
   #tail: Promise<void> = Promise.resolve();
 
   constructor(options: LocalProductionPluginInstallerOptions) {
@@ -133,6 +163,11 @@ export class LocalProductionPluginInstaller implements PluginInstallerPort {
     this.#tenantId = options.tenantId ?? "local";
     this.#actorId = options.actorId ?? "local-owner";
     this.#now = options.now ?? (() => new Date().toISOString());
+    this.#executionControl = options.executionControl ?? {
+      drain: (pluginId) => assertNoActiveExecutions(this.#store, this.#tenantId, pluginId),
+      async interruptAtSafeBoundary() {},
+    };
+    this.#projections = options.projections;
   }
 
   async initialize(): Promise<void> {
@@ -213,6 +248,16 @@ export class LocalProductionPluginInstaller implements PluginInstallerPort {
 
   isInstalled(pluginId: string): boolean {
     return this.#available.has(pluginId);
+  }
+
+  assertCanStartExecution(pluginId: string): void {
+    if (this.#startingBlocked.has(pluginId)) {
+      throw new PluginPolicyError(
+        "PLUGIN_NOT_ACTIVE",
+        `插件 ${pluginId} 正在排空执行`,
+        "等待插件更新完成后重试",
+      );
+    }
   }
 
   async install(input: JsonObject, context?: PluginInstallContext): Promise<PluginInstallation> {
@@ -328,6 +373,223 @@ export class LocalProductionPluginInstaller implements PluginInstallerPort {
       this.#contributions.registerVerified(artifact, release.definition);
       this.#available.add(request.pluginId);
       return persisted.installation;
+    });
+  }
+
+  async update(
+    pluginId: string,
+    input: JsonObject,
+    context?: PluginInstallContext,
+  ): Promise<PluginInstallation> {
+    const request = parseUpdateRequest(pluginId, input);
+    return this.#exclusive(async () => {
+      const previousReceipt = context
+        ? await this.#store.transact(this.#tenantId, (transaction) =>
+          transaction.getIdempotency(context.idempotencyScope, context.idempotencyKey))
+        : undefined;
+      if (previousReceipt) {
+        if (previousReceipt.requestDigest !== sha256(input)) {
+          throw new KernelError(
+            "IDEMPOTENCY_KEY_REUSED",
+            "幂等键已用于不同的插件更新请求",
+            "使用新的 Idempotency-Key",
+          );
+        }
+        return previousReceipt.response as PluginInstallation;
+      }
+
+      const snapshot = await this.#repository.read();
+      if (!snapshot || this.#trustedRoots.length === 0) {
+        throw new PluginPolicyError(
+          "PLUGIN_REGISTRY_UNAVAILABLE",
+          "本地签名插件仓库不可用",
+          "配置受信根和本地签名制品后重试",
+        );
+      }
+      const state = await this.#readState();
+      const before = state.records.find((record) => record.manifest.id === pluginId);
+      const installationBefore = state.installations.find((item) => item.pluginId === pluginId);
+      if (!before || !installationBefore) {
+        throw new PluginPolicyError("PLUGIN_NOT_INSTALLED", `插件 ${pluginId} 未安装`, "先安装插件");
+      }
+      if (installationBefore.streamVersion !== request.expectedStreamVersion) {
+        throw new StreamVersionConflictError(
+          request.expectedStreamVersion,
+          installationBefore.streamVersion,
+        );
+      }
+      const registry = verifyRegistryMetadata(snapshot.metadata, this.#trustedRoots, {
+        now: new Date(this.#now()),
+        operation: "update",
+        minimumSequence: Math.max(state.registry?.sequence ?? 0, before.registrySequence),
+      });
+      const release = findRelease(snapshot, pluginId, request.version);
+      if (!release) {
+        throw new PluginPolicyError(
+          "PLUGIN_RELEASE_NOT_FOUND",
+          `本地仓库没有插件 ${pluginId} ${request.version}`,
+          "刷新本地签名仓库或选择已有的精确版本",
+        );
+      }
+      const resolvedDependencies = resolveDependencies(release.manifest, state.records);
+      const artifact = verifyPluginArtifact({
+        manifest: release.manifest,
+        packageBytes: release.packageBytes,
+        registry,
+        now: new Date(this.#now()),
+        operation: "update",
+        installedRelease: releaseIdentity(before),
+        packageMetadata: release.packageMetadata,
+      });
+      preflightDefinition(artifact, release.definition);
+
+      // 复用 SDK 生命周期规则生成新记录；真正的排空、重放和切换由下方生产端口完成。
+      const lifecycleStore = new InMemoryPluginStateStore(state.records);
+      const lifecycle = new PluginLifecycleManager({
+        store: lifecycleStore,
+        engineApiVersion: ENGINE_API_VERSION,
+        now: () => new Date(this.#now()),
+      });
+      const planned = await lifecycle.upgradeVerified(artifact, resolvedDependencies);
+      if (release.manifest.projections.length > 0 && !this.#projections) {
+        throw new PluginPolicyError(
+          "PLUGIN_UPGRADE_INVALID",
+          `插件 ${pluginId} 声明了投影，但 Host 未配置投影重放器`,
+          "配置对应存储引擎的投影重放器后重试",
+        );
+      }
+
+      this.#startingBlocked.add(pluginId);
+      let prepared: PreparedProductionProjectionUpgrade | undefined;
+      try {
+        await this.#executionControl.drain(pluginId);
+        prepared = this.#projections
+          ? await this.#projections.replayAndValidate({
+            pluginId,
+            manifest: artifact.manifest,
+            namespace: planned.projectionNamespace,
+          })
+          : {
+            namespace: planned.projectionNamespace,
+            activate() {},
+            discard() {},
+          };
+        if (prepared.namespace !== planned.projectionNamespace) {
+          throw new PluginPolicyError(
+            "PLUGIN_UPGRADE_INVALID",
+            "投影准备返回了错误命名空间",
+            "检查投影升级实现",
+          );
+        }
+
+        const timestamp = this.#now();
+        const installation = installationFromRecord(
+          planned,
+          installationBefore,
+          this.#tenantId,
+          timestamp,
+        );
+        const records = state.records.map((record) =>
+          record.manifest.id === pluginId ? planned : record);
+        const lock = createPluginLock(records, registry.metadata.sequence, timestamp);
+        const persisted = await this.#store.transact(this.#tenantId, (transaction) => {
+          const previous = context
+            ? transaction.getIdempotency(context.idempotencyScope, context.idempotencyKey)
+            : undefined;
+          if (previous) {
+            if (previous.requestDigest !== sha256(input)) {
+              throw new KernelError(
+                "IDEMPOTENCY_KEY_REUSED",
+                "幂等键已用于不同的插件更新请求",
+                "使用新的 Idempotency-Key",
+              );
+            }
+            return { installation: previous.response as PluginInstallation, applied: false };
+          }
+          const current = transaction.getProjection<PluginInstallation>(
+            PLUGIN_INSTALLATION_PROJECTION,
+            pluginId,
+          );
+          const currentRecord = transaction.getProjection<InstalledPluginRecord>(
+            PLUGIN_LIFECYCLE_PROJECTION,
+            pluginId,
+          );
+          if (!current || !currentRecord) {
+            throw new PluginPolicyError("PLUGIN_NOT_INSTALLED", `插件 ${pluginId} 未安装`, "刷新插件列表");
+          }
+          if (current.streamVersion !== request.expectedStreamVersion) {
+            throw new StreamVersionConflictError(request.expectedStreamVersion, current.streamVersion);
+          }
+          if (current.packageSha256 !== before.manifest.packageSha256
+            || currentRecord.manifest.packageSha256 !== before.manifest.packageSha256) {
+            throw new PluginPolicyError(
+              "PLUGIN_UPGRADE_INVALID",
+              `插件 ${pluginId} 状态在更新期间发生变化`,
+              "刷新插件状态后重试",
+            );
+          }
+
+          prepared!.activate(transaction);
+          transaction.putProjection(PLUGIN_LIFECYCLE_PROJECTION, pluginId, planned);
+          transaction.putProjection(PLUGIN_INSTALLATION_PROJECTION, pluginId, installation);
+          transaction.putProjection(PLUGIN_REGISTRY_PROJECTION, "current", {
+            sequence: registry.metadata.sequence,
+            verifiedAt: registry.verifiedAt,
+          } satisfies PluginRegistryStateV1);
+          transaction.putProjection(PLUGIN_LOCK_PROJECTION, "current", lock);
+          transaction.appendEvent({
+            tenantId: this.#tenantId,
+            aggregateType: "pluginInstallation",
+            aggregateId: pluginId,
+            expectedStreamVersion: current.streamVersion,
+            type: "plugin.upgraded",
+            actorId: this.#actorId,
+            generation: 0,
+            correlationId: randomUUID(),
+            publicPayload: {
+              pluginId,
+              previousVersion: current.version,
+              version: installation.version,
+              packageSha256: installation.packageSha256,
+              projectionNamespace: installation.projectionNamespace,
+              lockDigest: lock.digest,
+            },
+          });
+          if (context) {
+            transaction.putIdempotency({
+              tenantId: this.#tenantId,
+              scope: context.idempotencyScope,
+              key: context.idempotencyKey,
+              requestDigest: sha256(input),
+              response: installation,
+              createdAt: timestamp,
+            });
+          }
+          return { installation, applied: true };
+        });
+        if (!persisted.applied) {
+          await Promise.resolve(prepared.discard()).catch(() => undefined);
+          return persisted.installation;
+        }
+        try {
+          if (this.#contributions.definition(pluginId)) {
+            this.#contributions.replaceVerified(artifact, release.definition);
+          } else {
+            this.#contributions.registerVerified(artifact, release.definition);
+          }
+          this.#available.add(pluginId);
+        } catch (error) {
+          this.#available.delete(pluginId);
+          await this.#markLoadFailure(planned, "failed", policyMessage(error));
+          throw error;
+        }
+        return persisted.installation;
+      } catch (error) {
+        if (prepared) await Promise.resolve(prepared.discard()).catch(() => undefined);
+        throw error;
+      } finally {
+        this.#startingBlocked.delete(pluginId);
+      }
     });
   }
 
@@ -475,6 +737,28 @@ function parseInstallRequest(input: JsonObject): { readonly pluginId: string; re
   return { pluginId: input.pluginId, version: input.version };
 }
 
+function parseUpdateRequest(
+  pluginId: string,
+  input: JsonObject,
+): { readonly version: string; readonly expectedStreamVersion: number } {
+  const allowed = new Set(["version", "expectedStreamVersion"]);
+  if (!/^[a-z][a-z0-9.-]{0,127}$/u.test(pluginId)
+    || Object.keys(input).some((key) => !allowed.has(key))) {
+    throw invalidRequest("插件更新路径或请求字段无效");
+  }
+  if (typeof input.version !== "string" || !EXACT_VERSION.test(input.version)) {
+    throw invalidRequest("version 必须是精确语义版本，不能使用范围或浮动标签");
+  }
+  if (!Number.isSafeInteger(input.expectedStreamVersion)
+    || Number(input.expectedStreamVersion) < 0) {
+    throw invalidRequest("expectedStreamVersion 必须是非负整数");
+  }
+  return {
+    version: input.version,
+    expectedStreamVersion: Number(input.expectedStreamVersion),
+  };
+}
+
 function cloneRepositorySnapshot(
   snapshot: LocalSignedPluginRepositorySnapshot,
 ): LocalSignedPluginRepositorySnapshot {
@@ -588,6 +872,26 @@ function createPluginLock(
 
 function policyMessage(error: unknown): string {
   return error instanceof PluginPolicyError ? error.message : "插件加载失败";
+}
+
+async function assertNoActiveExecutions(
+  store: KernelStore,
+  tenantId: string,
+  pluginId: string,
+): Promise<void> {
+  const activeExecutionIds = await store.transact(tenantId, (transaction) => {
+    return transaction.listProjections<Execution>("execution")
+      .filter((execution) => execution.pluginId === pluginId)
+      .filter((execution) => !["completed", "failed", "cancelled"].includes(execution.status))
+      .map((execution) => execution.id);
+  });
+  if (activeExecutionIds.length > 0) {
+    throw new PluginPolicyError(
+      "PLUGIN_UPGRADE_INVALID",
+      `插件 ${pluginId} 仍有 ${activeExecutionIds.length} 个未终结执行`,
+      "等待执行终结或在安全边界中断后重试",
+    );
+  }
 }
 
 function assertPersistedLock(state: {

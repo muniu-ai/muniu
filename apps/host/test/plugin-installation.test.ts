@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import type { PluginInstallation, PluginManifestV1 } from "@mn/contracts";
+import type { Execution, PluginInstallation, PluginManifestV1 } from "@mn/contracts";
 import { InMemoryKernelStore } from "@mn/kernel";
 import { SqliteStorage } from "@mn/storage";
 import {
@@ -29,9 +29,9 @@ const secrets: ModelSecretStore = {
   async read() { return "test-key"; },
 };
 
-function jsonRequest(path: string, body: unknown, key: string): Request {
+function jsonRequest(path: string, body: unknown, key: string, method = "POST"): Request {
   return new Request(`http://host.test${path}`, {
-    method: "POST",
+    method,
     headers: { "content-type": "application/json", "Idempotency-Key": key },
     body: JSON.stringify(body),
   });
@@ -117,12 +117,257 @@ function signedRepository(options: {
   };
   return {
     root,
+    release,
+    manifest,
+    packageBytes,
+    definition,
     repository: new LocalSignedPluginRepository({
       metadata: registry,
       releases: [{ manifest, packageBytes, definition, packageMetadata: options.packageMetadata }],
     }),
   };
 }
+
+async function signedUpgradeRepository() {
+  const first = signedRepository();
+  const snapshot = (await first.repository.read())!;
+  const nextPackageBytes = Buffer.from("local signed research plugin v1.3");
+  const nextManifest = signPluginManifest({
+    ...first.manifest,
+    version: "1.3.0",
+    packageSha256: sha256Hex(nextPackageBytes),
+    projections: [{
+      engine: "sqlite",
+      namespace: "research_v2",
+      entry: "./projection/sqlite.sql",
+    }],
+    release: { ...first.manifest.release, sequence: 5 },
+  }, first.release.privateKey);
+  const nextDefinition: PluginDefinitionV1 = {
+    ...first.definition,
+    version: "1.3.0",
+    manifest: nextManifest,
+    contributions: {
+      ...first.definition.contributions,
+      commands: [{
+        id: "summarize",
+        title: "生成摘要",
+        async run(input) { return { outcome: `新版已整理：${String(input.topic)}` }; },
+      }],
+    },
+  };
+  return {
+    ...first,
+    nextManifest,
+    nextPackageBytes,
+    nextDefinition,
+    repository: new LocalSignedPluginRepository({
+      metadata: snapshot.metadata,
+      releases: [
+        snapshot.releases[0]!,
+        { manifest: nextManifest, packageBytes: nextPackageBytes, definition: nextDefinition },
+      ],
+    }),
+  };
+}
+
+test("生产更新先排空执行并重放投影，再原子更新 installation、lock 与运行贡献", async () => {
+  const store = new InMemoryKernelStore();
+  const fixture = await signedUpgradeRepository();
+  const order: string[] = [];
+  let releaseDrain!: () => void;
+  let markDrainStarted!: () => void;
+  const drainGate = new Promise<void>((resolve) => { releaseDrain = resolve; });
+  const drainStarted = new Promise<void>((resolve) => { markDrainStarted = resolve; });
+  const host = await createAgentOsHost({
+    store,
+    secretStore: secrets,
+    now: () => NOW,
+    pluginRepository: fixture.repository,
+    trustedPluginRoots: [{ keyId: "root-1", publicKey: fixture.root.publicKey }],
+    pluginExecutionControl: {
+      async drain(pluginId) {
+        order.push(`drain:${pluginId}`);
+        markDrainStarted();
+        await drainGate;
+      },
+      async interruptAtSafeBoundary() {},
+    },
+    pluginProjections: {
+      async replayAndValidate(input) {
+        order.push(`replay:${input.namespace}`);
+        return {
+          namespace: input.namespace,
+          activate() { order.push(`switch:${input.namespace}`); },
+          discard() { order.push(`discard:${input.namespace}`); },
+        };
+      },
+    },
+  });
+
+  assert.equal((await host.dispatch(jsonRequest("/v2/plugins/installations", {
+    pluginId: "research", version: "1.2.3",
+  }, "install-before-update"))).status, 201);
+  const workspace = (await responseJson(await host.dispatch(jsonRequest("/v2/workspaces", {
+    name: "升级验证", viewMode: "professional", pluginIds: ["research"],
+  }, "workspace-before-update")))).data;
+
+  const updateRequest = jsonRequest("/v2/plugins/installations/research", {
+    version: "1.3.0",
+    expectedStreamVersion: 2,
+  }, "update-research", "PATCH");
+  const updating = host.dispatch(updateRequest);
+  await drainStarted;
+  const blockedCommand = await host.dispatch(jsonRequest("/v2/plugins/research/summarize", {
+    expectedStreamVersion: 0,
+    workspaceId: workspace.id,
+    topic: "不得在排空期间执行",
+  }, "blocked-during-update"));
+  assert.equal(blockedCommand.status, 422);
+  assert.equal((await responseJson(blockedCommand)).code, "PLUGIN_NOT_ACTIVE");
+  releaseDrain();
+  const updatedResponse = await updating;
+  const updatedBody = await updatedResponse.text();
+  assert.equal(updatedResponse.status, 200, updatedBody);
+  const updated = JSON.parse(updatedBody).data as PluginInstallation;
+  assert.equal(updated.version, "1.3.0");
+  assert.equal(updated.status, "active");
+  assert.equal(updated.streamVersion, 3);
+  assert.deepEqual(order, [
+    "drain:research",
+    "replay:research__1_3_0__5",
+    "switch:research__1_3_0__5",
+  ]);
+  const replayedUpdate = await host.dispatch(jsonRequest("/v2/plugins/installations/research", {
+    version: "1.3.0",
+    expectedStreamVersion: 2,
+  }, "update-research", "PATCH"));
+  assert.deepEqual((await responseJson(replayedUpdate)).data, updated);
+  assert.equal(order.length, 3);
+
+  const conflict = await host.dispatch(jsonRequest("/v2/plugins/installations/research", {
+    version: "1.3.0",
+    expectedStreamVersion: 2,
+  }, "update-research-stale", "PATCH"));
+  assert.equal(conflict.status, 409);
+  assert.equal((await responseJson(conflict)).code, "STREAM_VERSION_CONFLICT");
+
+  const persisted = await store.transact("local", (transaction) => ({
+    installation: transaction.getProjection<PluginInstallation>(PLUGIN_INSTALLATION_PROJECTION, "research"),
+    lock: transaction.getProjection<PluginLockV1>(PLUGIN_LOCK_PROJECTION, "current"),
+  }));
+  assert.equal(persisted.installation?.version, "1.3.0");
+  assert.equal(persisted.lock?.plugins[0]?.version, "1.3.0");
+
+  const command = await host.dispatch(jsonRequest("/v2/plugins/research/summarize", {
+    expectedStreamVersion: 0,
+    workspaceId: workspace.id,
+    topic: "反证",
+  }, "summarize-after-update"));
+  assert.deepEqual((await responseJson(command)).data, { outcome: "新版已整理：反证" });
+  const events = (await store.readEvents("local", 0, 100)).events
+    .filter((event) => event.type === "plugin.upgraded");
+  assert.equal(events.length, 1);
+  await host.close();
+});
+
+test("生产更新的投影切换失败时回滚状态、lock 与新命名空间写入", async () => {
+  const store = new InMemoryKernelStore();
+  const fixture = await signedUpgradeRepository();
+  let discarded = false;
+  const host = await createAgentOsHost({
+    store,
+    secretStore: secrets,
+    now: () => NOW,
+    pluginRepository: fixture.repository,
+    trustedPluginRoots: [{ keyId: "root-1", publicKey: fixture.root.publicKey }],
+    pluginProjections: {
+      async replayAndValidate(input) {
+        return {
+          namespace: input.namespace,
+          activate(transaction) {
+            transaction.putProjection("plugin-projection-pointer", "research", {
+              namespace: input.namespace,
+            });
+            throw new Error("projection switch failed");
+          },
+          discard() { discarded = true; },
+        };
+      },
+    },
+  });
+  const installed = (await responseJson(await host.dispatch(jsonRequest("/v2/plugins/installations", {
+    pluginId: "research", version: "1.2.3",
+  }, "install-before-failed-update")))).data as PluginInstallation;
+
+  const failed = await host.dispatch(jsonRequest("/v2/plugins/installations/research", {
+    version: "1.3.0",
+    expectedStreamVersion: installed.streamVersion,
+  }, "failed-update-research", "PATCH"));
+  assert.equal(failed.status, 500);
+  assert.equal(discarded, true);
+  const persisted = await store.transact("local", (transaction) => ({
+    installation: transaction.getProjection<PluginInstallation>(PLUGIN_INSTALLATION_PROJECTION, "research"),
+    lock: transaction.getProjection<PluginLockV1>(PLUGIN_LOCK_PROJECTION, "current"),
+    pointer: transaction.getProjection("plugin-projection-pointer", "research"),
+  }));
+  assert.equal(persisted.installation?.version, "1.2.3");
+  assert.equal(persisted.lock?.plugins[0]?.version, "1.2.3");
+  assert.equal(persisted.pointer, undefined);
+  assert.equal((await store.readEvents("local", 0, 100)).events
+    .some((event) => event.type === "plugin.upgraded"), false);
+  await host.close();
+});
+
+test("生产更新在插件仍有未终结 Execution 时拒绝切换", async () => {
+  const store = new InMemoryKernelStore();
+  const fixture = await signedUpgradeRepository();
+  let replayed = false;
+  const host = await createAgentOsHost({
+    store,
+    secretStore: secrets,
+    now: () => NOW,
+    pluginRepository: fixture.repository,
+    trustedPluginRoots: [{ keyId: "root-1", publicKey: fixture.root.publicKey }],
+    pluginProjections: {
+      async replayAndValidate(input) {
+        replayed = true;
+        return { namespace: input.namespace, activate() {}, discard() {} };
+      },
+    },
+  });
+  const installed = (await responseJson(await host.dispatch(jsonRequest("/v2/plugins/installations", {
+    pluginId: "research", version: "1.2.3",
+  }, "install-before-busy-update")))).data as PluginInstallation;
+  await store.transact("local", (transaction) => {
+    transaction.putProjection<Execution>("execution", "execution-busy", {
+      id: "execution-busy",
+      tenantId: "local",
+      workspaceId: "workspace-busy",
+      threadId: "thread-busy",
+      pluginId: "research",
+      agentDefinitionId: "researcher",
+      modelBindingId: "model-local",
+      initiatedBy: "local-owner",
+      executionPrincipalId: "agent:research",
+      generation: 1,
+      status: "running",
+      authorityId: "authority-busy",
+      streamVersion: 2,
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+  });
+
+  const blocked = await host.dispatch(jsonRequest("/v2/plugins/installations/research", {
+    version: "1.3.0",
+    expectedStreamVersion: installed.streamVersion,
+  }, "busy-update-research", "PATCH"));
+  assert.equal(blocked.status, 422);
+  assert.equal((await responseJson(blocked)).code, "PLUGIN_UPGRADE_INVALID");
+  assert.equal(replayed, false);
+  await host.close();
+});
 
 test("默认生产安装链验签本地制品，持久化 installation 与确定性 lock 后才能激活", async () => {
   const store = new InMemoryKernelStore();

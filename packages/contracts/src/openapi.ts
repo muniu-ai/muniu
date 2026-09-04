@@ -46,6 +46,7 @@ export const API_OPERATIONS_V2: readonly ApiOperationV2[] = [
   { method: "post", path: "/v2/model-connections/{connectionId}/probe", operationId: "probeModelConnection", mutation: true, versioned: true },
   { method: "post", path: "/v2/plugins/installations", operationId: "installPlugin", mutation: true, versioned: false },
   { method: "get", path: "/v2/plugins/installations", operationId: "listPluginInstallations", mutation: false, versioned: false },
+  { method: "patch", path: "/v2/plugins/installations/{pluginId}", operationId: "updatePlugin", mutation: true, versioned: true },
   { method: "post", path: "/v2/workspaces/{workspaceId}/plugin-activations", operationId: "activatePlugin", mutation: true, versioned: true },
   { method: "get", path: "/v2/plugins/opc/opportunities/{opportunityId}", operationId: "getOpcOpportunity", mutation: false, versioned: false },
   { method: "post", path: "/v2/plugins/opc/opportunities/{opportunityId}/commands", operationId: "commandOpcOpportunity", mutation: true, versioned: true },
