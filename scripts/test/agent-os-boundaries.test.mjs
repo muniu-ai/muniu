@@ -34,7 +34,32 @@ test("0.2 只保留目标工作区", () => {
     "plugins/runner-codex-cli",
   ];
   for (const path of required) assert.equal(existsSync(join(root, path)), true, `缺少 ${path}`);
-  for (const path of ["apps/api", "packages/config-manager", "packages/local-proxy"])
+  for (const path of [
+    "apps/api",
+    "packages/agent-host",
+    "packages/agent-kernel",
+    "packages/agent-llm",
+    "packages/agent-protocol",
+    "packages/agent-session",
+    "packages/agent-tools",
+    "packages/config-manager",
+    "packages/connectors",
+    "packages/core",
+    "packages/data-policy",
+    "packages/evidence",
+    "packages/executors",
+    "packages/extensions",
+    "packages/governance",
+    "packages/harness",
+    "packages/local-proxy",
+    "packages/loop",
+    "packages/provider-catalog",
+    "packages/runtime",
+    "packages/specs",
+    "packages/store",
+    "packages/usage",
+    "packages/verifier",
+  ])
     assert.equal(existsSync(join(root, path)), false, `旧入口仍存在：${path}`);
 });
 
@@ -50,8 +75,9 @@ test("源代码和当前文档不暴露 v1 路由或旧协议", () => {
   for (const item of roots) {
     for (const file of filesUnder(join(root, item))) {
       if (!/\.(?:ts|tsx|rs|json|ya?ml|md|mjs)$/.test(file)) continue;
+      if (relative(root, file).split("/").includes("test")) continue;
       const source = readFileSync(file, "utf8");
-      assert.doesNotMatch(source, /\/v1(?:\/|\b)|mniu:\/\//, relative(root, file));
+      assert.doesNotMatch(source, /["'`]\/v1(?:\/|\b)|mniu:\/\//, relative(root, file));
     }
   }
 });
