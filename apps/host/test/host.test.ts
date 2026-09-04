@@ -53,6 +53,32 @@ async function responseJson(response: Response): Promise<any> {
   return response.json();
 }
 
+async function readSseUntil(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  predicate: (body: string) => boolean,
+  timeoutMs = 1_000,
+): Promise<string> {
+  const decoder = new TextDecoder();
+  let body = "";
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate(body)) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new Error(`SSE read timed out: ${body}`);
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const result = await Promise.race([
+      reader.read(),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error(`SSE read timed out: ${body}`)), remaining);
+      }),
+    ]).finally(() => {
+      if (timeout) clearTimeout(timeout);
+    });
+    if (result.done) throw new Error(`SSE closed before expected data: ${body}`);
+    body += decoder.decode(result.value, { stream: true });
+  }
+  return body;
+}
+
 test("Cordis 是唯一组合根，官方插件预装但默认不启用", async () => {
   const host = await createAgentOsHost({
     store: new InMemoryKernelStore(),
@@ -477,7 +503,9 @@ test("过期 SSE 游标返回 410，事件使用 tenant position 作为 id", asy
     { headers: { "Last-Event-ID": "0" } },
   ));
   assert.equal(stream.status, 200);
-  assert.match(await stream.text(), /^id: 2$/m);
+  const reader = stream.body!.getReader();
+  assert.match(await readSseUntil(reader, (body) => /^id: 2$/m.test(body)), /^id: 2$/m);
+  await reader.cancel();
   await host.close();
 
   const expiredStore = {
@@ -491,6 +519,7 @@ test("过期 SSE 游标返回 410，事件使用 tenant position 作为 id", asy
     { headers: { "Last-Event-ID": "2" } },
   ));
   assert.equal(expired.status, 410);
+  assert.match(expired.headers.get("content-type") ?? "", /^application\/json/u);
   assert.equal((await responseJson(expired)).code, "EVENT_CURSOR_EXPIRED");
   await expiredHost.close();
 });
@@ -507,10 +536,99 @@ test("工作区 SSE 保持 tenant position 游标但不泄露其他工作区事�
     `http://host.test/v2/workspaces/${first.data.id}/events`,
     { headers: { "Last-Event-ID": "0" } },
   ));
-  const body = await response.text();
+  const reader = response.body!.getReader();
+  const body = await readSseUntil(reader, (candidate) => /"position":3/.test(candidate));
   assert.match(body, /仅工作区 A 可见/);
   assert.doesNotMatch(body, /绝不能出现在 A 的流中/);
   assert.match(body, /"position":3/);
+  assert.match(body, /^id: 3$/m);
+  await reader.cancel();
+  await host.close();
+});
+
+test("工作区 SSE 持续推送、过滤事件时推进 tenant 游标并支持 Last-Event-ID", async () => {
+  const store = new InMemoryKernelStore();
+  const host = await createAgentOsHost({
+    store,
+    secretStore: secrets,
+    ssePollIntervalMs: 5,
+    sseKeepAliveIntervalMs: 50,
+  });
+  const first = (await responseJson(await host.dispatch(jsonRequest("/v2/workspaces", {
+    name: "持续流 A", viewMode: "business", pluginIds: [],
+  }, "continuous-a")))).data;
+  const second = (await responseJson(await host.dispatch(jsonRequest("/v2/workspaces", {
+    name: "持续流 B", viewMode: "business", pluginIds: [],
+  }, "continuous-b")))).data;
+
+  const response = await host.dispatch(new Request(
+    `http://host.test/v2/workspaces/${first.id}/events`,
+    { headers: { "Last-Event-ID": "0" } },
+  ));
+  const reader = response.body!.getReader();
+  const initial = await readSseUntil(reader, (body) => /^id: 3$/m.test(body));
+  assert.match(initial, /持续流 A/u);
+  assert.doesNotMatch(initial, /持续流 B/u);
+
+  const secondUpdate = await host.dispatch(jsonRequest(`/v2/workspaces/${second.id}`, {
+    expectedStreamVersion: second.streamVersion,
+    name: "不得泄露的 B 更新",
+  }, "continuous-b-update", "PATCH"));
+  assert.equal(secondUpdate.status, 200);
+  const filtered = await readSseUntil(reader, (body) => /^id: 4$/m.test(body));
+  assert.match(filtered, /event: cursor/u);
+  assert.doesNotMatch(filtered, /不得泄露的 B 更新/u);
+
+  const firstUpdate = await host.dispatch(jsonRequest(`/v2/workspaces/${first.id}`, {
+    expectedStreamVersion: first.streamVersion,
+    name: "持续流 A 已更新",
+  }, "continuous-a-update", "PATCH"));
+  assert.equal(firstUpdate.status, 200);
+  const visible = await readSseUntil(reader, (body) => /持续流 A 已更新/u.test(body));
+  assert.match(visible, /^id: 5$/m);
+  await reader.cancel();
+
+  const resumed = await host.dispatch(new Request(
+    `http://host.test/v2/workspaces/${first.id}/events`,
+    { headers: { "Last-Event-ID": "4" } },
+  ));
+  const resumedReader = resumed.body!.getReader();
+  const resumedBody = await readSseUntil(resumedReader, (body) => /持续流 A 已更新/u.test(body));
+  assert.doesNotMatch(resumedBody, /name":"持续流 A"[,}]/u);
+  assert.match(resumedBody, /^id: 5$/m);
+  await resumedReader.cancel();
+  await host.close();
+});
+
+test("工作区 SSE 空闲时发送 keepalive，客户端取消后停止轮询", async () => {
+  const base = new InMemoryKernelStore();
+  let reads = 0;
+  const store = {
+    transact: base.transact.bind(base),
+    async readEvents(tenantId: string, afterPosition: number, limit: number) {
+      reads += 1;
+      return base.readEvents(tenantId, afterPosition, limit);
+    },
+  };
+  const host = await createAgentOsHost({
+    store,
+    secretStore: secrets,
+    ssePollIntervalMs: 5,
+    sseKeepAliveIntervalMs: 12,
+  });
+  const workspace = (await responseJson(await host.dispatch(jsonRequest("/v2/workspaces", {
+    name: "取消轮询", viewMode: "business", pluginIds: [],
+  }, "cancel-poll")))).data;
+  const response = await host.dispatch(new Request(
+    `http://host.test/v2/workspaces/${workspace.id}/events`,
+    { headers: { "Last-Event-ID": "2" } },
+  ));
+  const reader = response.body!.getReader();
+  assert.match(await readSseUntil(reader, (body) => /: keepalive/u.test(body)), /: keepalive/u);
+  await reader.cancel();
+  const readsAtCancel = reads;
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(reads, readsAtCancel);
   await host.close();
 });
 
@@ -780,7 +898,9 @@ test("SQLite 重启后保留已提交事件与投影", async () => {
       `http://host.test/v2/workspaces/${created.data.id}/events`,
       { headers: { "Last-Event-ID": "0" } },
     ));
-    assert.match(await events.text(), /event: kernel/);
+    const reader = events.body!.getReader();
+    assert.match(await readSseUntil(reader, (body) => /event: kernel/u.test(body)), /event: kernel/u);
+    await reader.cancel();
     await second.close();
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -804,6 +924,29 @@ test("Node HTTP 适配器只转发同一 dispatch", async () => {
     assert.equal((await responseJson(blocked)).code, "ORIGIN_NOT_ALLOWED");
     const legacy = await fetch(`http://${address.host}:${address.port}/v1/health`);
     assert.equal(legacy.status, 404);
+
+    const workspace = (await responseJson(await host.dispatch(jsonRequest("/v2/workspaces", {
+      name: "HTTP 增量 SSE", viewMode: "business", pluginIds: [],
+    }, "http-sse-workspace")))).data;
+    const stream = await Promise.race([
+      fetch(`http://${address.host}:${address.port}/v2/workspaces/${workspace.id}/events`, {
+        headers: { Origin: "tauri://localhost", "Last-Event-ID": "2" },
+      }),
+      new Promise<never>((_, reject) => setTimeout(
+        () => reject(new Error("Node HTTP adapter buffered the SSE response")),
+        500,
+      )),
+    ]);
+    const reader = stream.body!.getReader();
+    await host.dispatch(jsonRequest(`/v2/workspaces/${workspace.id}`, {
+      expectedStreamVersion: workspace.streamVersion,
+      name: "HTTP SSE 后续事件",
+    }, "http-sse-update", "PATCH"));
+    assert.match(
+      await readSseUntil(reader, (body) => /HTTP SSE 后续事件/u.test(body)),
+      /HTTP SSE 后续事件/u,
+    );
+    await reader.cancel();
   } finally {
     await host.close();
   }

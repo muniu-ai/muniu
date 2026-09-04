@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { createServer, type Server } from "node:http";
+import { createServer, type Server, type ServerResponse } from "node:http";
 import { Context } from "@deepseek-ai/cordis";
 import { KernelProjectionRuntimeStore, type RuntimeRecord } from "@mn/agent-runtime";
 import {
@@ -111,6 +111,10 @@ export interface AgentOsHostOptions {
   readonly acceptsModelSecretReference?: (reference: string) => boolean;
   /** 组合根用于先停止共享同一 Store 的 Worker。 */
   readonly beforeStoreClose?: () => Promise<void>;
+  /** 测试与部署可按负载调节；生产默认每 250 ms 读取一次新事件。 */
+  readonly ssePollIntervalMs?: number;
+  /** 测试与代理配置可调节；生产默认每 15 秒发送一次空闲保活。 */
+  readonly sseKeepAliveIntervalMs?: number;
 }
 
 export interface ListenOptions {
@@ -226,19 +230,177 @@ function requireMutationKey(request: Request, traceId: string): Response | strin
   ), { status: 400 });
 }
 
-function eventStream(page: Awaited<ReturnType<KernelStore["readEvents"]>>, traceId: string): Response {
-  const lines: string[] = [];
-  for (const event of page.events) {
-    lines.push(`id: ${event.position}`, "event: kernel", `data: ${JSON.stringify(event)}`, "");
-  }
-  lines.push(`event: cursor`, `data: ${JSON.stringify({ position: page.nextPosition, traceId })}`, "");
-  return new Response(`${lines.join("\n")}\n`, {
+function positiveInterval(value: number | undefined, fallback: number): number {
+  return Number.isSafeInteger(value) && Number(value) > 0 ? Number(value) : fallback;
+}
+
+function workspaceOwnsEvent(
+  workspaceId: string,
+  event: Awaited<ReturnType<KernelStore["readEvents"]>>["events"][number],
+): boolean {
+  return (event.aggregateType === "workspace" && event.aggregateId === workspaceId)
+    || event.publicPayload.workspaceId === workspaceId;
+}
+
+function eventStream(input: {
+  readonly initialPage: Awaited<ReturnType<KernelStore["readEvents"]>>;
+  readonly readPage: (afterPosition: number) => Promise<Awaited<ReturnType<KernelStore["readEvents"]>>>;
+  readonly workspaceId: string;
+  readonly traceId: string;
+  readonly signal: AbortSignal;
+  readonly pollIntervalMs: number;
+  readonly keepAliveIntervalMs: number;
+  readonly activeStreams: Set<() => void>;
+}): Response {
+  const encoder = new TextEncoder();
+  let cancelStream: () => void = () => {};
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      let cursor = input.initialPage.nextPosition;
+      let stopped = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let nextPollAt = Date.now() + input.pollIntervalMs;
+      let nextKeepAliveAt = Date.now() + input.keepAliveIntervalMs;
+
+      const enqueue = (value: string) => {
+        if (!stopped) controller.enqueue(encoder.encode(value));
+      };
+      const emitPage = (
+        page: Awaited<ReturnType<KernelStore["readEvents"]>>,
+        emitCursor: boolean,
+      ) => {
+        const lines: string[] = [];
+        for (const event of page.events) {
+          if (!workspaceOwnsEvent(input.workspaceId, event)) continue;
+          lines.push(`id: ${event.position}`, "event: kernel", `data: ${JSON.stringify(event)}`, "");
+        }
+        if (emitCursor) {
+          lines.push(
+            `id: ${page.nextPosition}`,
+            "event: cursor",
+            `data: ${JSON.stringify({ position: page.nextPosition, traceId: input.traceId })}`,
+            "",
+          );
+        }
+        if (lines.length > 0) {
+          enqueue(`${lines.join("\n")}\n`);
+          nextKeepAliveAt = Date.now() + input.keepAliveIntervalMs;
+        }
+      };
+      const cleanup = (closeController: boolean) => {
+        if (stopped) return;
+        stopped = true;
+        if (timer) clearTimeout(timer);
+        input.signal.removeEventListener("abort", onAbort);
+        input.activeStreams.delete(closeFromHost);
+        if (closeController) controller.close();
+      };
+      const closeFromHost = () => cleanup(true);
+      const onAbort = () => cleanup(true);
+      cancelStream = () => cleanup(false);
+
+      const schedule = () => {
+        if (stopped) return;
+        const dueAt = Math.min(nextPollAt, nextKeepAliveAt);
+        timer = setTimeout(() => void tick(), Math.max(0, dueAt - Date.now()));
+        timer.unref?.();
+      };
+      const poll = async () => {
+        let pageCount = 0;
+        while (!stopped && pageCount < 10) {
+          const previousCursor = cursor;
+          const page = await input.readPage(cursor);
+          if (stopped) return;
+          cursor = page.nextPosition;
+          if (cursor > previousCursor) emitPage(page, true);
+          pageCount += 1;
+          if (page.events.length < 200 || cursor === previousCursor) return;
+        }
+        if (!stopped && pageCount === 10) nextPollAt = Date.now();
+      };
+      const tick = async () => {
+        if (stopped) return;
+        try {
+          const beforePoll = Date.now();
+          if (beforePoll >= nextPollAt) {
+            nextPollAt = beforePoll + input.pollIntervalMs;
+            await poll();
+          }
+          if (stopped) return;
+          const afterPoll = Date.now();
+          if (afterPoll >= nextKeepAliveAt) {
+            enqueue(": keepalive\n\n");
+            nextKeepAliveAt = afterPoll + input.keepAliveIntervalMs;
+          }
+          schedule();
+        } catch (error) {
+          if (stopped) return;
+          cleanup(false);
+          controller.error(error);
+        }
+      };
+
+      input.activeStreams.add(closeFromHost);
+      input.signal.addEventListener("abort", onAbort, { once: true });
+      emitPage(input.initialPage, true);
+      if (input.signal.aborted) {
+        cleanup(true);
+      } else {
+        schedule();
+      }
+    },
+    cancel() {
+      cancelStream();
+    },
+  });
+  return new Response(body, {
     headers: {
       "content-type": "text/event-stream; charset=utf-8",
       "cache-control": "no-cache, no-transform",
       "x-accel-buffering": "no",
     },
   });
+}
+
+function waitForDrainOrClose(response: ServerResponse): Promise<void> {
+  return new Promise((resolve) => {
+    const done = () => {
+      response.off("drain", done);
+      response.off("close", done);
+      resolve();
+    };
+    response.once("drain", done);
+    response.once("close", done);
+  });
+}
+
+async function pipeResponseBody(response: Response, outgoing: ServerResponse): Promise<void> {
+  if (!response.body) {
+    outgoing.end();
+    return;
+  }
+  const reader = response.body.getReader();
+  let disconnected = outgoing.destroyed;
+  const cancel = () => {
+    disconnected = true;
+    void reader.cancel().catch(() => undefined);
+  };
+  outgoing.once("close", cancel);
+  try {
+    while (!disconnected) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      if (!outgoing.write(Buffer.from(chunk.value))) await waitForDrainOrClose(outgoing);
+    }
+    if (!disconnected) outgoing.end();
+  } catch (error) {
+    if (!disconnected) {
+      outgoing.destroy(error instanceof Error ? error : new Error("Response stream failed"));
+    }
+  } finally {
+    outgoing.off("close", cancel);
+    reader.releaseLock();
+  }
 }
 
 function projectionList<T>(store: KernelStore, tenantId: string, namespace: string): Promise<readonly T[]> {
@@ -453,6 +615,9 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
   let closePromise: Promise<void> | undefined;
   const inFlightAsyncMutations = new Map<string, Promise<unknown>>();
   const allowedOrigins = new Set([...DESKTOP_ORIGINS, ...(options.allowedOrigins ?? [])]);
+  const activeEventStreams = new Set<() => void>();
+  const ssePollIntervalMs = positiveInterval(options.ssePollIntervalMs, 250);
+  const sseKeepAliveIntervalMs = positiveInterval(options.sseKeepAliveIntervalMs, 15_000);
 
   const ensurePluginsActive = async (tenantId: string, workspace: Workspace): Promise<string> => {
     const scope = encodePluginWorkspace(tenantId, workspace.id);
@@ -700,11 +865,15 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         }
         const page = await options.store.readEvents(TENANT_ID, cursor, 200);
         return eventStream({
-          ...page,
-          events: page.events.filter((event) =>
-            (event.aggregateType === "workspace" && event.aggregateId === workspaceId)
-            || event.publicPayload.workspaceId === workspaceId),
-        }, traceId);
+          initialPage: page,
+          readPage: (afterPosition) => options.store.readEvents(TENANT_ID, afterPosition, 200),
+          workspaceId,
+          traceId,
+          signal: request.signal,
+          pollIntervalMs: ssePollIntervalMs,
+          keepAliveIntervalMs: sseKeepAliveIntervalMs,
+          activeStreams: activeEventStreams,
+        });
       }
       const executionCommand = url.pathname.match(/^\/v2\/executions\/([^/]+)\/commands$/u);
       if (executionCommand && request.method === "POST") {
@@ -1210,7 +1379,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           headers.vary = "Origin";
         }
         outgoing.writeHead(response.status, headers);
-        outgoing.end(Buffer.from(await response.arrayBuffer()));
+        await pipeResponseBody(response, outgoing);
       });
       await new Promise<void>((resolve, reject) => {
         server!.once("error", reject);
@@ -1221,6 +1390,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
     },
     async close() {
       closePromise ??= (async () => {
+        for (const closeStream of [...activeEventStreams]) closeStream();
         if (server) {
           await new Promise<void>((resolve, reject) => server!.close((error) => error ? reject(error) : resolve()));
           server = undefined;
