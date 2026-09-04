@@ -124,6 +124,10 @@ export interface CodingReconciliationViewV2 {
   readonly expectedStreamVersion: number;
   readonly expectedCodingStreamVersion: number;
   readonly evidence: CodingReconciliationEvidenceV2;
+  readonly newCall: {
+    readonly allowed: boolean;
+    readonly summary: string;
+  };
   readonly availableDecisions: readonly CodingReconciliationDecisionV2[];
 }
 

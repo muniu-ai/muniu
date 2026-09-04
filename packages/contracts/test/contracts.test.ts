@@ -166,6 +166,7 @@ test("OpenAPI 目录只有 v2，所有写操作要求幂等键", () => {
   );
   const reconciliation = (document.paths as Record<string, Record<string, {
     requestBody?: { content?: Record<string, { schema?: { $ref?: string } }> };
+    responses?: Record<string, unknown>;
   }>>)["/v2/plugins/coding/executions/{executionId}/reconciliation-decisions"]?.post;
   assert.equal(
     reconciliation?.requestBody?.content?.["application/json"]?.schema?.$ref,
@@ -176,6 +177,7 @@ test("OpenAPI 目录只有 v2，所有写操作要求幂等键", () => {
   assert.deepEqual(reconciliationSchema.properties.decision.enum, [
     "terminate", "mark_completed", "create_new_call",
   ]);
+  assert.ok(reconciliation?.responses?.["202"]);
   const reconciliationView = (document.paths as Record<string, Record<string, {
     parameters?: Array<{ name: string }>;
     responses?: Record<string, { content?: Record<string, { schema?: { $ref?: string } }> }>;
@@ -192,6 +194,9 @@ test("OpenAPI 目录只有 v2，所有写操作要求幂等键", () => {
   assert.equal(reconciliationViewSchema.properties.expectedStreamVersion.minimum, 1);
   assert.equal(reconciliationViewSchema.properties.expectedCodingStreamVersion.minimum, 1);
   assert.equal(reconciliationViewSchema.properties.evidence.properties.summary.minLength, 1);
+  assert.ok(reconciliationViewSchema.required.includes("newCall"));
+  assert.equal(reconciliationViewSchema.properties.newCall.properties.allowed.type, "boolean");
+  assert.equal(reconciliationViewSchema.properties.availableDecisions.minItems, 0);
   for (const operation of API_OPERATIONS_V2.filter((entry) => entry.mutation)) {
     const paths = document.paths as Record<string, Record<string, { parameters?: Array<{ name: string }> }>>;
     assert.equal(paths[operation.path]?.[operation.method]?.parameters?.[0]?.name, "Idempotency-Key");

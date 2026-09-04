@@ -490,7 +490,7 @@ async function code(parsed: ParsedArguments, api: ApiClient): Promise<CliResult>
     const human = decision === "terminate"
       ? "未知外部调用已终止，清理任务已入队"
       : decision === "mark_completed"
-        ? "已依据权威验证证据标记完成，清理任务已入队"
+        ? "权威验证已入队；通过后才会标记完成，且不会重放外部 Runner"
         : "旧调用已终止，新调用与清理任务已入队";
     return { command: "code", data, human };
   }

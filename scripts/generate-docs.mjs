@@ -162,6 +162,14 @@ function openApiDocument(operations) {
                   },
                 }
             : { $ref: "#/components/responses/Success" },
+          ...(operation.operationId === "decideCodingReconciliation" ? {
+            "202": {
+              description: "已接受标记完成意图，等待受控 Worker 执行权威 Gate",
+              content: {
+                "application/json": { schema: { $ref: "#/components/schemas/Envelope" } },
+              },
+            },
+          } : {}),
           ...(operation.mutation ? { "409": { $ref: "#/components/responses/Conflict" } } : {}),
           default: { $ref: "#/components/responses/Error" },
         };
@@ -408,7 +416,8 @@ function openApiDocument(operations) {
           additionalProperties: false,
           required: [
             "executionId", "workspaceId", "taskTitle", "nextStep", "runnerId", "status",
-            "expectedStreamVersion", "expectedCodingStreamVersion", "evidence", "availableDecisions",
+            "expectedStreamVersion", "expectedCodingStreamVersion", "evidence", "newCall",
+            "availableDecisions",
           ],
           properties: {
             executionId: { type: "string", minLength: 1 },
@@ -431,9 +440,18 @@ function openApiDocument(operations) {
                 summary: { type: "string", minLength: 1 },
               },
             },
+            newCall: {
+              type: "object",
+              additionalProperties: false,
+              required: ["allowed", "summary"],
+              properties: {
+                allowed: { type: "boolean" },
+                summary: { type: "string", minLength: 1 },
+              },
+            },
             availableDecisions: {
               type: "array",
-              minItems: 2,
+              minItems: 0,
               uniqueItems: true,
               items: {
                 type: "string",

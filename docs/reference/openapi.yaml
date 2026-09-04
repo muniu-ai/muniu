@@ -1033,6 +1033,12 @@ paths:
       responses:
         "200":
           $ref: "#/components/responses/Success"
+        "202":
+          description: 已接受标记完成意图，等待受控 Worker 执行权威 Gate
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Envelope"
         "409":
           $ref: "#/components/responses/Conflict"
         default:
@@ -1426,6 +1432,7 @@ components:
         - expectedStreamVersion
         - expectedCodingStreamVersion
         - evidence
+        - newCall
         - availableDecisions
       properties:
         executionId:
@@ -1477,9 +1484,21 @@ components:
             summary:
               type: string
               minLength: 1
+        newCall:
+          type: object
+          additionalProperties: false
+          required:
+            - allowed
+            - summary
+          properties:
+            allowed:
+              type: boolean
+            summary:
+              type: string
+              minLength: 1
         availableDecisions:
           type: array
-          minItems: 2
+          minItems: 0
           uniqueItems: true
           items:
             type: string

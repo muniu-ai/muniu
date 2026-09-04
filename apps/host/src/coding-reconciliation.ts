@@ -23,14 +23,10 @@ import {
   type KernelTransaction,
 } from "@mn/kernel";
 import type {
-  Candidate,
-  CodeEvidence,
   CodingControlPlaneCommitment,
   CodingExecutionResult,
   CodingTask,
-  GateResult,
 } from "@mn/plugin-coding";
-import { createCodeEvidence } from "@mn/plugin-coding";
 import { runnerToolId } from "./coding-runners.js";
 
 export type CodingReconciliationDecision =
@@ -52,10 +48,12 @@ export interface CodingReconciliationDecisionInput {
 
 export interface CodingReconciliationDecisionResult {
   readonly decision: CodingReconciliationDecision;
+  readonly status: "settled" | "verification_pending";
   readonly execution: Execution;
   readonly codingExecution: CodingReconciliationExecutionView;
   readonly task: CodingTask;
-  readonly cleanupJobId: string;
+  readonly cleanupJobId?: string;
+  readonly verificationJobId?: string;
   readonly newExecution?: Execution;
 }
 
@@ -80,6 +78,14 @@ interface ExternalInvocationCheckpoint {
   readonly updatedAt: string;
   readonly reconciliationDecision?: CodingReconciliationDecision;
   readonly cleanupJobId?: string;
+  readonly verification?: {
+    readonly status: "pending" | "failed" | "passed";
+    readonly jobId: string;
+    readonly requestedBy: string;
+    readonly requestedAt: string;
+    readonly updatedAt: string;
+    readonly failureReason?: string;
+  };
 }
 
 interface StoredCodingRun {
@@ -96,25 +102,6 @@ interface StoredCodingRun {
   readonly streamVersion: number;
   readonly createdAt: string;
   readonly updatedAt: string;
-}
-
-interface StoredCandidate extends Candidate {
-  readonly tenantId: string;
-  readonly workspaceId: string;
-  readonly executionId: string;
-  readonly diff: string;
-}
-
-interface StoredGateResult extends GateResult {
-  readonly tenantId: string;
-  readonly workspaceId: string;
-  readonly executionId: string;
-}
-
-interface StoredCodeEvidence extends CodeEvidence {
-  readonly tenantId: string;
-  readonly workspaceId: string;
-  readonly executionId: string;
 }
 
 interface StoredModelConnection {
@@ -159,7 +146,16 @@ export async function getCodingReconciliation(
       );
     }
     assertCleanupPaths(run.externalInvocation);
-    const markCompletedAllowed = hasAuthoritativeEvidence(transaction, execution, run, task);
+    const verification = run.externalInvocation.verification;
+    const markCompletedAllowed = verification === undefined;
+    const newCall = newCallReadiness(transaction, execution, run, task);
+    const availableDecisions: CodingReconciliationDecision[] = verification?.status === "pending"
+      ? []
+      : [
+          "terminate",
+          ...(markCompletedAllowed ? ["mark_completed" as const] : []),
+          ...(newCall.allowed ? ["create_new_call" as const] : []),
+        ];
     return {
       executionId,
       workspaceId: execution.workspaceId,
@@ -174,13 +170,14 @@ export async function getCodingReconciliation(
         gateCount: run.result.gates.length,
         markCompletedAllowed,
         ...(run.result.evidence ? { codeEvidenceDigest: run.result.evidence.digest } : {}),
-        summary: markCompletedAllowed
-          ? "已持久化权威通过 Gate 与匹配的 CodeEvidence，可标记完成"
-          : "尚无可用于标记完成的权威 Gate 与 CodeEvidence",
+        summary: verification?.status === "pending"
+          ? "正在对保留的候选运行权威 Gate；不会重放外部 Runner"
+          : verification?.status === "failed"
+            ? verification.failureReason ?? "保留候选未通过权威 Gate"
+            : "选择标记完成后，将先对保留候选运行权威 Gate；不会重放外部 Runner",
       },
-      availableDecisions: markCompletedAllowed
-        ? ["terminate", "mark_completed", "create_new_call"]
-        : ["terminate", "create_new_call"],
+      newCall,
+      availableDecisions,
     };
   });
 }
@@ -269,7 +266,13 @@ export async function decideCodingReconciliation(
     }
     assertCleanupPaths(run.externalInvocation);
     if (input.decision === "mark_completed") {
-      assertAuthoritativeEvidence(transaction, execution, run, task);
+      return requestReconciliationVerification(
+        transaction,
+        input,
+        execution,
+        run,
+        task,
+      );
     }
     if (input.decision === "create_new_call") {
       assertNewCallReady(transaction, execution, run, task);
@@ -346,6 +349,7 @@ export async function decideCodingReconciliation(
       : undefined;
     const response: CodingReconciliationDecisionResult = {
       decision: input.decision,
+      status: "settled",
       execution: nextExecution,
       codingExecution: {
         executionId: nextRun.executionId,
@@ -367,6 +371,141 @@ export async function decideCodingReconciliation(
     });
     return response;
   });
+}
+
+function requestReconciliationVerification(
+  transaction: KernelTransaction,
+  input: CodingReconciliationDecisionInput,
+  execution: Execution,
+  run: StoredCodingRun,
+  task: CodingTask,
+): CodingReconciliationDecisionResult {
+  if (run.externalInvocation?.verification) {
+    throw new KernelError(
+      "CODING_RECONCILIATION_VERIFICATION_UNAVAILABLE",
+      run.externalInvocation.verification.status === "pending"
+        ? "保留候选正在执行权威验证"
+        : "保留候选已验证失败，不能直接标记完成",
+      run.externalInvocation.verification.status === "pending"
+        ? "等待验证完成后刷新人工核对详情"
+        : "选择 terminate 或 create_new_call",
+    );
+  }
+  const occurredAt = input.now();
+  const verificationJob = createVerificationJob(input, execution, run, occurredAt);
+  const nextExecution: Execution = {
+    ...execution,
+    streamVersion: execution.streamVersion + 1,
+    updatedAt: occurredAt,
+  };
+  const nextTask: CodingTask = {
+    ...task,
+    stage: "verify",
+    streamVersion: task.streamVersion + 1,
+    updatedAt: occurredAt,
+  };
+  const nextRun: StoredCodingRun = {
+    ...run,
+    result: {
+      ...run.result!,
+      task: nextTask,
+      nextStep: "正在对保留候选运行权威 Gate；不会重放外部 Runner",
+    },
+    externalInvocation: {
+      ...run.externalInvocation!,
+      reconciliationDecision: "mark_completed",
+      verification: {
+        status: "pending",
+        jobId: verificationJob.id,
+        requestedBy: input.actorId,
+        requestedAt: occurredAt,
+        updatedAt: occurredAt,
+      },
+      updatedAt: occurredAt,
+    },
+    streamVersion: run.streamVersion + 1,
+    updatedAt: occurredAt,
+  };
+  transaction.putProjection("execution", execution.id, nextExecution);
+  transaction.appendEvent({
+    tenantId: input.tenantId,
+    aggregateType: "execution",
+    aggregateId: execution.id,
+    expectedStreamVersion: execution.streamVersion,
+    type: "execution.reconciliation_verification_requested",
+    actorId: input.actorId,
+    executionId: execution.id,
+    generation: execution.generation,
+    correlationId: `coding-reconciliation:${execution.id}`,
+    publicPayload: {
+      workspaceId: execution.workspaceId,
+      status: "needs_reconciliation",
+      verificationJobId: verificationJob.id,
+    },
+  });
+  transaction.putProjection("coding.task", task.id, nextTask);
+  transaction.appendEvent({
+    tenantId: input.tenantId,
+    aggregateType: "coding.task",
+    aggregateId: task.id,
+    expectedStreamVersion: task.streamVersion,
+    type: "coding.reconciliation_verification_requested",
+    actorId: input.actorId,
+    executionId: execution.id,
+    generation: execution.generation,
+    correlationId: `coding-reconciliation:${execution.id}`,
+    publicPayload: {
+      workspaceId: execution.workspaceId,
+      status: "verification_pending",
+      verificationJobId: verificationJob.id,
+    },
+  });
+  transaction.putProjection("coding.execution", execution.id, nextRun);
+  transaction.appendEvent({
+    tenantId: input.tenantId,
+    aggregateType: "coding.execution",
+    aggregateId: execution.id,
+    expectedStreamVersion: run.streamVersion,
+    type: "coding.reconciliation_verification_requested",
+    actorId: input.actorId,
+    executionId: execution.id,
+    generation: execution.generation,
+    correlationId: `coding-reconciliation:${execution.id}`,
+    publicPayload: {
+      workspaceId: execution.workspaceId,
+      taskId: task.id,
+      status: "verification_pending",
+      verificationJobId: verificationJob.id,
+    },
+  });
+  putAvailableJob(transaction, verificationJob, execution.id, execution.generation, input.actorId);
+  const response: CodingReconciliationDecisionResult = {
+    decision: "mark_completed",
+    status: "verification_pending",
+    execution: nextExecution,
+    codingExecution: {
+      executionId: nextRun.executionId,
+      status: nextRun.status as CodingExecutionResult["status"],
+      streamVersion: nextRun.streamVersion,
+      result: nextRun.result!,
+    },
+    task: nextTask,
+    verificationJobId: verificationJob.id,
+  };
+  transaction.putIdempotency({
+    tenantId: input.tenantId,
+    scope: `coding.reconciliation:${input.executionId}`,
+    key: input.idempotencyKey,
+    requestDigest: sha256({
+      executionId: input.executionId,
+      expectedStreamVersion: input.expectedStreamVersion,
+      expectedCodingStreamVersion: input.expectedCodingStreamVersion,
+      decision: input.decision,
+    }),
+    response,
+    createdAt: occurredAt,
+  });
+  return response;
 }
 
 function assertReviewer(
@@ -407,108 +546,28 @@ function assertCleanupPaths(invocation: ExternalInvocationCheckpoint): void {
   }
 }
 
-function assertAuthoritativeEvidence(
-  transaction: KernelTransaction,
-  execution: Execution,
-  run: StoredCodingRun,
-  task: CodingTask,
-): void {
-  if (!hasAuthoritativeEvidence(transaction, execution, run, task)) {
-    throw new KernelError(
-      "CODING_RECONCILIATION_EVIDENCE_REQUIRED",
-      "缺少已持久化的权威通过 Gate 或 CodeEvidence",
-      "核对外部结果后选择 terminate 或 create_new_call",
-    );
-  }
-}
-
-function hasAuthoritativeEvidence(
-  transaction: KernelTransaction,
-  execution: Execution,
-  run: StoredCodingRun,
-  task: CodingTask,
-): boolean {
-  const evidence = run.result?.evidence;
-  const candidate = evidence
-    ? transaction.getProjection<StoredCandidate>("coding.candidate", evidence.candidateId)
-    : undefined;
-  const gate = evidence
-    ? transaction.getProjection<StoredGateResult>("coding.gate-result", evidence.candidateId)
-    : undefined;
-  const storedEvidence = evidence
-    ? transaction.getProjection<StoredCodeEvidence>("coding.code-evidence", evidence.digest)
-    : undefined;
-  const resultCandidate = evidence
-    ? run.result?.candidates.find((item) => item.id === evidence.candidateId)
-    : undefined;
-  const resultGate = evidence
-    ? run.result?.gates.find((item) => item.candidateId === evidence.candidateId)
-    : undefined;
-  const computedEvidenceDigest = storedEvidence
-    ? recomputeCodeEvidenceDigest(storedEvidence)
-    : undefined;
-  return evidence !== undefined
-    && candidate?.tenantId === execution.tenantId
-    && candidate.workspaceId === execution.workspaceId
-    && candidate.executionId === execution.id
-    && candidate.taskId === task.id
-    && candidate.diffDigest === evidence.diffDigest
-    && candidate.sandbox.enforced
-    && !candidate.sandbox.fallbackUsed
-    && candidate.sandbox.evidenceDigest === run.controlPlane.sandboxDigest
-    && gate?.tenantId === execution.tenantId
-    && gate.workspaceId === execution.workspaceId
-    && gate.executionId === execution.id
-    && gate.status === "passed"
-    && gate.authoritative
-    && gate.evidenceDigest === evidence.gateEvidenceDigest
-    && resultCandidate?.diffDigest === evidence.diffDigest
-    && resultGate?.status === "passed"
-    && resultGate.authoritative
-    && resultGate.evidenceDigest === evidence.gateEvidenceDigest
-    && storedEvidence?.tenantId === execution.tenantId
-    && storedEvidence.workspaceId === execution.workspaceId
-    && storedEvidence.executionId === execution.id
-    && storedEvidence.taskId === task.id
-    && storedEvidence.candidateId === evidence.candidateId
-    && storedEvidence.runnerId === run.runnerId
-    && evidence.runnerId === run.runnerId
-    && storedEvidence.digest === evidence.digest
-    && storedEvidence.digest === computedEvidenceDigest
-    && storedEvidence.diffDigest === evidence.diffDigest
-    && storedEvidence.gateEvidenceDigest === evidence.gateEvidenceDigest
-    && storedEvidence.specDigest === run.controlPlane.specDigest
-    && storedEvidence.governanceDigest === run.controlPlane.governanceDigest
-    && storedEvidence.harnessDigest === run.controlPlane.harnessDigest
-    && storedEvidence.sandboxDigest === run.controlPlane.sandboxDigest
-    && storedEvidence.repositoryIndexDigest === run.controlPlane.repositoryIndexDigest;
-}
-
-function recomputeCodeEvidenceDigest(evidence: StoredCodeEvidence): string | undefined {
-  try {
-    return createCodeEvidence({
-      taskId: evidence.taskId,
-      candidateId: evidence.candidateId,
-      runnerId: evidence.runnerId,
-      specDigest: evidence.specDigest,
-      governanceDigest: evidence.governanceDigest,
-      harnessDigest: evidence.harnessDigest,
-      sandboxDigest: evidence.sandboxDigest,
-      repositoryIndexDigest: evidence.repositoryIndexDigest,
-      gateEvidenceDigest: evidence.gateEvidenceDigest,
-      diffDigest: evidence.diffDigest,
-    }).digest;
-  } catch {
-    return undefined;
-  }
-}
-
 function assertNewCallReady(
   transaction: KernelTransaction,
   execution: Execution,
   run: StoredCodingRun,
   task: CodingTask,
 ): void {
+  const readiness = newCallReadiness(transaction, execution, run, task);
+  if (!readiness.allowed) {
+    throw new KernelError(
+      "CODING_NEW_CALL_NOT_READY",
+      readiness.summary,
+      "检查 Coding 与 Runner 插件、模型连接和 Runner 确认状态",
+    );
+  }
+}
+
+function newCallReadiness(
+  transaction: KernelTransaction,
+  execution: Execution,
+  run: StoredCodingRun,
+  task: CodingTask,
+): { readonly allowed: boolean; readonly summary: string } {
   const workspace = transaction.getProjection<Workspace>("workspace", execution.workspaceId);
   const thread = transaction.getProjection<Thread>("thread", execution.threadId);
   const authority = transaction.getProjection<ExecutionAuthority>("authority", execution.authorityId);
@@ -537,33 +596,31 @@ function assertNewCallReady(
     parentAuthorityId: authority.parentAuthorityId,
     runnerId: externalRunnerId,
   }) : undefined;
-  if (!workspace || workspace.tenantId !== execution.tenantId
-    || !workspace.activePluginIds.includes("coding")
-    || (runnerPluginId !== undefined && !workspace.activePluginIds.includes(runnerPluginId))
-    || !thread || thread.workspaceId !== execution.workspaceId || thread.pluginId !== "coding"
-    || thread.resourceRef?.namespace !== "coding.task"
-    || thread.resourceRef.resourceId !== task.id
-    || !authority || authority.tenantId !== execution.tenantId
-    || authority.workspaceId !== execution.workspaceId
-    || authority.executionId !== execution.id
-    || authority.principalId !== execution.executionPrincipalId
-    || authority.commitment !== expectedAuthorityCommitment
-    || !authority.toolIds.includes(runnerToolId(externalRunnerId))
-    || !model || model.tenantId !== execution.tenantId || model.status !== "ready"
-    || !model.defaultModel.trim()
-    || (runnerPluginId !== undefined
-      && (!runnerConfiguration
-        || runnerConfiguration.tenantId !== execution.tenantId
-        || runnerConfiguration.workspaceId !== execution.workspaceId
-        || runnerConfiguration.runnerId !== run.runnerId
-        || runnerConfiguration.status !== "confirmed"
-        || runnerConfiguration.identityDigest !== sha256(runnerConfiguration.identity)))) {
-    throw new KernelError(
-      "CODING_NEW_CALL_NOT_READY",
-      "当前工作区不能创建新的 Coding 调用",
-      "检查 Coding 与 Runner 插件、模型连接和 Runner 确认状态",
-    );
-  }
+  const allowed = Boolean(workspace
+    && workspace.tenantId === execution.tenantId
+    && workspace.activePluginIds.includes("coding")
+    && (runnerPluginId === undefined || workspace.activePluginIds.includes(runnerPluginId))
+    && thread && thread.workspaceId === execution.workspaceId && thread.pluginId === "coding"
+    && thread.resourceRef?.namespace === "coding.task"
+    && thread.resourceRef.resourceId === task.id
+    && authority && authority.tenantId === execution.tenantId
+    && authority.workspaceId === execution.workspaceId
+    && authority.executionId === execution.id
+    && authority.principalId === execution.executionPrincipalId
+    && authority.commitment === expectedAuthorityCommitment
+    && authority.toolIds.includes(runnerToolId(externalRunnerId))
+    && model && model.tenantId === execution.tenantId && model.status === "ready"
+    && model.defaultModel.trim()
+    && (runnerPluginId === undefined
+      || (runnerConfiguration
+        && runnerConfiguration.tenantId === execution.tenantId
+        && runnerConfiguration.workspaceId === execution.workspaceId
+        && runnerConfiguration.runnerId === run.runnerId
+        && runnerConfiguration.status === "confirmed"
+        && runnerConfiguration.identityDigest === sha256(runnerConfiguration.identity))));
+  return allowed
+    ? { allowed: true, summary: "Coding、Runner、权限与模型连接均已就绪" }
+    : { allowed: false, summary: "Coding、Runner、权限或模型连接已失效，暂时不能创建新调用" };
 }
 
 function settleExecution(
@@ -659,6 +716,31 @@ function createCleanupJob(
     availableAt: occurredAt,
     fencingToken: 0,
     idempotencyKey: `coding:cleanup:${execution.id}:${run.generation}:${invocation.attempt}`,
+    streamVersion: 1,
+    createdAt: occurredAt,
+    updatedAt: occurredAt,
+  };
+}
+
+function createVerificationJob(
+  input: CodingReconciliationDecisionInput,
+  execution: Execution,
+  run: StoredCodingRun,
+  occurredAt: string,
+): Job {
+  const invocation = run.externalInvocation!;
+  const id = input.id("job");
+  return {
+    id,
+    tenantId: input.tenantId,
+    workspaceId: execution.workspaceId,
+    kind: "coding.reconciliation.verify",
+    payload: { reconciliationExecutionId: execution.id },
+    status: "available",
+    attempts: 0,
+    availableAt: occurredAt,
+    fencingToken: 0,
+    idempotencyKey: `coding:reconciliation-verify:${execution.id}:${run.generation}:${invocation.attempt}`,
     streamVersion: 1,
     createdAt: occurredAt,
     updatedAt: occurredAt,

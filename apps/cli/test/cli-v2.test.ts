@@ -460,7 +460,10 @@ test("code reconcile 自动读取两个流版本并提交三种人工核对决�
         idempotencyKey: `reconcile-${decision}`,
       },
     ]);
-    assert.match(output.out[0] ?? "", /清理任务已入队/);
+    assert.match(
+      output.out[0] ?? "",
+      decision === "mark_completed" ? /权威验证已入队/u : /清理任务已入队/u,
+    );
   }
 });
 

@@ -7,6 +7,7 @@ import test from "node:test";
 import type {
   Execution,
   ExecutionAuthority,
+  Job,
   Thread,
 } from "@mn/contracts";
 import { CODING_RUNNER_CONFIGURATION_NAMESPACE } from "@mn/contracts";
@@ -401,10 +402,14 @@ test("terminate 原子终结未知 Coding 执行、关闭收件箱并入队清�
     evidence: {
       candidateCount: 0,
       gateCount: 0,
-      markCompletedAllowed: false,
-      summary: "尚无可用于标记完成的权威 Gate 与 CodeEvidence",
+      markCompletedAllowed: true,
+      summary: "选择标记完成后，将先对保留候选运行权威 Gate；不会重放外部 Runner",
     },
-    availableDecisions: ["terminate", "create_new_call"],
+    newCall: {
+      allowed: true,
+      summary: "Coding、Runner、权限与模型连接均已就绪",
+    },
+    availableDecisions: ["terminate", "mark_completed", "create_new_call"],
   });
   assert.doesNotMatch(JSON.stringify(view), /\/private\/var\/tmp/u);
 
@@ -468,27 +473,55 @@ test("terminate 原子终结未知 Coding 执行、关闭收件箱并入队清�
   await fixture.host.close();
 });
 
-test("mark_completed 没有权威 Gate 与 CodeEvidence 时 fail closed", async () => {
+test("mark_completed 只持久化人工意图并入队受 fencing 保护的权威验证", async () => {
   const fixture = await createFixture();
-  const response = await fixture.host.dispatch(mutation(
-    `/v2/plugins/coding/executions/${fixture.executionId}/reconciliation-decisions`,
-    {
-      expectedStreamVersion: 1,
-      expectedCodingStreamVersion: 2,
-      decision: "mark_completed",
-    },
-    "mark-without-evidence",
-  ));
-  assert.equal(response.status, 422);
-  assert.equal((await responseBody(response)).code, "CODING_RECONCILIATION_EVIDENCE_REQUIRED");
-  assert.equal(fixture.store.readJobs("local").length, 0);
-  const execution = await fixture.store.transact("local", (transaction) =>
-    transaction.getProjection<Execution>("execution", fixture.executionId));
+  const path = `/v2/plugins/coding/executions/${fixture.executionId}/reconciliation-decisions`;
+  const body = {
+    expectedStreamVersion: 1,
+    expectedCodingStreamVersion: 2,
+    decision: "mark_completed",
+  } as const;
+  const response = await fixture.host.dispatch(mutation(path, body, "mark-without-evidence"));
+  assert.equal(response.status, 202);
+  const data = (await responseBody(response)).data;
+  assert.equal(data.status, "verification_pending");
+  assert.equal(data.execution.status, "needs_reconciliation");
+  assert.equal(data.codingExecution.status, "needs_reconciliation");
+  assert.equal(data.task.status, "needs_reconciliation");
+  assert.equal(typeof data.verificationJobId, "string");
+  assert.equal("cleanupJobId" in data, false);
+  assert.equal(fixture.store.readJobs("local").length, 1);
+  const state = await fixture.store.transact("local", (transaction) => ({
+    execution: transaction.getProjection<Execution>("execution", fixture.executionId),
+    run: transaction.getProjection<any>("coding.execution", fixture.executionId),
+    job: transaction.getProjection<Job>("job", data.verificationJobId),
+    inbox: transaction.listProjections<InboxItem>("inbox")
+      .filter((item) => item.executionId === fixture.executionId),
+  }));
+  const execution = state.execution;
   assert.equal(execution?.status, "needs_reconciliation");
+  assert.equal(state.run.externalInvocation.verification.status, "pending");
+  assert.equal(state.job?.kind, "coding.reconciliation.verify");
+  assert.deepEqual(state.job?.payload, { reconciliationExecutionId: fixture.executionId });
+  assert.ok(state.inbox.every((item) => item.status === "open"));
+  assert.ok(fixture.store.readOutbox("local").some((message) =>
+    message.topic === "job.available" && message.payload.jobId === data.verificationJobId));
+
+  const replayResponse = await fixture.host.dispatch(mutation(path, body, "mark-without-evidence"));
+  assert.equal(replayResponse.status, 202);
+  assert.deepEqual((await responseBody(replayResponse)).data, data);
+  assert.equal(fixture.store.readJobs("local").length, 1);
+
+  const detail = (await responseBody(await fixture.host.dispatch(new Request(
+    `http://host.test/v2/plugins/coding/executions/${fixture.executionId}/reconciliation`,
+  )))).data;
+  assert.equal(detail.evidence.markCompletedAllowed, false);
+  assert.match(detail.evidence.summary, /正在.*权威 Gate/u);
+  assert.deepEqual(detail.availableDecisions, []);
   await fixture.host.close();
 });
 
-test("mark_completed 只用已持久化的权威 Gate 与 CodeEvidence 收敛完成态", async () => {
+test("mark_completed 不信任预先拼装的证据，仍由 Worker 重新执行权威验证", async () => {
   const fixture = await createFixture(true);
   const view = (await responseBody(await fixture.host.dispatch(new Request(
     `http://host.test/v2/plugins/coding/executions/${fixture.executionId}/reconciliation`,
@@ -507,12 +540,13 @@ test("mark_completed 只用已持久化的权威 Gate 与 CodeEvidence 收敛完
     },
     "mark-with-evidence",
   ));
-  assert.equal(response.status, 200);
+  assert.equal(response.status, 202);
   const data = (await responseBody(response)).data;
-  assert.equal(data.execution.status, "completed");
-  assert.equal(data.codingExecution.result.status, "completed");
-  assert.equal(data.task.stage, "learn");
-  assert.equal(data.task.status, "completed");
+  assert.equal(data.status, "verification_pending");
+  assert.equal(data.execution.status, "needs_reconciliation");
+  assert.equal(data.codingExecution.result.status, "needs_reconciliation");
+  assert.equal(data.task.stage, "verify");
+  assert.equal(data.task.status, "needs_reconciliation");
   assert.equal(fixture.store.readJobs("local").length, 1);
   await fixture.host.close();
 });
@@ -599,6 +633,12 @@ test("人工核对拒绝 Runner 绑定、权限或确认身份被篡改的状态
         toolIds: authority.toolIds.filter((toolId) => toolId !== "runner.claude.execute"),
       });
     });
+    const detail = (await responseBody(await fixture.host.dispatch(new Request(
+      `http://host.test/v2/plugins/coding/executions/${fixture.executionId}/reconciliation`,
+    )))).data;
+    assert.equal(detail.newCall.allowed, false);
+    assert.match(detail.newCall.summary, /暂时不能创建新调用/u);
+    assert.equal(detail.availableDecisions.includes("create_new_call"), false);
     const response = await fixture.host.dispatch(mutation(
       `/v2/plugins/coding/executions/${fixture.executionId}/reconciliation-decisions`,
       {

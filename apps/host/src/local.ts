@@ -4,6 +4,7 @@ import { FileCas, MacOsKeychainKeyProvider, SqliteStorage } from "@mn/storage";
 import { createNodePublicWebReader } from "@mn/plugin-opc";
 import {
   AgentOsWorker,
+  createCodingReconciliationVerificationWorkerHandler,
   createCodingSandboxCleanupWorkerHandler,
   createKernelAgentTurnHandler,
   runWorkerLoop,
@@ -110,6 +111,11 @@ export async function startLocalAgentOsHost(options: StartLocalHostOptions = {})
     sandboxRoot: join(paths.root, "sandboxes", "coding"),
     ...(options.now ? { now: options.now } : {}),
   });
+  const reconciliationVerificationHandler = createCodingReconciliationVerificationWorkerHandler({
+    store,
+    sandboxRoot: join(paths.root, "sandboxes", "coding"),
+    ...(options.now ? { now: options.now } : {}),
+  });
   const worker = new AgentOsWorker({
     id: options.workerId ?? `local-${process.pid}`,
     store,
@@ -121,10 +127,11 @@ export async function startLocalAgentOsHost(options: StartLocalHostOptions = {})
     },
     handlers: {
       "agent.execution.run": turnHandler,
+      "coding.reconciliation.verify": reconciliationVerificationHandler,
       "coding.sandbox.cleanup": sandboxCleanupHandler,
     },
     tenantId: "local",
-    kinds: ["agent.execution.run", "coding.sandbox.cleanup"],
+    kinds: ["agent.execution.run", "coding.reconciliation.verify", "coding.sandbox.cleanup"],
   });
   workerLoop = runWorkerLoop(worker, {
     signal: stopWorker.signal,

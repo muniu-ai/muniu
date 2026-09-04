@@ -135,6 +135,12 @@ export function createOpenApiDocument(): JsonObject {
           description: "成功",
           content: { "application/json": { schema: successResponseSchema(operation.operationId) } },
         },
+        ...(operation.operationId === "decideCodingReconciliation" ? {
+          "202": {
+            description: "已接受标记完成意图，等待受控 Worker 执行权威 Gate",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/ApiEnvelope" } } },
+          },
+        } : {}),
         "400": { $ref: "#/components/responses/BadRequest" },
         "401": { $ref: "#/components/responses/Unauthorized" },
         "409": { $ref: "#/components/responses/Conflict" },
@@ -197,7 +203,8 @@ export function createOpenApiDocument(): JsonObject {
           additionalProperties: false,
           required: [
             "executionId", "workspaceId", "taskTitle", "nextStep", "runnerId", "status",
-            "expectedStreamVersion", "expectedCodingStreamVersion", "evidence", "availableDecisions",
+            "expectedStreamVersion", "expectedCodingStreamVersion", "evidence", "newCall",
+            "availableDecisions",
           ],
           properties: {
             executionId: { type: "string", minLength: 1 },
@@ -220,9 +227,18 @@ export function createOpenApiDocument(): JsonObject {
                 summary: { type: "string", minLength: 1 },
               },
             },
+            newCall: {
+              type: "object",
+              additionalProperties: false,
+              required: ["allowed", "summary"],
+              properties: {
+                allowed: { type: "boolean" },
+                summary: { type: "string", minLength: 1 },
+              },
+            },
             availableDecisions: {
               type: "array",
-              minItems: 2,
+              minItems: 0,
               uniqueItems: true,
               items: {
                 type: "string",

@@ -12,6 +12,6 @@ Coding Execution 没有 `runnerId` 时使用 `builtin`。显式选择 `claude-cl
 
 Worker 只使用 Runner Adapter 的 `start/events/cancel/resume`。Claude 与 Codex CLI 继续使用各自的 provider、登录、代理和 MCP 配置；适配器不会读取木牛的 BYOK 密钥，也不会接管 Prompt、Skill 或历史会话。
 
-Worker 会在启动外部 CLI 前持久化不可自动重放的调用检查点。CLI 已启动但缺少可确认终态、Worker 中断或结果持久化失败时，Execution 进入 `needs_reconciliation`。后续 claim 不会再次启动同一调用，必须由用户核对。正常取消会持久化 Coding `cancelled` 并删除候选目录；人工核对的清理由受 fencing token 保护的持久 Job 执行。
+Worker 会在启动外部 CLI 前持久化不可自动重放的调用检查点。CLI 已启动但缺少可确认终态、Worker 中断或结果持久化失败时，Execution 进入 `needs_reconciliation`。后续 claim 不会再次启动同一调用，必须由用户核对。正常取消会持久化 Coding `cancelled` 并删除候选目录；人工选择标记完成后，受 fencing token 保护的验证 Job 只读取保留候选并执行权威 Gate，不重放 Runner。通过后持久化 Candidate、Gate、CodeEvidence 与成果，失败则继续等待人工核对；清理由独立持久 Job 执行。
 
 当前生产实现只为 macOS 本地 Worker 提供外部 CLI sandbox。企业 Kubernetes Worker 仍使用 `builtin`；启用外部 Runner 前需要实现节点侧身份确认与相同的 fail-closed RuntimeClass 隔离。

@@ -150,7 +150,7 @@ mn code reconcile EXECUTION_ID mark_completed
 mn code reconcile EXECUTION_ID create_new_call
 ```
 
-详情包含任务标题、下一步、可用决定及权威证据摘要，不包含沙箱路径或 Runner 制品路径。若读取详情后状态发生变化，Host 会用版本冲突拒绝旧决定。`mark_completed` 缺少已持久化的权威通过 Gate 或 CodeEvidence 时会被拒绝。`create_new_call` 创建独立 Execution 和 Job，不重放结果未知的旧 Job。三种决定都会把旧沙箱的清理任务入队。
+详情包含任务标题、下一步、当前确实可用的决定、新调用就绪原因及权威证据摘要，不包含沙箱路径或 Runner 制品路径。若读取详情后状态发生变化，Host 会用版本冲突拒绝旧决定。`mark_completed` 先入队受 fencing 保护的验证 Job；Worker 不重放 Runner，只在保留沙箱中生成 Diff 并运行权威 Gate，通过后才标记完成并入队清理。Gate 失败仍保持 `needs_reconciliation`，可选择终止或创建独立新调用。
 
 ## 备份
 

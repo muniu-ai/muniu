@@ -28,6 +28,7 @@ import type {
   Execution,
   ExecutionAuthority,
   ExternalCodingRunnerId,
+  Job,
   JsonObject,
   JsonValue,
   RunnerBinaryIdentityV1,
@@ -45,6 +46,7 @@ import {
   buildRepositoryIndex,
   CODING_DEFAULT_LIMITS,
   CodingExecutionEngine,
+  createCodeEvidence,
   decideCodingExecution,
   type Candidate,
   type CandidateDraft,
@@ -52,6 +54,8 @@ import {
   type CodingExecutionResult,
   type CodingRunnerAdapter,
   type CodingTask,
+  type CodeEvidence,
+  type GateResult,
   type GateVerifier,
   type Repository,
   type RepositoryIndex,
@@ -108,6 +112,16 @@ interface ExternalInvocationState {
   readonly status: "started" | "settled" | "outcome_unknown";
   readonly cleanupStatus?: "pending" | "cleaned";
   readonly cleanedAt?: string;
+  readonly reconciliationDecision?: "terminate" | "mark_completed" | "create_new_call";
+  readonly cleanupJobId?: string;
+  readonly verification?: {
+    readonly status: "pending" | "failed" | "passed";
+    readonly jobId: string;
+    readonly requestedBy: string;
+    readonly requestedAt: string;
+    readonly updatedAt: string;
+    readonly failureReason?: string;
+  };
   readonly startedAt: string;
   readonly updatedAt: string;
 }
@@ -538,6 +552,166 @@ export function createCodingSandboxCleanupWorkerHandler(
       });
     });
     return { executionId, status: "cleaned" };
+  };
+}
+
+export function createCodingReconciliationVerificationWorkerHandler(
+  options: CodingSandboxCleanupWorkerOptions,
+) {
+  const now = options.now ?? (() => new Date().toISOString());
+  const sandbox = new MacOsCodingSandbox({
+    root: options.sandboxRoot,
+    executable: options.sandboxExecutable ?? DEFAULT_SANDBOX_EXECUTABLE,
+  });
+  return async (job: StoredJob, context: CodingWorkerJobContext): Promise<JsonValue> => {
+    if (job.kind !== "coding.reconciliation.verify") {
+      throw new Error("Coding 人工核对验证 Job 类型无效");
+    }
+    if (!job.workspaceId) throw new Error("Coding 人工核对验证 Job 缺少工作区");
+    const executionId = payloadString(job.payload, "reconciliationExecutionId");
+    const store = fencedCodingStore(options.store, job, context, now);
+    const state = await store.transact(job.tenantId, (transaction) => {
+      const execution = transaction.getProjection<Execution>("execution", executionId);
+      const run = transaction.getProjection<StoredCodingRun>("coding.execution", executionId);
+      const task = run
+        ? transaction.getProjection<CodingTask>("coding.task", run.taskId)
+        : undefined;
+      const thread = execution
+        ? transaction.getProjection<Thread>("thread", execution.threadId)
+        : undefined;
+      const workspace = execution
+        ? transaction.getProjection<Workspace>("workspace", execution.workspaceId)
+        : undefined;
+      return { execution, run, task, thread, workspace };
+    });
+    if (state.execution?.status === "completed"
+      && state.run?.externalInvocation?.verification?.status === "passed") {
+      return { executionId, status: "completed" };
+    }
+    const verification = state.run?.externalInvocation?.verification;
+    if (!state.execution || state.execution.tenantId !== job.tenantId
+      || state.execution.workspaceId !== job.workspaceId
+      || state.execution.pluginId !== "coding"
+      || state.execution.status !== "needs_reconciliation"
+      || !state.run || state.run.executionId !== state.execution.id
+      || state.run.generation !== state.execution.generation
+      || state.run.status !== "needs_reconciliation"
+      || !state.run.result || state.run.result.status !== "needs_reconciliation"
+      || !state.run.externalInvocation
+      || state.run.externalInvocation.status !== "outcome_unknown"
+      || verification?.status !== "pending" || verification.jobId !== job.id
+      || !state.task || state.task.status !== "needs_reconciliation"
+      || state.task.workspaceId !== job.workspaceId
+      || state.task.repositoryId !== state.run.repositoryId
+      || !state.thread || state.thread.workspaceId !== job.workspaceId
+      || state.thread.resourceRef?.namespace !== "coding.task"
+      || state.thread.resourceRef.resourceId !== state.task.id) {
+      throw new Error("Coding 人工核对验证状态不一致");
+    }
+    if (!state.workspace || state.workspace.tenantId !== job.tenantId
+      || !state.workspace.activePluginIds.includes("coding")) {
+      return persistReconciliationVerification({
+        store,
+        tenantId: job.tenantId,
+        job,
+        context,
+        execution: state.execution,
+        run: state.run,
+        task: state.task,
+        thread: state.thread,
+        failureReason: "Coding 插件已停用，未执行保留候选验证",
+        now: now(),
+      });
+    }
+    let candidate: Candidate | undefined;
+    let gate: GateResult | undefined;
+    let evidence: CodeEvidence | undefined;
+    let diff: string | undefined;
+    let failureReason: string | undefined;
+    try {
+      diff = await sandbox.recoverAndStageDiff(
+        state.run.externalInvocation.sandboxPath,
+        state.run.baseRevision,
+      );
+      if (!diff.trim()) throw new Error("保留候选没有可审阅 Diff");
+      if (Buffer.byteLength(diff, "utf8") > MAX_PATCH_BYTES) {
+        throw new Error("保留候选 Diff 超过 1 MiB 验证上限");
+      }
+      const candidateId = `${executionId}:generation:${state.execution.generation}:reconciliation:${state.run.externalInvocation.attempt}`;
+      candidate = {
+        id: candidateId,
+        taskId: state.task.id,
+        runnerId: state.run.runnerId,
+        sequence: state.run.externalInvocation.attempt,
+        baseRevision: state.run.baseRevision,
+        diffDigest: hashBytes(Buffer.from(diff)),
+        summary: `${runnerDisplayName(state.run.externalInvocation.runnerId)} 保留候选`,
+        sandbox: {
+          enforced: true,
+          fallbackUsed: false,
+          evidenceDigest: state.run.controlPlane.sandboxDigest,
+        },
+      };
+      const rawGate = await sandbox.verify(state.run.externalInvocation.sandboxPath);
+      const afterGate = await sandbox.diff(state.run.externalInvocation.sandboxPath);
+      if (hashBytes(Buffer.from(afterGate)) !== candidate.diffDigest) {
+        throw new Error("权威 Gate 执行期间保留候选已变化");
+      }
+      const gateEvidenceDigest = sha256({
+        candidateId,
+        diffDigest: candidate.diffDigest,
+        sandboxDigest: state.run.controlPlane.sandboxDigest,
+        command: "git diff --check HEAD --",
+        ...rawGate,
+      });
+      gate = {
+        candidateId,
+        status: rawGate.exitCode === 0 ? "passed" : "failed",
+        authoritative: true,
+        evidenceDigest: gateEvidenceDigest,
+        checks: [{
+          id: "git.diff-check",
+          status: rawGate.exitCode === 0 ? "passed" : "failed",
+          summary: rawGate.exitCode === 0
+            ? "git diff --check 通过"
+            : (rawGate.stderr || rawGate.stdout || "git diff --check 未通过").trim(),
+        }],
+        ...(rawGate.exitCode === 0 ? {} : { reason: "保留候选未通过权威 Gate" }),
+      };
+      if (gate.status === "passed") {
+        evidence = createCodeEvidence({
+          taskId: state.task.id,
+          candidateId,
+          runnerId: state.run.runnerId,
+          specDigest: state.run.controlPlane.specDigest,
+          governanceDigest: state.run.controlPlane.governanceDigest,
+          harnessDigest: state.run.controlPlane.harnessDigest,
+          sandboxDigest: state.run.controlPlane.sandboxDigest,
+          repositoryIndexDigest: state.run.controlPlane.repositoryIndexDigest,
+          gateEvidenceDigest,
+          diffDigest: candidate.diffDigest,
+        });
+      } else {
+        failureReason = gate.reason;
+      }
+    } catch (error) {
+      failureReason = safeMessage(error);
+    }
+    return persistReconciliationVerification({
+      store,
+      tenantId: job.tenantId,
+      job,
+      context,
+      execution: state.execution,
+      run: state.run,
+      task: state.task,
+      thread: state.thread,
+      ...(candidate && diff ? { candidate, diff } : {}),
+      ...(gate ? { gate } : {}),
+      ...(evidence ? { evidence } : {}),
+      ...(failureReason ? { failureReason } : {}),
+      now: now(),
+    });
   };
 }
 
@@ -1779,6 +1953,23 @@ class MacOsCodingSandbox {
     await rm(artifactRoot, { recursive: true, force: true });
   }
 
+  async recoverAndStageDiff(repositoryPath: string, expectedBaseRevision: string): Promise<string> {
+    const candidateRoot = await this.#candidateRoot(repositoryPath);
+    const actualRepository = await realpath(repositoryPath);
+    if (actualRepository !== repositoryPath || !/^[0-9a-f]{40,64}$/u.test(expectedBaseRevision)) {
+      throw new Error("保留候选路径或基础版本无效");
+    }
+    const info = await lstat(actualRepository);
+    if (!info.isDirectory() || info.isSymbolicLink()) throw new Error("保留候选目录类型无效");
+    const head = await this.#run(candidateRoot, actualRepository, ["rev-parse", "HEAD"]);
+    await requireSuccess(head, "读取保留候选基础版本失败");
+    if (head.stdout.trim() !== expectedBaseRevision) {
+      throw new Error("保留候选基础版本已变化");
+    }
+    this.#candidateBaseRevisions.set(actualRepository, expectedBaseRevision);
+    return this.stageAndDiff(actualRepository);
+  }
+
   async diff(repositoryPath: string): Promise<string> {
     const candidateRoot = await this.#candidateRoot(repositoryPath);
     const head = await this.#run(candidateRoot, repositoryPath, ["rev-parse", "HEAD"]);
@@ -1897,6 +2088,382 @@ class MacOsCodingSandbox {
       "(deny network*)",
     ].join("\n");
   }
+}
+
+async function persistReconciliationVerification(input: {
+  readonly store: KernelStore;
+  readonly tenantId: string;
+  readonly job: StoredJob;
+  readonly context: CodingWorkerJobContext;
+  readonly execution: Execution;
+  readonly run: StoredCodingRun;
+  readonly task: CodingTask;
+  readonly thread: Thread;
+  readonly candidate?: Candidate;
+  readonly diff?: string;
+  readonly gate?: GateResult;
+  readonly evidence?: CodeEvidence;
+  readonly failureReason?: string;
+  readonly now: string;
+}): Promise<JsonValue> {
+  return input.store.transact(input.tenantId, (transaction) => {
+    const execution = transaction.getProjection<Execution>("execution", input.execution.id);
+    const run = transaction.getProjection<StoredCodingRun>("coding.execution", input.execution.id);
+    const task = transaction.getProjection<CodingTask>("coding.task", input.task.id);
+    if (execution?.status === "completed"
+      && run?.externalInvocation?.verification?.status === "passed") {
+      return { executionId: execution.id, status: "completed" };
+    }
+    if (!execution || execution.status !== "needs_reconciliation"
+      || execution.generation !== input.execution.generation
+      || !run || run.generation !== execution.generation
+      || run.status !== "needs_reconciliation" || !run.result
+      || run.externalInvocation?.status !== "outcome_unknown"
+      || run.externalInvocation.verification?.status !== "pending"
+      || run.externalInvocation.verification.jobId !== input.job.id
+      || !task || task.status !== "needs_reconciliation") {
+      throw new Error("Coding 人工核对验证提交时状态已变化");
+    }
+    const passed = Boolean(input.candidate && input.diff && input.gate?.status === "passed"
+      && input.gate.authoritative && input.gate.evidenceDigest && input.evidence
+      && input.evidence.candidateId === input.candidate.id
+      && input.evidence.diffDigest === input.candidate.diffDigest
+      && input.evidence.gateEvidenceDigest === input.gate.evidenceDigest);
+    const failureReason = input.failureReason
+      ?? (passed ? undefined : "保留候选没有通过权威 Gate");
+    let taskVersion = task.streamVersion;
+    if (input.candidate && input.diff) {
+      const storedCandidate: StoredCandidate = {
+        ...input.candidate,
+        tenantId: input.tenantId,
+        workspaceId: execution.workspaceId,
+        executionId: execution.id,
+        diff: input.diff,
+        createdAt: input.now,
+      };
+      transaction.putProjection("coding.candidate", input.candidate.id, storedCandidate);
+      transaction.appendEvent({
+        tenantId: input.tenantId,
+        aggregateType: "coding.task",
+        aggregateId: task.id,
+        expectedStreamVersion: taskVersion++,
+        type: "coding.reconciliation_candidate_recorded",
+        actorId: `worker:${input.context.workerId}`,
+        executionId: execution.id,
+        generation: execution.generation,
+        correlationId: `coding:${execution.id}:${execution.generation}:reconciliation-verify`,
+        publicPayload: {
+          workspaceId: execution.workspaceId,
+          candidateId: input.candidate.id,
+          diffDigest: input.candidate.diffDigest,
+          runnerId: run.runnerId,
+          fencingToken: input.context.fencingToken,
+        },
+      });
+    }
+    if (input.gate) {
+      transaction.putProjection("coding.gate-result", input.gate.candidateId, {
+        ...input.gate,
+        tenantId: input.tenantId,
+        workspaceId: execution.workspaceId,
+        executionId: execution.id,
+        createdAt: input.now,
+      });
+      transaction.appendEvent({
+        tenantId: input.tenantId,
+        aggregateType: "coding.task",
+        aggregateId: task.id,
+        expectedStreamVersion: taskVersion++,
+        type: "coding.reconciliation_gate_recorded",
+        actorId: `worker:${input.context.workerId}`,
+        executionId: execution.id,
+        generation: execution.generation,
+        correlationId: `coding:${execution.id}:${execution.generation}:reconciliation-verify`,
+        publicPayload: {
+          workspaceId: execution.workspaceId,
+          candidateId: input.gate.candidateId,
+          status: input.gate.status,
+          authoritative: input.gate.authoritative,
+          evidenceDigest: input.gate.evidenceDigest!,
+          fencingToken: input.context.fencingToken,
+        },
+      });
+    }
+    if (passed && input.evidence) {
+      transaction.putProjection("coding.code-evidence", input.evidence.digest, {
+        ...input.evidence,
+        tenantId: input.tenantId,
+        workspaceId: execution.workspaceId,
+        executionId: execution.id,
+        createdAt: input.now,
+      });
+      transaction.appendEvent({
+        tenantId: input.tenantId,
+        aggregateType: "coding.task",
+        aggregateId: task.id,
+        expectedStreamVersion: taskVersion++,
+        type: "coding.reconciliation_evidence_recorded",
+        actorId: `worker:${input.context.workerId}`,
+        executionId: execution.id,
+        generation: execution.generation,
+        correlationId: `coding:${execution.id}:${execution.generation}:reconciliation-verify`,
+        publicPayload: {
+          workspaceId: execution.workspaceId,
+          candidateId: input.evidence.candidateId,
+          evidenceDigest: input.evidence.digest,
+          fencingToken: input.context.fencingToken,
+        },
+      });
+    }
+    transaction.appendEvent({
+      tenantId: input.tenantId,
+      aggregateType: "coding.task",
+      aggregateId: task.id,
+      expectedStreamVersion: taskVersion++,
+      type: passed
+        ? "coding.reconciliation_verification_passed"
+        : "coding.reconciliation_verification_failed",
+      actorId: `worker:${input.context.workerId}`,
+      executionId: execution.id,
+      generation: execution.generation,
+      correlationId: `coding:${execution.id}:${execution.generation}:reconciliation-verify`,
+      publicPayload: {
+        workspaceId: execution.workspaceId,
+        status: passed ? "completed" : "needs_reconciliation",
+        fencingToken: input.context.fencingToken,
+      },
+    });
+    const nextTask: CodingTask = {
+      ...task,
+      stage: passed ? "learn" : "verify",
+      status: passed ? "completed" : "needs_reconciliation",
+      streamVersion: taskVersion,
+      updatedAt: input.now,
+    };
+    transaction.putProjection("coding.task", task.id, nextTask);
+
+    const { failureCode: _failureCode, finishedAt: _finishedAt, ...executionSource } = execution;
+    const nextExecution: Execution = passed ? {
+      ...executionSource,
+      status: "completed",
+      streamVersion: execution.streamVersion + 1,
+      updatedAt: input.now,
+      finishedAt: input.now,
+    } : {
+      ...execution,
+      streamVersion: execution.streamVersion + 1,
+      updatedAt: input.now,
+    };
+    transaction.putProjection("execution", execution.id, nextExecution);
+    transaction.appendEvent({
+      tenantId: input.tenantId,
+      aggregateType: "execution",
+      aggregateId: execution.id,
+      expectedStreamVersion: execution.streamVersion,
+      type: passed
+        ? "execution.reconciliation_verified"
+        : "execution.reconciliation_verification_failed",
+      actorId: `worker:${input.context.workerId}`,
+      executionId: execution.id,
+      generation: execution.generation,
+      correlationId: `coding:${execution.id}:${execution.generation}:reconciliation-verify`,
+      publicPayload: {
+        workspaceId: execution.workspaceId,
+        status: nextExecution.status,
+        fencingToken: input.context.fencingToken,
+      },
+    });
+
+    const cleanupJob = passed
+      ? reconciliationCleanupJob(input, execution, run)
+      : undefined;
+    const { evidence: _oldEvidence, approval: _oldApproval, deliverable: _oldDeliverable, ...resultSource }
+      = run.result;
+    const nextResult: CodingExecutionResult = {
+      ...resultSource,
+      task: nextTask,
+      status: passed ? "completed" : "needs_reconciliation",
+      candidates: input.candidate ? [input.candidate] : [],
+      gates: input.gate ? [input.gate] : [],
+      ...(passed && input.evidence ? {
+        evidence: input.evidence,
+        approval: "approved_once" as const,
+        deliverable: {
+          kind: "code_change" as const,
+          title: task.title,
+          summary: input.candidate!.summary,
+          diffDigest: input.candidate!.diffDigest,
+          nextStep: "查看成果并记录学习结论",
+        },
+      } : {}),
+      nextStep: passed
+        ? "保留候选已通过权威 Gate，并依据人工决定标记完成"
+        : `${failureReason}；请选择 terminate 或 create_new_call`,
+    };
+    const nextRun: StoredCodingRun = {
+      ...run,
+      status: nextResult.status,
+      result: nextResult,
+      externalInvocation: {
+        ...run.externalInvocation,
+        status: passed ? "settled" : "outcome_unknown",
+        verification: {
+          ...run.externalInvocation.verification,
+          status: passed ? "passed" : "failed",
+          ...(failureReason ? { failureReason } : {}),
+          updatedAt: input.now,
+        },
+        ...(cleanupJob ? {
+          cleanupStatus: "pending" as const,
+          cleanupJobId: cleanupJob.id,
+        } : {}),
+        updatedAt: input.now,
+      },
+      streamVersion: run.streamVersion + 1,
+      updatedAt: input.now,
+    };
+    transaction.putProjection("coding.execution", execution.id, nextRun);
+    transaction.appendEvent({
+      tenantId: input.tenantId,
+      aggregateType: "coding.execution",
+      aggregateId: execution.id,
+      expectedStreamVersion: run.streamVersion,
+      type: passed
+        ? "coding.reconciliation_verification_passed"
+        : "coding.reconciliation_verification_failed",
+      actorId: `worker:${input.context.workerId}`,
+      executionId: execution.id,
+      generation: execution.generation,
+      correlationId: `coding:${execution.id}:${execution.generation}:reconciliation-verify`,
+      publicPayload: {
+        workspaceId: execution.workspaceId,
+        taskId: task.id,
+        status: nextResult.status,
+        ...(input.evidence ? { evidenceDigest: input.evidence.digest } : {}),
+        ...(cleanupJob ? { cleanupJobId: cleanupJob.id } : {}),
+        fencingToken: input.context.fencingToken,
+      },
+    });
+    if (passed && nextResult.deliverable) {
+      const deliverable: Deliverable = {
+        id: `coding-deliverable:${execution.id}`,
+        tenantId: input.tenantId,
+        workspaceId: execution.workspaceId,
+        pluginId: "coding",
+        threadId: input.thread.id,
+        executionId: execution.id,
+        kind: nextResult.deliverable.kind,
+        title: nextResult.deliverable.title,
+        summary: nextResult.deliverable.summary,
+        assetIds: [],
+        nextAction: nextResult.deliverable.nextStep,
+        streamVersion: 1,
+        createdAt: input.now,
+        updatedAt: input.now,
+      };
+      transaction.putProjection("deliverable", deliverable.id, deliverable);
+      transaction.appendEvent({
+        tenantId: input.tenantId,
+        aggregateType: "deliverable",
+        aggregateId: deliverable.id,
+        expectedStreamVersion: 0,
+        type: "deliverable.created",
+        actorId: `worker:${input.context.workerId}`,
+        executionId: execution.id,
+        generation: execution.generation,
+        correlationId: `coding:${execution.id}:${execution.generation}:reconciliation-verify`,
+        publicPayload: {
+          workspaceId: execution.workspaceId,
+          pluginId: "coding",
+          taskId: task.id,
+          kind: deliverable.kind,
+          diffDigest: nextResult.deliverable.diffDigest,
+        },
+      });
+    }
+    for (const item of transaction.listProjections<InboxItem>("inbox")) {
+      if (item.executionId !== execution.id || item.status !== "open") continue;
+      transaction.putProjection("inbox", item.id, passed ? {
+        ...item,
+        status: "resolved",
+      } : {
+        ...item,
+        summary: nextResult.nextStep,
+        risk: "gate_failed",
+      });
+    }
+    if (cleanupJob) {
+      transaction.putProjection("job", cleanupJob.id, cleanupJob);
+      transaction.appendEvent({
+        tenantId: input.tenantId,
+        aggregateType: "job",
+        aggregateId: cleanupJob.id,
+        expectedStreamVersion: 0,
+        type: "job.available",
+        actorId: `worker:${input.context.workerId}`,
+        executionId: execution.id,
+        generation: execution.generation,
+        correlationId: `coding:${execution.id}:${execution.generation}:reconciliation-verify`,
+        publicPayload: {
+          workspaceId: execution.workspaceId,
+          jobId: cleanupJob.id,
+          kind: cleanupJob.kind,
+        },
+      });
+      transaction.putJob({
+        id: cleanupJob.id,
+        tenantId: cleanupJob.tenantId,
+        workspaceId: cleanupJob.workspaceId,
+        kind: cleanupJob.kind,
+        payload: cleanupJob.payload,
+        availableAt: cleanupJob.availableAt,
+        idempotencyKey: cleanupJob.idempotencyKey,
+      });
+      transaction.putOutbox({
+        id: `outbox:${cleanupJob.id}`,
+        tenantId: input.tenantId,
+        topic: "job.available",
+        payload: {
+          workspaceId: execution.workspaceId,
+          jobId: cleanupJob.id,
+          kind: cleanupJob.kind,
+        },
+        availableAt: input.now,
+      });
+    }
+    return {
+      executionId: execution.id,
+      status: passed ? "completed" : "verification_failed",
+      ...(input.evidence ? { evidenceDigest: input.evidence.digest } : {}),
+    };
+  });
+}
+
+function reconciliationCleanupJob(
+  input: { readonly tenantId: string; readonly now: string },
+  execution: Execution,
+  run: StoredCodingRun,
+): Job {
+  const id = `job:coding-cleanup:${sha256({
+    executionId: execution.id,
+    generation: execution.generation,
+    attempt: run.externalInvocation!.attempt,
+  }).slice(0, 24)}`;
+  return {
+    id,
+    tenantId: input.tenantId,
+    workspaceId: execution.workspaceId,
+    kind: "coding.sandbox.cleanup",
+    payload: { reconciliationExecutionId: execution.id },
+    status: "available",
+    attempts: 0,
+    availableAt: input.now,
+    fencingToken: 0,
+    idempotencyKey: `coding:cleanup:${execution.id}:${execution.generation}:${run.externalInvocation!.attempt}`,
+    streamVersion: 1,
+    createdAt: input.now,
+    updatedAt: input.now,
+  };
 }
 
 async function persistRunning(

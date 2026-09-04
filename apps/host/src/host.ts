@@ -2223,7 +2223,9 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
               "使用新的 Idempotency-Key",
             );
           }
-          return json(replay.response, 200, traceId);
+          const replayStatus = (replay.response as { status?: unknown }).status
+            === "verification_pending" ? 202 : 200;
+          return json(replay.response, replayStatus, traceId);
         }
         if (decision === "create_new_call") {
           const current = await projectionGet<Execution>(
@@ -2258,7 +2260,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           now,
           id: nextId,
         });
-        return json(result, 200, traceId);
+        return json(result, result.status === "verification_pending" ? 202 : 200, traceId);
       }
       if (url.pathname === "/v2/plugins/opc/opportunities" && request.method === "GET") {
         const workspaceId = url.searchParams.get("workspaceId");

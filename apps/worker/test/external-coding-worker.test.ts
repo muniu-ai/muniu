@@ -35,6 +35,7 @@ import { SqliteStorage } from "@mn/storage";
 
 import {
   AgentOsWorker,
+  createCodingReconciliationVerificationWorkerHandler,
   createCodingSandboxCleanupWorkerHandler,
   createKernelAgentTurnHandler,
   type ByokModelInvoker,
@@ -189,6 +190,93 @@ test("Runner 没有可确认终态时进入人工核对，Job 不自动重放", 
     await readFile(join(state.run.externalInvocation.sandboxPath, "message.txt"), "utf8"),
     "new value\n",
   );
+});
+
+test("人工标记完成只验证保留候选，权威 Gate 通过后原子完成且不重跑 Runner", {
+  skip: !SANDBOX_AVAILABLE,
+}, async (t) => {
+  const fixture = await externalFixture(t, "unknown");
+  const firstRun = fixture.worker.pollOnce();
+  const approval = await waitForApproval(fixture.store, []);
+  await fixture.kernel.decideApproval(
+    "local", "local-owner", "approve-before-reconciliation-verify", approval.id,
+    approval.streamVersion, "approve_once",
+  );
+  assert.deepEqual(await firstRun, { status: "needs_reconciliation", jobId: "job-1" });
+  await enqueueReconciliationVerification(fixture.store);
+
+  assert.deepEqual(await fixture.worker.pollOnce(), {
+    status: "completed",
+    jobId: "verify-job-1",
+  });
+  const state = await fixture.store.transact("local", (transaction) => ({
+    execution: transaction.getProjection<Execution>("execution", "execution-1"),
+    task: transaction.getProjection<CodingTask>("coding.task", "task-1"),
+    run: transaction.getProjection<any>("coding.execution", "execution-1"),
+    candidates: transaction.listProjections<any>("coding.candidate"),
+    gates: transaction.listProjections<any>("coding.gate-result"),
+    evidence: transaction.listProjections<any>("coding.code-evidence"),
+    deliverable: transaction.getProjection<any>("deliverable", "coding-deliverable:execution-1"),
+    cleanupJobs: transaction.listProjections<Job>("job")
+      .filter((job) => job.kind === "coding.sandbox.cleanup"),
+  }));
+  assert.equal(state.execution?.status, "completed");
+  assert.equal(state.task?.status, "completed");
+  assert.equal(state.run.status, "completed");
+  assert.equal(state.run.externalInvocation.verification.status, "passed");
+  assert.equal(state.candidates.length, 1);
+  assert.match(state.candidates[0].diff, /\+new value/u);
+  assert.equal(state.gates[0]?.status, "passed");
+  assert.equal(state.gates[0]?.authoritative, true);
+  assert.equal(state.evidence[0]?.digest, state.run.result.evidence.digest);
+  assert.equal(state.deliverable?.kind, "code_change");
+  assert.equal(state.cleanupJobs.length, 1);
+  assert.equal((await fixture.store.getJob("job-1"))?.attempts, 1);
+  assert.equal(await readFile(join(fixture.repositoryPath, "message.txt"), "utf8"), "old value\n");
+
+  assert.deepEqual(await fixture.worker.pollOnce(), {
+    status: "completed",
+    jobId: state.cleanupJobs[0]!.id,
+  });
+  assert.deepEqual(await readdir(fixture.sandboxRoot), []);
+});
+
+test("保留候选未通过权威 Gate 时仍待人工核对且不能标记完成", {
+  skip: !SANDBOX_AVAILABLE,
+}, async (t) => {
+  const fixture = await externalFixture(t, "unknown");
+  const firstRun = fixture.worker.pollOnce();
+  const approval = await waitForApproval(fixture.store, []);
+  await fixture.kernel.decideApproval(
+    "local", "local-owner", "approve-before-failed-reconciliation-verify", approval.id,
+    approval.streamVersion, "approve_once",
+  );
+  assert.deepEqual(await firstRun, { status: "needs_reconciliation", jobId: "job-1" });
+  const run = await fixture.store.transact("local", (transaction) =>
+    transaction.getProjection<any>("coding.execution", "execution-1"));
+  await writeFile(join(run.externalInvocation.sandboxPath, "message.txt"), "new value   \n", "utf8");
+  await enqueueReconciliationVerification(fixture.store);
+
+  assert.deepEqual(await fixture.worker.pollOnce(), {
+    status: "completed",
+    jobId: "verify-job-1",
+  });
+  const state = await fixture.store.transact("local", (transaction) => ({
+    execution: transaction.getProjection<Execution>("execution", "execution-1"),
+    task: transaction.getProjection<CodingTask>("coding.task", "task-1"),
+    run: transaction.getProjection<any>("coding.execution", "execution-1"),
+    gates: transaction.listProjections<any>("coding.gate-result"),
+    cleanupJobs: transaction.listProjections<Job>("job")
+      .filter((job) => job.kind === "coding.sandbox.cleanup"),
+  }));
+  assert.equal(state.execution?.status, "needs_reconciliation");
+  assert.equal(state.task?.status, "needs_reconciliation");
+  assert.equal(state.run.status, "needs_reconciliation");
+  assert.equal(state.run.externalInvocation.verification.status, "failed");
+  assert.match(state.run.externalInvocation.verification.failureReason, /权威 Gate/u);
+  assert.equal(state.gates[0]?.status, "failed");
+  assert.equal(state.cleanupJobs.length, 0);
+  assert.equal((await readdir(fixture.sandboxRoot)).length, 1);
 });
 
 test("生产 launcher 遇到 stdin EPIPE 时失败关闭，Worker 不崩溃也不误判完成", {
@@ -499,6 +587,11 @@ async function externalFixture(
     sandboxRoot,
     now: () => NOW,
   });
+  const reconciliationVerificationHandler = createCodingReconciliationVerificationWorkerHandler({
+    store,
+    sandboxRoot,
+    now: () => NOW,
+  });
   const worker = new AgentOsWorker({
     id: "worker-external",
     store,
@@ -510,10 +603,11 @@ async function externalFixture(
     },
     handlers: {
       "agent.execution.run": handler,
+      "coding.reconciliation.verify": reconciliationVerificationHandler,
       "coding.sandbox.cleanup": cleanupHandler,
     },
     tenantId: "local",
-    kinds: ["agent.execution.run", "coding.sandbox.cleanup"],
+    kinds: ["agent.execution.run", "coding.reconciliation.verify", "coding.sandbox.cleanup"],
     now: () => new Date(NOW),
   });
   return {
@@ -762,6 +856,126 @@ async function enqueueSandboxCleanup(store: SqliteStorage): Promise<void> {
       executionId: "execution-1",
       generation: 1,
       correlationId: "coding:execution-1:cleanup",
+      publicPayload: { workspaceId: "workspace-1", kind: job.kind },
+    });
+    transaction.putJob({
+      id: job.id,
+      tenantId: job.tenantId,
+      workspaceId: job.workspaceId,
+      kind: job.kind,
+      payload: job.payload,
+      availableAt: job.availableAt,
+      idempotencyKey: job.idempotencyKey,
+    });
+  });
+}
+
+async function enqueueReconciliationVerification(store: SqliteStorage): Promise<void> {
+  await store.transact("local", (transaction) => {
+    const execution = transaction.getProjection<Execution>("execution", "execution-1");
+    const task = transaction.getProjection<CodingTask>("coding.task", "task-1");
+    const run = transaction.getProjection<any>("coding.execution", "execution-1");
+    assert.ok(execution);
+    assert.ok(task);
+    assert.ok(run?.externalInvocation);
+    const nextExecution = {
+      ...execution,
+      streamVersion: execution.streamVersion + 1,
+      updatedAt: NOW,
+    };
+    const nextTask = {
+      ...task,
+      stage: "verify" as const,
+      streamVersion: task.streamVersion + 1,
+      updatedAt: NOW,
+    };
+    const nextRun = {
+      ...run,
+      result: {
+        ...run.result,
+        task: nextTask,
+        nextStep: "正在对保留候选运行权威 Gate；不会重放外部 Runner",
+      },
+      externalInvocation: {
+        ...run.externalInvocation,
+        reconciliationDecision: "mark_completed",
+        verification: {
+          status: "pending",
+          jobId: "verify-job-1",
+          requestedBy: "local-owner",
+          requestedAt: NOW,
+          updatedAt: NOW,
+        },
+        updatedAt: NOW,
+      },
+      streamVersion: run.streamVersion + 1,
+      updatedAt: NOW,
+    };
+    transaction.putProjection("execution", execution.id, nextExecution);
+    transaction.appendEvent({
+      tenantId: "local",
+      aggregateType: "execution",
+      aggregateId: execution.id,
+      expectedStreamVersion: execution.streamVersion,
+      type: "execution.reconciliation_verification_requested",
+      actorId: "local-owner",
+      executionId: execution.id,
+      generation: execution.generation,
+      correlationId: "coding:execution-1:reconciliation-verify",
+      publicPayload: { workspaceId: "workspace-1", verificationJobId: "verify-job-1" },
+    });
+    transaction.putProjection("coding.task", task.id, nextTask);
+    transaction.appendEvent({
+      tenantId: "local",
+      aggregateType: "coding.task",
+      aggregateId: task.id,
+      expectedStreamVersion: task.streamVersion,
+      type: "coding.reconciliation_verification_requested",
+      actorId: "local-owner",
+      executionId: execution.id,
+      generation: execution.generation,
+      correlationId: "coding:execution-1:reconciliation-verify",
+      publicPayload: { workspaceId: "workspace-1", verificationJobId: "verify-job-1" },
+    });
+    transaction.putProjection("coding.execution", execution.id, nextRun);
+    transaction.appendEvent({
+      tenantId: "local",
+      aggregateType: "coding.execution",
+      aggregateId: execution.id,
+      expectedStreamVersion: run.streamVersion,
+      type: "coding.reconciliation_verification_requested",
+      actorId: "local-owner",
+      executionId: execution.id,
+      generation: execution.generation,
+      correlationId: "coding:execution-1:reconciliation-verify",
+      publicPayload: { workspaceId: "workspace-1", verificationJobId: "verify-job-1" },
+    });
+    const job: Job = {
+      id: "verify-job-1",
+      tenantId: "local",
+      workspaceId: "workspace-1",
+      kind: "coding.reconciliation.verify",
+      payload: { reconciliationExecutionId: "execution-1" },
+      status: "available",
+      attempts: 0,
+      availableAt: NOW,
+      fencingToken: 0,
+      idempotencyKey: "coding:execution-1:reconciliation-verify",
+      streamVersion: 1,
+      createdAt: NOW,
+      updatedAt: NOW,
+    };
+    transaction.putProjection("job", job.id, job);
+    transaction.appendEvent({
+      tenantId: "local",
+      aggregateType: "job",
+      aggregateId: job.id,
+      expectedStreamVersion: 0,
+      type: "job.available",
+      actorId: "local-owner",
+      executionId: execution.id,
+      generation: execution.generation,
+      correlationId: "coding:execution-1:reconciliation-verify",
       publicPayload: { workspaceId: "workspace-1", kind: job.kind },
     });
     transaction.putJob({
