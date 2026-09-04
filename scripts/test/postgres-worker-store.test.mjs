@@ -167,6 +167,24 @@ class WorkerFixtureClient {
       return { rows: [], rowCount: 1 };
     }
     if (normalized.startsWith("update mn_v2.jobs set status = 'failed'")) {
+      if (normalized.includes("fencing_token = $2")) {
+        const matches = this.job.tenant_id === parameters[3]
+          && this.job.job_id === parameters[4]
+          && this.job.status === parameters[5]
+          && this.job.fencing_token === parameters[6];
+        if (!matches) return { rows: [], rowCount: 0 };
+        this.job = {
+          ...this.job,
+          status: "failed",
+          failure_json: JSON.parse(parameters[0]),
+          result_json: null,
+          lease_owner: null,
+          lease_expires_at: null,
+          fencing_token: parameters[1],
+          updated_at: parameters[2],
+        };
+        return { rows: [], rowCount: 1 };
+      }
       this.job = {
         ...this.job,
         status: "failed",
@@ -215,8 +233,10 @@ class WorkerFixtureClient {
       return { rows: [], rowCount: 0 };
     }
     if (normalized.startsWith("select job_id, status, lease_owner, lease_expires_at, fencing_token")) {
-      const leased = this.job.status === "leased" ? [clone(this.job)] : [];
-      return { rows: leased, rowCount: leased.length };
+      const pending = this.job.status === "available" || this.job.status === "leased"
+        ? [clone(this.job)]
+        : [];
+      return { rows: pending, rowCount: pending.length };
     }
     if (normalized.startsWith("select stream_version, value_json from mn_v2.projections")) {
       const value = this.projections.get(`${parameters[1]}:${parameters[2]}`);
@@ -359,6 +379,60 @@ test("企业 Kernel 业务事务原子终结 Agent Job、Execution 和产品投�
     "job.completed",
     "execution.completed",
   ]);
+});
+
+test("企业 Kernel 业务事务可使待执行 Job 失效并推进 fencing token", async () => {
+  const client = new WorkerFixtureClient({ kind: "coding.reconciliation.verify", projected: true });
+  client.job.payload_json = { reconciliationExecutionId: "execution-a" };
+  client.projections.set("job:job-a", {
+    ...client.projections.get("job:job-a"),
+    payload: clone(client.job.payload_json),
+  });
+  const kernelStore = new PostgresKernelStore({
+    pool: { connect: async () => client, query: client.query.bind(client) },
+    hmacKey,
+    now: () => "2025-01-02T03:04:10.000Z",
+  });
+
+  await kernelStore.transact("tenant-a", (transaction) => {
+    const current = transaction.getProjection("job", "job-a");
+    const invalidated = transaction.invalidateJob({
+      jobId: "job-a",
+      reason: { code: "EXECUTION_CANCELLED" },
+      occurredAt: "2025-01-02T03:04:10.000Z",
+    });
+    transaction.putProjection("job", "job-a", {
+      ...current,
+      status: "failed",
+      failure: { code: "EXECUTION_CANCELLED" },
+      fencingToken: invalidated.fencingToken,
+      streamVersion: current.streamVersion + 1,
+      updatedAt: "2025-01-02T03:04:10.000Z",
+    });
+    transaction.appendEvent({
+      tenantId: "tenant-a",
+      aggregateType: "job",
+      aggregateId: "job-a",
+      expectedStreamVersion: current.streamVersion,
+      type: "job.failed",
+      actorId: "owner-a",
+      executionId: "execution-a",
+      generation: 1,
+      correlationId: "cancel-verification",
+      publicPayload: {
+        workspaceId: "workspace-a",
+        jobId: "job-a",
+        failureCode: "EXECUTION_CANCELLED",
+      },
+    });
+  });
+
+  assert.equal(client.job.status, "failed");
+  assert.equal(client.job.fencing_token, 1);
+  assert.deepEqual(client.job.failure_json, { code: "EXECUTION_CANCELLED" });
+  assert.equal(projection(client, "job", "job-a").status, "failed");
+  assert.equal(projection(client, "job", "job-a").fencingToken, 1);
+  assert.equal(client.events.at(-1).type, "job.failed");
 });
 
 test("Agent Job 重领和续租每次推进 Job，但不重复推进 running Execution", async () => {

@@ -158,9 +158,9 @@ export class PostgresKernelStore {
         select idempotency_key, request_hash, response_json, created_at from mn_v2.idempotency
         where tenant_id = $1 and idempotency_key like 'kernel:%'
       `, [tenantId]);
-      const leasedJobResult = await client.query(`
+      const pendingJobResult = await client.query(`
         select job_id, status, lease_owner, lease_expires_at, fencing_token
-        from mn_v2.jobs where tenant_id = $1 and status = 'leased'
+        from mn_v2.jobs where tenant_id = $1 and status in ('available', 'leased')
         for update
       `, [tenantId]);
 
@@ -186,7 +186,7 @@ export class PostgresKernelStore {
           createdAt: iso(row.created_at),
         }];
       }));
-      const leasedJobs = new Map(leasedJobResult.rows.map((row) => [String(row.job_id), row]));
+      const pendingJobs = new Map(pendingJobResult.rows.map((row) => [String(row.job_id), row]));
       const changedProjections = new Map();
       const deletedProjections = new Set();
       const changedIdempotency = new Map();
@@ -194,6 +194,7 @@ export class PostgresKernelStore {
       const jobs = [];
       const outbox = [];
       const settledJobs = [];
+      const invalidatedJobs = [];
 
       const transaction = {
         appendEvent: (request) => {
@@ -275,7 +276,7 @@ export class PostgresKernelStore {
           outbox.push(message);
         },
         assertJobLease: ({ jobId, workerId, fencingToken, occurredAt }) => {
-          const row = leasedJobs.get(jobId);
+          const row = pendingJobs.get(jobId);
           const projected = projections.get(projectionKey("job", jobId));
           if (!row
             || row.status !== "leased"
@@ -395,12 +396,59 @@ export class PostgresKernelStore {
             }
           }
           settledJobs.push(input);
-          leasedJobs.delete(input.jobId);
+          pendingJobs.delete(input.jobId);
           return Object.freeze({ ...input, settled: true });
+        },
+        invalidateJob: (input) => {
+          const row = pendingJobs.get(input.jobId);
+          const projected = projections.get(projectionKey("job", input.jobId));
+          if (!row
+            || (row.status !== "available" && row.status !== "leased")
+            || !projected
+            || projected.status !== row.status
+            || safeInteger(projected.fencingToken, "fencing token")
+              !== safeInteger(row.fencing_token, "fencing token")) {
+            throw new Error(`Job ${input.jobId} 不是可失效的待执行 Job`);
+          }
+          const fencingToken = safeInteger(row.fencing_token, "fencing token") + 1;
+          const invalidation = {
+            ...input,
+            previousStatus: row.status,
+            previousFencingToken: safeInteger(row.fencing_token, "fencing token"),
+            fencingToken,
+          };
+          invalidatedJobs.push(invalidation);
+          pendingJobs.delete(input.jobId);
+          return Object.freeze({
+            ...input,
+            invalidated: true,
+            previousStatus: row.status,
+            fencingToken,
+          });
         },
       };
 
       const result = await work(transaction);
+
+      for (const invalidation of invalidatedJobs) {
+        const changed = await client.query(`
+          update mn_v2.jobs set status = 'failed', failure_json = $1::jsonb,
+            result_json = null, lease_owner = null, lease_expires_at = null,
+            fencing_token = $2, updated_at = $3::timestamptz
+          where tenant_id = $4 and job_id = $5 and status = $6 and fencing_token = $7
+        `, [
+          JSON.stringify(invalidation.reason),
+          invalidation.fencingToken,
+          invalidation.occurredAt,
+          tenantId,
+          invalidation.jobId,
+          invalidation.previousStatus,
+          invalidation.previousFencingToken,
+        ]);
+        if (changed.rowCount !== 1) {
+          throw new Error(`Job ${invalidation.jobId} 在失效时状态已变化`);
+        }
+      }
 
       for (const settlement of settledJobs) {
         const changed = await client.query(settlement.outcome === "completed" ? `

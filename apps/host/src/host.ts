@@ -92,6 +92,7 @@ import {
   codingReconciliationVerificationReadiness,
   decideCodingReconciliation,
   getCodingReconciliation,
+  type CodingNewCallReadinessResolver,
   type CodingReconciliationDecision,
 } from "./coding-reconciliation.js";
 import {
@@ -1103,6 +1104,32 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
       const tenantPlugins = tenantRuntime.plugins;
       const pluginInstaller = tenantRuntime.installer;
       const pluginWorkspaceKey = (workspaceId: string) => encodePluginWorkspace(TENANT_ID, workspaceId);
+      const resolveCodingNewCallRuntimeReadiness: CodingNewCallReadinessResolver = async ({
+        workspaceId,
+        runnerId,
+      }) => {
+        const unavailable = {
+          allowed: false,
+          summary: "Runner 插件未能完成激活、健康检查或受控工具校验，暂时不能创建新调用",
+        } as const;
+        const workspace = await projectionGet<Workspace>(
+          options.store,
+          TENANT_ID,
+          "workspace",
+          workspaceId,
+        );
+        if (!workspace || workspace.tenantId !== TENANT_ID) return unavailable;
+        try {
+          await ensurePluginsActive(TENANT_ID, workspace, tenantRuntime, ACTOR_ID);
+          await requireRunnerPluginTool(TENANT_ID, workspace, runnerId);
+          return {
+            allowed: true,
+            summary: "Coding 与 Runner 插件运行态已就绪",
+          } as const;
+        } catch {
+          return unavailable;
+        }
+      };
       const accessibleWorkspaceIds = async () => new Set(
         (await projectionList<WorkspaceMembership>(options.store, TENANT_ID, "membership"))
           .filter((membership) => membership.principalId === ACTOR_ID && !membership.removedAt)
@@ -1533,6 +1560,49 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
             "该执行命令仅供内核和 Worker 使用",
             "使用 follow_up、steer、cancel 或 resume",
           );
+        }
+        if (command === "cancel" && execution.pluginId === "coding") {
+          const expectedStreamVersion = expectedVersion(body);
+          const idempotencyScope = `coding.execution.command:${executionId}`;
+          const idempotencyRequest = { expectedStreamVersion, command };
+          const replay = await options.store.transact(TENANT_ID, (transaction) =>
+            transaction.getIdempotency(idempotencyScope, mutationKey as string));
+          if (replay) {
+            if (replay.requestDigest !== sha256(idempotencyRequest)) {
+              throw new KernelError(
+                "IDEMPOTENCY_KEY_REUSED",
+                "幂等键已用于不同请求",
+                "使用新的 Idempotency-Key",
+              );
+            }
+            const stored = replay.response as Execution | { readonly execution: Execution };
+            return json("execution" in stored ? stored.execution : stored, 200, traceId);
+          }
+          if (execution.status === "needs_reconciliation") {
+            const detail = await getCodingReconciliation(
+              options.store,
+              TENANT_ID,
+              ACTOR_ID,
+              executionId,
+              reconciliationVerificationReadiness(),
+            );
+            const result = await decideCodingReconciliation(options.store, {
+              tenantId: TENANT_ID,
+              actorId: ACTOR_ID,
+              idempotencyKey: mutationKey as string,
+              idempotencyScope,
+              idempotencyRequest,
+              executionId,
+              expectedStreamVersion,
+              expectedCodingStreamVersion: detail.expectedCodingStreamVersion,
+              decision: "terminate",
+              verificationReadiness: reconciliationVerificationReadiness(),
+              newCallRuntimeReadiness: detail.newCall,
+              now,
+              id: nextId,
+            });
+            return json(result.execution, 200, traceId);
+          }
         }
         const result = await kernel.commandExecution(
           TENANT_ID, ACTOR_ID, mutationKey as string, executionId,
@@ -2194,6 +2264,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           ACTOR_ID,
           executionId,
           reconciliationVerificationReadiness(),
+          resolveCodingNewCallRuntimeReadiness,
         ), 200, traceId);
       }
       const codingReconciliationMatch = url.pathname.match(
@@ -2240,28 +2311,14 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
             === "verification_pending" ? 202 : 200;
           return json(replay.response, replayStatus, traceId);
         }
-        if (decision === "create_new_call") {
-          const current = await projectionGet<Execution>(
-            options.store,
-            TENANT_ID,
-            "execution",
-            executionId,
-          );
-          if (!current || current.pluginId !== "coding") {
-            throw new KernelError("EXECUTION_NOT_FOUND", "Coding 执行不存在", "刷新收件箱");
-          }
-          const workspace = await authorizedWorkspace(
-            options.store,
-            TENANT_ID,
-            ACTOR_ID,
-            current.workspaceId,
-            "review",
-          );
-          await ensurePluginsActive(TENANT_ID, workspace);
-          if (current.runnerId === "claude-cli" || current.runnerId === "codex-cli") {
-            await requireRunnerPluginTool(TENANT_ID, workspace, current.runnerId);
-          }
-        }
+        const detail = await getCodingReconciliation(
+          options.store,
+          TENANT_ID,
+          ACTOR_ID,
+          executionId,
+          reconciliationVerificationReadiness(),
+          resolveCodingNewCallRuntimeReadiness,
+        );
         const result = await decideCodingReconciliation(options.store, {
           tenantId: TENANT_ID,
           actorId: ACTOR_ID,
@@ -2271,6 +2328,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           expectedCodingStreamVersion,
           decision,
           verificationReadiness: reconciliationVerificationReadiness(),
+          newCallRuntimeReadiness: detail.newCall,
           now,
           id: nextId,
         });

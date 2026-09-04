@@ -392,6 +392,50 @@ export class SqliteStorage implements StoragePort {
             input.occurredAt
           );
           return { ...input, settled: true as const };
+        },
+        invalidateJob: (input) => {
+          validTimestamp(input.occurredAt);
+          const row = this.#database.prepare(`
+            select status, fencing_token from jobs
+            where tenant_id = ? and job_id = ?
+          `).get(tenantId, input.jobId) as RecordRow | undefined;
+          const projectionRow = this.#database.prepare(`
+            select value_json from projections
+            where tenant_id = ? and namespace = 'job' and projection_key = ?
+          `).get(tenantId, input.jobId) as RecordRow | undefined;
+          const projection = projectionRow
+            ? parseJson<Record<string, unknown>>(projectionRow.value_json)
+            : undefined;
+          if (!row
+            || (row.status !== "available" && row.status !== "leased")
+            || !projection
+            || projection.status !== row.status
+            || Number(projection.fencingToken) !== Number(row.fencing_token)) {
+            throw new Error(`Job ${input.jobId} 不是可失效的待执行 Job`);
+          }
+          const fencingToken = Number(row.fencing_token) + 1;
+          const changed = this.#database.prepare(`
+            update jobs set status = 'failed', failure_json = ?, result_json = null,
+              lease_owner = null, lease_expires_at = null, fencing_token = ?, updated_at = ?
+            where tenant_id = ? and job_id = ? and status = ? and fencing_token = ?
+          `).run(
+            JSON.stringify(input.reason),
+            fencingToken,
+            input.occurredAt,
+            tenantId,
+            input.jobId,
+            row.status,
+            Number(row.fencing_token),
+          );
+          if (Number(changed.changes) !== 1) {
+            throw new Error(`Job ${input.jobId} 在失效时状态已变化`);
+          }
+          return {
+            ...input,
+            invalidated: true as const,
+            previousStatus: row.status,
+            fencingToken,
+          };
         }
       };
       const result = work(transaction);

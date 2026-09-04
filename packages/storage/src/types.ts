@@ -113,6 +113,18 @@ export interface JobSettlementReceipt extends JobSettlementInput {
   readonly settled: true;
 }
 
+export interface JobInvalidationInput {
+  readonly jobId: string;
+  readonly reason: JsonObject;
+  readonly occurredAt: string;
+}
+
+export interface JobInvalidationReceipt extends JobInvalidationInput {
+  readonly invalidated: true;
+  readonly previousStatus: "available" | "leased";
+  readonly fencingToken: number;
+}
+
 export interface StoragePort {
   initialize(): Promise<void>;
   commit(batch: StorageCommit): Promise<StorageCommitResult>;
@@ -183,6 +195,7 @@ export interface KernelTransactionLike {
    * associated Execution within the caller's business transaction.
    */
   settleJob?(input: JobSettlementInput): JobSettlementReceipt;
+  invalidateJob?(input: JobInvalidationInput): JobInvalidationReceipt;
 }
 
 export interface KernelStoreCompatible {

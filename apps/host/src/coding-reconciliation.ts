@@ -45,6 +45,16 @@ export interface CodingReconciliationVerificationReadiness {
   readonly summary: string;
 }
 
+export interface CodingNewCallReadiness {
+  readonly allowed: boolean;
+  readonly summary: string;
+}
+
+export type CodingNewCallReadinessResolver = (input: {
+  readonly workspaceId: string;
+  readonly runnerId: ExternalCodingRunnerId;
+}) => Promise<CodingNewCallReadiness>;
+
 export function codingReconciliationVerificationReadiness(
   trustedWorkerSupportedKinds: readonly string[] | undefined,
 ): CodingReconciliationVerificationReadiness {
@@ -69,6 +79,9 @@ export interface CodingReconciliationDecisionInput {
   readonly expectedCodingStreamVersion: number;
   readonly decision: CodingReconciliationDecision;
   readonly verificationReadiness: CodingReconciliationVerificationReadiness;
+  readonly newCallRuntimeReadiness?: CodingNewCallReadiness;
+  readonly idempotencyScope?: string;
+  readonly idempotencyRequest?: unknown;
   readonly now: () => string;
   readonly id: (kind: string) => string;
 }
@@ -152,8 +165,9 @@ export async function getCodingReconciliation(
   actorId: string,
   executionId: string,
   verificationReadiness: CodingReconciliationVerificationReadiness,
+  resolveNewCallRuntimeReadiness?: CodingNewCallReadinessResolver,
 ): Promise<CodingReconciliationView> {
-  return store.transact(tenantId, (transaction) => {
+  const view = await store.transact<CodingReconciliationView>(tenantId, (transaction) => {
     const execution = transaction.getProjection<Execution>("execution", executionId);
     if (!execution || execution.pluginId !== "coding") {
       throw new KernelError("EXECUTION_NOT_FOUND", "Coding 执行不存在", "刷新收件箱");
@@ -186,14 +200,12 @@ export async function getCodingReconciliation(
       && verification === undefined
       && verificationReadiness.ready;
     const newCall = newCallReadiness(transaction, execution, run, task);
-    const availableDecisions: CodingReconciliationDecision[] = verification?.status === "pending"
-      || !runnerStopped
-      ? []
-      : [
-          "terminate",
-          ...(markCompletedAllowed ? ["mark_completed" as const] : []),
-          ...(newCall.allowed ? ["create_new_call" as const] : []),
-        ];
+    const availableDecisions = reconciliationDecisions({
+      runnerStopped,
+      verificationPending: verification?.status === "pending",
+      markCompletedAllowed,
+      newCallAllowed: newCall.allowed,
+    });
     return {
       executionId,
       workspaceId: execution.workspaceId,
@@ -222,19 +234,24 @@ export async function getCodingReconciliation(
       availableDecisions,
     };
   });
+  if (!resolveNewCallRuntimeReadiness || !view.newCall.allowed) return view;
+  const runtimeReadiness = await resolveNewCallRuntimeReadiness({
+    workspaceId: view.workspaceId,
+    runnerId: view.runnerId,
+  });
+  if (runtimeReadiness.allowed) return view;
+  return {
+    ...view,
+    newCall: runtimeReadiness,
+    availableDecisions: view.availableDecisions.filter((decision) =>
+      decision !== "create_new_call"),
+  };
 }
 
 export async function decideCodingReconciliation(
   store: KernelStore,
   input: CodingReconciliationDecisionInput,
 ): Promise<CodingReconciliationDecisionResult> {
-  if (input.decision === "mark_completed" && !input.verificationReadiness.ready) {
-    throw new KernelError(
-      "CODING_RECONCILIATION_VERIFICATION_UNAVAILABLE",
-      input.verificationReadiness.summary,
-      "部署同时实现 coding.reconciliation.verify 与 coding.sandbox.cleanup 的受信 Worker handler",
-    );
-  }
   if (!Number.isSafeInteger(input.expectedStreamVersion) || input.expectedStreamVersion < 1
     || !Number.isSafeInteger(input.expectedCodingStreamVersion)
     || input.expectedCodingStreamVersion < 1) {
@@ -251,8 +268,9 @@ export async function decideCodingReconciliation(
       expectedCodingStreamVersion: input.expectedCodingStreamVersion,
       decision: input.decision,
     };
-    const requestDigest = sha256(request);
-    const idempotencyScope = `coding.reconciliation:${input.executionId}`;
+    const requestDigest = sha256(input.idempotencyRequest ?? request);
+    const idempotencyScope = input.idempotencyScope
+      ?? `coding.reconciliation:${input.executionId}`;
     const previous = transaction.getIdempotency(idempotencyScope, input.idempotencyKey);
     if (previous) {
       if (previous.requestDigest !== requestDigest) {
@@ -314,7 +332,29 @@ export async function decideCodingReconciliation(
       );
     }
     assertCleanupPaths(run.externalInvocation);
-    assertRunnerStopped(run.externalInvocation);
+    const staticNewCall = newCallReadiness(transaction, execution, run, task);
+    const runtimeNewCall = input.newCallRuntimeReadiness ?? {
+      allowed: false,
+      summary: "尚未校验 Runner 插件运行态，暂时不能创建新调用",
+    };
+    const effectiveNewCall = staticNewCall.allowed ? runtimeNewCall : staticNewCall;
+    const runnerStopped = run.externalInvocation.terminationStatus === "confirmed";
+    const verificationPending = run.externalInvocation.verification?.status === "pending";
+    const availableDecisions = reconciliationDecisions({
+      runnerStopped,
+      verificationPending,
+      markCompletedAllowed: runnerStopped
+        && run.externalInvocation.verification === undefined
+        && input.verificationReadiness.ready,
+      newCallAllowed: effectiveNewCall.allowed,
+    });
+    assertReconciliationDecisionAvailable(
+      input.decision,
+      availableDecisions,
+      run.externalInvocation,
+      input.verificationReadiness,
+      effectiveNewCall,
+    );
     if (input.decision === "mark_completed") {
       return requestReconciliationVerification(
         transaction,
@@ -322,13 +362,15 @@ export async function decideCodingReconciliation(
         execution,
         run,
         task,
+        idempotencyScope,
+        requestDigest,
       );
-    }
-    if (input.decision === "create_new_call") {
-      assertNewCallReady(transaction, execution, run, task);
     }
 
     const occurredAt = input.now();
+    if (verificationPending) {
+      invalidateVerificationJob(transaction, input, execution, run, occurredAt);
+    }
     const cleanupJob = createCleanupJob(input, execution, run, occurredAt);
     const nextExecution = settleExecution(execution, input.decision, occurredAt);
     const nextTask = settleTask(task, input.decision, occurredAt);
@@ -411,14 +453,14 @@ export async function decideCodingReconciliation(
       cleanupJobId: cleanupJob.id,
       ...(newExecution ? { newExecution } : {}),
     };
-    transaction.putIdempotency({
-      tenantId: input.tenantId,
-      scope: idempotencyScope,
-      key: input.idempotencyKey,
-      requestDigest,
+    putReconciliationIdempotency(
+      transaction,
+      input,
       response,
-      createdAt: occurredAt,
-    });
+      occurredAt,
+      idempotencyScope,
+      requestDigest,
+    );
     return response;
   });
 }
@@ -429,6 +471,8 @@ function requestReconciliationVerification(
   execution: Execution,
   run: StoredCodingRun,
   task: CodingTask,
+  idempotencyScope: string,
+  requestDigest: string,
 ): CodingReconciliationDecisionResult {
   if (run.externalInvocation?.verification) {
     throw new KernelError(
@@ -542,19 +586,14 @@ function requestReconciliationVerification(
     task: nextTask,
     verificationJobId: verificationJob.id,
   };
-  transaction.putIdempotency({
-    tenantId: input.tenantId,
-    scope: `coding.reconciliation:${input.executionId}`,
-    key: input.idempotencyKey,
-    requestDigest: sha256({
-      executionId: input.executionId,
-      expectedStreamVersion: input.expectedStreamVersion,
-      expectedCodingStreamVersion: input.expectedCodingStreamVersion,
-      decision: input.decision,
-    }),
+  putReconciliationIdempotency(
+    transaction,
+    input,
     response,
-    createdAt: occurredAt,
-  });
+    occurredAt,
+    idempotencyScope,
+    requestDigest,
+  );
   return response;
 }
 
@@ -619,20 +658,56 @@ function assertRunnerStopped(invocation: ExternalInvocationCheckpoint): void {
   }
 }
 
-function assertNewCallReady(
-  transaction: KernelTransaction,
-  execution: Execution,
-  run: StoredCodingRun,
-  task: CodingTask,
+function reconciliationDecisions(input: {
+  readonly runnerStopped: boolean;
+  readonly verificationPending: boolean;
+  readonly markCompletedAllowed: boolean;
+  readonly newCallAllowed: boolean;
+}): readonly CodingReconciliationDecision[] {
+  if (!input.runnerStopped) return [];
+  if (input.verificationPending) return ["terminate"];
+  return [
+    "terminate",
+    ...(input.markCompletedAllowed ? ["mark_completed" as const] : []),
+    ...(input.newCallAllowed ? ["create_new_call" as const] : []),
+  ];
+}
+
+function assertReconciliationDecisionAvailable(
+  decision: CodingReconciliationDecision,
+  availableDecisions: readonly CodingReconciliationDecision[],
+  invocation: ExternalInvocationCheckpoint,
+  verificationReadiness: CodingReconciliationVerificationReadiness,
+  newCall: CodingNewCallReadiness,
 ): void {
-  const readiness = newCallReadiness(transaction, execution, run, task);
-  if (!readiness.allowed) {
+  if (availableDecisions.includes(decision)) return;
+  assertRunnerStopped(invocation);
+  if (invocation.verification?.status === "pending") {
+    throw new KernelError(
+      "CODING_RECONCILIATION_DECISION_UNAVAILABLE",
+      "保留候选正在执行权威验证，此时只能终止",
+      "选择 terminate，或等待验证结束后刷新",
+    );
+  }
+  if (decision === "mark_completed" && !verificationReadiness.ready) {
+    throw new KernelError(
+      "CODING_RECONCILIATION_VERIFICATION_UNAVAILABLE",
+      verificationReadiness.summary,
+      "部署同时实现 coding.reconciliation.verify 与 coding.sandbox.cleanup 的受信 Worker handler",
+    );
+  }
+  if (decision === "create_new_call" && !newCall.allowed) {
     throw new KernelError(
       "CODING_NEW_CALL_NOT_READY",
-      readiness.summary,
+      newCall.summary,
       "检查 Coding 与 Runner 插件、模型连接和 Runner 确认状态",
     );
   }
+  throw new KernelError(
+    "CODING_RECONCILIATION_DECISION_UNAVAILABLE",
+    "当前状态不允许该人工核对决定",
+    "刷新人工核对详情并选择可用操作",
+  );
 }
 
 function newCallReadiness(
@@ -762,11 +837,107 @@ function settleCodingRun(
       reconciliationDecision: decision,
       cleanupJobId,
       cleanupStatus: "pending",
+      ...(run.externalInvocation?.verification?.status === "pending"
+        ? {
+            verification: {
+              ...run.externalInvocation.verification,
+              status: "failed" as const,
+              failureReason: "用户已终止待核对验证",
+              updatedAt: occurredAt,
+            },
+          }
+        : {}),
       updatedAt: occurredAt,
     },
     streamVersion: run.streamVersion + 1,
     updatedAt: occurredAt,
   };
+}
+
+function invalidateVerificationJob(
+  transaction: KernelTransaction,
+  input: CodingReconciliationDecisionInput,
+  execution: Execution,
+  run: StoredCodingRun,
+  occurredAt: string,
+): void {
+  const verification = run.externalInvocation?.verification;
+  if (!verification || verification.status !== "pending") return;
+  const job = transaction.getProjection<Job>("job", verification.jobId);
+  if (!job
+    || job.tenantId !== input.tenantId
+    || job.workspaceId !== execution.workspaceId
+    || job.kind !== "coding.reconciliation.verify"
+    || job.payload.reconciliationExecutionId !== execution.id
+    || (job.status !== "available" && job.status !== "leased")) {
+    throw new KernelError(
+      "CODING_RECONCILIATION_STATE_INVALID",
+      "待核对验证 Job 与 Coding 执行不一致",
+      "停止操作并检查 Job、事件与投影",
+    );
+  }
+  if (!transaction.invalidateJob) {
+    throw new KernelError(
+      "CODING_RECONCILIATION_JOB_CONTROL_UNAVAILABLE",
+      "当前存储无法在领域事务中使验证 Job 失效",
+      "升级到支持 Job fencing 失效的存储实现",
+    );
+  }
+  const failure = {
+    code: "EXECUTION_CANCELLED",
+    message: "用户在人工核对中终止了权威验证",
+  } as const;
+  const invalidation = transaction.invalidateJob({
+    jobId: job.id,
+    reason: failure,
+    occurredAt,
+  });
+  const {
+    leaseOwner: _leaseOwner,
+    leaseExpiresAt: _leaseExpiresAt,
+    ...jobWithoutLease
+  } = job;
+  transaction.putProjection("job", job.id, {
+    ...jobWithoutLease,
+    status: "failed",
+    failure,
+    fencingToken: invalidation.fencingToken,
+    streamVersion: job.streamVersion + 1,
+    updatedAt: occurredAt,
+  });
+  transaction.appendEvent({
+    tenantId: input.tenantId,
+    aggregateType: "job",
+    aggregateId: job.id,
+    expectedStreamVersion: job.streamVersion,
+    type: "job.failed",
+    actorId: input.actorId,
+    executionId: execution.id,
+    generation: execution.generation,
+    correlationId: `coding-reconciliation:${execution.id}`,
+    publicPayload: {
+      workspaceId: execution.workspaceId,
+      jobId: job.id,
+      kind: job.kind,
+      status: "failed",
+      failureCode: failure.code,
+      fencingToken: invalidation.fencingToken,
+    },
+  });
+  transaction.putOutbox({
+    id: input.id("outbox"),
+    tenantId: input.tenantId,
+    topic: "job.failed",
+    payload: {
+      workspaceId: execution.workspaceId,
+      executionId: execution.id,
+      jobId: job.id,
+      kind: job.kind,
+      failureCode: failure.code,
+      fencingToken: invalidation.fencingToken,
+    },
+    availableAt: occurredAt,
+  });
 }
 
 function createCleanupJob(
@@ -872,6 +1043,24 @@ function putAvailableJob(
       kind: job.kind,
     },
     availableAt: job.availableAt,
+  });
+}
+
+function putReconciliationIdempotency(
+  transaction: KernelTransaction,
+  input: CodingReconciliationDecisionInput,
+  response: CodingReconciliationDecisionResult,
+  createdAt: string,
+  scope: string,
+  requestDigest: string,
+): void {
+  transaction.putIdempotency({
+    tenantId: input.tenantId,
+    scope,
+    key: input.idempotencyKey,
+    requestDigest,
+    response,
+    createdAt,
   });
 }
 

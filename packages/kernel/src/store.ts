@@ -55,6 +55,18 @@ export interface KernelJobSettlementReceipt extends KernelJobSettlement {
   readonly settled: true;
 }
 
+export interface KernelJobInvalidation {
+  readonly jobId: string;
+  readonly reason: JsonObject;
+  readonly occurredAt: string;
+}
+
+export interface KernelJobInvalidationReceipt extends KernelJobInvalidation {
+  readonly invalidated: true;
+  readonly previousStatus: "available" | "leased";
+  readonly fencingToken: number;
+}
+
 export interface KernelTransaction {
   appendEvent(request: EventAppendRequest): KernelEventV1;
   getProjection<T>(namespace: string, id: string): T | undefined;
@@ -76,6 +88,12 @@ export interface KernelTransaction {
    * projections in the same transaction as product writes.
    */
   settleJob?(input: KernelJobSettlement): KernelJobSettlementReceipt;
+  /**
+   * Atomically makes an available or leased Job unclaimable. Invalidating a
+   * lease advances its fencing token, so an in-flight Worker can no longer
+   * commit a result after the user terminates the operation.
+   */
+  invalidateJob?(input: KernelJobInvalidation): KernelJobInvalidationReceipt;
 }
 
 export interface KernelStore {
@@ -210,6 +228,27 @@ export class InMemoryKernelStore implements KernelStore {
           error.code = "STALE_FENCING_TOKEN";
           throw error;
         }
+      },
+      invalidateJob: (input) => {
+        const key = `${tenantId}:${input.jobId}`;
+        const physical = staged.jobs.get(key);
+        const value = staged.projections.get(`${tenantId}:job:${input.jobId}`);
+        const projected = typeof value === "object" && value !== null
+          ? value as Record<string, unknown>
+          : undefined;
+        if (!physical
+          || !projected
+          || (projected.status !== "available" && projected.status !== "leased")
+          || !Number.isSafeInteger(projected.fencingToken)) {
+          throw new Error(`Job ${input.jobId} 不是可失效的待执行 Job`);
+        }
+        staged.jobs.delete(key);
+        return {
+          ...input,
+          invalidated: true as const,
+          previousStatus: projected.status,
+          fencingToken: Number(projected.fencingToken) + 1,
+        };
       },
     };
     const result = work(transaction);

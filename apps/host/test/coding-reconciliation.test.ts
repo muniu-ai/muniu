@@ -25,11 +25,14 @@ import type {
   CodingTask,
   GateResult,
 } from "@mn/plugin-coding";
-import { createCodeEvidence } from "@mn/plugin-coding";
+import { codingPlugin, createCodeEvidence } from "@mn/plugin-coding";
+import type { PluginDefinitionV1 } from "@mn/plugin-sdk";
+import { claudeCliPluginDefinition } from "@mn/runner-claude-cli";
 import { SqliteStorage } from "@mn/storage";
 
 import {
   createAgentOsHost,
+  encodePluginWorkspace,
   type AgentOsHost,
   type AgentOsHostOptions,
   type ModelSecretStore,
@@ -77,7 +80,7 @@ async function createFixture<TStore extends KernelStore = InMemoryKernelStore>(
   providedStore?: TStore,
   hostOptions: Pick<
     AgentOsHostOptions,
-    "profile" | "trustedWorkerSupportedKinds"
+    "officialPlugins" | "profile" | "trustedWorkerSupportedKinds"
   > = {},
 ): Promise<ReconciliationFixture<TStore>> {
   const store = providedStore
@@ -565,8 +568,176 @@ test("mark_completed 只持久化人工意图并入队受 fencing 保护的权�
   )))).data;
   assert.equal(detail.evidence.markCompletedAllowed, false);
   assert.match(detail.evidence.summary, /正在.*权威 Gate/u);
-  assert.deepEqual(detail.availableDecisions, []);
+  assert.deepEqual(detail.availableDecisions, ["terminate"]);
+
+  for (const decision of ["mark_completed", "create_new_call"] as const) {
+    const rejected = await fixture.host.dispatch(mutation(path, {
+      expectedStreamVersion: detail.expectedStreamVersion,
+      expectedCodingStreamVersion: detail.expectedCodingStreamVersion,
+      decision,
+    }, `pending-${decision}`));
+    assert.equal(rejected.status, 422);
+    assert.equal(
+      (await responseBody(rejected)).code,
+      "CODING_RECONCILIATION_DECISION_UNAVAILABLE",
+    );
+  }
+
+  const terminated = await fixture.host.dispatch(mutation(path, {
+    expectedStreamVersion: detail.expectedStreamVersion,
+    expectedCodingStreamVersion: detail.expectedCodingStreamVersion,
+    decision: "terminate",
+  }, "terminate-pending-verification"));
+  assert.equal(terminated.status, 200);
+  const terminatedData = (await responseBody(terminated)).data;
+  assert.equal(terminatedData.execution.status, "cancelled");
+  assert.equal(terminatedData.codingExecution.status, "cancelled");
+  assert.equal(terminatedData.task.status, "cancelled");
+  assert.equal(fixture.store.readJobs("local").length, 1);
+  assert.equal(fixture.store.readJobs("local")[0]?.kind, "coding.sandbox.cleanup");
+  const terminatedState = await fixture.store.transact("local", (transaction) => ({
+    verificationJob: transaction.getProjection<Job>("job", data.verificationJobId),
+    run: transaction.getProjection<any>("coding.execution", fixture.executionId),
+    inbox: transaction.listProjections<InboxItem>("inbox")
+      .filter((item) => item.executionId === fixture.executionId),
+  }));
+  assert.equal(terminatedState.verificationJob?.status, "failed");
+  assert.equal((terminatedState.verificationJob as any)?.failure?.code, "EXECUTION_CANCELLED");
+  assert.equal(terminatedState.run.externalInvocation.verification.status, "failed");
+  assert.ok(terminatedState.inbox.every((item) => item.status === "resolved"));
+  assert.ok(fixture.store.readOutbox("local").some((message) =>
+    message.topic === "job.failed"
+    && message.payload.jobId === data.verificationJobId));
   await fixture.host.close();
+});
+
+test("通用 execution cancel 复用 Coding 待核对的领域终止语义", async () => {
+  const fixture = await createFixture();
+  const reconciliationPath =
+    `/v2/plugins/coding/executions/${fixture.executionId}/reconciliation-decisions`;
+  const pendingResponse = await fixture.host.dispatch(mutation(reconciliationPath, {
+    expectedStreamVersion: 1,
+    expectedCodingStreamVersion: 2,
+    decision: "mark_completed",
+  }, "generic-cancel-pending"));
+  const pending = (await responseBody(pendingResponse)).data;
+
+  const cancelBody = {
+    expectedStreamVersion: pending.execution.streamVersion,
+    command: "cancel",
+  } as const;
+  const cancelled = await fixture.host.dispatch(mutation(
+    `/v2/executions/${fixture.executionId}/commands`,
+    cancelBody,
+    "generic-cancel",
+  ));
+  assert.equal(cancelled.status, 200);
+  const execution = (await responseBody(cancelled)).data;
+  assert.equal(execution.status, "cancelled");
+
+  const replay = await fixture.host.dispatch(mutation(
+    `/v2/executions/${fixture.executionId}/commands`,
+    cancelBody,
+    "generic-cancel",
+  ));
+  assert.equal(replay.status, 200);
+  assert.deepEqual((await responseBody(replay)).data, execution);
+
+  const state = await fixture.store.transact("local", (transaction) => ({
+    task: transaction.getProjection<CodingTask>("coding.task", fixture.taskId),
+    run: transaction.getProjection<any>("coding.execution", fixture.executionId),
+    verificationJob: transaction.getProjection<Job>("job", pending.verificationJobId),
+    cleanupJobs: transaction.listProjections<Job>("job")
+      .filter((job) => job.kind === "coding.sandbox.cleanup"),
+    inbox: transaction.listProjections<InboxItem>("inbox")
+      .filter((item) => item.executionId === fixture.executionId),
+  }));
+  assert.equal(state.task?.status, "cancelled");
+  assert.equal(state.run.status, "cancelled");
+  assert.equal(state.verificationJob?.status, "failed");
+  assert.equal(state.cleanupJobs.length, 1);
+  assert.ok(state.inbox.every((item) => item.status === "resolved"));
+  await fixture.host.close();
+});
+
+test("GET 与 POST 共用 Runner 插件运行态的新调用 readiness", async (context) => {
+  await context.test("激活失败", async () => {
+    let activationFails = false;
+    const runnerDefinition: PluginDefinitionV1 = {
+      ...claudeCliPluginDefinition,
+      async activate() {
+        if (activationFails) throw new Error("fixture activation failed");
+      },
+    };
+    const fixture = await createFixture<InMemoryKernelStore>(false, undefined, {
+      officialPlugins: [codingPlugin, runnerDefinition],
+    });
+    await fixture.host.plugins.deactivate(
+      encodePluginWorkspace("local", fixture.workspaceId),
+      "runner-claude-cli",
+    );
+    activationFails = true;
+    const detail = (await responseBody(await fixture.host.dispatch(new Request(
+      `http://host.test/v2/plugins/coding/executions/${fixture.executionId}/reconciliation`,
+    )))).data;
+    assert.equal(detail.newCall.allowed, false);
+    assert.equal(detail.availableDecisions.includes("create_new_call"), false);
+    assert.match(detail.newCall.summary, /Runner 插件.*暂时不能创建新调用/u);
+    const response = await fixture.host.dispatch(mutation(
+      `/v2/plugins/coding/executions/${fixture.executionId}/reconciliation-decisions`,
+      {
+        expectedStreamVersion: detail.expectedStreamVersion,
+        expectedCodingStreamVersion: detail.expectedCodingStreamVersion,
+        decision: "create_new_call",
+      },
+      "runtime-not-ready-activation",
+    ));
+    assert.equal(response.status, 422);
+    assert.equal((await responseBody(response)).code, "CODING_NEW_CALL_NOT_READY");
+    assert.equal(fixture.store.readJobs("local").length, 0);
+    await fixture.host.close();
+  });
+
+  const cases: readonly [string, PluginDefinitionV1][] = [
+    ["健康检查降级", {
+      ...claudeCliPluginDefinition,
+      healthCheck() { return { status: "degraded", message: "fixture unavailable" }; },
+    }],
+    ["缺少工具贡献", {
+      ...claudeCliPluginDefinition,
+      contributions: { ...claudeCliPluginDefinition.contributions, tools: [] },
+    }],
+  ];
+
+  for (const [caseIndex, [label, runnerDefinition]] of cases.entries()) {
+    await context.test(label, async () => {
+      const fixture = await createFixture<InMemoryKernelStore>(false, undefined, {
+        officialPlugins: [codingPlugin, runnerDefinition],
+      });
+      const detail = (await responseBody(await fixture.host.dispatch(new Request(
+        `http://host.test/v2/plugins/coding/executions/${fixture.executionId}/reconciliation`,
+      )))).data;
+      assert.equal(detail.newCall.allowed, false);
+      assert.equal(detail.availableDecisions.includes("create_new_call"), false);
+      assert.match(detail.newCall.summary, /Runner 插件.*暂时不能创建新调用/u);
+
+      const response = await fixture.host.dispatch(mutation(
+        `/v2/plugins/coding/executions/${fixture.executionId}/reconciliation-decisions`,
+        {
+          expectedStreamVersion: detail.expectedStreamVersion,
+          expectedCodingStreamVersion: detail.expectedCodingStreamVersion,
+          decision: "create_new_call",
+        },
+        `runtime-not-ready-${caseIndex}`,
+      ));
+      assert.equal(response.status, 422);
+      const error = await responseBody(response);
+      assert.equal(error.code, "CODING_NEW_CALL_NOT_READY");
+      assert.equal(error.message, detail.newCall.summary);
+      assert.equal(fixture.store.readJobs("local").length, 0);
+      await fixture.host.close();
+    });
+  }
 });
 
 test("企业人工核对仅在显式受信 Worker capability 就绪时提供 mark_completed", async (context) => {
@@ -846,6 +1017,62 @@ test("SQLite 把核对状态、清理 Job 与 outbox 作为一个持久事务提
     );
     assert.equal((await reopened.getJob(data.cleanupJobId))?.status, "available");
     await reopened.close();
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("SQLite 终止已领取的核对验证 Job 时推进 fencing token", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "muniu-reconciliation-fencing-"));
+  const databaseFile = join(directory, "state.sqlite3");
+  const hmacKey = Buffer.from("coding-reconciliation-fencing-key");
+  try {
+    const storage = new SqliteStorage({ databaseFile, hmacKey, now: () => new Date(NOW) });
+    const fixture = await createFixture(false, storage);
+    const pending = (await responseBody(await fixture.host.dispatch(mutation(
+      `/v2/plugins/coding/executions/${fixture.executionId}/reconciliation-decisions`,
+      {
+        expectedStreamVersion: 1,
+        expectedCodingStreamVersion: 2,
+        decision: "mark_completed",
+      },
+      "sqlite-verification-pending",
+    )))).data;
+    const leased = await storage.claimJob("verification-worker", NOW, {
+      tenantId: "local",
+      kinds: ["coding.reconciliation.verify"],
+    });
+    assert.equal(leased?.id, pending.verificationJobId);
+    assert.equal(leased?.status, "leased");
+
+    const detail = (await responseBody(await fixture.host.dispatch(new Request(
+      `http://host.test/v2/plugins/coding/executions/${fixture.executionId}/reconciliation`,
+    )))).data;
+    assert.deepEqual(detail.availableDecisions, ["terminate"]);
+    const terminated = await fixture.host.dispatch(mutation(
+      `/v2/plugins/coding/executions/${fixture.executionId}/reconciliation-decisions`,
+      {
+        expectedStreamVersion: detail.expectedStreamVersion,
+        expectedCodingStreamVersion: detail.expectedCodingStreamVersion,
+        decision: "terminate",
+      },
+      "sqlite-terminate-leased-verification",
+    ));
+    assert.equal(terminated.status, 200);
+
+    const invalidated = await storage.getJob(pending.verificationJobId);
+    assert.equal(invalidated?.status, "failed");
+    assert.equal(invalidated?.fencingToken, (leased?.fencingToken ?? 0) + 1);
+    assert.equal(invalidated?.failure?.code, "EXECUTION_CANCELLED");
+    await assert.rejects(() => storage.completeJob(
+      pending.verificationJobId,
+      "verification-worker",
+      leased!.fencingToken,
+      { status: "completed" },
+      NOW,
+    ));
+    assert.equal((await storage.getJob(pending.verificationJobId))?.status, "failed");
+    await fixture.host.close();
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
