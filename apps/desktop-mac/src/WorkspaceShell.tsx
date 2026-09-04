@@ -23,6 +23,18 @@ type PageId = "home" | "workspaces" | "inbox" | "deliverables" | "activity" | "a
 const emptyHome: HomeSummary = { todayActions: [], blockers: [], approvals: [], recentDeliverables: [] };
 const emptyAgentCatalog: AgentCatalog = { agents: [], skills: [] };
 
+function productPlugins(pluginIds: readonly string[]): readonly ProductPluginId[] {
+  return pluginIds.filter((pluginId): pluginId is ProductPluginId => pluginId === "opc" || pluginId === "coding");
+}
+
+function pluginLabel(pluginId: string): string {
+  if (pluginId === "opc") return "OPC";
+  if (pluginId === "coding") return "Coding";
+  if (pluginId === "runner-claude-cli") return "Claude Runner";
+  if (pluginId === "runner-codex-cli") return "Codex Runner";
+  return pluginId;
+}
+
 interface WorkspaceShellProps {
   readonly api: AgentOsClient;
   readonly initialWorkspace: WorkspaceSummary;
@@ -37,7 +49,7 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces }: Wor
   const [technicalOpen, setTechnicalOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [captureText, setCaptureText] = useState("");
-  const [capturePlugin, setCapturePlugin] = useState<ProductPluginId>(initialWorkspace.activePluginIds[0] ?? "opc");
+  const [capturePlugin, setCapturePlugin] = useState<ProductPluginId | undefined>(productPlugins(initialWorkspace.activePluginIds)[0]);
   const [captureBusy, setCaptureBusy] = useState(false);
   const [notice, setNotice] = useState<string>();
   const [home, setHome] = useState<HomeSummary>(emptyHome);
@@ -112,7 +124,7 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces }: Wor
 
   async function submitCapture() {
     const value = captureText.trim();
-    if (!value) return;
+    if (!value || !capturePlugin) return;
     setCaptureBusy(true); setNotice(undefined);
     try {
       await api.capture(workspace.id, capturePlugin, value);
@@ -125,7 +137,7 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces }: Wor
   }
 
   function selectWorkspace(next: WorkspaceSummary) {
-    setWorkspace(next); setCapturePlugin(next.activePluginIds[0] ?? "opc"); setSelectedOpportunityId(undefined); setSelectedCodingTaskId(undefined); setPage("home");
+    setWorkspace(next); setCapturePlugin(productPlugins(next.activePluginIds)[0]); setSelectedOpportunityId(undefined); setSelectedCodingTaskId(undefined); setPage("home");
   }
 
   function updateWorkspace(next: WorkspaceSummary) {
@@ -134,6 +146,7 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces }: Wor
   }
 
   const degraded = health.filter((item) => item.status === "degraded");
+  const capturePlugins = productPlugins(workspace.activePluginIds);
 
   return <div className={`app-shell ${sidebarCompact ? "sidebar-compact" : ""}`} data-view-mode={workspace.viewMode}>
     <aside className="sidebar" aria-label="主导航">
@@ -162,9 +175,9 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces }: Wor
         <span className="view-chip">{professional ? "专业视图" : "经营视图"}</span>
         <button className="avatar-button" title="本地所有者">本</button>
       </header>
-      <section className="quick-capture" aria-label="快速捕获"><span className="capture-icon"><Zap size={17} /></span><input value={captureText} onChange={(event) => setCaptureText(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void submitCapture(); }} placeholder={capturePlugin === "opc" ? "记下一条机会、客户原话或反证" : "描述一个 Coding 任务"} /><select aria-label="捕获类型" value={capturePlugin} onChange={(event) => setCapturePlugin(event.target.value as ProductPluginId)}>{workspace.activePluginIds.includes("opc") && <option value="opc">OPC</option>}{workspace.activePluginIds.includes("coding") && <option value="coding">Coding</option>}</select><button className="primary-button" disabled={!captureText.trim() || captureBusy} onClick={() => void submitCapture()}><Plus size={15} />{captureBusy ? "正在保存" : "捕获"}</button></section>
+      <section className="quick-capture" aria-label="快速捕获"><span className="capture-icon"><Zap size={17} /></span><input value={captureText} disabled={!capturePlugin} onChange={(event) => setCaptureText(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void submitCapture(); }} placeholder={!capturePlugin ? "先在工作区启用 OPC 或 Coding" : capturePlugin === "opc" ? "记下一条机会、客户原话或反证" : "描述一个 Coding 任务"} /><select aria-label="捕获类型" value={capturePlugin ?? ""} disabled={capturePlugins.length === 0} onChange={(event) => setCapturePlugin(event.target.value as ProductPluginId)}>{capturePlugins.map((pluginId) => <option key={pluginId} value={pluginId}>{pluginLabel(pluginId)}</option>)}</select><button className="primary-button" disabled={!capturePlugin || !captureText.trim() || captureBusy} onClick={() => void submitCapture()}><Plus size={15} />{captureBusy ? "正在保存" : "捕获"}</button></section>
       {notice && <div className="toast" role="status"><Sparkles size={15} />{notice}<button onClick={() => setNotice(undefined)}>关闭</button></div>}
-      {degraded.length > 0 && <div className="degraded-banner" role="status">{degraded.map((item) => `${item.pluginId === "opc" ? "OPC" : "Coding"} 已降级`).join("，")}。首页、收件箱和设置仍可使用。</div>}
+      {degraded.length > 0 && <div className="degraded-banner" role="status">{degraded.map((item) => `${pluginLabel(item.pluginId)} 已降级`).join("，")}。首页、收件箱和设置仍可使用。</div>}
       <div className="page-scroll">
         {coreLoading && page === "home" && <Loading />}
         {coreError && page === "home" && <ErrorState detail={coreError} action="检查 Host 后重试" onRetry={() => void refreshCore()} />}

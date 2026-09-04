@@ -59,7 +59,9 @@ async function seedWorkspace(seedMode) {
   const workspace = await mutate("/v2/workspaces", {
     name: "设计师增长",
     viewMode: "business",
-    pluginIds: ["opc", "coding"],
+    pluginIds: seedMode === "coding"
+      ? ["runner-codex-cli", "coding", "opc"]
+      : ["opc", "coding"],
   }, "seed-workspace");
   const opportunity = await mutate("/v2/plugins/opc/opportunities", {
     workspaceId: workspace.id,

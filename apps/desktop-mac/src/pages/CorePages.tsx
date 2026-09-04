@@ -89,7 +89,11 @@ function roleLabel(role: WorkspaceMemberSummary["workspaceRole"]): string {
 }
 
 function pluginLabel(pluginId: string): string {
-  return pluginId === "opc" ? "OPC" : pluginId === "coding" ? "Coding" : pluginId;
+  if (pluginId === "opc") return "OPC";
+  if (pluginId === "coding") return "Coding";
+  if (pluginId === "runner-claude-cli") return "Claude Runner";
+  if (pluginId === "runner-codex-cli") return "Codex Runner";
+  return pluginId;
 }
 
 export function SettingsPage({ workspace, memories, api, onModeChanged, onMemoriesChanged }: { readonly workspace: WorkspaceSummary; readonly memories: readonly MemorySummary[]; readonly api: AgentOsClient; readonly onModeChanged: (workspace: WorkspaceSummary) => void; readonly onMemoriesChanged: () => void }) {

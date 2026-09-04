@@ -321,6 +321,16 @@ async function hostData(hostUrl, path) {
 }
 
 async function verifyCoding(page, requestLog) {
+  await page.getByRole("button", { name: "工作区" }).click();
+  await expectText(page, "Codex Runner");
+  const capture = page.getByLabel("捕获类型");
+  const captureOptions = await capture.locator("option").allTextContents();
+  if (JSON.stringify(captureOptions) !== JSON.stringify(["Coding", "OPC"])) {
+    throw new Error(`快速捕获混入非产品插件：${JSON.stringify(captureOptions)}`);
+  }
+  if (!new Set(["opc", "coding"]).has(await capture.inputValue())) {
+    throw new Error(`快速捕获选择了非产品插件：${await capture.inputValue()}`);
+  }
   await page.getByRole("button", { name: /收件箱/ }).click();
   await expectText(page, "模型凭据失效");
   await expectText(page, "重新连接模型后，等待中的任务才能继续");

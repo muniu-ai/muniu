@@ -5,7 +5,7 @@ export interface WorkspaceSummary {
   readonly id: string;
   readonly name: string;
   readonly viewMode: ViewMode;
-  readonly activePluginIds: readonly ProductPluginId[];
+  readonly activePluginIds: readonly string[];
   readonly streamVersion: number;
 }
 
@@ -272,7 +272,7 @@ export interface CodingTaskSummary {
 }
 
 export interface PluginHealth {
-  readonly pluginId: ProductPluginId;
+  readonly pluginId: string;
   readonly status: "healthy" | "degraded";
   readonly message?: string;
 }
