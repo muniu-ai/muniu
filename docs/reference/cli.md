@@ -28,6 +28,12 @@
   mn backup create state.mnbackup --verify
   mn backup check state.mnbackup
   mn backup restore state.mnbackup --destination restored.sqlite3
+
+外部 Coding Runner：
+  mn code runners --workspace <工作区 ID>
+  mn code runner inspect claude-cli --workspace <工作区 ID> --path /绝对路径/claude
+  mn code runner confirm claude-cli --workspace <工作区 ID> --path /绝对路径/claude --binary-version <版本> --sha256 <摘要> --version <配置版本>
+  mn ask <任务> --workspace <工作区 ID> --thread <会话 ID> --runner claude-cli
 ```
 
 <!-- generated:cli-help:end -->
@@ -57,6 +63,8 @@ mn resume EXECUTION_ID --version STREAM_VERSION
 ```
 
 `ask` 提交新 turn，`resume` 只恢复 `paused` 或 `interrupted` 的执行。审批与 `needs_reconciliation` 应在收件箱中明确处理，不能用 `resume` 绕过。
+
+Coding 会话默认使用 `builtin`。只有显式传入 `--runner claude-cli` 或 `--runner codex-cli` 时，Host 才会选择外部 Runner；其他插件的会话拒绝该参数。
 
 ## 健康检查
 
@@ -101,6 +109,36 @@ mn code task \
 ```
 
 第一个位置参数是插件命令；CLI 将其发送到 `/v2/plugins/{pluginId}/{path}`。领域对象仍由插件校验，CLI 不代替人工确认承诺、付费证据、最终机会决策或高风险代码审批。
+
+### 外部 Coding Runner
+
+先检查本机二进制，再由工作区 owner 对照检查结果确认版本与 SHA-256：
+
+```bash
+mn code runners --workspace WORKSPACE_ID
+
+mn code runner inspect claude-cli \
+  --workspace WORKSPACE_ID \
+  --path /opt/homebrew/bin/claude \
+  --json
+
+mn code runner confirm claude-cli \
+  --workspace WORKSPACE_ID \
+  --path /opt/homebrew/bin/claude \
+  --binary-version VERSION_FROM_INSPECTION \
+  --sha256 SHA256_FROM_INSPECTION \
+  --version RUNNER_CONFIGURATION_STREAM_VERSION
+
+mn ask "修复事件游标" \
+  --workspace WORKSPACE_ID \
+  --thread CODING_THREAD_ID \
+  --runner claude-cli \
+  --version THREAD_STREAM_VERSION
+```
+
+`inspect` 不启用 Runner。`confirm` 会在同一次请求中重新读取绝对真实路径、版本、SHA-256 和文件身份；检查结果与提交值不一致时拒绝确认。Worker 在每次启动前再次检查身份。二进制变化后，旧确认不再有效。
+
+Claude 与 Codex CLI 使用各自已有的登录、provider 和 MCP 配置。木牛只调用适配器的 `start/events/cancel/resume`，不会向外部 Runner 注入木牛的 BYOK 密钥、Prompt 注册表、Skill 或历史会话。每次外部启动仍需单次副作用审批；结果无法确认时进入 `needs_reconciliation`，不会自动重放。
 
 ## 备份
 

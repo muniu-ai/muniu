@@ -24,6 +24,8 @@
     "@mn/contracts": "0.2.0",
     "@mn/kernel": "0.2.0",
     "@mn/plugin-coding": "0.2.0",
+    "@mn/runner-claude-cli": "0.2.0",
+    "@mn/runner-codex-cli": "0.2.0",
     "@mn/storage": "0.2.0"
   }
 }

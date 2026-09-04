@@ -13,6 +13,7 @@ import type {
   Workspace,
   WorkspaceMembership,
   WorkspaceRole,
+  CodingRunnerId,
 } from "@mn/contracts";
 import { acceptMemory, deleteMemory, rejectMemory } from "./memory.js";
 import { authorityAllowsIntent } from "./authority.js";
@@ -42,6 +43,7 @@ export interface SubmitTurnInput {
   readonly agentDefinitionId: string;
   readonly modelBindingId: string;
   readonly executionPrincipalId: string;
+  readonly runnerId?: CodingRunnerId;
   readonly authority: Omit<
     ExecutionAuthority,
     "id" | "tenantId" | "executionId" | "streamVersion" | "commitment" | "createdAt" | "updatedAt"
@@ -370,6 +372,7 @@ export class AgentOsKernel {
       readonly agentDefinitionId: string;
       readonly modelBindingId: string;
       readonly executionPrincipalId: string;
+      readonly runnerId?: CodingRunnerId;
       readonly authority: Omit<ExecutionAuthority, "id" | "tenantId" | "executionId" | "streamVersion" | "createdAt" | "updatedAt">;
     },
   ): Promise<Execution> {
@@ -382,6 +385,7 @@ export class AgentOsKernel {
         agentDefinitionId: input.agentDefinitionId, modelBindingId: input.modelBindingId,
         initiatedBy: actorId, executionPrincipalId: input.executionPrincipalId, generation: 1,
         status: "queued", authorityId, streamVersion: 1, createdAt: now, updatedAt: now,
+        ...(input.runnerId ? { runnerId: input.runnerId } : {}),
       };
       const authority: ExecutionAuthority = {
         ...input.authority, id: authorityId, tenantId, executionId: id, streamVersion: 1,
@@ -439,6 +443,7 @@ export class AgentOsKernel {
         autoAllowedEffects: input.authority.autoAllowedEffects,
         budget: input.authority.budget,
         parentAuthorityId: input.authority.parentAuthorityId,
+        runnerId: input.runnerId,
       });
       const authority: ExecutionAuthority = {
         ...input.authority,
@@ -463,6 +468,7 @@ export class AgentOsKernel {
         generation: 1,
         status: "queued",
         authorityId,
+        ...(input.runnerId ? { runnerId: input.runnerId } : {}),
         streamVersion: 1,
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -511,7 +517,12 @@ export class AgentOsKernel {
         actorId,
         executionId,
         generation: 1,
-        publicPayload: { workspaceId: input.workspaceId, executionId, pluginId: thread.pluginId },
+        publicPayload: {
+          workspaceId: input.workspaceId,
+          executionId,
+          pluginId: thread.pluginId,
+          ...(input.runnerId ? { runnerId: input.runnerId } : {}),
+        },
       });
       this.append(transaction, {
         tenantId,
@@ -527,6 +538,7 @@ export class AgentOsKernel {
           threadId: input.threadId,
           authorityId,
           authorityCommitment: commitment,
+          ...(input.runnerId ? { runnerId: input.runnerId } : {}),
         },
       });
       this.append(transaction, {

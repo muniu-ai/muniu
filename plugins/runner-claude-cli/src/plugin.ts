@@ -26,7 +26,7 @@ export const claudeCliPluginDefinition = {
       permissionIds: ["runner.claude.execute"],
     }],
     workflows: [],
-    tools: [{ id: "runner.claude.execute", version: "0.2.0", effectClass: "local_reversible_write" }],
+    tools: [{ id: "runner.claude.execute", version: "0.2.0", effectClass: "external_side_effect" }],
     memorySchemas: [],
   },
   healthCheck() { return { status: "healthy" as const }; },

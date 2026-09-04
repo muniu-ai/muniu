@@ -195,3 +195,48 @@ test("OpenAPI 声明插件局部停用、全局停用与清除操作", () => {
     ],
   );
 });
+
+test("OpenAPI 声明 Coding Runner 检查、确认与显式选择", () => {
+  const operations = Object.fromEntries(API_OPERATIONS_V2.map((operation) => [
+    operation.operationId,
+    `${operation.method} ${operation.path}`,
+  ]));
+  assert.equal(operations.listCodingRunners, "get /v2/plugins/coding/runners");
+  assert.equal(
+    operations.inspectCodingRunner,
+    "post /v2/plugins/coding/runners/{runnerId}/inspections",
+  );
+  assert.equal(
+    operations.confirmCodingRunner,
+    "post /v2/plugins/coding/runners/{runnerId}/confirmations",
+  );
+
+  const document = createOpenApiDocument();
+  const schemas = (document.components as { schemas: Record<string, any> }).schemas;
+  assert.deepEqual(schemas.CreateTurnMutation.properties.runnerId.enum, [
+    "builtin", "claude-cli", "codex-cli",
+  ]);
+  assert.deepEqual(schemas.ConfirmCodingRunnerMutation.required, [
+    "workspaceId", "expectedStreamVersion", "binaryPath", "version", "sha256",
+  ]);
+  assert.equal(schemas.ConfirmCodingRunnerMutation.properties.binaryPath.pattern, "^/");
+  assert.equal(schemas.ConfirmCodingRunnerMutation.properties.sha256.pattern, "^[0-9a-f]{64}$");
+  const paths = document.paths as Record<string, Record<string, {
+    parameters?: Array<{ name?: string; in?: string; required?: boolean }>;
+  }>>;
+  assert.deepEqual(
+    paths["/v2/plugins/coding/runners"]?.get?.parameters,
+    [{ name: "workspaceId", in: "query", required: true, schema: { type: "string" } }],
+  );
+  assert.equal(
+    paths["/v2/plugins/coding/runners/{runnerId}/confirmations"]?.post?.parameters
+      ?.some((parameter) => parameter.name === "runnerId" && parameter.in === "path" && parameter.required),
+    true,
+  );
+  const runnerParameter = paths[
+    "/v2/plugins/coding/runners/{runnerId}/confirmations"
+  ]?.post?.parameters?.find((parameter) => parameter.name === "runnerId") as
+    | { schema?: { enum?: string[] } }
+    | undefined;
+  assert.deepEqual(runnerParameter?.schema?.enum, ["claude-cli", "codex-cli"]);
+});

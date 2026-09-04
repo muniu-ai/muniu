@@ -7,6 +7,7 @@
 - Host Scope 装载身份、事件、存储、插件与运行时定义。
 - tenant、workspace、thread 和 execution 分别创建子 Scope。
 - 官方 OPC 与 Coding 插件随应用提供，由工作区按需启用。
+- 官方 Claude CLI 与 Codex CLI Runner 定义随应用提供，但不会被默认选择。
 - 插件故障只降低对应插件能力；核心健康检查、收件箱、设置和其他插件保持可用。
 - 生产插件与 Host 同进程运行，是宿主级可信代码，不是沙箱。
 
@@ -29,6 +30,14 @@ GET /v2/openapi.json
 ```
 
 所有 mutation 都要求 `Idempotency-Key`；修改现有 aggregate 时还要求 `expectedStreamVersion`。完整契约见 [API 路由](../../docs/reference/api-routes.md) 与 [OpenAPI](../../docs/reference/openapi.md)。
+
+## Coding Runner
+
+Host 通过 `/v2/plugins/coding/runners` 提供工作区级 Runner 状态，并通过 `inspections`、`confirmations` 两个 mutation 完成二进制身份确认。确认值包含绝对真实路径、版本、SHA-256、文件设备与 inode；客户端提交的版本和摘要必须与 Host 的再次检查完全一致。
+
+创建 Coding turn 时省略 `runnerId` 会选择 `builtin`。`claude-cli` 与 `codex-cli` 只能显式选择；未确认、身份检查器不可用或配置已变化时，Host 拒绝创建外部 Runner Execution。Runner ID 和工具权限与 Execution 在同一事务提交。
+
+本地 profile 默认使用本机身份检查器。企业 profile 不假定 Host 能读取 Worker 节点上的二进制，因此必须注入受信的同节点检查实现，否则外部 Runner 检查 fail closed。
 
 ## 就绪与恢复
 

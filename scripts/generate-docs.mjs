@@ -57,7 +57,9 @@ function pathParameters(path) {
     in: "path",
     name: match[1],
     required: true,
-    schema: { type: "string" },
+    schema: match[1] === "runnerId"
+      ? { type: "string", enum: ["claude-cli", "codex-cli"] }
+      : { type: "string" },
     ...(match[1] === "path" ? { description: "插件领域内的相对资源或命令路径" } : {}),
   }));
 }
@@ -90,7 +92,26 @@ function operationParameters(operation) {
   if (operation.operationId === "listMemories") {
     parameters.push({ name: "namespace", in: "query", required: false, schema: { type: "string" } });
   }
+  if (operation.operationId === "listCodingRunners") {
+    parameters.push({ name: "workspaceId", in: "query", required: true, schema: { type: "string" } });
+  }
   return parameters;
+}
+
+function mutationSchema(operation) {
+  const schemas = {
+    createAssets: "CreateAssetsMutation",
+    deleteAsset: "DeleteAssetMutation",
+    createTurn: "CreateTurnMutation",
+    commandOpcOpportunity: "OpcOpportunityCommandMutation",
+    inspectCodingRunner: "InspectCodingRunnerMutation",
+    confirmCodingRunner: "ConfirmCodingRunnerMutation",
+  };
+  const schema = schemas[operation.operationId];
+  if (schema) return { $ref: `#/components/schemas/${schema}` };
+  return operation.versioned
+    ? { $ref: "#/components/schemas/VersionedMutation" }
+    : { $ref: "#/components/schemas/Mutation" };
 }
 
 function successStatus(operationId) {
@@ -133,15 +154,7 @@ function openApiDocument(operations) {
           required: true,
           content: {
             "application/json": {
-              schema: operation.operationId === "createAssets"
-                ? { $ref: "#/components/schemas/CreateAssetsMutation" }
-                : operation.operationId === "deleteAsset"
-                  ? { $ref: "#/components/schemas/DeleteAssetMutation" }
-                : operation.operationId === "commandOpcOpportunity"
-                  ? { $ref: "#/components/schemas/OpcOpportunityCommandMutation" }
-                : operation.versioned
-                ? { $ref: "#/components/schemas/VersionedMutation" }
-                : { $ref: "#/components/schemas/Mutation" },
+              schema: mutationSchema(operation),
             },
           },
         },
@@ -285,6 +298,39 @@ function openApiDocument(operations) {
               },
             },
           ],
+        },
+        CreateTurnMutation: {
+          type: "object",
+          additionalProperties: false,
+          required: ["expectedStreamVersion", "message"],
+          properties: {
+            expectedStreamVersion: { type: "integer", minimum: 0 },
+            message: { type: "string", minLength: 1 },
+            agentDefinitionId: { type: "string", minLength: 1 },
+            modelBindingId: { type: "string", minLength: 1 },
+            runnerId: { type: "string", enum: ["builtin", "claude-cli", "codex-cli"] },
+          },
+        },
+        InspectCodingRunnerMutation: {
+          type: "object",
+          additionalProperties: false,
+          required: ["workspaceId", "binaryPath"],
+          properties: {
+            workspaceId: { type: "string", minLength: 1 },
+            binaryPath: { type: "string", minLength: 1, pattern: "^/" },
+          },
+        },
+        ConfirmCodingRunnerMutation: {
+          type: "object",
+          additionalProperties: false,
+          required: ["workspaceId", "expectedStreamVersion", "binaryPath", "version", "sha256"],
+          properties: {
+            workspaceId: { type: "string", minLength: 1 },
+            expectedStreamVersion: { type: "integer", minimum: 0 },
+            binaryPath: { type: "string", minLength: 1, pattern: "^/" },
+            version: { type: "string", minLength: 1, maxLength: 256 },
+            sha256: { type: "string", pattern: "^[0-9a-f]{64}$" },
+          },
         },
         Envelope: {
           type: "object",

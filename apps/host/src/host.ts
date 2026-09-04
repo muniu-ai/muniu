@@ -19,6 +19,7 @@ import {
   type ThreadTurnsView,
   type Workspace,
   type WorkspaceMembership,
+  type CodingRunnerId,
 } from "@mn/contracts";
 import {
   AgentOsKernel,
@@ -49,6 +50,8 @@ import {
 } from "@mn/storage";
 import { codingPlugin } from "@mn/plugin-coding";
 import { createOpcPluginDefinition, exportOpportunityDeliverables, OpcService } from "@mn/plugin-opc";
+import { claudeCliPluginDefinition } from "@mn/runner-claude-cli";
+import { codexCliPluginDefinition } from "@mn/runner-codex-cli";
 import type { EnterpriseReadiness } from "./config.js";
 import {
   ASSET_TOMBSTONE_NAMESPACE,
@@ -83,6 +86,16 @@ import {
   type TrustedRegistryRoot,
 } from "./plugin-installation.js";
 import type { ModelSecretStore } from "./secrets.js";
+import {
+  confirmCodingRunner,
+  inspectCodingRunner,
+  listCodingRunners,
+  localCodingRunnerIdentityInspector,
+  parseExternalCodingRunnerId,
+  requireConfirmedCodingRunner,
+  runnerToolId,
+  type CodingRunnerIdentityInspector,
+} from "./coding-runners.js";
 
 const LOCAL_TENANT_ID = "local";
 const LOCAL_ACTOR_ID = "local-owner";
@@ -138,6 +151,8 @@ export interface AgentOsHostOptions {
   readonly protectedPayloadKeys?: ProtectedPayloadKeyDestroyer;
   /** 本地注入 Keychain provider；企业注入 Vault/KMS provider。 */
   readonly protectedPayloadKeyProvider?: KeyProvider;
+  /** Local hosts inspect same-node binaries; enterprise hosts require an injected trusted inspector. */
+  readonly runnerIdentityInspector?: CodingRunnerIdentityInspector;
   /** 默认由 profile 决定：本地 Keychain，企业 Vault/KMS。 */
   readonly acceptsModelSecretReference?: (reference: string) => boolean;
   /** 组合根用于先停止共享同一 Store 的 Worker。 */
@@ -687,6 +702,8 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
     ?? (options.profile === "enterprise"
       ? (reference: string) => reference.startsWith("vault://muniu/v2/")
       : (reference: string) => reference.startsWith("keychain://muniu.v2/"));
+  const runnerIdentityInspector = options.runnerIdentityInspector
+    ?? (profile === "local" ? localCodingRunnerIdentityInspector : undefined);
   const kernel = new AgentOsKernel(options.store, {
     now,
     id: nextId,
@@ -708,6 +725,8 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
   const officialPlugins = options.officialPlugins ?? [
     createOpcPluginDefinition({ service: opcService }),
     codingPlugin,
+    claudeCliPluginDefinition,
+    codexCliPluginDefinition,
   ];
   for (const plugin of officialPlugins) {
     plugins.registerOfficial(plugin);
@@ -1039,7 +1058,30 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
             "在集成设置中连接模型后重试",
           );
         }
+        const requestedRunner = stringField(body, "runnerId", false);
+        if (thread.pluginId !== "coding" && requestedRunner !== undefined) {
+          throw new KernelError(
+            "CODING_RUNNER_NOT_APPLICABLE",
+            "runnerId 只能用于 Coding turn",
+            "删除 runnerId 或选择 Coding 会话",
+          );
+        }
+        let runnerId: CodingRunnerId | undefined;
+        if (thread.pluginId === "coding") {
+          runnerId = requestedRunner === undefined || requestedRunner === "builtin"
+            ? "builtin"
+            : parseExternalCodingRunnerId(requestedRunner);
+          if (runnerId !== "builtin") {
+            await requireConfirmedCodingRunner(
+              options.store,
+              TENANT_ID,
+              workspaceId,
+              runnerId,
+            );
+          }
+        }
         const toolIds = definition.contributions.tools.map((tool) => tool.id);
+        if (runnerId && runnerId !== "builtin") toolIds.push(runnerToolId(runnerId));
         const dataNamespaces = new Set([thread.pluginId]);
         if (toolIds.some((toolId) => toolId.includes("web"))) dataNamespaces.add("web");
         if (toolIds.some((toolId) => toolId.includes("repository") || toolId.includes("sandbox"))) {
@@ -1053,6 +1095,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           agentDefinitionId: agentDefinition.id,
           modelBindingId: modelConnection.id,
           executionPrincipalId: `agent:${thread.pluginId}`,
+          ...(runnerId ? { runnerId } : {}),
           authority: {
             workspaceId,
             principalId: `agent:${thread.pluginId}`,
@@ -1697,6 +1740,105 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           },
         });
         return json(workspace, 200, traceId);
+      }
+      if (url.pathname === "/v2/plugins/coding/runners" && request.method === "GET") {
+        const workspaceId = url.searchParams.get("workspaceId");
+        if (!workspaceId) {
+          throw new KernelError("INVALID_BODY", "缺少 workspaceId", "选择工作区后重试");
+        }
+        const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId, "owner");
+        if (!workspace.activePluginIds.includes("coding")) {
+          throw new KernelError("PLUGIN_NOT_ACTIVE", "工作区尚未启用 Coding", "先启用 Coding 插件");
+        }
+        return json(await listCodingRunners(options.store, TENANT_ID, workspaceId), 200, traceId);
+      }
+      const runnerInspectionMatch = url.pathname.match(
+        /^\/v2\/plugins\/coding\/runners\/([^/]+)\/inspections$/u,
+      );
+      if (runnerInspectionMatch && request.method === "POST") {
+        const body = await readBody(request);
+        if (Object.keys(body).some((field) => !["workspaceId", "binaryPath"].includes(field))) {
+          throw new KernelError("INVALID_BODY", "Runner 检查请求包含不支持的字段", "按 OpenAPI 重新提交");
+        }
+        const workspaceId = stringField(body, "workspaceId")!;
+        const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId, "owner");
+        if (!workspace.activePluginIds.includes("coding")) {
+          throw new KernelError("PLUGIN_NOT_ACTIVE", "工作区尚未启用 Coding", "先启用 Coding 插件");
+        }
+        const runnerId = parseExternalCodingRunnerId(decodeURIComponent(runnerInspectionMatch[1]!));
+        const identity = await idempotentAsyncOperation({
+          store: options.store,
+          tenantId: TENANT_ID,
+          key: mutationKey as string,
+          scope: `coding.runner.inspect:${workspaceId}:${runnerId}`,
+          request: body,
+          now,
+          inFlight: inFlightAsyncMutations,
+          work: () => inspectCodingRunner(
+            runnerIdentityInspector,
+            runnerId,
+            stringField(body, "binaryPath")!,
+          ),
+        });
+        return json(identity, 200, traceId);
+      }
+      const runnerConfirmationMatch = url.pathname.match(
+        /^\/v2\/plugins\/coding\/runners\/([^/]+)\/confirmations$/u,
+      );
+      if (runnerConfirmationMatch && request.method === "POST") {
+        const body = await readBody(request);
+        if (Object.keys(body).some((field) => ![
+          "workspaceId", "expectedStreamVersion", "binaryPath", "version", "sha256",
+        ].includes(field))) {
+          throw new KernelError("INVALID_BODY", "Runner 确认请求包含不支持的字段", "按 OpenAPI 重新提交");
+        }
+        const workspaceId = stringField(body, "workspaceId")!;
+        const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId, "owner");
+        if (!workspace.activePluginIds.includes("coding")) {
+          throw new KernelError("PLUGIN_NOT_ACTIVE", "工作区尚未启用 Coding", "先启用 Coding 插件");
+        }
+        const runnerId = parseExternalCodingRunnerId(decodeURIComponent(runnerConfirmationMatch[1]!));
+        const scope = `coding.runner.confirm:${workspaceId}:${runnerId}`;
+        const requestDigest = sha256(body);
+        const replay = await options.store.transact(TENANT_ID, (transaction) =>
+          transaction.getIdempotency(scope, mutationKey as string));
+        if (replay) {
+          if (replay.requestDigest !== requestDigest) {
+            throw new KernelError(
+              "IDEMPOTENCY_KEY_REUSED",
+              "幂等键已用于不同请求",
+              "使用新的 Idempotency-Key",
+            );
+          }
+          return json(replay.response, 200, traceId);
+        }
+        const identity = await inspectCodingRunner(
+          runnerIdentityInspector,
+          runnerId,
+          stringField(body, "binaryPath")!,
+        );
+        const configuration = await idempotentProjectionMutation({
+          store: options.store,
+          tenantId: TENANT_ID,
+          key: mutationKey as string,
+          scope,
+          request: body,
+          now,
+          work: (transaction) => confirmCodingRunner({
+            transaction,
+            tenantId: TENANT_ID,
+            workspaceId,
+            actorId: ACTOR_ID,
+            runnerId,
+            expectedStreamVersion: expectedVersion(body),
+            expectedVersion: stringField(body, "version")!,
+            expectedSha256: stringField(body, "sha256")!,
+            identity,
+            occurredAt: now(),
+            correlationId: nextId("correlation"),
+          }),
+        });
+        return json(configuration, 200, traceId);
       }
       if (url.pathname === "/v2/plugins/opc/opportunities" && request.method === "GET") {
         const workspaceId = url.searchParams.get("workspaceId");

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ApiErrorV2 } from "@mn/contracts";
 import {
@@ -38,6 +38,12 @@ const HELP = `木牛 Agent OS 0.2
   mn backup create state.mnbackup --verify
   mn backup check state.mnbackup
   mn backup restore state.mnbackup --destination restored.sqlite3
+
+外部 Coding Runner：
+  mn code runners --workspace <工作区 ID>
+  mn code runner inspect claude-cli --workspace <工作区 ID> --path /绝对路径/claude
+  mn code runner confirm claude-cli --workspace <工作区 ID> --path /绝对路径/claude --binary-version <版本> --sha256 <摘要> --version <配置版本>
+  mn ask <任务> --workspace <工作区 ID> --thread <会话 ID> --runner claude-cli
 `;
 
 export interface CliIo {
@@ -265,14 +271,23 @@ async function setup(parsed: ParsedArguments, api: ApiClient): Promise<CliResult
 }
 
 async function ask(parsed: ParsedArguments, api: ApiClient): Promise<CliResult> {
-  assertAllowedFlags(parsed, ["workspace", "thread", "version"]);
+  assertAllowedFlags(parsed, ["workspace", "thread", "version", "runner"]);
   const message = parsed.positional.join(" ").trim();
   if (!message) throw new CliUsageError("请提供要提交的内容");
   const workspaceId = flag(parsed, "workspace", true)!;
   const threadId = flag(parsed, "thread", true)!;
+  const runnerId = flag(parsed, "runner");
+  if (runnerId !== undefined
+    && runnerId !== "builtin" && runnerId !== "claude-cli" && runnerId !== "codex-cli") {
+    throw new CliUsageError("--runner 只能是 builtin、claude-cli 或 codex-cli");
+  }
   const data = await api.mutate(
     `/v2/workspaces/${encodeURIComponent(workspaceId)}/threads/${encodeURIComponent(threadId)}/turns`,
-    { expectedStreamVersion: integerFlag(parsed, "version", 1), message },
+    {
+      expectedStreamVersion: integerFlag(parsed, "version", 1),
+      message,
+      ...(runnerId ? { runnerId } : {}),
+    },
   );
   return { command: "ask", data, human: "已提交，结果会进入当前会话和成果页" };
 }
@@ -408,6 +423,77 @@ async function productCommand(
     ...(input ? { input } : {}),
   });
   return { command, data, human };
+}
+
+function externalCodingRunnerId(value: string | undefined): "claude-cli" | "codex-cli" {
+  if (value === "claude-cli" || value === "codex-cli") return value;
+  throw new CliUsageError("Runner 只能是 claude-cli 或 codex-cli");
+}
+
+function absoluteRunnerPath(parsed: ParsedArguments): string {
+  const binaryPath = flag(parsed, "path", true)!;
+  if (!isAbsolute(binaryPath) || binaryPath.includes("\0")) {
+    throw new CliUsageError("--path 必须是不含空字节的绝对路径");
+  }
+  return binaryPath;
+}
+
+async function code(parsed: ParsedArguments, api: ApiClient): Promise<CliResult> {
+  const operation = parsed.positional[0] ?? "task";
+  if (operation !== "runner" && operation !== "runners") {
+    return productCommand("coding", "code", parsed, api);
+  }
+  if (operation === "runners") {
+    assertAllowedFlags(parsed, ["workspace"]);
+    if (parsed.positional.length !== 1) throw new CliUsageError("code runners 不接受额外参数");
+    const workspaceId = flag(parsed, "workspace", true)!;
+    const data = await api.get(
+      `/v2/plugins/coding/runners?workspaceId=${encodeURIComponent(workspaceId)}`,
+    );
+    return { command: "code", data, human: "已列出 Coding Runner" };
+  }
+
+  const action = parsed.positional[1];
+  const runnerId = externalCodingRunnerId(parsed.positional[2]);
+  const workspaceId = flag(parsed, "workspace", true)!;
+  if (action === "inspect") {
+    assertAllowedFlags(parsed, ["workspace", "path"]);
+    if (parsed.positional.length !== 3) throw new CliUsageError("code runner inspect 不接受额外参数");
+    const binaryPath = absoluteRunnerPath(parsed);
+    const data = await api.mutate(
+      `/v2/plugins/coding/runners/${encodeURIComponent(runnerId)}/inspections`,
+      { workspaceId, binaryPath },
+    );
+    return {
+      command: "code",
+      data,
+      human: `已检查 ${runnerId}；确认版本和 SHA-256 后才能启用`,
+    };
+  }
+  if (action === "confirm") {
+    assertAllowedFlags(parsed, ["workspace", "path", "binary-version", "sha256", "version"]);
+    if (parsed.positional.length !== 3) throw new CliUsageError("code runner confirm 不接受额外参数");
+    const binaryPath = absoluteRunnerPath(parsed);
+    const version = flag(parsed, "binary-version", true)!;
+    const sha256 = flag(parsed, "sha256", true)!;
+    if (!/^[0-9a-f]{64}$/u.test(sha256)) throw new CliUsageError("--sha256 必须是 64 位小写十六进制摘要");
+    const data = await api.mutate(
+      `/v2/plugins/coding/runners/${encodeURIComponent(runnerId)}/confirmations`,
+      {
+        workspaceId,
+        expectedStreamVersion: integerFlag(parsed, "version", 0),
+        binaryPath,
+        version,
+        sha256,
+      },
+    );
+    return {
+      command: "code",
+      data,
+      human: `已确认 ${runnerId}；二进制变化后需要重新确认`,
+    };
+  }
+  throw new CliUsageError("code runner 仅支持 inspect 或 confirm");
 }
 
 const OPC_DOMAIN_COMMANDS = new Set([
@@ -588,7 +674,7 @@ export async function runCli(arguments_: readonly string[], dependencies: CliDep
       case "doctor": result = await doctor(parsed, api); break;
       case "plugin": result = await plugin(parsed, api); break;
       case "opc": result = await opc(parsed, api); break;
-      case "code": result = await productCommand("coding", "code", parsed, api); break;
+      case "code": result = await code(parsed, api); break;
       case "backup": result = await backup(
         parsed,
         () => dependencies.backup ?? createDefaultBackup(dependencies),

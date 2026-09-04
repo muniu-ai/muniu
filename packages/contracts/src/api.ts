@@ -77,6 +77,25 @@ export interface AgentCatalogV2 {
   readonly skills: readonly AgentCatalogSkillV2[];
 }
 
+export type CreateTurnMutationBodyV2 = VersionedMutationBody & {
+  readonly message: string;
+  readonly agentDefinitionId?: string;
+  readonly modelBindingId?: string;
+  readonly runnerId?: "builtin" | "claude-cli" | "codex-cli";
+};
+
+export interface InspectCodingRunnerMutationBodyV2 extends JsonObject {
+  readonly workspaceId: string;
+  readonly binaryPath: string;
+}
+
+export interface ConfirmCodingRunnerMutationBodyV2 extends VersionedMutationBody {
+  readonly workspaceId: string;
+  readonly binaryPath: string;
+  readonly version: string;
+  readonly sha256: string;
+}
+
 export const CORE_API_ROUTES = [
   "/v2/openapi.json",
   "/v2/health",
@@ -115,6 +134,9 @@ export const CORE_API_ROUTES = [
   "/v2/plugins/opc/opportunities/{opportunityId}/commands",
   "/v2/plugins/opc/opportunities/{opportunityId}/deliverables",
   "/v2/plugins/opc/opportunities/{opportunityId}/exports",
+  "/v2/plugins/coding/runners",
+  "/v2/plugins/coding/runners/{runnerId}/inspections",
+  "/v2/plugins/coding/runners/{runnerId}/confirmations",
   "/v2/plugins/{pluginId}/{path}",
 ] as const;
 

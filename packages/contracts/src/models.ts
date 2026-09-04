@@ -85,6 +85,34 @@ export interface Execution extends VersionedEntity {
   readonly startedAt?: IsoDateTime;
   readonly finishedAt?: IsoDateTime;
   readonly failureCode?: string;
+  /** Coding uses builtin or an explicitly confirmed external runner; other products omit this. */
+  readonly runnerId?: CodingRunnerId;
+}
+
+export const CODING_RUNNER_IDS = ["builtin", "claude-cli", "codex-cli"] as const;
+export const CODING_RUNNER_CONFIGURATION_NAMESPACE = "coding.runner-configuration";
+export type CodingRunnerId = (typeof CODING_RUNNER_IDS)[number];
+export type ExternalCodingRunnerId = Exclude<CodingRunnerId, "builtin">;
+
+export interface RunnerBinaryIdentityV1 {
+  readonly requestedPath: string;
+  readonly realPath: string;
+  readonly version: string;
+  readonly sha256: string;
+  readonly device: string;
+  readonly inode: string;
+  readonly byteLength: number;
+  readonly modifiedAtMs: number;
+}
+
+export interface CodingRunnerConfigurationV1 extends VersionedEntity {
+  readonly workspaceId: WorkspaceId;
+  readonly runnerId: ExternalCodingRunnerId;
+  readonly status: "confirmed";
+  readonly identity: RunnerBinaryIdentityV1;
+  readonly identityDigest: string;
+  readonly confirmedBy: PrincipalId;
+  readonly confirmedAt: IsoDateTime;
 }
 
 export interface ThreadTurnSessionEntry {

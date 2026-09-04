@@ -298,6 +298,124 @@ test("OPC 与 Coding 命令只映射已实现的插件资源", async () => {
   assert.match(output.err[0] ?? "", /opc 支持/);
 });
 
+test("ask 仅在显式指定时发送外部 Coding Runner", async () => {
+  const requests: CapturedRequest[] = [];
+  const fetch: typeof globalThis.fetch = async (input, init) => {
+    requests.push(await captureRequest(input, init));
+    return ok({ id: "execution-1", runnerId: "claude-cli" }, 202);
+  };
+
+  assert.equal(await runCli([
+    "ask", "修复事件游标", "--workspace", "w-1", "--thread", "thread-1",
+    "--version", "4", "--runner", "claude-cli",
+  ], { io: io(), fetch, idempotencyKey: () => "ask-runner-key" }), 0);
+  assert.deepEqual(requests, [{
+    method: "POST",
+    path: "/v2/workspaces/w-1/threads/thread-1/turns",
+    body: {
+      expectedStreamVersion: 4,
+      message: "修复事件游标",
+      runnerId: "claude-cli",
+    },
+    idempotencyKey: "ask-runner-key",
+  }]);
+
+  requests.length = 0;
+  assert.equal(await runCli([
+    "ask", "使用默认执行器", "--workspace", "w-1", "--thread", "thread-1",
+  ], { io: io(), fetch }), 0);
+  assert.deepEqual(requests[0]?.body, {
+    expectedStreamVersion: 1,
+    message: "使用默认执行器",
+  });
+});
+
+test("code runner 提供检查、人工确认与状态查询", async () => {
+  const output = io();
+  const requests: Array<CapturedRequest & { readonly search: string }> = [];
+  const fetch: typeof globalThis.fetch = async (input, init) => {
+    const request = await captureRequest(input, init);
+    const url = new URL(input instanceof Request ? input.url : input);
+    requests.push({ ...request, search: url.search });
+    if (request.path.endsWith("/inspections")) {
+      return ok({
+        requestedPath: "/opt/homebrew/bin/claude",
+        realPath: "/opt/homebrew/bin/claude",
+        version: "2.1.0",
+        sha256: "a".repeat(64),
+      });
+    }
+    if (request.path.endsWith("/confirmations")) {
+      return ok({ runnerId: "claude-cli", status: "confirmed", streamVersion: 3 });
+    }
+    return ok([{ runnerId: "builtin", status: "ready" }]);
+  };
+  const nextKey = (() => { let id = 0; return () => `runner-key-${++id}`; })();
+
+  assert.equal(await runCli([
+    "code", "runners", "--workspace", "w-1",
+  ], { io: output, fetch, idempotencyKey: nextKey }), 0);
+  assert.equal(await runCli([
+    "code", "runner", "inspect", "claude-cli", "--workspace", "w-1",
+    "--path", "/opt/homebrew/bin/claude",
+  ], { io: output, fetch, idempotencyKey: nextKey }), 0);
+  assert.equal(await runCli([
+    "code", "runner", "confirm", "claude-cli", "--workspace", "w-1",
+    "--path", "/opt/homebrew/bin/claude", "--binary-version", "2.1.0",
+    "--sha256", "a".repeat(64), "--version", "2",
+  ], { io: output, fetch, idempotencyKey: nextKey }), 0);
+
+  assert.deepEqual(requests, [
+    {
+      method: "GET",
+      path: "/v2/plugins/coding/runners",
+      search: "?workspaceId=w-1",
+    },
+    {
+      method: "POST",
+      path: "/v2/plugins/coding/runners/claude-cli/inspections",
+      search: "",
+      body: { workspaceId: "w-1", binaryPath: "/opt/homebrew/bin/claude" },
+      idempotencyKey: "runner-key-1",
+    },
+    {
+      method: "POST",
+      path: "/v2/plugins/coding/runners/claude-cli/confirmations",
+      search: "",
+      body: {
+        workspaceId: "w-1",
+        expectedStreamVersion: 2,
+        binaryPath: "/opt/homebrew/bin/claude",
+        version: "2.1.0",
+        sha256: "a".repeat(64),
+      },
+      idempotencyKey: "runner-key-2",
+    },
+  ]);
+  assert.deepEqual(output.out, [
+    "已列出 Coding Runner",
+    "已检查 claude-cli；确认版本和 SHA-256 后才能启用",
+    "已确认 claude-cli；二进制变化后需要重新确认",
+  ]);
+});
+
+test("code runner 在本地拒绝相对路径和未知 Runner", async () => {
+  const output = io();
+  let called = false;
+  const fetch: typeof globalThis.fetch = async () => { called = true; return ok({}); };
+
+  assert.equal(await runCli([
+    "code", "runner", "inspect", "claude-cli", "--workspace", "w-1", "--path", "claude",
+  ], { io: output, fetch }), 2);
+  assert.equal(await runCli([
+    "code", "runner", "confirm", "builtin", "--workspace", "w-1", "--path", "/usr/bin/true",
+    "--binary-version", "1", "--sha256", "a".repeat(64),
+  ], { io: output, fetch }), 2);
+  assert.equal(called, false);
+  assert.match(output.err[0] ?? "", /绝对路径/);
+  assert.match(output.err[1] ?? "", /claude-cli 或 codex-cli/);
+});
+
 test("doctor --fix 明确报告无需修复且不发起写请求", async () => {
   const output = io();
   const requests: CapturedRequest[] = [];

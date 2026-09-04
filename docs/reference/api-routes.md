@@ -78,6 +78,9 @@ Agent OS 0.2 默认监听 `http://127.0.0.1:7318`。成功的 JSON 响应使用 
 | `POST` | `/v2/plugins/opc/opportunities/{opportunityId}/commands` | `commandOpcOpportunity` | 必需 | 必需 |
 | `GET` | `/v2/plugins/opc/opportunities/{opportunityId}/deliverables` | `previewOpcDeliverables` | — | — |
 | `POST` | `/v2/plugins/opc/opportunities/{opportunityId}/exports` | `exportOpcDeliverables` | 必需 | 必需 |
+| `GET` | `/v2/plugins/coding/runners` | `listCodingRunners` | — | — |
+| `POST` | `/v2/plugins/coding/runners/{runnerId}/inspections` | `inspectCodingRunner` | 必需 | — |
+| `POST` | `/v2/plugins/coding/runners/{runnerId}/confirmations` | `confirmCodingRunner` | 必需 | 必需 |
 | `GET` | `/v2/plugins/{pluginId}/{path}` | `getPluginResource` | — | — |
 | `POST` | `/v2/plugins/{pluginId}/{path}` | `mutatePluginResource` | 必需 | 必需 |
 
@@ -92,6 +95,20 @@ OPC 的 `record_signal` 在 `sourceKind=file` 时必须提交 `sourceAssetId`。
 机会详情、成果预览和导出会在工作区授权通过后读取受保护 Asset，并只在当前响应中解密访谈原文。OPC 事件、机会投影、幂等记录和持久化成果只保存 Asset ID。Asset 被删除、数据密钥被销毁或调用方失去工作区权限后，读取与导出失败关闭，不使用缓存原文继续响应。访谈原文不能覆盖；后续解释只能通过 `annotate_interview` 追加。
 
 工作区与会话路由负责创建 Thread 和 turn。创建 turn 会先持久化模型可见输入，再返回 queued Execution；客户端从 SSE 或活动页跟踪后续状态。
+
+Coding turn 的 `runnerId` 可选值为 `builtin`、`claude-cli` 或 `codex-cli`。省略该字段时固定选择 `builtin`；非 Coding 会话拒绝 `runnerId`。外部 Runner 必须已在同一工作区确认，Host 才会把 Runner ID 和对应工具权限原子写入 Execution 与 authority commitment。
+
+## Coding Runner 身份
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| `GET` | `/v2/plugins/coding/runners?workspaceId=...` | 查询内置 Runner 与外部 Runner 确认状态 |
+| `POST` | `/v2/plugins/coding/runners/{runnerId}/inspections` | 检查外部 Runner 的绝对路径、版本、SHA-256 和文件身份 |
+| `POST` | `/v2/plugins/coding/runners/{runnerId}/confirmations` | 重新检查并原子保存人工确认结果 |
+
+`runnerId` 路径参数只接受 `claude-cli` 或 `codex-cli`。检查请求包含 `workspaceId` 与 `binaryPath`。确认请求还包含 Runner 的 `version`、`sha256` 和当前配置的 `expectedStreamVersion`。这些 mutation 都需要 `Idempotency-Key`。
+
+确认接口不会信任客户端转述的身份：Host 会重新检查同一绝对路径，并要求版本和 SHA-256 与请求完全一致。Worker 在副作用承诺前再次检查持久化身份；任何差异都会 fail closed。外部 CLI 已启动但无法获得确定终态时，Execution 进入 `needs_reconciliation`，同一 Job 不会自动重放。
 
 执行命令包括 `follow_up`、`steer`、`cancel` 和 `resume`。审批决定只接受 `approve_once` 或 `deny`。调用参数、资源、工具版本、generation 或 authority commitment 变化后，原批准失效。
 

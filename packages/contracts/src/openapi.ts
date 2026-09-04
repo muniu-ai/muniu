@@ -61,6 +61,9 @@ export const API_OPERATIONS_V2: readonly ApiOperationV2[] = [
   { method: "post", path: "/v2/plugins/opc/opportunities/{opportunityId}/commands", operationId: "commandOpcOpportunity", mutation: true, versioned: true },
   { method: "get", path: "/v2/plugins/opc/opportunities/{opportunityId}/deliverables", operationId: "previewOpcDeliverables", mutation: false, versioned: false },
   { method: "post", path: "/v2/plugins/opc/opportunities/{opportunityId}/exports", operationId: "exportOpcDeliverables", mutation: true, versioned: true },
+  { method: "get", path: "/v2/plugins/coding/runners", operationId: "listCodingRunners", mutation: false, versioned: false },
+  { method: "post", path: "/v2/plugins/coding/runners/{runnerId}/inspections", operationId: "inspectCodingRunner", mutation: true, versioned: false },
+  { method: "post", path: "/v2/plugins/coding/runners/{runnerId}/confirmations", operationId: "confirmCodingRunner", mutation: true, versioned: true },
   { method: "get", path: "/v2/plugins/{pluginId}/{path}", operationId: "getPluginResource", mutation: false, versioned: false },
   { method: "post", path: "/v2/plugins/{pluginId}/{path}", operationId: "mutatePluginResource", mutation: true, versioned: true },
 ] as const;
@@ -82,9 +85,27 @@ function successStatus(operationId: string): "200" | "201" | "202" {
 export function createOpenApiDocument(): JsonObject {
   const paths: Record<string, Record<string, JsonObject>> = {};
   for (const operation of API_OPERATIONS_V2) {
-    const parameters = operation.mutation
+    const parameters: JsonObject[] = operation.mutation
       ? [{ in: "header", name: "Idempotency-Key", required: true, schema: { type: "string" } }]
       : [];
+    for (const match of operation.path.matchAll(/\{([^}]+)\}/gu)) {
+      parameters.push({
+        in: "path",
+        name: match[1]!,
+        required: true,
+        schema: match[1] === "runnerId"
+          ? { type: "string", enum: ["claude-cli", "codex-cli"] }
+          : { type: "string" },
+      });
+    }
+    if (operation.operationId === "listCodingRunners") {
+      parameters.push({
+        in: "query",
+        name: "workspaceId",
+        required: true,
+        schema: { type: "string" },
+      });
+    }
     paths[operation.path] ??= {};
     paths[operation.path]![operation.method] = {
       operationId: operation.operationId,
@@ -94,15 +115,7 @@ export function createOpenApiDocument(): JsonObject {
           required: true,
           content: {
             "application/json": {
-              schema: operation.operationId === "createAssets"
-                ? { $ref: "#/components/schemas/CreateAssetsMutation" }
-                : operation.operationId === "deleteAsset"
-                  ? { $ref: "#/components/schemas/DeleteAssetMutation" }
-                : operation.operationId === "commandOpcOpportunity"
-                  ? { $ref: "#/components/schemas/OpcOpportunityCommandMutation" }
-                : operation.versioned
-                ? { $ref: "#/components/schemas/VersionedMutation" }
-                : { type: "object", additionalProperties: true },
+              schema: mutationSchema(operation.operationId, operation.versioned),
             },
           },
         },
@@ -244,6 +257,39 @@ export function createOpenApiDocument(): JsonObject {
             },
           ],
         },
+        CreateTurnMutation: {
+          type: "object",
+          additionalProperties: false,
+          required: ["expectedStreamVersion", "message"],
+          properties: {
+            expectedStreamVersion: { type: "integer", minimum: 0 },
+            message: { type: "string", minLength: 1 },
+            agentDefinitionId: { type: "string", minLength: 1 },
+            modelBindingId: { type: "string", minLength: 1 },
+            runnerId: { type: "string", enum: ["builtin", "claude-cli", "codex-cli"] },
+          },
+        },
+        InspectCodingRunnerMutation: {
+          type: "object",
+          additionalProperties: false,
+          required: ["workspaceId", "binaryPath"],
+          properties: {
+            workspaceId: { type: "string", minLength: 1 },
+            binaryPath: { type: "string", minLength: 1, pattern: "^/" },
+          },
+        },
+        ConfirmCodingRunnerMutation: {
+          type: "object",
+          additionalProperties: false,
+          required: ["workspaceId", "expectedStreamVersion", "binaryPath", "version", "sha256"],
+          properties: {
+            workspaceId: { type: "string", minLength: 1 },
+            expectedStreamVersion: { type: "integer", minimum: 0 },
+            binaryPath: { type: "string", minLength: 1, pattern: "^/" },
+            version: { type: "string", minLength: 1, maxLength: 256 },
+            sha256: { type: "string", pattern: "^[0-9a-f]{64}$" },
+          },
+        },
       },
       responses: {
         BadRequest: errorResponse("请求无效"),
@@ -254,6 +300,22 @@ export function createOpenApiDocument(): JsonObject {
       },
     },
   };
+}
+
+function mutationSchema(operationId: string, versioned: boolean): JsonObject {
+  const schemas: Readonly<Record<string, string>> = {
+    createAssets: "CreateAssetsMutation",
+    deleteAsset: "DeleteAssetMutation",
+    createTurn: "CreateTurnMutation",
+    commandOpcOpportunity: "OpcOpportunityCommandMutation",
+    inspectCodingRunner: "InspectCodingRunnerMutation",
+    confirmCodingRunner: "ConfirmCodingRunnerMutation",
+  };
+  const schema = schemas[operationId];
+  if (schema) return { $ref: `#/components/schemas/${schema}` };
+  return versioned
+    ? { $ref: "#/components/schemas/VersionedMutation" }
+    : { type: "object", additionalProperties: true };
 }
 
 function errorResponse(description: string): JsonObject {

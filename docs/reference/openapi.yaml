@@ -296,7 +296,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/VersionedMutation"
+              $ref: "#/components/schemas/CreateTurnMutation"
       responses:
         "202":
           $ref: "#/components/responses/Success"
@@ -922,6 +922,75 @@ paths:
         default:
           $ref: "#/components/responses/Error"
       x-muniu-versioned: true
+  /v2/plugins/coding/runners:
+    get:
+      operationId: listCodingRunners
+      parameters:
+        - name: workspaceId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+      x-muniu-versioned: false
+  /v2/plugins/coding/runners/{runnerId}/inspections:
+    post:
+      operationId: inspectCodingRunner
+      parameters:
+        - in: path
+          name: runnerId
+          required: true
+          schema:
+            type: string
+            enum:
+              - claude-cli
+              - codex-cli
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InspectCodingRunnerMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        default:
+          $ref: "#/components/responses/Error"
+      x-muniu-versioned: false
+  /v2/plugins/coding/runners/{runnerId}/confirmations:
+    post:
+      operationId: confirmCodingRunner
+      parameters:
+        - in: path
+          name: runnerId
+          required: true
+          schema:
+            type: string
+            enum:
+              - claude-cli
+              - codex-cli
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfirmCodingRunnerMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        default:
+          $ref: "#/components/responses/Error"
+      x-muniu-versioned: true
   /v2/plugins/{pluginId}/{path}:
     get:
       operationId: getPluginResource
@@ -1147,6 +1216,72 @@ components:
                 type: object
                 required:
                   - sourceAssetId
+    CreateTurnMutation:
+      type: object
+      additionalProperties: false
+      required:
+        - expectedStreamVersion
+        - message
+      properties:
+        expectedStreamVersion:
+          type: integer
+          minimum: 0
+        message:
+          type: string
+          minLength: 1
+        agentDefinitionId:
+          type: string
+          minLength: 1
+        modelBindingId:
+          type: string
+          minLength: 1
+        runnerId:
+          type: string
+          enum:
+            - builtin
+            - claude-cli
+            - codex-cli
+    InspectCodingRunnerMutation:
+      type: object
+      additionalProperties: false
+      required:
+        - workspaceId
+        - binaryPath
+      properties:
+        workspaceId:
+          type: string
+          minLength: 1
+        binaryPath:
+          type: string
+          minLength: 1
+          pattern: ^/
+    ConfirmCodingRunnerMutation:
+      type: object
+      additionalProperties: false
+      required:
+        - workspaceId
+        - expectedStreamVersion
+        - binaryPath
+        - version
+        - sha256
+      properties:
+        workspaceId:
+          type: string
+          minLength: 1
+        expectedStreamVersion:
+          type: integer
+          minimum: 0
+        binaryPath:
+          type: string
+          minLength: 1
+          pattern: ^/
+        version:
+          type: string
+          minLength: 1
+          maxLength: 256
+        sha256:
+          type: string
+          pattern: ^[0-9a-f]{64}$
     Envelope:
       type: object
       required:
