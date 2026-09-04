@@ -76,6 +76,132 @@ export interface OpportunitySummary {
   readonly streamVersion: number;
 }
 
+export type OpportunityState =
+  | "captured"
+  | "framed"
+  | "researching"
+  | "interviewing"
+  | "evaluating"
+  | "offer_ready"
+  | "decided"
+  | "paused"
+  | "abandoned";
+
+export type OpcOpportunityCommand =
+  | "frame"
+  | "start_research"
+  | "record_signal"
+  | "start_interviewing"
+  | "record_interview"
+  | "annotate_interview"
+  | "start_evaluation"
+  | "record_experiment"
+  | "propose_commitment"
+  | "confirm_commitment"
+  | "prepare_offer"
+  | "decide"
+  | "pause"
+  | "resume"
+  | "abandon";
+
+export interface OpportunityDetail {
+  readonly id: string;
+  readonly workspaceId: string;
+  readonly title: string;
+  readonly rawCapture: string;
+  readonly state: OpportunityState;
+  readonly evidenceLevel: OpportunitySummary["evidenceLevel"];
+  readonly streamVersion: number;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly hypotheses: readonly OpportunityHypothesis[];
+  readonly signals: readonly OpportunitySignal[];
+  readonly interviews: readonly OpportunityInterview[];
+  readonly experiments: readonly OpportunityExperiment[];
+  readonly commitmentEvidence: readonly OpportunityCommitmentEvidence[];
+  readonly minimumPaidOffer?: OpportunityOffer;
+  readonly decision?: OpportunityDecision;
+}
+
+export interface OpportunityHypothesis {
+  readonly id: string;
+  readonly targetCustomer: string;
+  readonly problem: string;
+  readonly statement: string;
+  readonly createdAt: string;
+}
+
+export interface OpportunitySignal {
+  readonly id: string;
+  readonly sourceKind: "public_web" | "pasted" | "file" | "manual";
+  readonly sourceUrl?: string;
+  readonly observedAt: string;
+  readonly excerpt?: string;
+  readonly summary: string;
+  readonly relationship: "support" | "oppose" | "neutral";
+  readonly evidenceKind: "context" | "interest";
+}
+
+export interface OpportunityInterview {
+  readonly id: string;
+  readonly participantRef: string;
+  readonly occurredAt: string;
+  readonly rawRecord: string;
+  readonly annotations: readonly { readonly id: string; readonly text: string }[];
+}
+
+export interface OpportunityExperiment {
+  readonly id: string;
+  readonly question: string;
+  readonly method: string;
+  readonly successCriterion: string;
+  readonly outcome?: string;
+  readonly status: "planned" | "completed";
+}
+
+export interface OpportunityCommitmentEvidence {
+  readonly id: string;
+  readonly level: "commitment" | "paid";
+  readonly description: string;
+  readonly sourceRef: string;
+  readonly status: "proposed" | "confirmed";
+  readonly confirmedAt?: string;
+}
+
+export interface OpportunityOffer {
+  readonly id: string;
+  readonly targetCustomer: string;
+  readonly promisedOutcome: string;
+  readonly inScope: readonly string[];
+  readonly outOfScope: readonly string[];
+  readonly price: {
+    readonly amountMinor: string;
+    readonly currency: string;
+    readonly assumption: string;
+  };
+  readonly deliveryFormat: string;
+  readonly duration: string;
+  readonly acceptanceMethod: string;
+  readonly nextCustomerAction: string;
+  readonly risks: readonly string[];
+}
+
+export interface OpportunityDecision {
+  readonly id: string;
+  readonly choice: "pursue" | "revise" | "stop";
+  readonly rationale: string;
+  readonly decidedAt: string;
+}
+
+export interface OpcDeliverablePreview {
+  readonly kind: string;
+  readonly title: string;
+  readonly summary: string;
+  readonly validationStatus: string;
+  readonly nextAction: string;
+  readonly content: Readonly<Record<string, unknown>>;
+}
+
 export interface EvidenceSummary {
   readonly id: string;
   readonly stance: "supporting" | "opposing" | "neutral";

@@ -52,7 +52,7 @@ try {
   const page = await context.newPage();
   page.on("request", (request) => {
     const url = new URL(request.url());
-    if (url.origin !== apiUrl || ["GET", "HEAD", "OPTIONS"].includes(request.method())) return;
+    if (url.origin !== apiUrl || ["HEAD", "OPTIONS"].includes(request.method())) return;
     let body = {};
     try { body = request.postDataJSON(); } catch { /* 请求体不是 JSON */ }
     requests.push({ method: request.method(), path: url.pathname, body });
@@ -61,7 +61,7 @@ try {
   await page.goto(appUrl, { waitUntil: "domcontentloaded" });
 
   if (mode === "onboarding") await verifyOnboarding(page, requests);
-  if (mode === "opc") await verifyOpc(page);
+  if (mode === "opc") await verifyOpc(page, requests, apiUrl);
   if (mode === "coding") await verifyCoding(page, requests);
 
   await assertViewportFit(page);
@@ -116,22 +116,156 @@ async function verifyOnboarding(page, requestLog) {
   }
 }
 
-async function verifyOpc(page) {
+async function verifyOpc(page, requestLog, hostUrl) {
   await expectText(page, "首页");
   await page.getByRole("button", { name: "OPC" }).click();
-  await expectText(page, "已有兴趣信号");
+  await expectText(page, "方案待验证");
   await expectText(page, "支持证据");
   await expectText(page, "反证");
   await expectText(page, "证据缺口");
   await expectText(page, "下一步");
-  await page.getByRole("button", { name: "收件箱" }).click();
-  await expectText(page, "读取客户公开案例并保存摘要");
-  await expectText(page, "https://example.com/case");
-  await expectText(page, "external_read");
-  await page.getByRole("button", { name: "仅批准这一次" }).click();
-  await expectText(page, "收件箱已清空");
+  const businessText = await page.locator("body").innerText();
+  for (const hiddenDetail of ["机会 ID", "事件版本", "内部状态"]) {
+    if (businessText.includes(hiddenDetail)) throw new Error(`经营视图不应显示${hiddenDetail}`);
+  }
+
+  const workspace = (await hostData(hostUrl, "/v2/workspaces"))[0];
+  const summary = (await hostData(hostUrl, `/v2/plugins/opc/opportunities?workspaceId=${encodeURIComponent(workspace.id)}`))[0];
+  await page.getByRole("button", { name: "查看档案" }).click();
+  await expectText(page, "界定这项机会");
+  await page.getByLabel("目标客户").fill("有 2–5 年经验的独立设计师");
+  await page.getByLabel("客户问题").fill("收入依赖不稳定的转介绍");
+  await page.getByLabel("可证伪假设").fill("3 位目标客户中至少 1 位愿意承诺付费试用");
+  await page.getByRole("button", { name: "保存机会界定" }).click();
+  await expectText(page, "开始资料研究");
+  let opportunity = await hostData(hostUrl, `/v2/plugins/opc/opportunities/${summary.id}?workspaceId=${encodeURIComponent(workspace.id)}`);
+  if (opportunity.state !== "framed" || opportunity.hypotheses.at(-1)?.problem !== "收入依赖不稳定的转介绍") {
+    throw new Error(`机会界定没有写入真实 Host：${JSON.stringify(opportunity)}`);
+  }
+
+  await page.getByRole("button", { name: "开始研究" }).click();
+  await expectText(page, "记录一条市场信号");
+  await page.getByLabel("来源类型").selectOption("public_web");
+  await page.getByLabel("来源网址").fill("ftp://example.com/research");
+  await page.getByLabel("观察时间").fill("2026-09-04T08:30");
+  await page.getByLabel("原始摘录").fill("访谈准备耗时");
+  await page.getByLabel("信号摘要").fill("目标客户正在寻找可复用的获客方法");
+  await page.getByLabel("证据关系").selectOption("support");
+  await page.getByLabel("信号强度").selectOption("interest");
+  await page.getByRole("button", { name: "保存信号" }).click();
+  const pluginError = page.getByRole("alert").filter({ hasText: "公开网页来源必须使用 HTTP 或 HTTPS" });
+  await pluginError.waitFor();
+  if ((await pluginError.locator("xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' opc-detail ')]").count()) !== 1) {
+    throw new Error("OPC 命令错误没有留在插件详情边界内");
+  }
+  await page.getByRole("button", { name: "首页" }).waitFor({ state: "visible" });
+  await expectText(page, "记录一条市场信号");
+  await page.getByLabel("来源网址").fill("https://example.com/research");
+  await page.getByRole("button", { name: "保存信号" }).click();
+  await expectText(page, "信号已保存");
+
+  await page.getByLabel("来源类型").selectOption("pasted");
+  await page.getByLabel("观察时间").fill("2026-09-04T08:40");
+  await page.getByLabel("原始摘录").fill("熟人推荐已经够用");
+  await page.getByLabel("信号摘要").fill("现有转介绍可能削弱付费意愿");
+  await page.getByLabel("证据关系").selectOption("oppose");
+  await page.getByLabel("信号强度").selectOption("context");
+  await page.getByRole("button", { name: "保存信号" }).click();
+  await expectText(page, "信号已保存");
+  opportunity = await hostData(hostUrl, `/v2/plugins/opc/opportunities/${summary.id}?workspaceId=${encodeURIComponent(workspace.id)}`);
+  if (opportunity.signals.length !== 2 || !opportunity.signals.some((item) => item.relationship === "oppose")) {
+    throw new Error(`支持与反证没有写入真实 Host：${JSON.stringify(opportunity.signals)}`);
+  }
+
+  await page.getByRole("button", { name: "信号已够，开始访谈" }).click();
+  await expectText(page, "保存访谈原文");
+  await page.getByLabel("受访者代号").fill("受访者 A");
+  await page.getByLabel("访谈时间").fill("2026-09-03T10:00");
+  const rawInterview = "我依赖熟人推荐，但淡季时没有稳定的新客户。";
+  await page.getByLabel("访谈原文").fill(rawInterview);
+  await page.getByRole("button", { name: "保存访谈原文" }).click();
+  await expectText(page, "访谈原文已保存");
+  opportunity = await hostData(hostUrl, `/v2/plugins/opc/opportunities/${summary.id}?workspaceId=${encodeURIComponent(workspace.id)}`);
+  if (opportunity.interviews[0]?.rawRecord !== rawInterview) throw new Error("访谈原文未按输入保存");
+
+  await page.getByRole("button", { name: "访谈已够，开始评估" }).click();
+  await expectText(page, "形成最小收费方案");
+  await page.getByLabel("承诺结果").fill("七天内形成可执行的获客节奏");
+  await page.getByLabel("服务范围").fill("访谈提纲\n证据账本");
+  await page.getByLabel("不包含").fill("自动外联\n代替客户访谈");
+  await page.getByLabel("价格", { exact: true }).fill("99");
+  await page.getByLabel("价格假设").fill("首批客户测试价");
+  await page.getByLabel("交付形式").fill("在线文档与复盘会");
+  await page.getByLabel("交付周期").fill("7 天");
+  await page.getByLabel("验收方式").fill("完成三次访谈并形成结论");
+  await page.getByLabel("客户下一步").fill("确认参与付费试用");
+  await page.getByLabel("主要风险").fill("样本招募不足");
+  await page.getByRole("button", { name: "保存最小收费方案" }).click();
+  await expectText(page, "记录客户承诺");
+
+  await page.getByLabel("证据说明").fill("客户确认愿意按测试价试用");
+  await page.getByLabel("证据来源").fill("受访者 A 的访谈原文");
+  await page.getByRole("button", { name: "提交待确认承诺" }).click();
+  await expectText(page, "核对客户承诺");
+  const confirmEvidence = page.getByRole("button", { name: "确认承诺证据" });
+  if (!(await confirmEvidence.isDisabled())) throw new Error("未人工核对前不应允许确认承诺");
+  await page.getByLabel("我已核对原始记录，确认这项承诺真实有效").check();
+  await confirmEvidence.click();
+  await expectText(page, "作出最终决策");
+  opportunity = await hostData(hostUrl, `/v2/plugins/opc/opportunities/${summary.id}?workspaceId=${encodeURIComponent(workspace.id)}`);
+  if (opportunity.evidenceLevel !== "commitment" || opportunity.commitmentEvidence[0]?.status !== "confirmed") {
+    throw new Error("人工确认没有提升承诺证据等级");
+  }
+
+  await page.getByLabel("决策", { exact: true }).selectOption("pursue");
+  await page.getByLabel("决策理由").fill("已有明确承诺，同时保留转介绍替代方案风险");
+  const decide = page.getByRole("button", { name: "保存人工决策" });
+  if (!(await decide.isDisabled())) throw new Error("未人工确认前不应允许保存最终决策");
+  await page.getByLabel("我确认这是负责人作出的最终决策").check();
+  await decide.click();
+  await expectText(page, "导出机会成果");
+  await expectText(page, "机会验证档案");
+  await expectText(page, "决策记录");
+  opportunity = await hostData(hostUrl, `/v2/plugins/opc/opportunities/${summary.id}?workspaceId=${encodeURIComponent(workspace.id)}`);
+  if (opportunity.state !== "decided" || opportunity.decision?.choice !== "pursue") throw new Error("人工决策未写入真实 Host");
+
+  await page.getByRole("button", { name: "导出 6 项成果" }).click();
+  await expectText(page, "6 项成果已导出");
+  const exported = await hostData(hostUrl, `/v2/deliverables?workspaceId=${encodeURIComponent(workspace.id)}`);
+  if (exported.length !== 6) throw new Error(`实际导出成果数不是 6：${exported.length}`);
+
+  const commandRequests = requestLog.filter((entry) => entry.method === "POST" && entry.path.endsWith("/commands"));
+  const successfulSequence = ["frame", "start_research", "record_signal", "record_signal", "start_interviewing", "record_interview", "start_evaluation", "prepare_offer", "propose_commitment", "confirm_commitment", "decide"];
+  let cursor = 0;
+  for (const request of commandRequests) {
+    if (request.body.command === successfulSequence[cursor]) cursor += 1;
+  }
+  if (cursor !== successfulSequence.length) throw new Error(`OPC 命令序列不完整：${JSON.stringify(commandRequests.map((entry) => entry.body.command))}`);
+  if (!requestLog.some((entry) => entry.method === "GET" && entry.path.endsWith(`/opportunities/${summary.id}`))) throw new Error("档案没有调用真实 GET opportunity");
+  if (!requestLog.some((entry) => entry.method === "GET" && entry.path.endsWith(`/opportunities/${summary.id}/deliverables`))) throw new Error("档案没有调用真实 GET deliverables");
+  if (!requestLog.some((entry) => entry.method === "POST" && entry.path.endsWith(`/opportunities/${summary.id}/exports`))) throw new Error("档案没有调用真实 POST exports");
+  if (commandRequests.some((entry) => !Number.isInteger(entry.body.expectedStreamVersion))) throw new Error("OPC 命令缺少 expectedStreamVersion");
+  const commandCountBeforeModeSwitch = commandRequests.length;
+
+  await page.getByRole("button", { name: "返回机会列表" }).click();
+  await expectText(page, "已有承诺证据");
+  await page.getByTitle("技术配置").click();
+  await page.getByRole("button", { name: "设置" }).click();
+  await page.getByRole("button", { name: "专业视图" }).click();
   await page.getByRole("button", { name: "OPC" }).click();
-  await expectText(page, "已有兴趣信号");
+  await page.getByRole("button", { name: "查看档案" }).click();
+  await expectText(page, "机会 ID");
+  await expectText(page, "事件版本");
+  await expectText(page, "继续推进");
+  const commandCountAfterModeSwitch = requestLog.filter((entry) => entry.method === "POST" && entry.path.endsWith("/commands")).length;
+  if (commandCountAfterModeSwitch !== commandCountBeforeModeSwitch) throw new Error("切换视图不应产生新的 OPC 领域命令");
+}
+
+async function hostData(hostUrl, path) {
+  const response = await fetch(`${hostUrl}${path}`, { headers: { accept: "application/json" } });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(`真实 Host 请求失败 ${path}：${JSON.stringify(payload)}`);
+  return payload.data;
 }
 
 async function verifyCoding(page, requestLog) {

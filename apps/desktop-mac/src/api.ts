@@ -5,6 +5,9 @@ import type {
   DeliverableSummary,
   HomeSummary,
   MemorySummary,
+  OpcDeliverablePreview,
+  OpcOpportunityCommand,
+  OpportunityDetail,
   OpportunitySummary,
   PluginHealth,
   ProductPluginId,
@@ -113,6 +116,44 @@ export class AgentOsClient {
   activity(workspaceId: string) { return this.request<readonly ActivitySummary[]>(`/v2/activity?workspaceId=${encodeURIComponent(workspaceId)}`); }
   memories(workspaceId: string) { return this.request<readonly MemorySummary[]>(`/v2/memories?workspaceId=${encodeURIComponent(workspaceId)}`); }
   opportunities(workspaceId: string) { return this.request<readonly OpportunitySummary[]>(`/v2/plugins/opc/opportunities?workspaceId=${encodeURIComponent(workspaceId)}`); }
+  opportunity(workspaceId: string, opportunityId: string) {
+    return this.request<OpportunityDetail>(
+      `/v2/plugins/opc/opportunities/${encodeURIComponent(opportunityId)}?workspaceId=${encodeURIComponent(workspaceId)}`,
+    );
+  }
+  commandOpportunity(
+    workspaceId: string,
+    opportunity: Pick<OpportunityDetail, "id" | "streamVersion">,
+    command: OpcOpportunityCommand,
+    input: Readonly<Record<string, unknown>> = {},
+  ) {
+    return this.request<OpportunityDetail>(
+      `/v2/plugins/opc/opportunities/${encodeURIComponent(opportunity.id)}/commands`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          workspaceId,
+          expectedStreamVersion: opportunity.streamVersion,
+          command,
+          input,
+        }),
+      },
+    );
+  }
+  opportunityDeliverables(workspaceId: string, opportunityId: string) {
+    return this.request<readonly OpcDeliverablePreview[]>(
+      `/v2/plugins/opc/opportunities/${encodeURIComponent(opportunityId)}/deliverables?workspaceId=${encodeURIComponent(workspaceId)}`,
+    );
+  }
+  exportOpportunity(workspaceId: string, opportunity: Pick<OpportunityDetail, "id" | "streamVersion">) {
+    return this.request<readonly DeliverableSummary[]>(
+      `/v2/plugins/opc/opportunities/${encodeURIComponent(opportunity.id)}/exports`,
+      {
+        method: "POST",
+        body: JSON.stringify({ workspaceId, expectedStreamVersion: opportunity.streamVersion }),
+      },
+    );
+  }
   codingTasks(workspaceId: string) { return this.request<readonly CodingTaskSummary[]>(`/v2/plugins/coding/tasks?workspaceId=${encodeURIComponent(workspaceId)}`); }
 
   decideApproval(approvalId: string, streamVersion: number, decision: "approve_once" | "deny") {

@@ -1,13 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createHash, randomUUID } from "node:crypto";
-import {
-  KernelOpcRepository,
-  createAgentOsHost,
-  encodePluginWorkspace,
-} from "../../host/dist/index.js";
+import { createAgentOsHost } from "../../host/dist/index.js";
 import { InMemoryKernelStore } from "../../../packages/kernel/dist/index.js";
-import { OpcService } from "../../../plugins/opc/dist/index.js";
 
 const port = Number(process.env.MN_FIXTURE_API_PORT);
 const appOrigin = process.env.MN_FIXTURE_APP_ORIGIN;
@@ -46,47 +41,11 @@ async function seedWorkspace(seedMode) {
     viewMode: "business",
     pluginIds: ["opc", "coding"],
   }, "seed-workspace");
-  const captured = await mutate("/v2/plugins/opc/opportunities", {
+  const opportunity = await mutate("/v2/plugins/opc/opportunities", {
     workspaceId: workspace.id,
     expectedStreamVersion: 0,
-    input: "面向有 2–5 年经验的独立设计师，解决收入依赖不稳定转介绍的问题",
+    input: "面向有 2–5 年经验的独立设计师，解决获客收入过度依赖转介绍的问题",
   }, "seed-opportunity");
-  const repository = new KernelOpcRepository({ store, now, id });
-  const service = new OpcService({ repository, clock: now, createId: id });
-  const scopedWorkspaceId = encodePluginWorkspace("local", workspace.id);
-  const human = { id: "local-owner", kind: "human" };
-  let opportunity = await service.frame({
-    workspaceId: scopedWorkspaceId,
-    opportunityId: captured.id,
-    expectedStreamVersion: captured.streamVersion,
-    actor: human,
-    targetCustomer: "有 2–5 年经验的独立设计师",
-    problem: "收入依赖不稳定的转介绍",
-    falsifiableHypothesis: "若提供每周可执行的获客系统，3 位目标客户中至少 1 位愿意承诺付费试用",
-  });
-  opportunity = await service.startResearch(command(opportunity));
-  opportunity = await service.recordSignal({
-    ...command(opportunity),
-    signal: {
-      sourceKind: "manual",
-      observedAt: now(),
-      summary: "两位设计师主动询问可复制的获客流程",
-      relationship: "support",
-      evidenceKind: "interest",
-    },
-  });
-  opportunity = await service.recordSignal({
-    ...command(opportunity),
-    signal: {
-      sourceKind: "manual",
-      observedAt: now(),
-      summary: "一位受访者更愿意继续依赖熟人推荐",
-      relationship: "oppose",
-      evidenceKind: "context",
-    },
-  });
-  opportunity = await service.startInterviewing(command(opportunity));
-  opportunity = await service.startEvaluation(command(opportunity));
 
   await mutate("/v2/plugins/coding/repositories", {
     workspaceId: workspace.id,
@@ -116,14 +75,6 @@ async function seedWorkspace(seedMode) {
     }, "seed-view", "PATCH");
   }
 
-  function command(current) {
-    return {
-      workspaceId: scopedWorkspaceId,
-      opportunityId: current.id,
-      expectedStreamVersion: current.streamVersion,
-      actor: human,
-    };
-  }
 }
 
 async function seedApproval(workspaceId) {

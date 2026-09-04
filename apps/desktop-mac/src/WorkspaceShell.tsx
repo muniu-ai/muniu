@@ -170,7 +170,7 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces }: Wor
         {page === "agents" && <AgentsPage />}
         {page === "integrations" && <IntegrationsPage />}
         {page === "settings" && <SettingsPage workspace={workspace} memories={memories} api={api} onModeChanged={updateWorkspace} onMemoriesChanged={() => void refreshCore()} />}
-        {page === "opc" && <PluginBoundary pluginName="OPC"><OpcPage items={opportunities} loading={opcLoading} error={opcError} viewMode={workspace.viewMode} onRetry={() => void refreshOpc()} /></PluginBoundary>}
+        {page === "opc" && <PluginBoundary pluginName="OPC"><OpcPage api={api} workspaceId={workspace.id} items={opportunities} loading={opcLoading} error={opcError} viewMode={workspace.viewMode} onRetry={() => void refreshOpc()} onChanged={async () => { await Promise.all([refreshOpc(), refreshCore()]); }} /></PluginBoundary>}
         {page === "coding" && <PluginBoundary pluginName="Coding"><CodingPage items={codingTasks} loading={codingLoading} error={codingError} viewMode={workspace.viewMode} onRetry={() => void refreshCoding()} /></PluginBoundary>}
       </div>
     </main>
