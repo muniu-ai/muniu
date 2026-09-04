@@ -122,6 +122,11 @@ test("OpenAPI 目录只有 v2，所有写操作要求幂等键", () => {
   );
   assert.match(serialized, /\/v2\/memories\/\{memoryId\}\/decisions/);
   assert.match(serialized, /\/v2\/plugins\/opc\/opportunities\/\{opportunityId\}\/commands/);
+  assert.match(serialized, /\/v2\/plugins\/opc\/opportunities/);
+  assert.match(serialized, /\/v2\/plugins\/opc\/samples\/read-only/);
+  assert.match(serialized, /\/v2\/plugins\/coding\/repositories/);
+  assert.match(serialized, /\/v2\/plugins\/coding\/tasks/);
+  assert.match(serialized, /\/v2\/plugins\/coding\/samples\/read-only/);
   assert.match(serialized, /\/v2\/plugins\/opc\/opportunities\/\{opportunityId\}\/exports/);
   assert.match(serialized, /\/v2\/plugins\/coding\/executions\/\{executionId\}\/reconciliation/);
   assert.match(serialized, /\/v2\/plugins\/coding\/executions\/\{executionId\}\/reconciliation-decisions/);
@@ -200,6 +205,32 @@ test("OpenAPI 目录只有 v2，所有写操作要求幂等键", () => {
   for (const operation of API_OPERATIONS_V2.filter((entry) => entry.mutation)) {
     const paths = document.paths as Record<string, Record<string, { parameters?: Array<{ name: string }> }>>;
     assert.equal(paths[operation.path]?.[operation.method]?.parameters?.[0]?.name, "Idempotency-Key");
+  }
+  assert.equal(
+    API_OPERATIONS_V2.some((operation) => String(operation.path) === "/v2/plugins/{pluginId}/{path}"),
+    false,
+    "OpenAPI path 参数不能伪装成跨斜杠通配符",
+  );
+  const officialProductMutations = {
+    createOpcOpportunity: "CreateProductObjectMutation",
+    createCodingRepository: "CreateProductObjectMutation",
+    createCodingTask: "CreateProductObjectMutation",
+    runOpcReadOnlySample: "RunReadOnlySampleMutation",
+    runCodingReadOnlySample: "RunReadOnlySampleMutation",
+  };
+  for (const [operationId, schemaName] of Object.entries(officialProductMutations)) {
+    const operation = API_OPERATIONS_V2.find((candidate) => candidate.operationId === operationId)!;
+    const operationDocument = (document.paths as Record<string, Record<string, any>>)
+      [operation.path]?.[operation.method];
+    assert.equal(
+      operationDocument.requestBody.content["application/json"].schema.$ref,
+      `#/components/schemas/${schemaName}`,
+    );
+    assert.equal(
+      (document.components as { schemas: Record<string, any> }).schemas[schemaName]
+        .additionalProperties,
+      false,
+    );
   }
 });
 

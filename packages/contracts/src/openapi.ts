@@ -57,17 +57,22 @@ export const API_OPERATIONS_V2: readonly ApiOperationV2[] = [
   { method: "delete", path: "/v2/plugins/installations/{pluginId}", operationId: "purgePlugin", mutation: true, versioned: true },
   { method: "post", path: "/v2/workspaces/{workspaceId}/plugin-activations", operationId: "activatePlugin", mutation: true, versioned: true },
   { method: "delete", path: "/v2/workspaces/{workspaceId}/plugin-activations/{pluginId}", operationId: "deactivatePlugin", mutation: true, versioned: true },
+  { method: "get", path: "/v2/plugins/opc/opportunities", operationId: "listOpcOpportunities", mutation: false, versioned: false },
+  { method: "post", path: "/v2/plugins/opc/opportunities", operationId: "createOpcOpportunity", mutation: true, versioned: true },
   { method: "get", path: "/v2/plugins/opc/opportunities/{opportunityId}", operationId: "getOpcOpportunity", mutation: false, versioned: false },
   { method: "post", path: "/v2/plugins/opc/opportunities/{opportunityId}/commands", operationId: "commandOpcOpportunity", mutation: true, versioned: true },
   { method: "get", path: "/v2/plugins/opc/opportunities/{opportunityId}/deliverables", operationId: "previewOpcDeliverables", mutation: false, versioned: false },
   { method: "post", path: "/v2/plugins/opc/opportunities/{opportunityId}/exports", operationId: "exportOpcDeliverables", mutation: true, versioned: true },
+  { method: "post", path: "/v2/plugins/opc/samples/read-only", operationId: "runOpcReadOnlySample", mutation: true, versioned: true },
+  { method: "post", path: "/v2/plugins/coding/repositories", operationId: "createCodingRepository", mutation: true, versioned: true },
+  { method: "get", path: "/v2/plugins/coding/tasks", operationId: "listCodingTasks", mutation: false, versioned: false },
+  { method: "post", path: "/v2/plugins/coding/tasks", operationId: "createCodingTask", mutation: true, versioned: true },
+  { method: "post", path: "/v2/plugins/coding/samples/read-only", operationId: "runCodingReadOnlySample", mutation: true, versioned: true },
   { method: "get", path: "/v2/plugins/coding/runners", operationId: "listCodingRunners", mutation: false, versioned: false },
   { method: "post", path: "/v2/plugins/coding/runners/{runnerId}/inspections", operationId: "inspectCodingRunner", mutation: true, versioned: false },
   { method: "post", path: "/v2/plugins/coding/runners/{runnerId}/confirmations", operationId: "confirmCodingRunner", mutation: true, versioned: true },
   { method: "get", path: "/v2/plugins/coding/executions/{executionId}/reconciliation", operationId: "getCodingReconciliation", mutation: false, versioned: false },
   { method: "post", path: "/v2/plugins/coding/executions/{executionId}/reconciliation-decisions", operationId: "decideCodingReconciliation", mutation: true, versioned: true },
-  { method: "get", path: "/v2/plugins/{pluginId}/{path}", operationId: "getPluginResource", mutation: false, versioned: false },
-  { method: "post", path: "/v2/plugins/{pluginId}/{path}", operationId: "mutatePluginResource", mutation: true, versioned: true },
 ] as const;
 
 function successStatus(operationId: string): "200" | "201" | "202" {
@@ -80,6 +85,10 @@ function successStatus(operationId: string): "200" | "201" | "202" {
     "createShareGrant",
     "createModelConnection",
     "installPlugin",
+    "createOpcOpportunity",
+    "createCodingRepository",
+    "createCodingTask",
+    "exportOpcDeliverables",
   ].includes(operationId)) return "201";
   return "200";
 }
@@ -108,7 +117,13 @@ export function createOpenApiDocument(): JsonObject {
           : { type: "string" },
       });
     }
-    if (operation.operationId === "listCodingRunners") {
+    if ([
+      "listCodingRunners",
+      "listOpcOpportunities",
+      "getOpcOpportunity",
+      "previewOpcDeliverables",
+      "listCodingTasks",
+    ].includes(operation.operationId)) {
       parameters.push({
         in: "query",
         name: "workspaceId",
@@ -402,6 +417,25 @@ export function createOpenApiDocument(): JsonObject {
             },
           },
         },
+        CreateProductObjectMutation: {
+          type: "object",
+          additionalProperties: false,
+          required: ["workspaceId", "expectedStreamVersion", "input"],
+          properties: {
+            workspaceId: { type: "string", minLength: 1 },
+            expectedStreamVersion: { type: "integer", const: 0 },
+            input: { type: "string", minLength: 1 },
+          },
+        },
+        RunReadOnlySampleMutation: {
+          type: "object",
+          additionalProperties: false,
+          required: ["workspaceId", "expectedStreamVersion"],
+          properties: {
+            workspaceId: { type: "string", minLength: 1 },
+            expectedStreamVersion: { type: "integer", const: 0 },
+          },
+        },
       },
       responses: {
         BadRequest: errorResponse("请求无效"),
@@ -423,6 +457,11 @@ function mutationSchema(operationId: string, versioned: boolean): JsonObject {
     inspectCodingRunner: "InspectCodingRunnerMutation",
     confirmCodingRunner: "ConfirmCodingRunnerMutation",
     decideCodingReconciliation: "DecideCodingReconciliationMutation",
+    createOpcOpportunity: "CreateProductObjectMutation",
+    createCodingRepository: "CreateProductObjectMutation",
+    createCodingTask: "CreateProductObjectMutation",
+    runOpcReadOnlySample: "RunReadOnlySampleMutation",
+    runCodingReadOnlySample: "RunReadOnlySampleMutation",
   };
   const schema = schemas[operationId];
   if (schema) return { $ref: `#/components/schemas/${schema}` };
