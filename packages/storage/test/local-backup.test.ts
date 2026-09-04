@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -17,6 +18,7 @@ import { afterEach, test } from "node:test";
 
 import {
   EnvelopeCipher,
+  FileCas,
   InMemoryKeyProvider,
   LocalBackupError,
   LocalSqliteBackup,
@@ -49,16 +51,20 @@ interface BackupFixture {
   readonly envelope: EncryptedEnvelopeV1;
 }
 
-test("本地备份从活动 WAL 生成加密 SQLite 快照并声明不含 CAS", async () => {
+test("本地备份从活动 WAL 生成包含 CAS 的统一加密快照", async () => {
   const root = temporaryDirectory();
   const databaseFile = join(root, "state.sqlite");
+  const casDirectory = join(root, "cas");
   const backupDirectory = join(root, "backups");
   const restoreDirectory = join(root, "restore");
   const masterKey = Buffer.alloc(32, 0x5a);
   const hmacKey = randomBytes(32);
   const storage = new SqliteStorage({ databaseFile, hmacKey });
+  const cas = new FileCas({ rootDir: casDirectory });
+  const asset = await cas.put(Buffer.from("private-cas-marker"));
   const backup = new LocalSqliteBackup({
     databaseFile,
+    casDirectory,
     backupDirectory,
     restoreDirectory,
     keyProvider: new InMemoryKeyProvider(masterKey),
@@ -83,13 +89,16 @@ test("本地备份从活动 WAL 生成加密 SQLite 快照并声明不含 CAS", 
     const created = await backup.create("state.mnbackup");
     assert.equal(created.manifest.format, "muniu-agent-os-local-backup");
     assert.equal(created.manifest.manifestVersion, 1);
-    assert.deepEqual(created.manifest.capabilities, { sqlite: true, cas: false });
-    assert.equal(created.manifest.payload.mediaType, "application/vnd.sqlite3");
+    assert.deepEqual(created.manifest.capabilities, { sqlite: true, cas: true });
+    assert.equal(created.manifest.payload.mediaType, "application/vnd.muniu.agent-os-local-state+json");
+    assert.equal(created.manifest.payload.casObjects, 1);
+    assert.equal(created.manifest.payload.casBytes, Buffer.byteLength("private-cas-marker"));
     assert.equal(created.manifest.encryption.algorithm, "AES-256-GCM");
     assert.equal(created.manifest.createdAt, "2026-09-04T08:00:00.000Z");
 
     const archiveText = readFileSync(created.file, "utf8");
     assert.doesNotMatch(archiveText, /private-backup-marker/);
+    assert.doesNotMatch(archiveText, /private-cas-marker/);
     assert.equal(archiveText.includes(masterKey.toString("base64")), false);
 
     const checked = await backup.check("state.mnbackup");
@@ -104,6 +113,8 @@ test("本地备份从活动 WAL 生成加密 SQLite 快照并声明不含 CAS", 
     } finally {
       database.close();
     }
+    const restoredCas = new FileCas({ rootDir: restored.casDirectory });
+    assert.equal((await restoredCas.get(asset.digest)).toString(), "private-cas-marker");
   } finally {
     await storage.close();
   }
@@ -167,7 +178,7 @@ test("校验拒绝清单篡改、密文篡改和错误密钥", async () => {
       const manifestSha256 = createHash("sha256").update(canonicalJson(manifest)).digest("hex");
       const envelope = await new EnvelopeCipher(new InMemoryKeyProvider(key)).encrypt(plaintext, {
         tenantId: "local",
-        purpose: "local-sqlite-backup",
+        purpose: "local-state-backup",
         manifestSha256
       });
       writeFileSync(
@@ -215,8 +226,41 @@ test("restore 拒绝覆盖、路径穿越和符号链接", async () => {
     );
     assert.equal(existsSync(join(root, "escaped.sqlite")), false);
 
+    mkdirSync(join(restoreDirectory, "cas-conflict.sqlite.cas"));
+    await assert.rejects(
+      backup.restore("state.mnbackup", "cas-conflict.sqlite"),
+      hasBackupCode("BACKUP_DESTINATION_EXISTS")
+    );
+    assert.equal(existsSync(join(restoreDirectory, "cas-conflict.sqlite")), false);
+
     symlinkSync(created.file, join(backupDirectory, "linked.mnbackup"));
     await assert.rejects(backup.check("linked.mnbackup"), hasBackupCode("BACKUP_INVALID_PATH"));
+  } finally {
+    await storage.close();
+  }
+});
+
+test("create 在 CAS 对象摘要损坏时失败关闭", async () => {
+  const root = temporaryDirectory();
+  const databaseFile = join(root, "state.sqlite");
+  const casDirectory = join(root, "cas");
+  const storage = new SqliteStorage({ databaseFile, hmacKey: randomBytes(32) });
+  const cas = new FileCas({ rootDir: casDirectory });
+  const stored = await cas.put(Buffer.from("original"));
+  writeFileSync(stored.path!, "tampered");
+  const backup = new LocalSqliteBackup({
+    databaseFile,
+    casDirectory,
+    backupDirectory: join(root, "backups"),
+    restoreDirectory: join(root, "restore"),
+    keyProvider: new InMemoryKeyProvider(randomBytes(32)),
+  });
+  try {
+    await assert.rejects(
+      backup.create("corrupt.mnbackup"),
+      hasBackupCode("BACKUP_INTEGRITY_FAILED")
+    );
+    assert.equal(existsSync(join(root, "backups", "corrupt.mnbackup")), false);
   } finally {
     await storage.close();
   }

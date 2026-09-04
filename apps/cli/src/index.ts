@@ -521,6 +521,7 @@ function createDefaultBackup(dependencies: CliDependencies): CliBackup {
   const stateRoot = resolve(dependencies.stateRoot ?? process.env.MN_STATE_ROOT ?? join(homedir(), ".muniu", "v2"));
   return new LocalSqliteBackup({
     databaseFile: join(stateRoot, "state.sqlite3"),
+    casDirectory: join(stateRoot, "cas"),
     backupDirectory: join(stateRoot, "backups"),
     restoreDirectory: join(stateRoot, "restore"),
     keyProvider: new MacOsKeychainKeyProvider({ account: "backup-wrapping-key" }),

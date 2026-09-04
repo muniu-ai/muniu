@@ -300,7 +300,7 @@ test("doctor --fix 不把需人工处理的问题报告为已修复", async () =
   });
 });
 
-test("backup 在本地创建、校验并恢复加密 SQLite 快照", async () => {
+test("backup 在本地创建、校验并恢复 SQLite 与 CAS 加密快照", async () => {
   const output = io();
   let called = false;
   const fetch: typeof globalThis.fetch = async () => { called = true; return ok({}); };
@@ -308,12 +308,16 @@ test("backup 在本地创建、校验并恢复加密 SQLite 快照", async () =>
     format: "muniu-agent-os-local-backup",
     manifestVersion: 1,
     createdAt: "2026-09-04T08:00:00.000Z",
-    capabilities: { sqlite: true, cas: false },
+    capabilities: { sqlite: true, cas: true },
     payload: {
-      mediaType: "application/vnd.sqlite3",
+      mediaType: "application/vnd.muniu.agent-os-local-state+json",
       bytes: 4096,
       sha256: "a".repeat(64),
       sqliteSchemaVersion: "2",
+      sqliteBytes: 2048,
+      sqliteSha256: "b".repeat(64),
+      casObjects: 1,
+      casBytes: 2048,
     },
     encryption: { algorithm: "AES-256-GCM", keyManagement: "external-key-provider" },
   } as const;
@@ -329,7 +333,11 @@ test("backup 在本地创建、校验并恢复加密 SQLite 快照", async () =>
     },
     async restore(fileName: string, destinationName: string): Promise<LocalBackupRestoreResult> {
       calls.push(["restore", fileName, destinationName]);
-      return { file: `/state/restore/${destinationName}`, manifest };
+      return {
+        file: `/state/restore/${destinationName}`,
+        casDirectory: `/state/restore/${destinationName}.cas`,
+        manifest,
+      };
     },
   };
   assert.equal(await runCli([
@@ -350,7 +358,7 @@ test("backup 在本地创建、校验并恢复加密 SQLite 快照", async () =>
   ]);
   assert.deepEqual(JSON.parse(output.out[0] ?? "").data.created.manifest.capabilities, {
     sqlite: true,
-    cas: false,
+    cas: true,
   });
 });
 

@@ -99,7 +99,7 @@ mn code task \
 mn backup --output ./muniu-v2-backup.mnbackup --verify
 ```
 
-备份应加密并在创建后校验。恢复前先在隔离目录验证事件 HMAC、CAS 摘要和 Keychain/KMS 可用性。
+本地备份把一致的 SQLite 快照与 `~/.muniu/v2/cas` 对象封装为同一个 AES-256-GCM 加密包，并记录数据库、每个 CAS 对象和完整负载的摘要。恢复采用 create-only 语义，同时还原数据库与独立 CAS 目录；切换前应在隔离目录复核事件 HMAC、CAS 摘要和 Keychain 可用性。
 
 ## JSON 与退出码
 
