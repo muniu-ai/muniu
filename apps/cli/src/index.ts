@@ -45,7 +45,7 @@ const HELP = `木牛 Agent OS 0.2
   mn code runner inspect claude-cli --workspace <工作区 ID> --path /绝对路径/claude
   mn code runner confirm claude-cli --workspace <工作区 ID> --path /绝对路径/claude --binary-version <人工核实版本> --sha256 <摘要> --version <配置版本>
   mn ask <任务> --workspace <工作区 ID> --thread <会话 ID> --runner claude-cli
-  mn code reconcile <执行 ID> terminate --version <执行版本> --coding-version <Coding 执行版本>
+  mn code reconcile <执行 ID> terminate
 `;
 
 export interface CliIo {
@@ -213,13 +213,25 @@ function integerFlag(parsed: ParsedArguments, name: string, fallback: number): n
   return value;
 }
 
-function requiredIntegerFlag(parsed: ParsedArguments, name: string): number {
-  const raw = flag(parsed, name, true)!;
-  const value = Number(raw);
-  if (!Number.isSafeInteger(value) || value < 0) {
-    throw new CliUsageError(`--${name} 必须是非负整数`);
+function reconciliationVersions(
+  value: unknown,
+  executionId: string,
+): { readonly expectedStreamVersion: number; readonly expectedCodingStreamVersion: number } {
+  const detail = typeof value === "object" && value !== null
+    ? value as Record<string, unknown>
+    : undefined;
+  const coreVersion = detail?.expectedStreamVersion;
+  const codingVersion = detail?.expectedCodingStreamVersion;
+  if (!detail || detail.executionId !== executionId
+    || detail.status !== "needs_reconciliation"
+    || typeof coreVersion !== "number" || !Number.isSafeInteger(coreVersion) || coreVersion < 1
+    || typeof codingVersion !== "number" || !Number.isSafeInteger(codingVersion) || codingVersion < 1) {
+    throw new CliUsageError("Host 未返回有效的人工核对版本，请刷新收件箱");
   }
-  return value;
+  return {
+    expectedStreamVersion: coreVersion,
+    expectedCodingStreamVersion: codingVersion,
+  };
 }
 
 async function setup(parsed: ParsedArguments, api: ApiClient): Promise<CliResult> {
@@ -452,7 +464,7 @@ function absoluteRunnerPath(parsed: ParsedArguments): string {
 async function code(parsed: ParsedArguments, api: ApiClient): Promise<CliResult> {
   const operation = parsed.positional[0] ?? "task";
   if (operation === "reconcile") {
-    assertAllowedFlags(parsed, ["version", "coding-version"]);
+    assertAllowedFlags(parsed, []);
     if (parsed.positional.length !== 3) {
       throw new CliUsageError("code reconcile 需要执行 ID 和决定");
     }
@@ -465,11 +477,13 @@ async function code(parsed: ParsedArguments, api: ApiClient): Promise<CliResult>
         "核对决定只能是 terminate、mark_completed 或 create_new_call",
       );
     }
+    const reconciliationPath =
+      `/v2/plugins/coding/executions/${encodeURIComponent(executionId)}/reconciliation`;
+    const versions = reconciliationVersions(await api.get(reconciliationPath), executionId);
     const data = await api.mutate(
-      `/v2/plugins/coding/executions/${encodeURIComponent(executionId)}/reconciliation-decisions`,
+      `${reconciliationPath}-decisions`,
       {
-        expectedStreamVersion: requiredIntegerFlag(parsed, "version"),
-        expectedCodingStreamVersion: requiredIntegerFlag(parsed, "coding-version"),
+        ...versions,
         decision,
       },
     );

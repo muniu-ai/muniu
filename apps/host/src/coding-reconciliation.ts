@@ -3,6 +3,7 @@
 import { basename, isAbsolute, normalize } from "node:path";
 
 import type {
+  CodingReconciliationViewV2,
   CodingRunnerConfigurationV1,
   Execution,
   ExecutionAuthority,
@@ -65,6 +66,8 @@ export interface CodingReconciliationExecutionView {
   readonly result: CodingExecutionResult;
 }
 
+export type CodingReconciliationView = CodingReconciliationViewV2;
+
 interface ExternalInvocationCheckpoint {
   readonly runnerId: ExternalCodingRunnerId;
   readonly attempt: number;
@@ -122,6 +125,65 @@ interface StoredModelConnection {
 }
 
 const REVIEW_ROLES = new Set(["owner", "operator", "reviewer"]);
+
+export async function getCodingReconciliation(
+  store: KernelStore,
+  tenantId: string,
+  actorId: string,
+  executionId: string,
+): Promise<CodingReconciliationView> {
+  return store.transact(tenantId, (transaction) => {
+    const execution = transaction.getProjection<Execution>("execution", executionId);
+    if (!execution || execution.pluginId !== "coding") {
+      throw new KernelError("EXECUTION_NOT_FOUND", "Coding 执行不存在", "刷新收件箱");
+    }
+    assertReviewer(transaction, execution.workspaceId, actorId);
+    const run = transaction.getProjection<StoredCodingRun>("coding.execution", executionId);
+    const task = run
+      ? transaction.getProjection<CodingTask>("coding.task", run.taskId)
+      : undefined;
+    if (execution.status !== "needs_reconciliation"
+      || (execution.runnerId !== "claude-cli" && execution.runnerId !== "codex-cli")
+      || !run || run.executionId !== execution.id || run.generation !== execution.generation
+      || run.runnerId !== execution.runnerId
+      || run.externalInvocation?.runnerId !== execution.runnerId
+      || run.externalInvocation.status !== "outcome_unknown"
+      || run.status !== "needs_reconciliation"
+      || run.result?.status !== "needs_reconciliation"
+      || !task || task.workspaceId !== execution.workspaceId
+      || task.repositoryId !== run.repositoryId || task.status !== "needs_reconciliation") {
+      throw new KernelError(
+        "CODING_RECONCILIATION_STATE_INVALID",
+        "Coding 执行没有待核对的外部调用",
+        "刷新收件箱",
+      );
+    }
+    assertCleanupPaths(run.externalInvocation);
+    const markCompletedAllowed = hasAuthoritativeEvidence(transaction, execution, run, task);
+    return {
+      executionId,
+      workspaceId: execution.workspaceId,
+      taskTitle: task.title,
+      nextStep: run.result.nextStep,
+      runnerId: execution.runnerId,
+      status: "needs_reconciliation",
+      expectedStreamVersion: execution.streamVersion,
+      expectedCodingStreamVersion: run.streamVersion,
+      evidence: {
+        candidateCount: run.result.candidates.length,
+        gateCount: run.result.gates.length,
+        markCompletedAllowed,
+        ...(run.result.evidence ? { codeEvidenceDigest: run.result.evidence.digest } : {}),
+        summary: markCompletedAllowed
+          ? "已持久化权威通过 Gate 与匹配的 CodeEvidence，可标记完成"
+          : "尚无可用于标记完成的权威 Gate 与 CodeEvidence",
+      },
+      availableDecisions: markCompletedAllowed
+        ? ["terminate", "mark_completed", "create_new_call"]
+        : ["terminate", "create_new_call"],
+    };
+  });
+}
 
 export async function decideCodingReconciliation(
   store: KernelStore,
@@ -351,6 +413,21 @@ function assertAuthoritativeEvidence(
   run: StoredCodingRun,
   task: CodingTask,
 ): void {
+  if (!hasAuthoritativeEvidence(transaction, execution, run, task)) {
+    throw new KernelError(
+      "CODING_RECONCILIATION_EVIDENCE_REQUIRED",
+      "缺少已持久化的权威通过 Gate 或 CodeEvidence",
+      "核对外部结果后选择 terminate 或 create_new_call",
+    );
+  }
+}
+
+function hasAuthoritativeEvidence(
+  transaction: KernelTransaction,
+  execution: Execution,
+  run: StoredCodingRun,
+  task: CodingTask,
+): boolean {
   const evidence = run.result?.evidence;
   const candidate = evidence
     ? transaction.getProjection<StoredCandidate>("coding.candidate", evidence.candidateId)
@@ -370,7 +447,7 @@ function assertAuthoritativeEvidence(
   const computedEvidenceDigest = storedEvidence
     ? recomputeCodeEvidenceDigest(storedEvidence)
     : undefined;
-  const valid = evidence !== undefined
+  return evidence !== undefined
     && candidate?.tenantId === execution.tenantId
     && candidate.workspaceId === execution.workspaceId
     && candidate.executionId === execution.id
@@ -405,13 +482,6 @@ function assertAuthoritativeEvidence(
     && storedEvidence.harnessDigest === run.controlPlane.harnessDigest
     && storedEvidence.sandboxDigest === run.controlPlane.sandboxDigest
     && storedEvidence.repositoryIndexDigest === run.controlPlane.repositoryIndexDigest;
-  if (!valid) {
-    throw new KernelError(
-      "CODING_RECONCILIATION_EVIDENCE_REQUIRED",
-      "缺少已持久化的权威通过 Gate 或 CodeEvidence",
-      "核对外部结果后选择 terminate 或 create_new_call",
-    );
-  }
 }
 
 function recomputeCodeEvidenceDigest(evidence: StoredCodeEvidence): string | undefined {

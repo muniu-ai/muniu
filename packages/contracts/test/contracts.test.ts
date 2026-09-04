@@ -123,6 +123,7 @@ test("OpenAPI 目录只有 v2，所有写操作要求幂等键", () => {
   assert.match(serialized, /\/v2\/memories\/\{memoryId\}\/decisions/);
   assert.match(serialized, /\/v2\/plugins\/opc\/opportunities\/\{opportunityId\}\/commands/);
   assert.match(serialized, /\/v2\/plugins\/opc\/opportunities\/\{opportunityId\}\/exports/);
+  assert.match(serialized, /\/v2\/plugins\/coding\/executions\/\{executionId\}\/reconciliation/);
   assert.match(serialized, /\/v2\/plugins\/coding\/executions\/\{executionId\}\/reconciliation-decisions/);
   const assetUpload = (document.paths as Record<string, Record<string, {
     requestBody?: { content?: Record<string, { schema?: { $ref?: string } }> };
@@ -175,6 +176,22 @@ test("OpenAPI 目录只有 v2，所有写操作要求幂等键", () => {
   assert.deepEqual(reconciliationSchema.properties.decision.enum, [
     "terminate", "mark_completed", "create_new_call",
   ]);
+  const reconciliationView = (document.paths as Record<string, Record<string, {
+    parameters?: Array<{ name: string }>;
+    responses?: Record<string, { content?: Record<string, { schema?: { $ref?: string } }> }>;
+  }>>)["/v2/plugins/coding/executions/{executionId}/reconciliation"]?.get;
+  assert.equal(reconciliationView?.parameters?.some(({ name }) => name === "Idempotency-Key"), false);
+  assert.equal(
+    reconciliationView?.responses?.["200"]?.content?.["application/json"]?.schema?.$ref,
+    "#/components/schemas/CodingReconciliationEnvelope",
+  );
+  const reconciliationViewSchema = (document.components as { schemas: Record<string, any> })
+    .schemas.CodingReconciliation;
+  assert.ok(reconciliationViewSchema.required.includes("taskTitle"));
+  assert.ok(reconciliationViewSchema.required.includes("nextStep"));
+  assert.equal(reconciliationViewSchema.properties.expectedStreamVersion.minimum, 1);
+  assert.equal(reconciliationViewSchema.properties.expectedCodingStreamVersion.minimum, 1);
+  assert.equal(reconciliationViewSchema.properties.evidence.properties.summary.minLength, 1);
   for (const operation of API_OPERATIONS_V2.filter((entry) => entry.mutation)) {
     const paths = document.paths as Record<string, Record<string, { parameters?: Array<{ name: string }> }>>;
     assert.equal(paths[operation.path]?.[operation.method]?.parameters?.[0]?.name, "Idempotency-Key");

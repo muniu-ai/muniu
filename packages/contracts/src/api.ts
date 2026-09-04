@@ -106,6 +106,27 @@ export interface DecideCodingReconciliationMutationBodyV2 extends VersionedMutat
   readonly decision: CodingReconciliationDecisionV2;
 }
 
+export interface CodingReconciliationEvidenceV2 {
+  readonly candidateCount: number;
+  readonly gateCount: number;
+  readonly markCompletedAllowed: boolean;
+  readonly codeEvidenceDigest?: string;
+  readonly summary: string;
+}
+
+export interface CodingReconciliationViewV2 {
+  readonly executionId: string;
+  readonly workspaceId: string;
+  readonly taskTitle: string;
+  readonly nextStep: string;
+  readonly runnerId: "claude-cli" | "codex-cli";
+  readonly status: "needs_reconciliation";
+  readonly expectedStreamVersion: number;
+  readonly expectedCodingStreamVersion: number;
+  readonly evidence: CodingReconciliationEvidenceV2;
+  readonly availableDecisions: readonly CodingReconciliationDecisionV2[];
+}
+
 export const CORE_API_ROUTES = [
   "/v2/openapi.json",
   "/v2/health",
@@ -147,6 +168,7 @@ export const CORE_API_ROUTES = [
   "/v2/plugins/coding/runners",
   "/v2/plugins/coding/runners/{runnerId}/inspections",
   "/v2/plugins/coding/runners/{runnerId}/confirmations",
+  "/v2/plugins/coding/executions/{executionId}/reconciliation",
   "/v2/plugins/coding/executions/{executionId}/reconciliation-decisions",
   "/v2/plugins/{pluginId}/{path}",
 ] as const;

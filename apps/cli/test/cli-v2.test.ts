@@ -415,54 +415,72 @@ test("code runner 在本地拒绝相对路径和未知 Runner", async () => {
   assert.match(output.err[1] ?? "", /claude-cli 或 codex-cli/);
 });
 
-test("code reconcile 提交三种人工核对决定和两个流版本", async () => {
+test("code reconcile 自动读取两个流版本并提交三种人工核对决定", async () => {
   const decisions = ["terminate", "mark_completed", "create_new_call"] as const;
   for (const decision of decisions) {
     const output = io();
-    let request: CapturedRequest | undefined;
+    const requests: CapturedRequest[] = [];
     const fetch: typeof globalThis.fetch = async (input, init) => {
-      request = await captureRequest(input, init);
+      const request = await captureRequest(input, init);
+      requests.push(request);
+      if (request.method === "GET") {
+        return ok({
+          executionId: "execution/a",
+          status: "needs_reconciliation",
+          expectedStreamVersion: 4,
+          expectedCodingStreamVersion: 7,
+          evidence: {
+            markCompletedAllowed: decision === "mark_completed",
+            summary: "核对证据摘要",
+          },
+        });
+      }
       return ok({ decision, cleanupJobId: "cleanup-1" });
     };
     assert.equal(await runCli([
       "code", "reconcile", "execution/a", decision,
-      "--version", "4", "--coding-version", "7",
     ], {
       io: output,
       fetch,
       idempotencyKey: () => `reconcile-${decision}`,
     }), 0);
-    assert.deepEqual(request, {
-      method: "POST",
-      path: "/v2/plugins/coding/executions/execution%2Fa/reconciliation-decisions",
-      body: {
-        expectedStreamVersion: 4,
-        expectedCodingStreamVersion: 7,
-        decision,
+    assert.deepEqual(requests, [
+      {
+        method: "GET",
+        path: "/v2/plugins/coding/executions/execution%2Fa/reconciliation",
       },
-      idempotencyKey: `reconcile-${decision}`,
-    });
+      {
+        method: "POST",
+        path: "/v2/plugins/coding/executions/execution%2Fa/reconciliation-decisions",
+        body: {
+          expectedStreamVersion: 4,
+          expectedCodingStreamVersion: 7,
+          decision,
+        },
+        idempotencyKey: `reconcile-${decision}`,
+      },
+    ]);
     assert.match(output.out[0] ?? "", /清理任务已入队/);
   }
 });
 
-test("code reconcile 未提供版本或提交未知决定时不发请求", async () => {
+test("code reconcile 拒绝未知决定或无效的 Host 版本快照", async () => {
   const output = io();
-  let called = false;
+  let calls = 0;
   const fetch: typeof globalThis.fetch = async () => {
-    called = true;
+    calls += 1;
     return ok({});
   };
   assert.equal(await runCli([
-    "code", "reconcile", "execution-1", "terminate", "--version", "2",
-  ], { io: output, fetch }), 2);
-  assert.equal(await runCli([
     "code", "reconcile", "execution-1", "retry",
-    "--version", "2", "--coding-version", "3",
   ], { io: output, fetch }), 2);
-  assert.equal(called, false);
-  assert.match(output.err[0] ?? "", /--coding-version/);
-  assert.match(output.err[1] ?? "", /核对决定/);
+  assert.equal(calls, 0);
+  assert.equal(await runCli([
+    "code", "reconcile", "execution-1", "terminate",
+  ], { io: output, fetch }), 2);
+  assert.equal(calls, 1);
+  assert.match(output.err[0] ?? "", /核对决定/);
+  assert.match(output.err[1] ?? "", /人工核对版本/);
 });
 
 test("doctor --fix 明确报告无需修复且不发起写请求", async () => {

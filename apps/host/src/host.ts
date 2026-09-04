@@ -89,6 +89,7 @@ import {
 import type { ModelSecretStore } from "./secrets.js";
 import {
   decideCodingReconciliation,
+  getCodingReconciliation,
   type CodingReconciliationDecision,
 } from "./coding-reconciliation.js";
 import {
@@ -2169,6 +2170,18 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           }),
         });
         return json(configuration, 200, traceId);
+      }
+      const codingReconciliationViewMatch = url.pathname.match(
+        /^\/v2\/plugins\/coding\/executions\/([^/]+)\/reconciliation$/u,
+      );
+      if (codingReconciliationViewMatch && request.method === "GET") {
+        const executionId = decodeURIComponent(codingReconciliationViewMatch[1]!);
+        return json(await getCodingReconciliation(
+          options.store,
+          TENANT_ID,
+          ACTOR_ID,
+          executionId,
+        ), 200, traceId);
       }
       const codingReconciliationMatch = url.pathname.match(
         /^\/v2\/plugins\/coding\/executions\/([^/]+)\/reconciliation-decisions$/u,

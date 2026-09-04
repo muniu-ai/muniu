@@ -152,6 +152,15 @@ function openApiDocument(operations) {
                   },
                 },
               }
+            : operation.operationId === "getCodingReconciliation"
+              ? {
+                  description: "返回人工核对所需版本、可用决定和权威证据摘要",
+                  content: {
+                    "application/json": {
+                      schema: { $ref: "#/components/schemas/CodingReconciliationEnvelope" },
+                    },
+                  },
+                }
             : { $ref: "#/components/responses/Success" },
           ...(operation.mutation ? { "409": { $ref: "#/components/responses/Conflict" } } : {}),
           default: { $ref: "#/components/responses/Error" },
@@ -383,6 +392,54 @@ function openApiDocument(operations) {
             inode: { type: "string", minLength: 1 },
             byteLength: { type: "integer", minimum: 1 },
             modifiedAtMs: { type: "number", minimum: 0 },
+          },
+        },
+        CodingReconciliationEnvelope: {
+          type: "object",
+          additionalProperties: false,
+          required: ["data", "traceId"],
+          properties: {
+            data: { $ref: "#/components/schemas/CodingReconciliation" },
+            traceId: { type: "string" },
+          },
+        },
+        CodingReconciliation: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "executionId", "workspaceId", "taskTitle", "nextStep", "runnerId", "status",
+            "expectedStreamVersion", "expectedCodingStreamVersion", "evidence", "availableDecisions",
+          ],
+          properties: {
+            executionId: { type: "string", minLength: 1 },
+            workspaceId: { type: "string", minLength: 1 },
+            taskTitle: { type: "string", minLength: 1 },
+            nextStep: { type: "string", minLength: 1 },
+            runnerId: { type: "string", enum: ["claude-cli", "codex-cli"] },
+            status: { type: "string", const: "needs_reconciliation" },
+            expectedStreamVersion: { type: "integer", minimum: 1 },
+            expectedCodingStreamVersion: { type: "integer", minimum: 1 },
+            evidence: {
+              type: "object",
+              additionalProperties: false,
+              required: ["candidateCount", "gateCount", "markCompletedAllowed", "summary"],
+              properties: {
+                candidateCount: { type: "integer", minimum: 0 },
+                gateCount: { type: "integer", minimum: 0 },
+                markCompletedAllowed: { type: "boolean" },
+                codeEvidenceDigest: { type: "string", pattern: "^[0-9a-f]{64}$" },
+                summary: { type: "string", minLength: 1 },
+              },
+            },
+            availableDecisions: {
+              type: "array",
+              minItems: 2,
+              uniqueItems: true,
+              items: {
+                type: "string",
+                enum: ["terminate", "mark_completed", "create_new_call"],
+              },
+            },
           },
         },
         FieldIssue: {

@@ -383,7 +383,30 @@ async function createFixture<TStore extends KernelStore = InMemoryKernelStore>(
 
 test("terminate 原子终结未知 Coding 执行、关闭收件箱并入队清理 Job", async () => {
   const fixture = await createFixture();
+  const viewPath = `/v2/plugins/coding/executions/${fixture.executionId}/reconciliation`;
   const path = `/v2/plugins/coding/executions/${fixture.executionId}/reconciliation-decisions`;
+
+  const viewResponse = await fixture.host.dispatch(new Request(`http://host.test${viewPath}`));
+  assert.equal(viewResponse.status, 200);
+  const view = (await responseBody(viewResponse)).data;
+  assert.deepEqual(view, {
+    executionId: fixture.executionId,
+    workspaceId: fixture.workspaceId,
+    taskTitle: "核对外部 Runner",
+    nextStep: "人工核对外部执行结果",
+    runnerId: "claude-cli",
+    status: "needs_reconciliation",
+    expectedStreamVersion: 1,
+    expectedCodingStreamVersion: 2,
+    evidence: {
+      candidateCount: 0,
+      gateCount: 0,
+      markCompletedAllowed: false,
+      summary: "尚无可用于标记完成的权威 Gate 与 CodeEvidence",
+    },
+    availableDecisions: ["terminate", "create_new_call"],
+  });
+  assert.doesNotMatch(JSON.stringify(view), /\/private\/var\/tmp/u);
 
   const missingKey = await fixture.host.dispatch(mutation(path, {
     expectedStreamVersion: 1,
@@ -467,6 +490,14 @@ test("mark_completed 没有权威 Gate 与 CodeEvidence 时 fail closed", async 
 
 test("mark_completed 只用已持久化的权威 Gate 与 CodeEvidence 收敛完成态", async () => {
   const fixture = await createFixture(true);
+  const view = (await responseBody(await fixture.host.dispatch(new Request(
+    `http://host.test/v2/plugins/coding/executions/${fixture.executionId}/reconciliation`,
+  )))).data;
+  assert.equal(view.evidence.markCompletedAllowed, true);
+  assert.equal(view.evidence.candidateCount, 1);
+  assert.equal(view.evidence.gateCount, 1);
+  assert.equal(view.evidence.codeEvidenceDigest.length, 64);
+  assert.deepEqual(view.availableDecisions, ["terminate", "mark_completed", "create_new_call"]);
   const response = await fixture.host.dispatch(mutation(
     `/v2/plugins/coding/executions/${fixture.executionId}/reconciliation-decisions`,
     {

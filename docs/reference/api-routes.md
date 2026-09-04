@@ -81,6 +81,7 @@ Agent OS 0.2 默认监听 `http://127.0.0.1:7318`。成功的 JSON 响应使用 
 | `GET` | `/v2/plugins/coding/runners` | `listCodingRunners` | — | — |
 | `POST` | `/v2/plugins/coding/runners/{runnerId}/inspections` | `inspectCodingRunner` | 必需 | — |
 | `POST` | `/v2/plugins/coding/runners/{runnerId}/confirmations` | `confirmCodingRunner` | 必需 | 必需 |
+| `GET` | `/v2/plugins/coding/executions/{executionId}/reconciliation` | `getCodingReconciliation` | — | — |
 | `POST` | `/v2/plugins/coding/executions/{executionId}/reconciliation-decisions` | `decideCodingReconciliation` | 必需 | 必需 |
 | `GET` | `/v2/plugins/{pluginId}/{path}` | `getPluginResource` | — | — |
 | `POST` | `/v2/plugins/{pluginId}/{path}` | `mutatePluginResource` | 必需 | 必需 |
@@ -116,6 +117,8 @@ Coding turn 的 `runnerId` 可选值为 `builtin`、`claude-cli` 或 `codex-cli`
 确认接口不会信任客户端转述的身份：Host 会重新检查同一绝对路径，并要求版本和 SHA-256 与请求完全一致。Worker 在副作用承诺前再次检查持久化身份；任何差异都会 fail closed。外部 CLI 已启动但无法获得确定终态时，Execution 进入 `needs_reconciliation`，同一 Job 不会自动重放。
 
 ## Coding 人工核对
+
+`GET /v2/plugins/coding/executions/{executionId}/reconciliation` 返回任务标题、下一步、可用决定、人可读权威证据摘要，以及 core/Coding 当前 stream version。它不返回沙箱或 Runner 制品路径。CLI 会先调用该接口，再自动把两个版本提交给决定接口。
 
 `POST /v2/plugins/coding/executions/{executionId}/reconciliation-decisions` 同时要求 core `expectedStreamVersion` 和 `expectedCodingStreamVersion`。`decision` 支持：
 
