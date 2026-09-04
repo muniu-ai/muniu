@@ -5,6 +5,7 @@ import { StaleFencingTokenError, type StoredJob } from "@mn/storage";
 import {
   AgentOsWorker,
   AgentExecutionInterruptedError,
+  AgentExecutionCancelledError,
   createByokModelInvoker,
   createAgentTurnHandler,
   createKernelToolApprovalPort,
@@ -284,6 +285,20 @@ test("重领崩溃后的运行中 Agent Job 会转为 interrupted，不标为普
   assert.deepEqual(await worker.pollOnce(), { status: "interrupted", jobId: "job-1" });
   assert.deepEqual(store.interrupted, [["job-1", 7, "Agent turn 已中断，需要显式恢复"]]);
   assert.equal(store.failed.length, 0);
+});
+
+test("用户取消会终结物理 Job，且不会作为可重试失败处理", async () => {
+  const store = new FakeStore();
+  const worker = new AgentOsWorker({
+    id: "worker-1", store,
+    lock: { engineLockDigest: "a", expectedEngineLockDigest: "a", pluginLockDigest: "b", expectedPluginLockDigest: "b" },
+    handlers: { "tool.execute": async () => { throw new AgentExecutionCancelledError("execution-1"); } },
+  });
+  assert.deepEqual(await worker.pollOnce(), { status: "cancelled", jobId: "job-1" });
+  assert.equal(store.failed.length, 1);
+  assert.deepEqual(store.failed[0]?.[2], {
+    code: "EXECUTION_CANCELLED", message: "Agent turn 已由用户取消", retryable: false,
+  });
 });
 
 test("内核审批端口只在同一持久化意图获单次批准后放行", async () => {

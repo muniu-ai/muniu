@@ -425,6 +425,113 @@ test("关闭本地 Host 会中断在途模型后再关闭 SQLite", async () => {
   }
 });
 
+test("取消在途 Execution 会中止模型并终结 Job，重启后不再认领", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "muniu-local-runtime-cancel-"));
+  const secrets = new FixtureSecrets();
+  let modelStarted!: () => void;
+  let modelAborted!: () => void;
+  const started = new Promise<void>((resolve) => { modelStarted = resolve; });
+  const aborted = new Promise<void>((resolve) => { modelAborted = resolve; });
+  let invocations = 0;
+  const invoke: ByokModelInvoker = async ({ signal }) => {
+    invocations += 1;
+    modelStarted();
+    await new Promise<void>((_resolve, reject) => {
+      signal.addEventListener("abort", () => {
+        modelAborted();
+        reject(new Error("aborted"));
+      }, { once: true });
+    });
+    return { text: "不可达", toolCalls: [] };
+  };
+  let first: AgentOsHost | undefined;
+  let second: AgentOsHost | undefined;
+  let executionId = "";
+  try {
+    first = await startLocalAgentOsHost({
+      stateRoot: directory, port: 0, secretStore: secrets, modelInvoker: invoke,
+      workerIdleDelayMs: 1,
+      modelProbe: async ({ preset }) => ({
+        models: preset.suggestedModels, defaultModel: preset.suggestedModels[0]!,
+      }),
+    });
+    const workspace = (await body(await first.dispatch(jsonRequest("/v2/workspaces", {
+      name: "取消执行", viewMode: "business", pluginIds: ["opc"],
+    }, "cancel-workspace")))).data;
+    const pendingModel = (await body(await first.dispatch(jsonRequest("/v2/model-connections", {
+      presetId: "deepseek", apiKey: "fixture-byok-key", displayName: "DeepSeek",
+    }, "cancel-model")))).data;
+    const model = (await body(await first.dispatch(jsonRequest(
+      `/v2/model-connections/${pendingModel.id}/probe`,
+      { expectedStreamVersion: pendingModel.streamVersion },
+      "cancel-model-probe",
+    )))).data;
+    const thread = (await body(await first.dispatch(jsonRequest(
+      `/v2/workspaces/${workspace.id}/threads`,
+      { subject: "取消中的任务", pluginId: "opc" },
+      "cancel-thread",
+    )))).data;
+    const execution = (await body(await first.dispatch(jsonRequest(
+      `/v2/workspaces/${workspace.id}/threads/${thread.id}/turns`,
+      {
+        expectedStreamVersion: thread.streamVersion,
+        message: "开始长任务后取消",
+        agentDefinitionId: "opc.opportunity-validator",
+        modelBindingId: model.id,
+      },
+      "cancel-turn",
+    )))).data;
+    executionId = execution.id;
+    await started;
+
+    const turnsPath = `/v2/workspaces/${workspace.id}/threads/${thread.id}/turns`;
+    const running = (await body(await first.dispatch(new Request(`http://host.test${turnsPath}`))))
+      .data.turns[0].execution;
+    assert.equal(running.status, "running");
+    const cancelledResponse = await first.dispatch(jsonRequest(
+      `/v2/executions/${execution.id}/commands`,
+      { expectedStreamVersion: running.streamVersion, command: "cancel" },
+      "cancel-command",
+    ));
+    assert.equal(cancelledResponse.status, 200, JSON.stringify(await cancelledResponse.clone().json()));
+    assert.equal((await body(cancelledResponse)).data.status, "cancelled");
+    await aborted;
+    await first.close();
+    first = undefined;
+
+    const inspected = new SqliteStorage({
+      databaseFile: join(directory, "state.sqlite3"),
+      hmacKey: Buffer.alloc(32, 17),
+    });
+    const state = await inspected.transact("local", (transaction) => ({
+      execution: transaction.getProjection<any>("execution", executionId),
+      job: transaction.listProjections<any>("job")
+        .find((candidate) => candidate.payload.executionId === executionId),
+    }));
+    const physicalJob = await inspected.getJob(state.job.id);
+    assert.equal(state.execution.status, "cancelled");
+    assert.equal(state.job.status, "failed");
+    assert.equal(state.job.failure.code, "EXECUTION_CANCELLED");
+    assert.equal(physicalJob?.status, "failed");
+    assert.equal(physicalJob?.failure?.code, "EXECUTION_CANCELLED");
+    await inspected.close();
+
+    second = await startLocalAgentOsHost({
+      stateRoot: directory, port: 0, secretStore: secrets, modelInvoker: invoke,
+      workerIdleDelayMs: 1,
+    });
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    const restored = (await body(await second.dispatch(new Request(`http://host.test${turnsPath}`))))
+      .data.turns[0].execution;
+    assert.equal(restored.status, "cancelled");
+    assert.equal(invocations, 1);
+  } finally {
+    await first?.close();
+    await second?.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("中断后的 Execution 通过公开 resume 命令以新 generation 继续", async () => {
   const directory = await mkdtemp(join(tmpdir(), "muniu-local-runtime-resume-"));
   const secrets = new FixtureSecrets();

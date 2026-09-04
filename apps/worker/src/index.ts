@@ -105,6 +105,13 @@ export class AgentExecutionInterruptedError extends Error {
   }
 }
 
+export class AgentExecutionCancelledError extends Error {
+  constructor(readonly executionId: string) {
+    super("Agent turn 已由用户取消");
+    this.name = "AgentExecutionCancelledError";
+  }
+}
+
 class WorkerLeaseLostError extends Error {
   constructor(options?: ErrorOptions) {
     super("Worker 无法续租，已停止当前处理", options);
@@ -115,7 +122,7 @@ class WorkerLeaseLostError extends Error {
 export type WorkerPollResult =
   | { readonly status: "not_ready"; readonly issues: readonly WorkerReadinessIssue[] }
   | { readonly status: "idle" }
-  | { readonly status: "completed" | "failed" | "interrupted" | "needs_reconciliation" | "lost_lease"; readonly jobId: string };
+  | { readonly status: "completed" | "failed" | "cancelled" | "interrupted" | "needs_reconciliation" | "lost_lease"; readonly jobId: string };
 
 export interface AgentOsWorkerOptions {
   readonly id: string;
@@ -260,6 +267,25 @@ export class AgentOsWorker {
           throw interruptError;
         }
       }
+      if (error instanceof AgentExecutionCancelledError) {
+        try {
+          await this.#store.failJob(
+            job.id,
+            this.#id,
+            job.fencingToken,
+            safeFailure("EXECUTION_CANCELLED", error.message, false),
+            this.#now().toISOString(),
+          );
+          return { status: "cancelled", jobId: job.id };
+        } catch (failureError) {
+          if (failureError instanceof StaleFencingTokenError
+            || (typeof failureError === "object" && failureError !== null
+              && "code" in failureError && failureError.code === "STALE_FENCING_TOKEN")) {
+            return { status: "lost_lease", jobId: job.id };
+          }
+          throw failureError;
+        }
+      }
       const message = error instanceof Error ? error.message : "任务执行失败";
       return this.#failKnown(job, "JOB_EXECUTION_FAILED", message, true);
     } finally {
@@ -318,6 +344,11 @@ export interface AgentTurnHandlerOptions {
     job: StoredJob,
     context: WorkerJobContext,
   ) => Awaitable<AgentHandleOptions>;
+  readonly observeControl?: (
+    handle: AgentHandle,
+    job: StoredJob,
+    context: WorkerJobContext,
+  ) => Awaitable<() => Awaitable<void>>;
 }
 
 export function createAgentTurnHandler(options: AgentTurnHandlerOptions): WorkerJobHandler {
@@ -349,6 +380,7 @@ export function createAgentTurnHandler(options: AgentTurnHandlerOptions): Worker
       await handleOptions.scope.dispose();
       throw new Error(`状态为 ${handle.status} 的 Agent turn 不能恢复`);
     }
+    const stopObserving = await options.observeControl?.(handle, job, context);
     const interruptForWorkerStop = () => {
       void handle.interrupt("Worker 已停止").catch(() => {});
     };
@@ -356,14 +388,19 @@ export function createAgentTurnHandler(options: AgentTurnHandlerOptions): Worker
     try {
       if (context.signal.aborted) {
         await handle.interrupt("Worker 已停止");
+      } else if (handle.status === "cancelled") {
+        // 控制观察器已持久化取消并中止在途执行。
       } else if (isResume) {
         await handle.resume();
       } else {
         await handle.followUp(message!);
       }
       await handle.whenIdle();
+    } catch (error) {
+      if (handle.status !== "cancelled") throw error;
     } finally {
       context.signal.removeEventListener("abort", interruptForWorkerStop);
+      await stopObserving?.();
       await handleOptions.scope.dispose();
     }
     const finalStatus: string = handle.status;
@@ -376,7 +413,7 @@ export function createAgentTurnHandler(options: AgentTurnHandlerOptions): Worker
         : new Error("Agent turn 执行失败");
     }
     if (finalStatus === "interrupted") throw new AgentExecutionInterruptedError(executionId);
-    if (finalStatus === "cancelled") throw new Error("Agent turn 已取消");
+    if (finalStatus === "cancelled") throw new AgentExecutionCancelledError(executionId);
     return { executionId, status: handle.status };
   };
 }
@@ -414,6 +451,7 @@ export interface KernelAgentTurnHandlerOptions {
   readonly approvalKernel?: ToolApprovalKernel;
   readonly approvalPollIntervalMs?: number;
   readonly opcPublicWebReader?: OpcPublicWebReader;
+  readonly controlPollIntervalMs?: number;
   readonly acceptsSecretReference?: (reference: string) => boolean;
   readonly now?: () => string;
 }
@@ -428,7 +466,17 @@ export function createKernelAgentTurnHandler(
     id: (kind) => `${kind}-${randomUUID()}`,
     acceptsModelSecretReference: acceptsSecretReference,
   });
+  const controlPollIntervalMs = options.controlPollIntervalMs ?? 100;
+  if (!Number.isSafeInteger(controlPollIntervalMs) || controlPollIntervalMs < 1) {
+    throw new TypeError("执行控制轮询间隔必须是正整数毫秒");
+  }
   return createAgentTurnHandler({
+    observeControl: async (handle, job) => observeExecutionControl(
+      options.store,
+      job.tenantId,
+      handle,
+      controlPollIntervalMs,
+    ),
     resolveOptions: async (job) => {
       const executionId = requiredPayloadString(job.payload, "executionId");
       const state = await options.store.transact(job.tenantId, (transaction) => {
@@ -457,9 +505,16 @@ export function createKernelAgentTurnHandler(
         .createChild("execution", state.execution.id);
       const promptId = `${state.execution.pluginId}.outcome`;
       const llmId = `byok:${state.model.id}`;
+      const hasPublicWebTool = state.execution.pluginId === "opc"
+        && state.authority.toolIds.includes("opc.public-web.read")
+        && options.opcPublicWebReader !== undefined;
       executionScope.register("prompt", {
         id: promptId,
-        render: () => productPrompt(state.execution.pluginId, state.thread.subject),
+        render: () => productPrompt(
+          state.execution.pluginId,
+          state.thread.subject,
+          hasPublicWebTool,
+        ),
       });
       executionScope.register("llm", {
         id: llmId,
@@ -485,9 +540,7 @@ export function createKernelAgentTurnHandler(
         },
       });
       const toolIds: string[] = [];
-      if (state.execution.pluginId === "opc"
-        && state.authority.toolIds.includes("opc.public-web.read")
-        && options.opcPublicWebReader) {
+      if (hasPublicWebTool) {
         const toolId = "opc.public-web.read";
         executionScope.register("tool", {
           id: toolId,
@@ -569,6 +622,34 @@ function jsonValue(value: unknown): JsonValue {
   }
 }
 
+async function observeExecutionControl(
+  store: AgentExecutionStore,
+  tenantId: string,
+  handle: AgentHandle,
+  intervalMs: number,
+): Promise<() => Promise<void>> {
+  let stopped = false;
+  let current = Promise.resolve();
+  const inspect = async () => {
+    if (stopped) return;
+    const status = await store.transact(tenantId, (transaction) =>
+      transaction.getProjection<Execution>("execution", handle.executionId)?.status);
+    if (status === "cancelled") await handle.cancel("用户取消");
+  };
+  const schedule = () => {
+    current = current.then(inspect).catch(async () => {
+      if (!stopped) await handle.interrupt("执行控制状态检查失败");
+    });
+  };
+  await inspect();
+  const timer = setInterval(schedule, intervalMs);
+  return async () => {
+    stopped = true;
+    clearInterval(timer);
+    await current;
+  };
+}
+
 function assertExecutionState(
   job: StoredJob,
   execution: Execution,
@@ -610,14 +691,16 @@ function providerId(value: string): ByokProviderId {
   throw new Error("模型厂商预设不受支持");
 }
 
-function productPrompt(pluginId: string, subject: string): string {
+function productPrompt(pluginId: string, subject: string, hasPublicWebTool: boolean): string {
   if (pluginId === "opc") {
     return [
       "你是木牛 OPC 机会验证 Agent。",
       `当前会话主题：${subject}。`,
       "输出可审阅的阶段成果，分别列出支持证据、反证、证据缺口和下一次人工行动。",
       "未经人工确认的 commitment 或 paid 证据，不得声称机会已经验证。",
-      "当前执行未注册网页、外联、发布、报价或支付工具，不得声称已经调用这些能力。",
+      hasPublicWebTool
+        ? "当前执行只注册了受控公开网页读取工具；未注册外联、发布、报价或支付工具。"
+        : "当前执行未注册网页、外联、发布、报价或支付工具，不得声称已经调用这些能力。",
     ].join("\n");
   }
   return [
