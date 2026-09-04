@@ -49,6 +49,88 @@ function appendRequest(overrides: Partial<EventAppendRequest> = {}): EventAppend
   };
 }
 
+async function seedAgentExecutionJob(
+  storage: SqliteStorage,
+  options: {
+    readonly executionId?: string;
+    readonly jobId?: string;
+    readonly projectedExecutionStreamVersion?: number;
+  } = {}
+): Promise<void> {
+  const executionId = options.executionId ?? "execution-agent";
+  const jobId = options.jobId ?? "job-agent";
+  const createdAt = "2026-09-04T00:00:00.000Z";
+  const execution = {
+    id: executionId,
+    tenantId: "tenant-a",
+    workspaceId: "workspace-1",
+    threadId: "thread-1",
+    pluginId: "coding",
+    agentDefinitionId: "coding.builtin",
+    modelBindingId: "model-1",
+    initiatedBy: "local-owner",
+    executionPrincipalId: "agent:coding",
+    generation: 1,
+    status: "queued",
+    authorityId: "authority-1",
+    streamVersion: options.projectedExecutionStreamVersion ?? 1,
+    createdAt,
+    updatedAt: createdAt
+  } as const;
+  const job = {
+    id: jobId,
+    tenantId: "tenant-a",
+    workspaceId: "workspace-1",
+    kind: "agent.execution.run",
+    payload: { executionId, message: "实现修复" },
+    status: "available",
+    attempts: 0,
+    availableAt: createdAt,
+    fencingToken: 0,
+    idempotencyKey: `execution:${executionId}:generation:1`,
+    streamVersion: 1,
+    createdAt,
+    updatedAt: createdAt
+  } as const;
+  await storage.transact("tenant-a", (transaction) => {
+    transaction.putProjection("execution", executionId, execution);
+    transaction.putProjection("job", jobId, job);
+    transaction.appendEvent({
+      tenantId: "tenant-a",
+      aggregateType: "execution",
+      aggregateId: executionId,
+      expectedStreamVersion: 0,
+      type: "execution.queued",
+      actorId: "local-owner",
+      executionId,
+      generation: 1,
+      correlationId: `execution:${executionId}`,
+      publicPayload: { workspaceId: "workspace-1", status: "queued" }
+    });
+    transaction.appendEvent({
+      tenantId: "tenant-a",
+      aggregateType: "job",
+      aggregateId: jobId,
+      expectedStreamVersion: 0,
+      type: "job.available",
+      actorId: "local-owner",
+      executionId,
+      generation: 1,
+      correlationId: `execution:${executionId}`,
+      publicPayload: { workspaceId: "workspace-1", executionId, kind: job.kind }
+    });
+    transaction.putJob({
+      id: jobId,
+      tenantId: "tenant-a",
+      workspaceId: "workspace-1",
+      kind: job.kind,
+      payload: job.payload,
+      availableAt: createdAt,
+      idempotencyKey: job.idempotencyKey
+    });
+  });
+}
+
 test("SQLite uses WAL/FULL and appends a canonical HMAC chained event", async () => {
   const databaseFile = temporaryPath("state.sqlite");
   const hmacKey = randomBytes(32);
@@ -255,6 +337,200 @@ test("job leases last thirty seconds and fencing rejects a stale worker", async 
     );
     await storage.completeJob("job-1", "worker-b", 2, { ok: true }, "2026-09-04T00:00:31.000Z");
     assert.equal((await storage.getJob("job-1"))?.status, "completed");
+  } finally {
+    await storage.close();
+  }
+});
+
+test("Agent Job 领取与完成会在同一事务推进 Job、Execution 和事件流", async () => {
+  const hmacKey = randomBytes(32);
+  const storage = new SqliteStorage({
+    databaseFile: temporaryPath("state.sqlite"),
+    hmacKey
+  });
+  try {
+    await seedAgentExecutionJob(storage);
+
+    const claimed = await storage.claimJob("worker-a", "2026-09-04T00:00:01.000Z");
+    assert.equal(claimed?.status, "leased");
+    assert.equal(claimed?.fencingToken, 1);
+    assert.deepEqual(await storage.getProjection("tenant-a", "job", "job-agent"), {
+      id: "job-agent",
+      tenantId: "tenant-a",
+      workspaceId: "workspace-1",
+      kind: "agent.execution.run",
+      payload: { executionId: "execution-agent", message: "实现修复" },
+      status: "leased",
+      attempts: 1,
+      availableAt: "2026-09-04T00:00:00.000Z",
+      leaseOwner: "worker-a",
+      leaseExpiresAt: "2026-09-04T00:00:31.000Z",
+      fencingToken: 1,
+      idempotencyKey: "execution:execution-agent:generation:1",
+      streamVersion: 2,
+      createdAt: "2026-09-04T00:00:00.000Z",
+      updatedAt: "2026-09-04T00:00:01.000Z"
+    });
+    const running = await storage.getProjection("tenant-a", "execution", "execution-agent");
+    assert.equal(running?.status, "running");
+    assert.equal(running?.streamVersion, 2);
+    assert.equal(running?.startedAt, "2026-09-04T00:00:01.000Z");
+
+    await storage.completeJob(
+      "job-agent",
+      "worker-a",
+      1,
+      { output: "done" },
+      "2026-09-04T00:00:02.000Z"
+    );
+    assert.equal((await storage.getJob("job-agent"))?.status, "completed");
+    const completedJob = await storage.getProjection("tenant-a", "job", "job-agent");
+    assert.equal(completedJob?.status, "completed");
+    assert.equal(completedJob?.streamVersion, 3);
+    assert.deepEqual(completedJob?.result, { output: "done" });
+    const completedExecution = await storage.getProjection("tenant-a", "execution", "execution-agent");
+    assert.equal(completedExecution?.status, "completed");
+    assert.equal(completedExecution?.streamVersion, 3);
+    assert.equal(completedExecution?.finishedAt, "2026-09-04T00:00:02.000Z");
+
+    const events = await storage.readEvents("tenant-a", { afterPosition: 0, limit: 20 });
+    assert.deepEqual(events.events.map((event) => event.type), [
+      "execution.queued",
+      "job.available",
+      "job.leased",
+      "execution.running",
+      "job.completed",
+      "execution.completed"
+    ]);
+    assert.equal(events.events.every((event) => verifyEventIntegrity(event, hmacKey)), true);
+  } finally {
+    await storage.close();
+  }
+});
+
+test("Agent Job 转移租约可恢复执行，陈旧 Worker 不能提交失败结果", async () => {
+  const storage = new SqliteStorage({
+    databaseFile: temporaryPath("state.sqlite"),
+    hmacKey: randomBytes(32)
+  });
+  try {
+    await seedAgentExecutionJob(storage, { executionId: "execution-retry", jobId: "job-retry" });
+    await storage.claimJob("worker-a", "2026-09-04T00:00:00.000Z");
+    const reclaimed = await storage.claimJob("worker-b", "2026-09-04T00:00:30.000Z");
+    assert.equal(reclaimed?.fencingToken, 2);
+
+    await assert.rejects(
+      storage.failJob(
+        "job-retry",
+        "worker-a",
+        1,
+        { code: "STALE_WORKER" },
+        "2026-09-04T00:00:31.000Z"
+      ),
+      StaleFencingTokenError
+    );
+    assert.equal((await storage.getJob("job-retry"))?.status, "leased");
+    assert.equal((await storage.getProjection("tenant-a", "execution", "execution-retry"))?.status, "running");
+
+    await storage.failJob(
+      "job-retry",
+      "worker-b",
+      2,
+      { code: "MODEL_FAILED", message: "模型请求失败" },
+      "2026-09-04T00:00:31.000Z"
+    );
+    const failedJob = await storage.getProjection("tenant-a", "job", "job-retry");
+    assert.equal(failedJob?.status, "failed");
+    assert.equal(failedJob?.streamVersion, 4);
+    const failedExecution = await storage.getProjection("tenant-a", "execution", "execution-retry");
+    assert.equal(failedExecution?.status, "failed");
+    assert.equal(failedExecution?.failureCode, "MODEL_FAILED");
+    assert.equal(failedExecution?.streamVersion, 3);
+    const events = await storage.readEvents("tenant-a", { afterPosition: 0, limit: 20 });
+    assert.deepEqual(events.events.slice(-3).map((event) => event.type), [
+      "job.leased",
+      "job.failed",
+      "execution.failed"
+    ]);
+  } finally {
+    await storage.close();
+  }
+});
+
+test("Agent Job 生命周期遇到 Execution 版本冲突时回滚租约和事件", async () => {
+  const storage = new SqliteStorage({
+    databaseFile: temporaryPath("state.sqlite"),
+    hmacKey: randomBytes(32)
+  });
+  try {
+    await seedAgentExecutionJob(storage, {
+      executionId: "execution-conflicting-claim",
+      jobId: "job-conflicting-claim",
+      projectedExecutionStreamVersion: 2
+    });
+    await assert.rejects(
+      storage.claimJob("worker-a", "2026-09-04T00:00:01.000Z"),
+      StreamVersionConflictError
+    );
+    assert.equal((await storage.getJob("job-conflicting-claim"))?.status, "available");
+    assert.equal(
+      (await storage.getProjection("tenant-a", "job", "job-conflicting-claim"))?.status,
+      "available"
+    );
+    assert.equal(
+      (await storage.getProjection("tenant-a", "execution", "execution-conflicting-claim"))?.status,
+      "queued"
+    );
+    assert.equal((await storage.readEvents("tenant-a", { afterPosition: 0, limit: 20 })).events.length, 2);
+  } finally {
+    await storage.close();
+  }
+});
+
+test("Agent Job 续租与未知副作用核对同步 Job 投影并保持原子性", async () => {
+  const storage = new SqliteStorage({
+    databaseFile: temporaryPath("state.sqlite"),
+    hmacKey: randomBytes(32)
+  });
+  try {
+    await seedAgentExecutionJob(storage, {
+      executionId: "execution-reconciliation",
+      jobId: "job-reconciliation"
+    });
+    await storage.claimJob("worker-a", "2026-09-04T00:00:00.000Z");
+    await storage.renewJobLease(
+      "job-reconciliation",
+      "worker-a",
+      1,
+      "2026-09-04T00:00:20.000Z"
+    );
+    const renewed = await storage.getProjection("tenant-a", "job", "job-reconciliation");
+    assert.equal(renewed?.leaseExpiresAt, "2026-09-04T00:00:50.000Z");
+    assert.equal(renewed?.streamVersion, 3);
+
+    await storage.markNeedsReconciliation("execution-reconciliation", {
+      jobId: "job-reconciliation",
+      workerId: "worker-a",
+      fencingToken: 1,
+      occurredAt: "2026-09-04T00:00:21.000Z"
+    });
+    const failedJob = await storage.getProjection("tenant-a", "job", "job-reconciliation");
+    assert.equal(failedJob?.status, "failed");
+    assert.equal(failedJob?.streamVersion, 4);
+    assert.equal((failedJob?.failure as { code?: string } | undefined)?.code, "UNKNOWN_EXTERNAL_SIDE_EFFECT");
+    const execution = await storage.getProjection(
+      "tenant-a",
+      "execution",
+      "execution-reconciliation"
+    );
+    assert.equal(execution?.status, "needs_reconciliation");
+    assert.equal(execution?.streamVersion, 3);
+    const events = await storage.readEvents("tenant-a", { afterPosition: 0, limit: 20 });
+    assert.deepEqual(events.events.slice(-3).map((event) => event.type), [
+      "job.lease_renewed",
+      "job.failed",
+      "execution.needs_reconciliation"
+    ]);
   } finally {
     await storage.close();
   }

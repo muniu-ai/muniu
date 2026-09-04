@@ -690,6 +690,8 @@ export class SqliteStorage implements StoragePort {
   }
 
   async claimJob(workerId: string, now: string, options: JobClaimOptions = {}): Promise<StoredJob | undefined> {
+    this.#assertOpen();
+    validTimestamp(now);
     const kinds = options.kinds ?? [];
     const conditions = [
       "available_at <= ?",
@@ -720,6 +722,7 @@ export class SqliteStorage implements StoragePort {
         update jobs set status = 'leased', attempts = attempts + 1, lease_owner = ?,
           lease_expires_at = ?, fencing_token = ?, updated_at = ? where job_id = ?
       `).run(workerId, leaseExpiresAt, fencingToken, now, String(row.job_id));
+      this.#recordAgentJobClaim(row, workerId, leaseExpiresAt, fencingToken, now);
       const claimed = this.#database.prepare("select * from jobs where job_id = ?")
         .get(String(row.job_id)) as RecordRow;
       this.#database.exec("commit");
@@ -737,13 +740,24 @@ export class SqliteStorage implements StoragePort {
     result: JsonValue,
     now: string
   ): Promise<void> {
-    const change = this.#database.prepare(`
-      update jobs set status = 'completed', result_json = ?, lease_owner = null,
-        lease_expires_at = null, updated_at = ?
-      where job_id = ? and status = 'leased' and lease_owner = ? and fencing_token = ?
-        and lease_expires_at > ?
-    `).run(JSON.stringify(result), now, jobId, workerId, fencingToken, now);
-    if (Number(change.changes) !== 1) throw new StaleFencingTokenError(jobId);
+    this.#assertOpen();
+    validTimestamp(now);
+    this.#database.exec("begin immediate");
+    try {
+      const job = this.#ownedLeasedJob(jobId, workerId, fencingToken, now);
+      const change = this.#database.prepare(`
+        update jobs set status = 'completed', result_json = ?, failure_json = null,
+          lease_owner = null, lease_expires_at = null, updated_at = ?
+        where job_id = ? and status = 'leased' and lease_owner = ? and fencing_token = ?
+          and lease_expires_at > ?
+      `).run(JSON.stringify(result), now, jobId, workerId, fencingToken, now);
+      if (Number(change.changes) !== 1) throw new StaleFencingTokenError(jobId);
+      this.#recordAgentJobTerminal(job, workerId, fencingToken, "completed", result, now);
+      this.#database.exec("commit");
+    } catch (error) {
+      this.#database.exec("rollback");
+      throw error;
+    }
   }
 
   async renewJobLease(
@@ -754,12 +768,21 @@ export class SqliteStorage implements StoragePort {
   ): Promise<void> {
     this.#assertOpen();
     const leaseExpiresAt = new Date(validTimestamp(now) + JOB_LEASE_MILLISECONDS).toISOString();
-    const change = this.#database.prepare(`
-      update jobs set lease_expires_at = ?, updated_at = ?
-      where job_id = ? and status = 'leased' and lease_owner = ? and fencing_token = ?
-        and lease_expires_at > ?
-    `).run(leaseExpiresAt, now, jobId, workerId, fencingToken, now);
-    if (Number(change.changes) !== 1) throw new StaleFencingTokenError(jobId);
+    this.#database.exec("begin immediate");
+    try {
+      const job = this.#ownedLeasedJob(jobId, workerId, fencingToken, now);
+      const change = this.#database.prepare(`
+        update jobs set lease_expires_at = ?, updated_at = ?
+        where job_id = ? and status = 'leased' and lease_owner = ? and fencing_token = ?
+          and lease_expires_at > ?
+      `).run(leaseExpiresAt, now, jobId, workerId, fencingToken, now);
+      if (Number(change.changes) !== 1) throw new StaleFencingTokenError(jobId);
+      this.#recordAgentJobLeaseRenewal(job, workerId, leaseExpiresAt, fencingToken, now);
+      this.#database.exec("commit");
+    } catch (error) {
+      this.#database.exec("rollback");
+      throw error;
+    }
   }
 
   async failJob(
@@ -769,13 +792,432 @@ export class SqliteStorage implements StoragePort {
     failure: JsonObject,
     now: string
   ): Promise<void> {
-    const change = this.#database.prepare(`
-      update jobs set status = 'failed', failure_json = ?, lease_owner = null,
-        lease_expires_at = null, updated_at = ?
+    this.#assertOpen();
+    validTimestamp(now);
+    this.#database.exec("begin immediate");
+    try {
+      const job = this.#ownedLeasedJob(jobId, workerId, fencingToken, now);
+      const change = this.#database.prepare(`
+        update jobs set status = 'failed', failure_json = ?, result_json = null,
+          lease_owner = null, lease_expires_at = null, updated_at = ?
+        where job_id = ? and status = 'leased' and lease_owner = ? and fencing_token = ?
+          and lease_expires_at > ?
+      `).run(JSON.stringify(failure), now, jobId, workerId, fencingToken, now);
+      if (Number(change.changes) !== 1) throw new StaleFencingTokenError(jobId);
+      this.#recordAgentJobTerminal(job, workerId, fencingToken, "failed", failure, now);
+      this.#database.exec("commit");
+    } catch (error) {
+      this.#database.exec("rollback");
+      throw error;
+    }
+  }
+
+  #ownedLeasedJob(
+    jobId: string,
+    workerId: string,
+    fencingToken: number,
+    now: string
+  ): RecordRow {
+    const job = this.#database.prepare(`
+      select * from jobs
       where job_id = ? and status = 'leased' and lease_owner = ? and fencing_token = ?
         and lease_expires_at > ?
-    `).run(JSON.stringify(failure), now, jobId, workerId, fencingToken, now);
-    if (Number(change.changes) !== 1) throw new StaleFencingTokenError(jobId);
+    `).get(jobId, workerId, fencingToken, now) as RecordRow | undefined;
+    if (!job) throw new StaleFencingTokenError(jobId);
+    return job;
+  }
+
+  #agentJobContext(job: RecordRow): {
+    readonly tenantId: string;
+    readonly executionId: string;
+    readonly workspaceId: string;
+    readonly generation: number;
+    readonly execution: JsonObject;
+    readonly jobProjection: JsonObject;
+  } | undefined {
+    if (String(job.kind) !== "agent.execution.run") return undefined;
+    const tenantId = String(job.tenant_id);
+    const payload = parseJson<JsonObject>(job.payload_json);
+    const executionId = requiredString(payload.executionId, "Job executionId");
+    const execution = this.#requiredProjection(tenantId, "execution", executionId, "Execution");
+    const jobProjection = this.#requiredProjection(tenantId, "job", String(job.job_id), "Job");
+    if (execution.tenantId !== tenantId || jobProjection.tenantId !== tenantId) {
+      throw new Error("Agent Job 与投影所属租户不一致");
+    }
+    if (jobProjection.kind !== "agent.execution.run"
+      || requiredString(jobProjection.id, "Job id") !== String(job.job_id)) {
+      throw new Error("Agent Job 物理记录与查询投影不一致");
+    }
+    return {
+      tenantId,
+      executionId,
+      workspaceId: requiredString(execution.workspaceId, "Execution workspaceId"),
+      generation: requiredSafeInteger(execution.generation, "Execution generation"),
+      execution,
+      jobProjection
+    };
+  }
+
+  #requiredProjection(
+    tenantId: string,
+    namespace: string,
+    key: string,
+    label: string
+  ): JsonObject {
+    const row = this.#database.prepare(`
+      select value_json from projections
+      where tenant_id = ? and namespace = ? and projection_key = ?
+    `).get(tenantId, namespace, key) as RecordRow | undefined;
+    if (!row) throw new Error(`${label} ${key} 的投影不存在`);
+    return parseJson<JsonObject>(row.value_json);
+  }
+
+  #putProjectionValue(
+    tenantId: string,
+    namespace: string,
+    key: string,
+    streamVersion: number,
+    value: JsonObject,
+    updatedAt: string
+  ): void {
+    this.#database.prepare(`
+      insert into projections (
+        tenant_id, namespace, projection_key, stream_version, value_json, updated_at
+      ) values (?, ?, ?, ?, ?, ?)
+      on conflict(tenant_id, namespace, projection_key) do update set
+        stream_version = excluded.stream_version,
+        value_json = excluded.value_json,
+        updated_at = excluded.updated_at
+    `).run(tenantId, namespace, key, streamVersion, JSON.stringify(value), updatedAt);
+  }
+
+  #recordAgentJobClaim(
+    job: RecordRow,
+    workerId: string,
+    leaseExpiresAt: string,
+    fencingToken: number,
+    now: string
+  ): void {
+    const context = this.#agentJobContext(job);
+    if (!context) return;
+    const jobStreamVersion = requiredSafeInteger(
+      context.jobProjection.streamVersion,
+      "Job streamVersion"
+    );
+    const priorFencingToken = requiredSafeInteger(
+      context.jobProjection.fencingToken,
+      "Job fencingToken"
+    );
+    if (context.jobProjection.status !== String(job.status)
+      || priorFencingToken !== Number(job.fencing_token)) {
+      throw new Error("Agent Job 物理状态与查询投影不一致");
+    }
+    const updatedJob: JsonObject = {
+      ...context.jobProjection,
+      status: "leased",
+      attempts: Number(job.attempts) + 1,
+      leaseOwner: workerId,
+      leaseExpiresAt,
+      fencingToken,
+      streamVersion: jobStreamVersion + 1,
+      updatedAt: now
+    };
+    this.#appendEvent({
+      tenantId: context.tenantId,
+      aggregateType: "job",
+      aggregateId: String(job.job_id),
+      expectedStreamVersion: jobStreamVersion,
+      type: "job.leased",
+      actorId: `worker:${workerId}`,
+      executionId: context.executionId,
+      generation: context.generation,
+      correlationId: `job:${String(job.job_id)}:fence:${fencingToken}`,
+      publicPayload: {
+        workspaceId: context.workspaceId,
+        executionId: context.executionId,
+        workerId,
+        fencingToken,
+        leaseExpiresAt
+      }
+    }, now);
+    this.#putProjectionValue(
+      context.tenantId,
+      "job",
+      String(job.job_id),
+      jobStreamVersion + 1,
+      updatedJob,
+      now
+    );
+
+    if (context.execution.status === "running" || context.execution.status === "waiting_approval") {
+      return;
+    }
+    if (context.execution.status !== "queued") {
+      throw new Error(`状态为 ${String(context.execution.status)} 的 Execution 不能领取 Agent Job`);
+    }
+    const executionStreamVersion = requiredSafeInteger(
+      context.execution.streamVersion,
+      "Execution streamVersion"
+    );
+    const updatedExecution: JsonObject = {
+      ...context.execution,
+      status: "running",
+      startedAt: context.execution.startedAt ?? now,
+      streamVersion: executionStreamVersion + 1,
+      updatedAt: now
+    };
+    this.#appendEvent({
+      tenantId: context.tenantId,
+      aggregateType: "execution",
+      aggregateId: context.executionId,
+      expectedStreamVersion: executionStreamVersion,
+      type: "execution.running",
+      actorId: `worker:${workerId}`,
+      executionId: context.executionId,
+      generation: context.generation,
+      correlationId: `job:${String(job.job_id)}:fence:${fencingToken}`,
+      publicPayload: {
+        workspaceId: context.workspaceId,
+        jobId: String(job.job_id),
+        status: "running",
+        workerId,
+        fencingToken
+      }
+    }, now);
+    this.#putProjectionValue(
+      context.tenantId,
+      "execution",
+      context.executionId,
+      executionStreamVersion + 1,
+      updatedExecution,
+      now
+    );
+  }
+
+  #recordAgentJobLeaseRenewal(
+    job: RecordRow,
+    workerId: string,
+    leaseExpiresAt: string,
+    fencingToken: number,
+    now: string
+  ): void {
+    const context = this.#agentJobContext(job);
+    if (!context) return;
+    const jobStreamVersion = requiredSafeInteger(
+      context.jobProjection.streamVersion,
+      "Job streamVersion"
+    );
+    if (context.jobProjection.status !== "leased"
+      || context.jobProjection.leaseOwner !== workerId
+      || context.jobProjection.fencingToken !== fencingToken) {
+      throw new Error("Agent Job 租约与查询投影不一致");
+    }
+    const updatedJob: JsonObject = {
+      ...context.jobProjection,
+      leaseExpiresAt,
+      streamVersion: jobStreamVersion + 1,
+      updatedAt: now
+    };
+    this.#appendEvent({
+      tenantId: context.tenantId,
+      aggregateType: "job",
+      aggregateId: String(job.job_id),
+      expectedStreamVersion: jobStreamVersion,
+      type: "job.lease_renewed",
+      actorId: `worker:${workerId}`,
+      executionId: context.executionId,
+      generation: context.generation,
+      correlationId: `job:${String(job.job_id)}:fence:${fencingToken}`,
+      publicPayload: {
+        workspaceId: context.workspaceId,
+        executionId: context.executionId,
+        workerId,
+        fencingToken,
+        leaseExpiresAt
+      }
+    }, now);
+    this.#putProjectionValue(
+      context.tenantId,
+      "job",
+      String(job.job_id),
+      jobStreamVersion + 1,
+      updatedJob,
+      now
+    );
+  }
+
+  #recordAgentJobTerminal(
+    job: RecordRow,
+    workerId: string,
+    fencingToken: number,
+    outcome: "completed" | "failed",
+    value: JsonValue,
+    now: string
+  ): void {
+    const context = this.#agentJobContext(job);
+    if (!context) return;
+    const jobStreamVersion = requiredSafeInteger(
+      context.jobProjection.streamVersion,
+      "Job streamVersion"
+    );
+    if (context.jobProjection.status !== "leased"
+      || context.jobProjection.leaseOwner !== workerId
+      || context.jobProjection.fencingToken !== fencingToken) {
+      throw new Error("Agent Job 租约与查询投影不一致");
+    }
+    const {
+      leaseOwner: _leaseOwner,
+      leaseExpiresAt: _leaseExpiresAt,
+      result: _priorResult,
+      failure: _priorFailure,
+      ...jobWithoutLease
+    } = context.jobProjection;
+    const updatedJob: JsonObject = {
+      ...jobWithoutLease,
+      status: outcome,
+      ...(outcome === "completed" ? { result: value } : { failure: value }),
+      streamVersion: jobStreamVersion + 1,
+      updatedAt: now
+    };
+    this.#appendEvent({
+      tenantId: context.tenantId,
+      aggregateType: "job",
+      aggregateId: String(job.job_id),
+      expectedStreamVersion: jobStreamVersion,
+      type: `job.${outcome}`,
+      actorId: `worker:${workerId}`,
+      executionId: context.executionId,
+      generation: context.generation,
+      correlationId: `job:${String(job.job_id)}:fence:${fencingToken}`,
+      publicPayload: {
+        workspaceId: context.workspaceId,
+        executionId: context.executionId,
+        status: outcome,
+        fencingToken
+      }
+    }, now);
+    this.#putProjectionValue(
+      context.tenantId,
+      "job",
+      String(job.job_id),
+      jobStreamVersion + 1,
+      updatedJob,
+      now
+    );
+
+    const acceptedStatuses = outcome === "completed"
+      ? ["running"]
+      : ["running", "waiting_approval"];
+    if (!acceptedStatuses.includes(String(context.execution.status))) {
+      throw new Error(`状态为 ${String(context.execution.status)} 的 Execution 不能标记为 ${outcome}`);
+    }
+    const executionStreamVersion = requiredSafeInteger(
+      context.execution.streamVersion,
+      "Execution streamVersion"
+    );
+    const failureObject = outcome === "failed"
+      && typeof value === "object"
+      && value !== null
+      && !Array.isArray(value)
+      ? value as JsonObject
+      : undefined;
+    const failureCode = typeof failureObject?.code === "string" && failureObject.code
+      ? failureObject.code
+      : "WORKER_FAILED";
+    const updatedExecution: JsonObject = {
+      ...context.execution,
+      status: outcome,
+      ...(outcome === "failed" ? { failureCode } : {}),
+      finishedAt: now,
+      streamVersion: executionStreamVersion + 1,
+      updatedAt: now
+    };
+    this.#appendEvent({
+      tenantId: context.tenantId,
+      aggregateType: "execution",
+      aggregateId: context.executionId,
+      expectedStreamVersion: executionStreamVersion,
+      type: `execution.${outcome}`,
+      actorId: `worker:${workerId}`,
+      executionId: context.executionId,
+      generation: context.generation,
+      correlationId: `job:${String(job.job_id)}:fence:${fencingToken}`,
+      publicPayload: {
+        workspaceId: context.workspaceId,
+        jobId: String(job.job_id),
+        status: outcome,
+        ...(outcome === "failed" ? { failureCode } : {})
+      }
+    }, now);
+    this.#putProjectionValue(
+      context.tenantId,
+      "execution",
+      context.executionId,
+      executionStreamVersion + 1,
+      updatedExecution,
+      now
+    );
+  }
+
+  #recordAgentJobNeedsReconciliation(
+    job: RecordRow,
+    workerId: string,
+    fencingToken: number,
+    failure: JsonObject,
+    now: string
+  ): void {
+    const context = this.#agentJobContext(job);
+    if (!context) return;
+    const jobStreamVersion = requiredSafeInteger(
+      context.jobProjection.streamVersion,
+      "Job streamVersion"
+    );
+    if (context.jobProjection.status !== "leased"
+      || context.jobProjection.leaseOwner !== workerId
+      || context.jobProjection.fencingToken !== fencingToken) {
+      throw new Error("Agent Job 租约与查询投影不一致");
+    }
+    const {
+      leaseOwner: _leaseOwner,
+      leaseExpiresAt: _leaseExpiresAt,
+      result: _priorResult,
+      failure: _priorFailure,
+      ...jobWithoutLease
+    } = context.jobProjection;
+    const updatedJob: JsonObject = {
+      ...jobWithoutLease,
+      status: "failed",
+      failure,
+      streamVersion: jobStreamVersion + 1,
+      updatedAt: now
+    };
+    this.#appendEvent({
+      tenantId: context.tenantId,
+      aggregateType: "job",
+      aggregateId: String(job.job_id),
+      expectedStreamVersion: jobStreamVersion,
+      type: "job.failed",
+      actorId: `worker:${workerId}`,
+      executionId: context.executionId,
+      generation: context.generation,
+      correlationId: `reconciliation:${String(job.job_id)}:${fencingToken}`,
+      publicPayload: {
+        workspaceId: context.workspaceId,
+        executionId: context.executionId,
+        status: "failed",
+        failureCode: "UNKNOWN_EXTERNAL_SIDE_EFFECT",
+        needsReconciliation: true,
+        fencingToken
+      }
+    }, now);
+    this.#putProjectionValue(
+      context.tenantId,
+      "job",
+      String(job.job_id),
+      jobStreamVersion + 1,
+      updatedJob,
+      now
+    );
   }
 
   async markNeedsReconciliation(
@@ -852,6 +1294,13 @@ export class SqliteStorage implements StoragePort {
         input.occurredAt
       );
       if (Number(jobChange.changes) !== 1) throw new StaleFencingTokenError(input.jobId);
+      this.#recordAgentJobNeedsReconciliation(
+        job,
+        input.workerId,
+        input.fencingToken,
+        failure,
+        input.occurredAt
+      );
       this.#appendEvent({
         tenantId,
         aggregateType: "execution",
