@@ -310,6 +310,9 @@ async function hostData(hostUrl, path) {
 }
 
 async function verifyCoding(page, requestLog) {
+  await page.getByRole("button", { name: /收件箱/ }).click();
+  await expectText(page, "模型凭据失效");
+  await expectText(page, "重新连接模型后，等待中的任务才能继续");
   await page.getByRole("button", { name: "Coding" }).click();
   await expectText(page, "统一 Agent OS API");
   await expectText(page, "差异");

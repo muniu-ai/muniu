@@ -51,8 +51,11 @@ export function InboxPage({ summary, api, onChanged }: { readonly summary: HomeS
       <h3>{approval.title}</h3><p className="intent">{approval.intent}</p>
       <dl><div><dt>资源</dt><dd>{approval.resourceSummary}</dd></div><div><dt>风险</dt><dd>{approval.risk}</dd></div></dl>
       <footer><button className="danger-button" onClick={() => void decide(approval.id, approval.streamVersion, "deny")}><X size={15} />拒绝</button><button className="primary-button" onClick={() => void decide(approval.id, approval.streamVersion, "approve_once")}><Check size={15} />仅批准这一次</button></footer>
+    </article>)}{summary.blockers.map((item) => <article className="approval-card inbox-message-card" key={item.id}>
+      <header><span className="pill risk"><AlertCircle size={13} />需要处理</span></header>
+      <h3>{item.title}</h3><p className="intent">{item.detail}</p>
     </article>)}</div>
-    {summary.approvals.length === 0 && <EmptyState title="收件箱已清空" detail="没有等待处理的审批或人工核对" />}
+    {summary.approvals.length + summary.blockers.length === 0 && <EmptyState title="收件箱已清空" detail="没有等待处理的审批、问题、故障或人工核对" />}
   </div>;
 }
 

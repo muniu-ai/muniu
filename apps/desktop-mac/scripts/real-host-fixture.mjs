@@ -89,12 +89,29 @@ async function seedWorkspace(seedMode) {
   });
   await seedApproval(workspace.id);
   if (seedMode === "coding") {
+    await seedFailure(workspace.id);
     await mutate(`/v2/workspaces/${workspace.id}`, {
       expectedStreamVersion: workspace.streamVersion,
       viewMode: "business",
     }, "seed-view", "PATCH");
   }
 
+}
+
+async function seedFailure(workspaceId) {
+  await store.transact("local", (transaction) => {
+    transaction.putProjection("inbox", "fixture-credential", {
+      id: "fixture-credential",
+      tenantId: "local",
+      workspaceId,
+      kind: "credential",
+      title: "模型凭据失效",
+      summary: "重新连接模型后，等待中的任务才能继续。",
+      risk: "credential_invalid",
+      createdAt: now(),
+      status: "open",
+    });
+  });
 }
 
 async function seedApproval(workspaceId) {
