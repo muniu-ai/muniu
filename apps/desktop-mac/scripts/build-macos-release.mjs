@@ -21,11 +21,11 @@ const tauriConfigPath = path.join(tauriDir, "tauri.conf.json");
 const tauriBin = path.join(repoRoot, "node_modules/.bin/tauri");
 const config = JSON.parse(readFileSync(tauriConfigPath, "utf8"));
 
-const target = process.env.MNIU_MACOS_TARGET ?? "universal-apple-darwin";
-const shouldSign = process.env.MNIU_MACOS_SIGN === "1";
-const shouldNotarize = process.env.MNIU_MACOS_NOTARIZE === "1";
-const signingIdentity = process.env.MNIU_MACOS_SIGNING_IDENTITY ?? process.env.APPLE_SIGNING_IDENTITY;
-const notaryProfile = process.env.MNIU_NOTARY_KEYCHAIN_PROFILE;
+const target = process.env.MN_MACOS_TARGET ?? "universal-apple-darwin";
+const shouldSign = process.env.MN_MACOS_SIGN === "1";
+const shouldNotarize = process.env.MN_MACOS_NOTARIZE === "1";
+const signingIdentity = process.env.MN_MACOS_SIGNING_IDENTITY ?? process.env.APPLE_SIGNING_IDENTITY;
+const notaryProfile = process.env.MN_NOTARY_KEYCHAIN_PROFILE;
 const archLabel = target === "universal-apple-darwin" ? "universal" : target.replace(/-apple-darwin$/, "");
 const releaseDir = path.join(tauriDir, "target", target, "release");
 const bundleDir = path.join(releaseDir, "bundle");
@@ -106,13 +106,13 @@ if (target === "universal-apple-darwin") {
 }
 
 if (shouldSign && !signingIdentity) {
-  throw new Error("MNIU_MACOS_SIGN=1 requires MNIU_MACOS_SIGNING_IDENTITY or APPLE_SIGNING_IDENTITY");
+  throw new Error("MN_MACOS_SIGN=1 requires MN_MACOS_SIGNING_IDENTITY or APPLE_SIGNING_IDENTITY");
 }
 if (shouldNotarize && !shouldSign) {
-  throw new Error("MNIU_MACOS_NOTARIZE=1 requires MNIU_MACOS_SIGN=1");
+  throw new Error("MN_MACOS_NOTARIZE=1 requires MN_MACOS_SIGN=1");
 }
 if (shouldNotarize && !notaryProfile) {
-  throw new Error("MNIU_MACOS_NOTARIZE=1 requires MNIU_NOTARY_KEYCHAIN_PROFILE");
+  throw new Error("MN_MACOS_NOTARIZE=1 requires MN_NOTARY_KEYCHAIN_PROFILE");
 }
 const tauriArgs = ["build", "--ci", "--bundles", "app", "--target", target];
 if (!shouldSign) {

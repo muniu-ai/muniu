@@ -1,54 +1,35 @@
 use serde::{Deserialize, Serialize};
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::PathBuf;
+use std::net::{SocketAddr, TcpStream};
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 use tauri::{Emitter, Manager};
+use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tauri_plugin_shell::{process::CommandChild, process::CommandEvent, ShellExt};
 
-struct ManagedDaemon(Mutex<Option<CommandChild>>);
+const HOST_ADDRESS: &str = "127.0.0.1";
+const HOST_PORT: u16 = 7318;
+
+struct ManagedHost(Mutex<Option<CommandChild>>);
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DesktopRuntimeStatus {
     runtime: &'static str,
     platform: &'static str,
-    tray: bool,
-    window_label: &'static str,
+    agent_os: &'static str,
+    state_generation: &'static str,
+    host_managed: bool,
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize, Debug, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 struct DesktopSettings {
     theme: String,
     close_behavior: String,
     launch_at_login: bool,
-    lightweight_mode: bool,
-    api_url: String,
-}
-
-#[derive(Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct TrayProvider {
-    id: String,
-    name: String,
-    enabled: bool,
-}
-
-#[derive(Deserialize)]
-struct TrayProviderList {
-    providers: Vec<TrayProvider>,
-}
-
-#[derive(Deserialize)]
-struct TrayProxyRuntime {
-    running: bool,
-}
-
-#[derive(Deserialize)]
-struct TrayProxyStatus {
-    runtime: TrayProxyRuntime,
 }
 
 impl Default for DesktopSettings {
@@ -57,651 +38,278 @@ impl Default for DesktopSettings {
             theme: "system".to_string(),
             close_behavior: "tray".to_string(),
             launch_at_login: false,
-            lightweight_mode: false,
-            api_url: "http://127.0.0.1:7318".to_string(),
         }
     }
 }
 
 #[tauri::command]
-fn desktop_runtime_status() -> DesktopRuntimeStatus {
+fn desktop_runtime_status(app: tauri::AppHandle) -> DesktopRuntimeStatus {
+    let host_managed = app
+        .state::<ManagedHost>()
+        .0
+        .lock()
+        .map(|child| child.is_some())
+        .unwrap_or(false);
     DesktopRuntimeStatus {
         runtime: "Tauri 2",
         platform: "macOS-first",
-        tray: true,
-        window_label: "main",
+        agent_os: "0.2",
+        state_generation: "v2",
+        host_managed,
     }
 }
 
 #[tauri::command]
-fn read_desktop_settings() -> Result<DesktopSettings, String> {
-    let path = settings_path()?;
+fn read_desktop_settings(app: tauri::AppHandle) -> Result<DesktopSettings, String> {
+    let path = settings_path(&app)?;
     if !path.exists() {
         return Ok(DesktopSettings::default());
     }
-    let raw = fs::read_to_string(&path).map_err(|error| error.to_string())?;
-    serde_json::from_str::<DesktopSettings>(&raw).map_err(|error| error.to_string())
+    let raw = fs::read_to_string(path).map_err(|error| error.to_string())?;
+    serde_json::from_str::<DesktopSettings>(&raw)
+        .map(normalize_settings)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-fn write_desktop_settings(settings: DesktopSettings) -> Result<DesktopSettings, String> {
-    let path = settings_path()?;
+fn write_desktop_settings(
+    app: tauri::AppHandle,
+    settings: DesktopSettings,
+) -> Result<DesktopSettings, String> {
+    let path = settings_path(&app)?;
     let parent = path
         .parent()
-        .ok_or_else(|| "settings path has no parent".to_string())?;
+        .ok_or_else(|| "设置文件路径无效".to_string())?;
     fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     let normalized = normalize_settings(settings);
-    let raw = serde_json::to_string_pretty(&normalized).map_err(|error| error.to_string())?;
-    let tmp_path = path.with_extension("json.tmp");
-    fs::write(&tmp_path, raw).map_err(|error| error.to_string())?;
-    fs::rename(&tmp_path, &path).map_err(|error| error.to_string())?;
+    let raw = serde_json::to_vec_pretty(&normalized).map_err(|error| error.to_string())?;
+    write_private_atomic(&path, &raw)?;
     Ok(normalized)
 }
 
-#[tauri::command]
-fn enter_lightweight_mode(app: tauri::AppHandle) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window("main") {
-        window.destroy().map_err(|error| error.to_string())?;
-    }
-    Ok(())
-}
-
 pub fn run() {
-    install_panic_log_hook();
-
     let app = tauri::Builder::default()
         .plugin(
             tauri_plugin_autostart::Builder::new()
                 .app_name("木牛")
                 .build(),
         )
-        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
-            let daemon = spawn_managed_daemon(app.handle())?;
-            app.manage(ManagedDaemon(Mutex::new(daemon)));
+            if host_port_is_occupied() {
+                app.dialog()
+                    .message("检测到另一个木牛后台进程。请先退出旧版木牛，再重新打开 0.2。")
+                    .title("木牛无法启动")
+                    .kind(MessageDialogKind::Warning)
+                    .blocking_show();
+                return Err("another daemon is already listening on port 7318".into());
+            }
+
+            let host = spawn_managed_host(app.handle())?;
+            app.manage(ManagedHost(Mutex::new(Some(host))));
             build_tray(app)?;
-            let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                let _ = refresh_tray_providers(&handle).await;
-            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             desktop_runtime_status,
             read_desktop_settings,
-            write_desktop_settings,
-            enter_lightweight_mode
+            write_desktop_settings
         ])
         .build(tauri::generate_context!())
-        .expect("error while building 木牛 desktop");
+        .expect("failed to build 木牛 desktop");
 
     app.run(|handle, event| {
         if matches!(
             event,
             tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
         ) {
-            stop_managed_daemon(handle);
+            stop_managed_host(handle);
         }
     });
 }
 
-fn stop_managed_daemon(app: &tauri::AppHandle) {
-    if let Ok(mut child) = app.state::<ManagedDaemon>().0.lock() {
-        if let Some(child) = child.take() {
-            let _ = child.kill();
-        }
-    }
-}
-
-fn install_panic_log_hook() {
-    let previous_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        let _ = write_panic_log(info);
-        previous_hook(info);
-    }));
-}
-
-fn write_panic_log(info: &std::panic::PanicHookInfo<'_>) -> Result<(), String> {
-    let path = panic_log_path()?;
-    let parent = path
-        .parent()
-        .ok_or_else(|| "panic log path has no parent".to_string())?;
-    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    let mut file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .map_err(|error| error.to_string())?;
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or_default();
-    let thread = std::thread::current();
-    let thread_name = thread.name().unwrap_or("unnamed");
-    let location = info
-        .location()
-        .map(|location| {
-            format!(
-                "{}:{}:{}",
-                location.file(),
-                location.line(),
-                location.column()
-            )
-        })
-        .unwrap_or_else(|| "unknown".to_string());
-    writeln!(file, "--- mniu desktop panic ---").map_err(|error| error.to_string())?;
-    writeln!(file, "unix_seconds={timestamp}").map_err(|error| error.to_string())?;
-    writeln!(file, "thread={thread_name}").map_err(|error| error.to_string())?;
-    writeln!(file, "location={location}").map_err(|error| error.to_string())?;
-    writeln!(
-        file,
-        "message={}",
-        sanitize_panic_message(&panic_message(info))
-    )
-    .map_err(|error| error.to_string())?;
-    Ok(())
-}
-
-fn panic_log_path() -> Result<PathBuf, String> {
-    let home = std::env::var("HOME").map_err(|_| "HOME is not set".to_string())?;
-    Ok(PathBuf::from(home)
-        .join("Library")
-        .join("Logs")
-        .join("dev.muniu.desktop")
-        .join("panic.log"))
-}
-
-fn panic_message(info: &std::panic::PanicHookInfo<'_>) -> String {
-    if let Some(message) = info.payload().downcast_ref::<&str>() {
-        return (*message).to_string();
-    }
-    if let Some(message) = info.payload().downcast_ref::<String>() {
-        return message.clone();
-    }
-    "non-string panic payload".to_string()
-}
-
-fn sanitize_panic_message(message: &str) -> String {
-    let normalized = message.replace('\r', "\\n").replace('\n', "\\n");
-    let lower = normalized.to_ascii_lowercase();
-    if ["api_key", "apikey", "bearer", "password", "secret", "token"]
-        .iter()
-        .any(|marker| lower.contains(marker))
-    {
-        return "[REDACTED: panic message contained sensitive marker]".to_string();
-    }
-    const MAX_PANIC_MESSAGE_CHARS: usize = 2048;
-    if normalized.chars().count() > MAX_PANIC_MESSAGE_CHARS {
-        return format!(
-            "{}...[truncated]",
-            normalized
-                .chars()
-                .take(MAX_PANIC_MESSAGE_CHARS)
-                .collect::<String>()
-        );
-    }
-    normalized
-}
-
-fn muniu_root_path() -> Result<PathBuf, String> {
-    let home = std::env::var("HOME").map_err(|_| "HOME is not set".to_string())?;
-    let home = PathBuf::from(home);
-    let current = home.join(".muniu");
-    let legacy = home.join(".mniu");
-    if !current.exists() && legacy.exists() {
-        fs::rename(&legacy, &current)
-            .map_err(|error| format!("failed to migrate ~/.mniu to ~/.muniu: {error}"))?;
-    }
-    Ok(current)
-}
-
-fn settings_path() -> Result<PathBuf, String> {
-    Ok(muniu_root_path()?.join("settings.json"))
-}
-
-fn normalize_settings(mut settings: DesktopSettings) -> DesktopSettings {
-    if !matches!(settings.theme.as_str(), "system" | "light" | "dark") {
-        settings.theme = DesktopSettings::default().theme;
-    }
-    if !matches!(
-        settings.close_behavior.as_str(),
-        "quit" | "tray" | "lightweight"
-    ) {
-        settings.close_behavior = DesktopSettings::default().close_behavior;
-    }
-    if settings.api_url.trim().is_empty() {
-        settings.api_url = DesktopSettings::default().api_url;
-    }
-    settings
-}
-
 fn build_tray(app: &tauri::App) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
     use tauri::tray::TrayIconBuilder;
 
-    let menu = tray_menu(app, &[], &[], false)?;
+    let open = MenuItem::with_id(app, "open", "打开木牛", true, None::<&str>)?;
+    let inbox = MenuItem::with_id(app, "inbox", "收件箱", true, None::<&str>)?;
+    let capture = MenuItem::with_id(app, "capture", "快速记录", true, None::<&str>)?;
+    let separator = PredefinedMenuItem::separator(app)?;
+    let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&open, &inbox, &capture, &separator, &quit])?;
 
     TrayIconBuilder::with_id("main")
-        .tooltip("木牛")
+        .tooltip("木牛 Agent OS")
         .menu(&menu)
         .show_menu_on_left_click(true)
-        .on_menu_event(|app, event| {
-            let event_id = event.id().as_ref();
-            match event_id {
-                "open" => {
-                    let _ = show_or_recreate_main_window(app);
-                }
-                "light_mode" => {
-                    if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.destroy();
-                    }
-                }
-                "refresh_providers" => {
-                    let handle = app.clone();
-                    tauri::async_runtime::spawn(async move {
-                        let _ = refresh_tray_providers(&handle).await;
-                    });
-                }
-                "toggle_proxy" => {
-                    let handle = app.clone();
-                    tauri::async_runtime::spawn(async move {
-                        if let Err(error) = toggle_tray_proxy(&handle).await {
-                            let _ = handle.emit("tray-action-error", error);
-                        }
-                    });
-                }
-                "quit" => app.exit(0),
-                _ => {
-                    if let Some((app_id, provider_id)) = parse_tray_provider_event(event_id) {
-                        let app_id = app_id.to_string();
-                        let provider_id = provider_id.to_string();
-                        let handle = app.clone();
-                        tauri::async_runtime::spawn(async move {
-                            if let Err(error) =
-                                switch_tray_provider(&handle, &app_id, &provider_id).await
-                            {
-                                let _ = handle.emit("tray-provider-error", error);
-                            }
-                        });
-                    }
-                }
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "open" => {
+                let _ = show_main_window(app);
             }
+            "inbox" => {
+                let _ = show_main_window(app);
+                let _ = app.emit("desktop:navigate", "inbox");
+            }
+            "capture" => {
+                let _ = show_main_window(app);
+                let _ = app.emit("desktop:quick-capture", ());
+            }
+            "quit" => app.exit(0),
+            _ => {}
         })
         .build(app)?;
 
     Ok(())
 }
 
-fn tray_menu(
-    app: &impl Manager<tauri::Wry>,
-    claude: &[TrayProvider],
-    codex: &[TrayProvider],
-    proxy_running: bool,
-) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
-    use tauri::menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
-
-    fn provider_submenu(
-        app: &impl Manager<tauri::Wry>,
-        label: &str,
-        app_id: &str,
-        providers: &[TrayProvider],
-    ) -> tauri::Result<Submenu<tauri::Wry>> {
-        let mut items = Vec::new();
-        if providers.is_empty() {
-            items.push(MenuItem::with_id(
-                app,
-                format!("provider_empty:{app_id}"),
-                "暂无 Provider",
-                false,
-                None::<&str>,
-            )?);
-        } else {
-            for provider in providers {
-                let state = if provider.enabled { "✓ " } else { "" };
-                items.push(MenuItem::with_id(
-                    app,
-                    format!("provider:{app_id}:{}", provider.id),
-                    format!("{state}{}", provider.name),
-                    !provider.enabled,
-                    None::<&str>,
-                )?);
-            }
-        }
-        let refs: Vec<&dyn IsMenuItem<tauri::Wry>> = items
-            .iter()
-            .map(|item| item as &dyn IsMenuItem<tauri::Wry>)
-            .collect();
-        Submenu::with_items(app, label, true, &refs)
-    }
-
-    let claude_menu = provider_submenu(app, "Claude Code", "claude", claude)?;
-    let codex_menu = provider_submenu(app, "Codex", "codex", codex)?;
-    let refresh = MenuItem::with_id(
-        app,
-        "refresh_providers",
-        "刷新 Provider",
-        true,
-        None::<&str>,
-    )?;
-    let proxy = MenuItem::with_id(
-        app,
-        "toggle_proxy",
-        if proxy_running {
-            "本地代理：停止"
-        } else {
-            "本地代理：启动"
-        },
-        true,
-        None::<&str>,
-    )?;
-    let separator = PredefinedMenuItem::separator(app)?;
-    let open = MenuItem::with_id(app, "open", "打开主界面", true, None::<&str>)?;
-    let light_mode = MenuItem::with_id(app, "light_mode", "轻量模式", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-    Menu::with_items(
-        app,
-        &[
-            &open,
-            &claude_menu,
-            &codex_menu,
-            &refresh,
-            &proxy,
-            &separator,
-            &light_mode,
-            &quit,
-        ],
-    )
+fn show_main_window(app: &tauri::AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "主窗口不可用".to_string())?;
+    window.show().map_err(|error| error.to_string())?;
+    window.set_focus().map_err(|error| error.to_string())
 }
 
-async fn refresh_tray_providers(app: &tauri::AppHandle) -> Result<(), String> {
-    let api_url = desktop_api_url();
-    let client = reqwest::Client::new();
-    let claude = fetch_tray_providers(&client, &api_url, "claude")
-        .await
-        .map_err(|error| error.to_string())?;
-    let codex = fetch_tray_providers(&client, &api_url, "codex")
-        .await
-        .map_err(|error| error.to_string())?;
-    let proxy_running = fetch_tray_proxy_running(&client, &api_url)
-        .await
-        .map_err(|error| error.to_string())?;
-    let menu = tray_menu(app, &claude, &codex, proxy_running).map_err(|error| error.to_string())?;
-    let tray = app
-        .tray_by_id("main")
-        .ok_or_else(|| "main tray is missing".to_string())?;
-    tray.set_menu(Some(menu)).map_err(|error| error.to_string())
-}
-
-async fn fetch_tray_proxy_running(
-    client: &reqwest::Client,
-    api_url: &str,
-) -> Result<bool, reqwest::Error> {
-    Ok(client
-        .get(format!("{api_url}/v1/proxy/status"))
-        .send()
-        .await?
-        .error_for_status()?
-        .json::<TrayProxyStatus>()
-        .await?
-        .runtime
-        .running)
-}
-
-async fn toggle_tray_proxy(app: &tauri::AppHandle) -> Result<(), String> {
-    let api_url = desktop_api_url();
-    let client = reqwest::Client::new();
-    let running = fetch_tray_proxy_running(&client, &api_url)
-        .await
-        .map_err(|error| error.to_string())?;
-    let action = if running { "stop" } else { "start" };
-    client
-        .post(format!("{api_url}/v1/proxy/{action}"))
-        .json(&serde_json::json!({}))
-        .send()
-        .await
-        .map_err(|error| error.to_string())?
-        .error_for_status()
-        .map_err(|error| error.to_string())?;
-    refresh_tray_providers(app).await?;
-    app.emit(
-        "tray-proxy-changed",
-        serde_json::json!({ "running": !running }),
-    )
-    .map_err(|error| error.to_string())?;
-    Ok(())
-}
-
-async fn fetch_tray_providers(
-    client: &reqwest::Client,
-    api_url: &str,
-    app_id: &str,
-) -> Result<Vec<TrayProvider>, reqwest::Error> {
-    Ok(client
-        .get(format!("{api_url}/v1/providers?app={app_id}"))
-        .send()
-        .await?
-        .error_for_status()?
-        .json::<TrayProviderList>()
-        .await?
-        .providers)
-}
-
-async fn switch_tray_provider(
+fn spawn_managed_host(
     app: &tauri::AppHandle,
-    app_id: &str,
-    provider_id: &str,
-) -> Result<(), String> {
-    let api_url = desktop_api_url();
-    let client = reqwest::Client::new();
-    request_tray_provider_switch(&client, &api_url, app_id, provider_id).await?;
-    show_or_recreate_main_window(app)?;
-    app.emit(
-        "tray-provider-preview",
-        serde_json::json!({ "app": app_id, "providerId": provider_id }),
-    )
-    .map_err(|error| error.to_string())?;
-    Ok(())
-}
-
-fn parse_tray_provider_event(event_id: &str) -> Option<(&str, &str)> {
-    let mut parts = event_id.split(':');
-    if parts.next()? != "provider" {
-        return None;
-    }
-    let app_id = parts.next()?;
-    let provider_id = parts.next()?;
-    if parts.next().is_some() || !matches!(app_id, "claude" | "codex") || provider_id.is_empty() {
-        return None;
-    }
-    Some((app_id, provider_id))
-}
-
-async fn request_tray_provider_switch(
-    client: &reqwest::Client,
-    api_url: &str,
-    app_id: &str,
-    provider_id: &str,
-) -> Result<(), String> {
-    let url = format!("{api_url}/v1/providers/{provider_id}/enable");
-    client
-        .post(&url)
-        .json(&serde_json::json!({ "app": app_id, "dryRun": true }))
-        .send()
-        .await
-        .map_err(|error| error.to_string())?
-        .error_for_status()
-        .map_err(|error| error.to_string())?;
-    Ok(())
-}
-
-fn desktop_api_url() -> String {
-    read_desktop_settings()
-        .unwrap_or_default()
-        .api_url
-        .trim_end_matches('/')
-        .to_string()
-}
-
-fn spawn_managed_daemon(
-    app: &tauri::AppHandle,
-) -> Result<Option<CommandChild>, Box<dyn std::error::Error>> {
-    let settings = read_desktop_settings().unwrap_or_default();
-    let api_url = reqwest::Url::parse(&settings.api_url)?;
-    let host = api_url.host_str().unwrap_or("127.0.0.1");
-    if !matches!(host, "127.0.0.1" | "localhost" | "::1") {
-        return Ok(None);
-    }
-    let port = api_url.port_or_known_default().unwrap_or(7318).to_string();
-    let mniu_root = muniu_root_path().map_err(std::io::Error::other)?;
-    let runtime_root = app.path().resource_dir()?.join("runtime");
-    fs::create_dir_all(&mniu_root)?;
+) -> Result<CommandChild, Box<dyn std::error::Error>> {
+    let state_root = v2_state_root(app)?;
+    fs::create_dir_all(&state_root)?;
     let (mut events, child) = app
         .shell()
-        .sidecar("mn-api")?
-        .current_dir(&mniu_root)
-        .env("MN_API_HOST", "127.0.0.1")
-        .env("MN_API_PORT", &port)
-        .env("MN_MNIU_ROOT", mniu_root.as_os_str())
-        .env(
-            "MN_API_STATE_PATH",
-            mniu_root.join("api-state.json").as_os_str(),
-        )
-        .env("MN_WORKSPACE_ROOT", mniu_root.join("worktrees").as_os_str())
-        .env(
-            "MN_RUNTIME_BASE_PATH",
-            runtime_root.join("base.yml").as_os_str(),
-        )
-        .env(
-            "MN_RUNTIME_PROFILE_PATH",
-            runtime_root.join("profiles").join("local.yml").as_os_str(),
-        )
-        .env("MN_DESKTOP_PACKAGED", "1")
+        .sidecar("mn-host")?
+        .current_dir(&state_root)
+        .env("MN_HOST_ADDRESS", HOST_ADDRESS)
+        .env("MN_HOST_PORT", HOST_PORT.to_string())
+        .env("MN_V2_STATE_ROOT", state_root.as_os_str())
         .env("MN_DESKTOP_PARENT_PID", std::process::id().to_string())
         .spawn()?;
+
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
         while let Some(event) = events.recv().await {
             match event {
-                CommandEvent::Stdout(line) => {
-                    let _ = handle.emit("daemon-log", String::from_utf8_lossy(&line).to_string());
-                }
-                CommandEvent::Stderr(line) => {
-                    let _ = handle.emit("daemon-log", String::from_utf8_lossy(&line).to_string());
-                }
                 CommandEvent::Terminated(status) => {
                     let _ = handle.emit(
-                        "daemon-status",
+                        "desktop:host-status",
                         serde_json::json!({ "running": false, "code": status.code }),
                     );
                 }
+                CommandEvent::Error(error) => {
+                    let _ = handle.emit(
+                        "desktop:host-status",
+                        serde_json::json!({ "running": false, "message": redact_message(&error) }),
+                    );
+                }
+                CommandEvent::Stdout(_) | CommandEvent::Stderr(_) => {}
                 _ => {}
             }
         }
     });
-    Ok(Some(child))
+
+    Ok(child)
 }
 
-fn show_or_recreate_main_window(app: &tauri::AppHandle) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window("main") {
-        window.show().map_err(|error| error.to_string())?;
-        window.set_focus().map_err(|error| error.to_string())?;
-        return Ok(());
+fn stop_managed_host(app: &tauri::AppHandle) {
+    if let Ok(mut child) = app.state::<ManagedHost>().0.lock() {
+        if let Some(child) = child.take() {
+            let _ = child.kill();
+        }
     }
+}
 
-    let config = app.config();
-    let window_config = config
-        .app
-        .windows
-        .first()
-        .ok_or_else(|| "main window config is missing".to_string())?;
-    let window = tauri::WebviewWindowBuilder::from_config(app, window_config)
-        .map_err(|error| error.to_string())?
-        .build()
-        .map_err(|error| error.to_string())?;
-    window.show().map_err(|error| error.to_string())?;
-    window.set_focus().map_err(|error| error.to_string())?;
-    Ok(())
+fn v2_state_root(app: &tauri::AppHandle) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    Ok(v2_state_root_from_home(&app.path().home_dir()?))
+}
+
+fn v2_state_root_from_home(home: &Path) -> PathBuf {
+    home.join(".muniu").join("v2")
+}
+
+fn settings_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    v2_state_root(app)
+        .map(|root| root.join("desktop-settings.json"))
+        .map_err(|error| error.to_string())
+}
+
+fn normalize_settings(mut settings: DesktopSettings) -> DesktopSettings {
+    if !matches!(settings.theme.as_str(), "system" | "light" | "dark") {
+        settings.theme = DesktopSettings::default().theme;
+    }
+    if !matches!(settings.close_behavior.as_str(), "quit" | "tray") {
+        settings.close_behavior = DesktopSettings::default().close_behavior;
+    }
+    settings
+}
+
+fn host_port_is_occupied() -> bool {
+    let address = SocketAddr::from(([127, 0, 0, 1], HOST_PORT));
+    TcpStream::connect_timeout(&address, Duration::from_millis(180)).is_ok()
+}
+
+fn write_private_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let temporary = path.with_extension("json.tmp");
+    let mut options = OpenOptions::new();
+    options.create(true).write(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&temporary).map_err(|error| error.to_string())?;
+    file.write_all(bytes).map_err(|error| error.to_string())?;
+    file.sync_all().map_err(|error| error.to_string())?;
+    fs::rename(temporary, path).map_err(|error| error.to_string())
+}
+
+fn redact_message(message: &str) -> String {
+    let lower = message.to_ascii_lowercase();
+    if ["api_key", "apikey", "bearer", "password", "secret", "token"]
+        .iter()
+        .any(|marker| lower.contains(marker))
+    {
+        return "mn-host 运行失败，错误详情中的敏感信息已隐藏".to_string();
+    }
+    message.chars().take(512).collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_tray_provider_event, request_tray_provider_switch};
-    use std::io::{Read, Write};
-    use std::net::TcpListener;
-    use std::thread;
+    use super::{normalize_settings, redact_message, v2_state_root_from_home, DesktopSettings};
+    use std::path::Path;
 
     #[test]
-    fn tray_provider_event_parser_rejects_invalid_targets() {
+    fn v2_state_is_isolated_from_every_legacy_path() {
         assert_eq!(
-            parse_tray_provider_event("provider:claude:p-1"),
-            Some(("claude", "p-1"))
+            v2_state_root_from_home(Path::new("/Users/test")),
+            Path::new("/Users/test/.muniu/v2")
         );
-        assert_eq!(
-            parse_tray_provider_event("provider:codex:p-2"),
-            Some(("codex", "p-2"))
-        );
-        assert_eq!(parse_tray_provider_event("provider:other:p-3"), None);
-        assert_eq!(parse_tray_provider_event("provider:codex:"), None);
-        assert_eq!(parse_tray_provider_event("provider:codex:p-2:extra"), None);
-        assert_eq!(parse_tray_provider_event("refresh_providers"), None);
     }
 
     #[test]
-    fn tray_provider_switch_only_runs_preview() {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock provider server");
-        let address = listener.local_addr().expect("read mock server address");
-        let server = thread::spawn(move || {
-            let mut requests = Vec::new();
-            for _ in 0..1 {
-                let (mut stream, _) = listener.accept().expect("accept provider request");
-                let mut bytes = Vec::new();
-                let mut buffer = [0_u8; 2048];
-                loop {
-                    let read = stream.read(&mut buffer).expect("read provider request");
-                    if read == 0 {
-                        break;
-                    }
-                    bytes.extend_from_slice(&buffer[..read]);
-                    let text = String::from_utf8_lossy(&bytes);
-                    if let Some(header_end) = text.find("\r\n\r\n") {
-                        let content_length = text[..header_end]
-                            .lines()
-                            .find_map(|line| {
-                                line.to_ascii_lowercase()
-                                    .strip_prefix("content-length:")
-                                    .and_then(|value| value.trim().parse::<usize>().ok())
-                            })
-                            .unwrap_or(0);
-                        if bytes.len() >= header_end + 4 + content_length {
-                            break;
-                        }
-                    }
-                }
-                requests.push(String::from_utf8(bytes).expect("valid HTTP request"));
-                stream
-                    .write_all(
-                        b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}",
-                    )
-                    .expect("write provider response");
+    fn settings_reject_hidden_legacy_modes() {
+        assert_eq!(
+            normalize_settings(DesktopSettings {
+                theme: "neon".to_string(),
+                close_behavior: "lightweight".to_string(),
+                launch_at_login: true,
+            }),
+            DesktopSettings {
+                theme: "system".to_string(),
+                close_behavior: "tray".to_string(),
+                launch_at_login: true,
             }
-            requests
-        });
+        );
+    }
 
-        tauri::async_runtime::block_on(request_tray_provider_switch(
-            &reqwest::Client::new(),
-            &format!("http://{address}"),
-            "codex",
-            "provider-1",
-        ))
-        .expect("switch provider through tray request flow");
-
-        let requests = server.join().expect("join mock provider server");
-        assert!(requests[0].starts_with("POST /v1/providers/provider-1/enable HTTP/1.1"));
-        assert!(requests[0].contains(r#"{"app":"codex","dryRun":true}"#));
-        assert_eq!(requests.len(), 1);
+    #[test]
+    fn host_errors_are_redacted_before_the_webview_sees_them() {
+        assert_eq!(
+            redact_message("request failed with bearer token"),
+            "mn-host 运行失败，错误详情中的敏感信息已隐藏"
+        );
+        assert_eq!(redact_message("address already in use"), "address already in use");
     }
 }

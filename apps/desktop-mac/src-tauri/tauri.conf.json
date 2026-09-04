@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "木牛",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "identifier": "dev.muniu.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -23,34 +23,17 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: data: blob:; font-src 'self' data:; connect-src 'self' http://127.0.0.1:7318; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'",
+      "devCsp": "default-src 'self' http://127.0.0.1:5173; script-src 'self' http://127.0.0.1:5173; style-src 'self' 'unsafe-inline' http://127.0.0.1:5173; img-src 'self' asset: data: blob:; font-src 'self' data:; connect-src 'self' http://127.0.0.1:7318 http://127.0.0.1:5173 ws://127.0.0.1:5173; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'"
     }
   },
   "bundle": {
     "active": true,
     "createUpdaterArtifacts": false,
-    "externalBin": ["binaries/mn-api"],
-    "resources": {
-      "binaries/mn-api-aarch64-apple-darwin": "mn-api-aarch64-apple-darwin",
-      "binaries/mn-api-x86_64-apple-darwin": "mn-api-x86_64-apple-darwin",
-      "binaries/mn-descriptor-lock-aarch64-apple-darwin": "mn-descriptor-lock-aarch64-apple-darwin",
-      "binaries/mn-descriptor-lock-x86_64-apple-darwin": "mn-descriptor-lock-x86_64-apple-darwin",
-      "../../../config/runtime/base.yml": "runtime/base.yml",
-      "../../../config/runtime/profiles/local.yml": "runtime/profiles/local.yml",
-      "../../../config/runtime/profiles/enterprise-api.yml": "runtime/profiles/enterprise-api.yml",
-      "../../../config/runtime/profiles/enterprise-worker.yml": "runtime/profiles/enterprise-worker.yml",
-      "../../../config/runtime/profiles/desktop.yml": "runtime/profiles/desktop.yml"
-    },
+    "externalBin": ["binaries/mn-host"],
     "targets": ["dmg", "app"],
     "macOS": {
       "minimumSystemVersion": "12.0"
-    }
-  },
-  "plugins": {
-    "deep-link": {
-      "desktop": {
-        "schemes": ["muniu", "mniu"]
-      }
     }
   }
 }

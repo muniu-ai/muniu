@@ -1,6 +1,6 @@
 {
   "name": "@mn/desktop-mac",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
   "license": "Apache-2.0",
   "repository": "https://github.com/muniu-ai/muniu",
@@ -10,11 +10,9 @@
     "build": "tsc -p tsconfig.json && vite build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "preview": "vite preview --host 127.0.0.1",
-    "verify:extensions-ui": "node scripts/verify-extensions-ui.mjs",
-    "verify:observability-ui": "node scripts/verify-observability-ui.mjs",
-    "verify:task-fusion-ui": "node scripts/verify-task-fusion-ui.mjs",
-    "verify:settings-ui": "node scripts/verify-settings-ui.mjs",
-    "verify:close-behavior-source": "node scripts/verify-close-behavior-source.mjs",
+    "verify:opc-ui": "node scripts/verify-agent-os-ui.mjs opc",
+    "verify:coding-ui": "node scripts/verify-agent-os-ui.mjs coding",
+    "verify:onboarding-ui": "node scripts/verify-agent-os-ui.mjs onboarding",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "node scripts/build-macos-release.mjs",
@@ -29,13 +27,6 @@
     "vite": "^8.1.3"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2.11.1",
-    "@tauri-apps/plugin-autostart": "^2.5.1",
-    "@tauri-apps/plugin-deep-link": "^2.4.9",
-    "@tauri-apps/plugin-dialog": "^2.7.1",
-    "@tauri-apps/plugin-fs": "^2.5.1",
-    "@tauri-apps/plugin-opener": "^2.5.4",
-    "@tauri-apps/plugin-process": "^2.3.1",
     "lucide-react": "^1.23.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
