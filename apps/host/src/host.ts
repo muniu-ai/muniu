@@ -1004,8 +1004,9 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         "先在工作区启用对应 Runner 插件",
       );
     }
-    const scope = await ensurePluginsActive(tenantId, workspace);
-    const health = (await plugins.health(scope)).plugins.find((entry) => entry.pluginId === pluginId);
+    const runtime = await runtimeForTenant(tenantId);
+    const scope = await ensurePluginsActive(tenantId, workspace, runtime);
+    const health = (await runtime.plugins.health(scope)).plugins.find((entry) => entry.pluginId === pluginId);
     if (!health) {
       throw new PluginPolicyError(
         "PLUGIN_NOT_ACTIVE",
@@ -1017,9 +1018,9 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
       throw new PluginBoundaryError(pluginId, "health", new Error(health.message ?? "Runner 插件已降级"));
     }
     const expectedToolId = runnerToolId(runnerId);
-    const declaredTool = plugins.definition(pluginId)?.contributions.tools
+    const declaredTool = runtime.plugins.definition(pluginId)?.contributions.tools
       .find((tool) => tool.id === expectedToolId && tool.effectClass === "external_side_effect");
-    const activeTool = plugins.contributions(scope).tools
+    const activeTool = runtime.plugins.contributions(scope).tools
       .find((tool) => tool.id === expectedToolId && tool.effectClass === "external_side_effect");
     if (!declaredTool || !activeTool) {
       throw new PluginPolicyError(
