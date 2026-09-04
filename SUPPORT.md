@@ -1,20 +1,14 @@
 # Support
 
-Muniu v0.1.x is a community-supported Developer Preview with no warranty,
-service-level agreement, or guaranteed response time.
+Muniu Agent OS 0.2 is community supported and provided without a service-level agreement or guaranteed response time.
 
+- Read the [quick start](docs/quickstart.md) and [troubleshooting guide](docs/troubleshooting.md) before opening a report.
 - Use GitHub Discussions for usage questions when enabled.
 - Use GitHub Issues for reproducible bugs and focused feature proposals.
-- Use GitHub private vulnerability reporting for security issues.
-- Consult README.md, docs/TECHNICAL_DESIGN.md, and docs/plans before opening an
-  issue.
+- Use [GitHub private vulnerability reporting](https://github.com/muniu-ai/muniu/security/advisories/new) for security issues.
 
-Include the exact Muniu version/commit, macOS and CPU architecture, Node/npm
-versions, configuration with secrets removed, expected behavior, actual
-behavior, and minimal reproduction. Do not upload project source, model
-prompts, logs, databases, or credentials unless they are sanitized and
-necessary for the report.
+Include the exact version and commit, operating system and CPU architecture, Node/npm versions, affected Host or Worker profile, plugin versions and digests, expected behavior, actual behavior, and a minimal reproduction. For API errors, include the `traceId` and redacted error code.
 
-Support for enterprise deployment examples does not create a commercial
-support commitment. Downstream distributions are responsible for their own
-binaries, signing, updates, and user support.
+Do not upload credentials, Keychain or Vault/KMS content, local databases, raw event payloads, customer records, interview transcripts, repository source, complete model context, or unredacted diagnostics. Follow the [redaction policy](docs/security/redaction-policy.md) and share only the minimum material needed to reproduce the issue.
+
+Enterprise deployment examples and verification fixtures do not create a commercial support commitment or certify a production environment. Downstream distributors remain responsible for their binaries, signatures, plugin trust roots, retention policies, upgrades, and user support.

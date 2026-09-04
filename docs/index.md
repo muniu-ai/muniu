@@ -1,24 +1,33 @@
-# Muniu 文档
+# 木牛 Agent OS 0.2
 
-Muniu v0.1.1 的文档以代码和测试事实为准。根 README 只负责定位、状态与导航；CLI、API、配置和事件参考由脚本生成到 `docs/reference/`。
+木牛把桌面端、CLI 和 API 收敛到一个 Agent OS 内核。OPC 与 Coding 是随应用提供的产品插件，共用工作区、会话、执行、审批、事件、记忆、成果和任务恢复能力。
 
-## 入门
+## 从这里开始
 
-- [快速开始](quickstart.md) / [Quickstart](quickstart.en.md)
-- [架构](architecture.md) / [Architecture](architecture.en.md)
-- [插件开发](plugin-authoring.md) / [Plugin authoring](plugin-authoring.en.md)
+- [快速开始](./quickstart.md)：完成四屏向导并创建第一个工作区。
+- [架构](./architecture.md)：了解 Scope、事件、权限、恢复与产品边界。
+- [CLI 参考](./reference/cli.md)：使用 `mn` 操作工作区、收件箱、OPC 和 Coding。
+- [API 路由](./reference/api-routes.md)：查看 HTTP、幂等、并发与 SSE 契约。
+- [插件开发](./plugin-authoring.md)：声明贡献、权限、投影和供应链元数据。
+- [企业运维](./enterprise-operations.md)：部署多副本 Host/Worker 与外部存储。
+- [安全边界](./security/overview.md)：核对插件、工具、密钥和数据治理边界。
 
-## 运维与迁移
+## 产品体验
 
-- [企业运维](enterprise-operations.md)
-- [故障排查](troubleshooting.md)
-- [v0.1 迁移指南](migration-v0.1.md)
-- [Helm Chart](https://github.com/muniu-ai/muniu/tree/main/deploy/helm/muniu)
+一级导航固定为首页、工作区、收件箱、成果和活动。Agents、集成与设置默认折叠。`Cmd-K` 可搜索命令、机会、Coding 任务、Skill 和成果；快速捕获始终绑定当前工作区。
 
-## 设计与历史
+经营视图隐藏内部标识和执行细节，专业视图原位展开。两种视图产生相同的 API 请求与事件序列。工具日志默认折叠为阶段卡和结果卡，成果、审批与下一步优先展示。
 
-- [企业 SDD 循环](ENTERPRISE_SDD_LOOP.md)
-- [技术设计](TECHNICAL_DESIGN.md)
-- [ADR](https://github.com/muniu-ai/muniu/tree/main/docs/adr)
-- [历史计划](https://github.com/muniu-ai/muniu/tree/main/docs/plans)
-- [上游来源](upstream-provenance/deepseek-harness.yaml)
+## 插件概览
+
+OPC 将一句自然语言输入整理为可审阅的机会对象，再沿“定义问题、研究、访谈、评估、最小收费方案、人工决策”推进。原始访谈只追加标注；承诺与付费证据必须人工确认。证据不足时，界面和导出物只显示“方案待验证”。
+
+Coding 以仓库和任务组织会话，沿“发现、规格、影响、实现、验证、审批、学习”推进。内置 Agent 为默认 Runner；外部 Runner 需要显式启用并固定二进制身份。
+
+## 运行保证
+
+- 本地以 SQLite WAL/FULL 为权威存储；企业以 PostgreSQL 为权威存储。
+- 事件、投影、Job、outbox 与审批状态在同一数据库事务提交。
+- CAS 按摘要 create-only 写入，提交事件后才成为事实引用。
+- 工具承诺先持久化再执行；结果未知的外部副作用进入人工核对。
+- 插件故障只降低对应插件能力，核心首页、收件箱、设置和其他插件保持可用。

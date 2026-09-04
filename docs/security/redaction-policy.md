@@ -1,30 +1,41 @@
-# Data redaction policy
+# 日志与导出脱敏
 
-Muniu treats business content and security credentials as different data
-classes. This distinction is normative for API, CLI, desktop, persisted event,
-diagnostic, evidence, and release-output implementations.
+日志、错误、审计摘要、诊断包和测试输出只记录定位问题所需的最少信息。原始模型上下文、访谈全文、客户附件和敏感 payload 不得进入普通日志。
 
-## Business content
+## 凭据
 
-Only the following business-content values are redacted:
+以下内容始终隐藏，debug、verbose、管理员或原始导出选项也不能绕过：
 
-- mobile/cellular phone numbers;
-- government-issued identity card numbers (including PRC resident ID).
+- 模型 API Key、访问 token 与刷新 token；
+- 密码、会话 cookie、授权 header；
+- 私钥、KMS 明文材料与 Keychain 内容；
+- 数据库、S3 和插件仓库凭据。
 
-Names, email addresses, postal addresses, filesystem paths, ordinary
-usernames, and model-generated text are not redacted merely because they are
-business content. A feature must not silently expand this list without an
-explicit policy change and compatibility review.
+日志可以记录稳定的连接 ID、key ID、摘要前缀和错误 code，但不能记录 secret 引用中可还原凭据的部分。
 
-## Credentials
+## 业务数据
 
-API keys, access or refresh tokens, passwords, private keys, and equivalent
-authentication material are always hidden. Credential hiding applies even
-when a raw, debug, verbose, export, replay, or administrator option is enabled;
-such an option must never bypass the credential boundary.
+业务内容与凭据分开分类。默认检测器对中国大陆手机号和政府签发身份证件号码做脱敏。姓名、邮箱、邮政地址、文件路径、普通用户名和模型文本不会仅因属于业务内容而自动替换；调用方仍应避免把它们写入日志。
 
-Repository secret scanning and release credential gates remain fail-closed and
-are not relaxed by the narrow business-content rule. Phase 02 records this
-policy only. Central implementation and transport contract tests belong to
-phase 03, product-surface consistency belongs to phase 05, and artifact/log
-acceptance scans belong to phase 06.
+以下内容必须放入受保护 payload/CAS，而不是公开事件或日志：
+
+- 原始访谈、人工记录与客户材料；
+- 未公开的商业假设、价格信息与承诺证据；
+- 代码库中的 secret-bearing 文件；
+- 被用户标记为敏感的附件和记忆。
+
+公开事件只保留对象标识、分类、摘要和必要状态。诊断包应在导出前再次扫描并让用户预览文件清单。
+
+## 错误与追踪
+
+API 错误使用 `code/message/action/fieldIssues/traceId/retryable`。`message` 与 `fieldIssues` 不回显原始密钥、请求 body 或受保护内容。关联排查使用 `traceId`，不用完整请求复制日志。
+
+工具日志记录工具 ID、版本、effect class、参数摘要、资源摘要、generation 和 authority commitment，不记录敏感参数明文。公开网页工具只记录来源、时间、MIME、大小和内容摘要；保存摘录时进入领域证据存储。
+
+## 删除
+
+删除敏感对象时销毁对应数据密钥并追加 tombstone。审计只保留操作者、时间、对象摘要和删除原因。已经发送到模型或外部服务的数据无法召回，删除和授权界面必须说明这一限制。
+
+## 验收
+
+针对日志、事件、SSE、CLI JSON、诊断包、成果导出、失败堆栈和测试输出运行相同的 secret fixture。发现凭据时必须阻断发布，不得只在 UI 隐藏。

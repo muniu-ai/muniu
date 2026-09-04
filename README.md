@@ -1,189 +1,90 @@
-# Muniu
+# 木牛 Agent OS 0.2
 
-[中文](README.zh-CN.md) · [Documentation](docs/index.md) · [Security](SECURITY.md) · [Contributing](CONTRIBUTING.md)
+[文档](docs/index.md) · [快速开始](docs/quickstart.md) · [架构](docs/architecture.md) · [安全](docs/security/overview.md) · [参与贡献](CONTRIBUTING.md)
 
-Muniu is an open-source, evidence-first coding-agent control plane. It turns an engineering task into a durable chain:
+木牛是面向本地与企业环境的 Agent OS。桌面端、CLI 和 API 共用一个内核；OPC 与 Coding 作为产品插件，共用会话、执行、审批、事件、记忆、成果和持久任务。
 
 ```text
-task → run → candidate → gate → evidence
+Desktop / CLI / API Shell
+            ↓
+      Agent OS 内核
+      ↙          ↘
+  OPC 插件      Coding 插件
+                    ↘
+          Claude / Codex Runner Adapter
 ```
 
-The default runtime is the embedded `builtin` Agent. Claude Code and Codex CLI remain explicit compatibility runtimes; they are not required for a default engineering run.
+## 0.2 的使用边界
 
-> v0.1.1 is a Developer Preview. Do not infer production readiness from an API or configuration surface alone; use the status matrix below.
+- 本地版以 macOS 为首要体验，状态保存在 `~/.muniu/v2`，模型密钥写入独立的 macOS Keychain service。
+- 企业版使用 PostgreSQL、S3 与 Vault/KMS，可部署多个 Host 和 Worker 副本。
+- OPC 覆盖机会发现、证据验证、人工访谈、反证、最小收费方案与人工决策；不提供 CRM、自动外联、发布、报价发送或收款工具。
+- Coding 保留 Spec、Governance、Harness、Gate、Evidence 和 fail-closed sandbox；内置 Agent 是默认 Runner，Claude 与 Codex CLI 仅在显式选择后使用。
+- 生产插件是与 Host 同进程的可信代码，不是沙箱。安装前必须核对来源、权限、版本和摘要。
+- 遥测默认关闭，BYOK 是唯一模型接入方式。
 
-## Why Muniu
+## 本地启动
 
-- Durable Agent sessions bind model input, tool calls, approvals and results.
-- Multiple candidates run under one immutable strategy and Gate plan.
-- Evidence remains attributable to its runtime, model, profile, plugin set and sandbox capability.
-- Local, enterprise API, enterprise worker and macOS Desktop share runtime contracts.
-- Cordis provides dependency injection, isolated Contexts, effects, cleanup, executable configuration and trusted plugin reload.
-
-## Status
-
-| Capability | Status | Notes |
-| --- | --- | --- |
-| Task/run/candidate/Gate/evidence flow | Implemented | Durable local state; governed checkpoints |
-| Embedded builtin Agent | Implemented | Provider/model binding required |
-| Workspace tools | Implemented | Boundary, policy, approval, timeout and audit |
-| Gate repair loop | Implemented | Bounded structured failure feedback |
-| Agent session recovery | Implemented | Enterprise S3 retains runtime overlays |
-| Cordis Context/effects/events | Implemented | Fixed upstream snapshot and provenance |
-| Trusted local/npm plugins | Experimental | Same authority as host; not a sandbox |
-| Claude/Codex CLI runtimes | Compatibility | Selected explicitly |
-| PostgreSQL/S3 enterprise sessions | Experimental | Tenant CAS and integrity verification |
-| Multi-replica run queue | Implemented | PostgreSQL authoritative |
-| Helm API/Worker deployment | Experimental | Shared PVC, least-privilege RBAC and independent replicas |
-| Kubernetes candidate sandbox Pods | Experimental | CAS source, runtime verification, authority Gate Pod and Kind fault-injection suite |
-| Enterprise builtin model/tool relay | Experimental | PostgreSQL generations/mailbox/approvals; multi-replica Kind recovery |
-| macOS Desktop build | Implemented | No v0.1 signing/notarization/updater promise |
-| Release/SBOM/provenance | Release workflow | Produced for published tags |
-
-v0.1.1 does not publish or enable a desktop runtime updater. Signing,
-notarization and automatic-update artifacts remain outside this release.
-
-## Five-minute local start
-
-Prerequisites: Node.js `22.19.x`, npm `11.10.1`, and Git.
+需要 Node.js `22.19.x`、npm `11.10.1`、Git、Rust 工具链和 Apple 构建工具。
 
 ```bash
 git clone https://github.com/muniu-ai/muniu.git
 cd muniu
 npm ci
-npm run build
-npm run dev:api
+npm run build:host-sidecar
+npm run tauri:dev -w @mn/desktop-mac
 ```
 
-In another terminal:
+首次启动按四屏向导选择视图、启用插件、连接模型，再创建工作区与第一个机会或仓库。经营视图和专业视图调用同一接口，只改变信息密度。
+
+CLI 连接本机 Host，默认地址为 `http://127.0.0.1:7318`：
 
 ```bash
-node apps/cli/dist/index.js init
-node apps/cli/dist/index.js doctor
-node apps/cli/dist/index.js agent run \
-  --provider YOUR_PROVIDER_ID \
-  --model YOUR_MODEL_ID \
-  --prompt "Inspect this repository and improve one focused issue" \
-  --cwd .
+node apps/cli/dist/index.js setup \
+  --view business \
+  --plugins opc,coding \
+  --workspace "我的工作区"
+node apps/cli/dist/index.js doctor --fix
 ```
 
-Create the provider first with `mn provider add` or the Desktop settings UI. The builtin Agent fails closed when its provider/model binding is missing or disabled.
+请在桌面向导中录入模型密钥，避免密钥进入 shell history。完整命令见 [CLI 参考](docs/reference/cli.md)。
 
-## Minimal strategy
+## 工作区结构
 
-New writes use `ExecutionStrategyV2`:
+| 路径 | 职责 |
+| --- | --- |
+| `apps/host` | 本地 daemon 与企业 API 的组合根 |
+| `apps/worker` | 持久任务、受控工具与 Coding sandbox 执行 |
+| `apps/desktop-mac` | macOS Shell、原生能力与插件 UI 宿主 |
+| `apps/cli` | 类型化命令宿主 |
+| `packages/contracts` | 公共类型、错误、事件与 OpenAPI 来源 |
+| `packages/kernel` | 身份、权限、插件、Job、Memory 与审计 |
+| `packages/agent-runtime` | Agent、会话、模型、工具与子 Agent 运行时 |
+| `packages/plugin-sdk` | 产品插件、UI、CLI 与服务贡献契约 |
+| `packages/storage` | SQLite/PostgreSQL、文件/S3 CAS、Keychain/KMS |
+| `plugins/opc` | 机会验证领域与成果 |
+| `plugins/coding` | 研发控制面 |
+| `plugins/runner-*` | 可选外部 Runner 适配器 |
 
-```json
-{
-  "schemaVersion": 2,
-  "targets": [{
-    "runtimeId": "builtin",
-    "providerId": "deepseek",
-    "modelId": "deepseek-chat",
-    "candidates": 2
-  }],
-  "sandbox": "isolated-worktree",
-  "requiredGates": ["unit_test", "lint", "typecheck"],
-  "humanApproval": "on-risk",
-  "timeoutSeconds": 3600
-}
-```
-
-Legacy `providers: ["claude", "codex"]` strategies are accepted for one compatibility version and normalized deterministically. Responses and new snapshots emit V2 only.
-
-## Agent CLI
+## 开发门禁
 
 ```bash
-mn agent run --provider ID --model ID --prompt "..." [--cwd .]
-mn agent chat --provider ID --model ID [--prompt "..."] [--cwd .]
-mn agent resume SESSION_ID --prompt "..."
-mn agent sessions [--limit 100]
-```
-
-Commands emit JSON. API failures preserve the HTTP status and structured body; failed commands exit non-zero.
-
-## Profiles and plugins
-
-Configuration resolves in this order:
-
-```text
-base bundle → deployment profile → ~/.muniu patch → CLI patch
-```
-
-Built-in profiles are `local`, `enterprise-api`, `enterprise-worker` and `desktop`.
-
-```bash
-mn profile inspect
-mn profile validate --file config/runtime/profiles/local.yml
-mn plugin list
-mn plugin install ./my-plugin.mjs
-mn plugin install @scope/my-plugin@1.2.3
-mn plugin reload
-mn plugin remove PLUGIN_ID
-```
-
-Installation records an exact version and integrity value. Plugins are executable, process-equivalent trusted code. They can access every credential, file and network capability available to the host. Muniu does not claim plugin sandbox isolation.
-
-## State migration
-
-- Local state moved from `~/.mniu` to `~/.muniu`; the old directory is renamed automatically when the new one does not exist.
-- API snapshots migrate from V1/V2 to V3 after writing a versioned backup.
-- Migration is repeatable; unknown or corrupt snapshots are never overwritten.
-- `muniu://` is canonical. `mniu://` remains a one-version compatibility alias.
-
-## Enterprise deployment
-
-The chart at `deploy/helm/muniu` deploys API/Worker replicas, a migration Job, Service, optional Ingress, HPA, PDB, least-privilege ServiceAccounts/RBAC, a shared workspace PVC and NetworkPolicies. The Worker is disabled by default. Production values reference external PostgreSQL, S3, OIDC/JWKS, OTLP and KMS/Vault services.
-
-```bash
-helm upgrade --install muniu deploy/helm/muniu \
-  --namespace muniu --create-namespace \
-  -f values.production.yaml
-```
-
-Each claimed candidate is materialized from an S3-backed content-addressed source snapshot into an independent Pod. Candidate Pods receive no ServiceAccount token, `hostPath`, sidecar, secret, privilege or network access. The API resolves and verifies the Pod independently and replays Gates in a second API-created immutable Pod. `RuntimeClass` is mandatory and is the cluster administrator's enforcement boundary for runtime-specific controls such as PID limits.
-
-`worker.fixtureMode=true` runs the deterministic acceptance executor. A non-fixture Worker advertises `builtin` by default. The API owns provider credentials and the durable Agent session, while the Worker relays the six bounded workspace tools to the exact inspected candidate Pod. The Pod remains network-denied and receives neither model credentials nor a Kubernetes token. Claude/Codex CLI targets remain explicit compatibility runtimes and are rejected by the non-fixture enterprise Worker.
-
-The builtin execution mailbox, owner lease and run-bound manual approval decisions are PostgreSQL-backed. Start, poll, tool-result and run-bound `on-risk` approval requests may reach different API replicas; standalone `/v1/agent-sessions` approvals still use the serving API process. A terminating API relinquishes its lease. A lost owner is retired as an immutable generation and the same durable Agent session is recovered before a new owner resumes. Unconfirmed tool calls are never replayed: an outstanding approval is closed as `interrupted/deny`, and the recovered model must issue a fresh tool call and approval. Uniquely tenant-scoped provider metadata is restored from PostgreSQL on replacement replicas; legacy unscoped providers remain local, and provider secrets remain external environment/Vault/KMS inputs.
-
-The Kind + Calico release gate starts two API and two Worker replicas, deletes the exact API Pod that owns a waiting tool approval, verifies generation/session recovery and fresh approval, exports the completed evidence archive, restarts PostgreSQL, and verifies the result remains readable. The enterprise path remains experimental because this is a repository acceptance environment, not a production availability or isolation certification.
-
-## Development checks
-
-```bash
-npm ci
-npm run build
-npm run typecheck
 npm test
-npm run test:coverage:agent
-npm run verify:oss-baseline
-npm run verify:enterprise-fixture
-npm run verify:helm
-npm run verify:kind
-npm audit --omit=dev
+npm run typecheck
 npm run typecheck:desktop
 npm run build:desktop
+cargo test --locked
+npm run verify:enterprise-fixture
+npm run verify:kind
+npm run verify:plugins
+npm run verify:opc-ui
+npm run verify:coding-ui
+npm audit --omit=dev
+git diff --check
 ```
 
-`verify:kind` requires Docker, Kind, kubectl, Helm, buildx and curl. It installs Calico in an ephemeral cluster and proves source materialization, Pod execution, token absence, Kubernetes-API network denial, multi-replica owner loss, PostgreSQL restart, evidence export and lease cleanup.
+`verify:kind` 需要 Docker、Kind、kubectl、Helm、buildx 和 curl。按修改范围运行 focused suite 后，再运行相关门禁。
 
-## Cordis provenance
+## 上游与许可证
 
-Cordis, cosmokit, schemastery, loader, include, group, hmr, timer and logger-console are vendored from DeepSeek Harness commit `99f6f02fecdb7dff40c3fbc9470f5907c29f74ca`. Upstream MIT licenses, package names, per-file hashes and provenance are retained under `vendor/` and `docs/upstream-provenance/`. They are private implementation dependencies and are not separately published by Muniu.
-
-## Documentation
-
-- [Quickstart](docs/quickstart.md) · [English](docs/quickstart.en.md)
-- [Architecture](docs/architecture.md) · [English](docs/architecture.en.md)
-- [Plugin authoring](docs/plugin-authoring.md) · [English](docs/plugin-authoring.en.md)
-- [Enterprise operations](docs/enterprise-operations.md)
-- [Troubleshooting](docs/troubleshooting.md)
-- [Migration guide](docs/migration-v0.1.md)
-- [Security](SECURITY.md) · [中文](SECURITY.zh-CN.md)
-- [Contributing](CONTRIBUTING.md) · [中文](CONTRIBUTING.zh-CN.md)
-- [Historical plans](docs/plans/)
-
-## License
-
-Muniu is Apache-2.0. Vendored Cordis components retain their upstream MIT licenses. See `LICENSE`, `NOTICE` and `THIRD_PARTY_LICENSES.md`.
+新代码采用 Apache-2.0。DeepSeek Harness 的适配只使用仓库批准的固定提交；vendored Cordis 保留上游 MIT 许可证。固定提交、文件映射和摘要记录在 `docs/upstream-provenance/` 与 `vendor/SOURCE_MANIFEST.sha256`。详见 [架构说明](docs/architecture.md#上游边界) 与仓库内 `LICENSE`、`NOTICE`、`THIRD_PARTY_NOTICES.md`。

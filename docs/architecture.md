@@ -1,92 +1,154 @@
-# 架构
+# Agent OS 0.2 架构
 
-## 运行闭环
+木牛只有一个通用内核和一套事实模型。Desktop、CLI 与 HTTP API 是 Shell；OPC、Coding 与外部 Runner 通过插件贡献能力。
 
-```mermaid
-flowchart LR
-  T[Task + Strategy V2] --> R[Run]
-  R --> C1[Candidate + Session]
-  R --> C2[Candidate + Session]
-  C1 --> G[Gate Registry]
-  C2 --> G
-  G -->|失败原因| C1
-  G -->|通过| S[评分与选择]
-  S --> E[Evidence + Audit]
+```text
+Desktop / CLI / API Shell
+            ↓
+       apps/host（Cordis）
+            ↓
+  contracts / kernel / agent-runtime
+       ↙                    ↘
+  OPC 插件                Coding 插件
+                              ↘
+                  Claude / Codex Runner Adapter
+            ↓
+       storage / apps/worker
 ```
 
-每个 candidate 拥有 `AgentExecutionBindingV1`，其中绑定 session、runtime、provider/model、Harness、治理策略、effect policy 和 sandbox capability 摘要。
+## Scope 与贡献解析
 
-## Cordis 生命周期
+Cordis 是唯一组合根。Scope 按下列层级创建：
 
-```mermaid
-sequenceDiagram
-  participant B as bootstrap
-  participant C as Cordis Context
-  participant P as plugin
-  B->>C: load ordered profile layers
-  C->>P: inject services + apply
-  P-->>C: register effects/events
-  C-->>B: runtime snapshot + digest
-  B->>C: reload/dispose
-  C->>P: cleanup effects in reverse order
+```text
+Host
+└── Tenant
+    └── Workspace
+        └── Thread
+            └── Execution
+                └── Subagent
 ```
 
-API、Worker、Desktop 使用独立根 Context；每个 Agent session 再隔离 `agentHost`、`agentSession`、`toolRegistry` 和 `modelRuntime` 服务。
+- Host Scope 装载身份、事件、存储、插件和运行时定义。
+- Tenant 与 Workspace Scope 决定插件激活、成员权限和数据范围。
+- Thread Scope 隔离 Session、Tool 与 Model。
+- Execution 与 Subagent Scope 只获得父级权限、预算、工具和数据范围的子集。
+- Prompt、LLM、Tool、Skill、Job 与 Subagent 从 Scope 内的贡献注册表解析。每个 turn 固定 generation；开发热更新只影响下一 turn。
 
-## 数据流
+Scope 销毁必须撤销监听、计时器、资源句柄和子 Scope。内核不得导入产品插件，插件也不得绕过公共契约访问其他插件的领域状态。
 
-```mermaid
-flowchart TB
-  U[User/API] --> A[AgentHost]
-  A --> M[Model provider]
-  M --> A
-  A --> P[Policy + Approval]
-  P --> T[Workspace tools]
-  T --> W[Candidate workspace]
-  W --> G[Gates]
-  G --> O[Object storage]
-  A --> S[Session store]
-  S --> PG[(PostgreSQL index)]
-  S --> O
+## Agent 与 Session
+
+`AgentHandle + Inbox` 是执行入口，支持 `follow_up`、`steer`、`cancel`、`resume` 和 `whenIdle`：
+
+- `follow_up` 按 FIFO 进入下一 turn。
+- `steer` 只在下一模型边界注入，不改写已经持久化的上下文。
+- `resume` 只接受 `paused` 或 `interrupted`。
+- 内部 `inject` 不向普通插件开放。
+
+Session Log 保存模型可见上下文。Surface 和 Compaction 可以改变模型看到的内容，但不能覆盖事实事件、原始访谈或工具记录。模型请求的完整上下文必须先持久化，再发送给模型服务。
+
+Execution 状态为：
+
+```text
+queued → running → waiting_approval → completed
+                    ↘ paused / interrupted / needs_reconciliation
+                    ↘ failed / cancelled
 ```
 
-企业会话把事件索引、序号和摘要存入 PostgreSQL；受保护事件与模型运行时 overlay 写入 S3。读取时同时验证对象大小、SHA-256、事件摘要和链。
+Workflow 使用类型化声明式状态机，不执行插件提供的任意 JavaScript 工作流。
 
-## 插件信任边界
+## 事实、并发与恢复
 
-```mermaid
-flowchart LR
-  Admin -->|install exact version/hash| Plugin
-  Plugin --> Host[Muniu process]
-  Host --> Secrets
-  Host --> Filesystem
-  Host --> Network
+`KernelEventV1` 是事实记录，包含：
+
+- tenant 级单调 `position`，供 SSE 断点续传；
+- aggregate 级 `streamVersion`，供乐观并发；
+- `causationId`、`correlationId` 与 generation；
+- 公开 payload 与加密 payload 引用；
+- 前序摘要、当前摘要与 HMAC。
+
+所有写入提供 `expectedStreamVersion`。版本冲突返回 `409`。事件、投影、Job、outbox、审批和幂等结果在同一数据库事务提交；查询表与快照可从事件重建，不是事实源。
+
+文件先按摘要 create-only 写入 CAS，再在事务中提交事件引用。未被事件引用的对象由保留期 GC 清理。已经提交的事件不会因 Host 或 Worker 重启而丢失。
+
+Job 使用至少一次投递、30 秒租约与 fencing token。数据库拒绝陈旧 Worker 的续租和提交。外部副作用若无法确认结果，Execution 进入 `needs_reconciliation`，等待人选择终止、标记已完成或创建新调用；系统不会自动重放原调用。
+
+## 权限与工具
+
+`ExecutionAuthority` 同时约束 Agent 与经内核调用的工具。每次调用在执行前持久化工具标识、参数摘要、资源摘要、generation 和 authority commitment。
+
+工具 effect class 固定为：
+
+| 类别 | 默认处理 |
+| --- | --- |
+| `local_read` | 可按策略自动执行 |
+| `external_read` | 可按策略自动执行 |
+| `local_reversible_write` | 可按策略自动执行 |
+| `local_irreversible_write` | 需要 `approve_once` 或 `deny` |
+| `external_side_effect` | 需要 `approve_once` 或 `deny` |
+| `financial` | 需要 `approve_once` 或 `deny` |
+| `privileged` | 需要 `approve_once` 或 `deny` |
+| `unknown` | 需要 `approve_once` 或 `deny` |
+
+执行前重新规范化路径和资源摘要。工具版本、参数、资源、generation 或 authority commitment 变化时，原批准失效。提示文本不能授予权限。
+
+## 存储实现
+
+本地实现使用：
+
+- SQLite WAL 与 `synchronous=FULL`；
+- 文件 CAS；
+- macOS Keychain 包装数据密钥；
+- AES-256-GCM 加密敏感 payload。
+
+企业实现使用 PostgreSQL schema `mn_v2`、S3 `v2/` 对象前缀与 Vault/KMS。事件 HMAC 能检测没有密钥的数据库改写，不用于抵御宿主或 KMS 管理员失陷。
+
+Host、Worker 的 engine lock 与 plugin lock 摘要必须一致，否则 readiness 或 Job claim 失败。企业环境使用蓝绿切换，不进行混合版本滚动升级。
+
+## 插件边界
+
+`PluginManifestV1` 声明服务、Worker、UI、CLI、路由、导航、组件、命令、Agent、Skill、Workflow、Tool、Memory schema、健康检查、权限、数据 namespace、事件 schema 和投影。
+
+生产插件与 Host 同进程运行，拥有宿主进程可见的能力。这是信任边界，不是沙箱；`ExecutionAuthority` 无法约束恶意插件直接调用进程能力。生产安装只接受受信仓库的 Ed25519 签名、精确依赖、包 SHA-256 和单调 release sequence。
+
+插件升级先排空 Execution，在独立 namespace 重放并校验投影，再原子切换。已经发布的事件类型不能重新定义；新版本产生事件后不支持自动降级。被撤销的插件不再接收新任务，活动任务在安全边界中断。
+
+## 产品插件
+
+OPC 的一等对象是 `Opportunity`、`Hypothesis`、`Signal`、`Interview`、`Experiment`、`CommitmentEvidence`、`MinimumPaidOffer` 与 `Decision`。流程为：
+
+```text
+captured → framed → researching → interviewing
+→ evaluating → offer_ready → decided
 ```
 
-插件不是沙箱。第三方插件拥有宿主进程权限，必须由管理员显式信任。
+非终态可进入 `paused` 或 `abandoned`。承诺和付费证据必须人工确认；最终决策也只能由人作出。公开网页研究通过受控只读工具访问，阻止本机、私网、link-local、DNS rebinding 与跨协议重定向。
 
-## Kubernetes 拓扑
+Coding 的一等对象是 `Repository`、`Service`、`Spec`、`CodingTask`、`Candidate`、`GateResult` 与 `CodeEvidence`。流程为：
 
-```mermaid
-flowchart LR
-  Ingress --> API1[API]
-  Ingress --> API2[API]
-  API1 --> PG[(PostgreSQL)]
-  API2 --> PG
-  API1 --> S3[(S3)]
-  Worker1 --> API1
-  Worker2 --> API2
-  API1 -->|model stream; credentials stay here| Provider[Model Provider]
-  API1 -->|bounded tool call/result| Worker1
-  API1 --> PVC[(Shared workspace PVC)]
-  Worker1 --> PVC
-  Worker1 -->|create / inspect / exec / delete| Pod[Candidate sandbox Pod]
-  API1 -->|independent inspect| Pod
-  API1 -->|create / exec / delete| GatePod[Immutable authority Gate Pod]
-  PVC --> Pod
-  PVC --> GatePod
+```text
+discover → specify → impact → implement → verify → approve → learn
 ```
 
-源码由 API 写入 S3 内容寻址存储，Worker 凭活跃 claim 下载并校验后物化到共享 PVC。builtin 模型流在 API 内执行，Provider 凭据不下发；模型请求的读取、搜索、补丁、写入和命令通过活跃 claim 绑定的工具协议交给 Worker，并只在同一已检查 Pod 中执行。未确认的工具调用使用同一 `callId` 重投，Worker 缓存结果，API 仅接受内容一致的幂等提交。候选 Pod 不读取 S3、不挂载 Kubernetes token，也没有默认网络。Worker 只控制候选 Pod；API 使用独立 RBAC 再次验证实际 Pod，并在第二个只读 Pod 中权威重放 Gate。
+内置 Agent 是默认 Runner。Claude 与 Codex CLI 只实现 `start/events/cancel/resume`，不接管模型连接、代理、MCP、Prompt、Skill 或历史会话。
 
-活动 execution generation、模型 owner lease、工具 mailbox、幂等结果摘要与运行绑定的人工审批决定均由 PostgreSQL 管理，Worker 的 start/poll/result 和运行绑定的 `on-risk` 审批可以落到不同 API 副本；Run 状态与 Approval/Demo 批准也以 PostgreSQL 当前队列载荷为准。Gate CAS 句柄和权威回执采用追加型元数据，陈旧副本的可变控制面快照不能裁剪它们。独立 `/v1/agent-sessions` 的审批仍由当前 API 进程处理。API 优雅退出会释放 owner；owner 失效时旧 generation 被保留并关闭，新 generation 在恢复 PostgreSQL/S3 中的受保护 Agent session 后继续。旧 generation 未确认的工具调用不会重放：旧审批以 `interrupted/deny` 关闭，恢复后的模型必须重新发起工具调用和审批。唯一租户 scope 的 Provider 非敏感目录随 PostgreSQL snapshot 恢复；旧的无 scope Provider 保持本地兼容，凭据仍由环境变量或 Vault/KMS 注入。Kind + Calico 门禁以两个 API、两个 Worker 删除精确 owner Pod，验证接管、证据导出、PostgreSQL 重启和 Pod 隔离；该路径仍标记为实验性，因为仓库验收不构成生产认证。
+## 记忆与共享
+
+`MemoryRecord` 使用 `scopeType + namespace + resourceId`，并记录来源事件、置信度、确认时间、有效期和 share grant。模型只能提出记忆 proposal；用户可接受、修改、拒绝或删除。
+
+跨插件默认不可见。撤销 share grant 会立即阻止后续读取，并使派生记忆失效；已经发送到模型或外部服务的数据无法召回，授权界面必须说明这一限制。删除敏感内容时销毁对应数据密钥并写入 tombstone，不可变审计只保留操作者、时间、对象摘要和删除原因。
+
+## Shell 与视图
+
+一级导航是首页、工作区、收件箱、成果和活动；Agents、集成与设置默认折叠。插件只能贡献二级路由、首页卡片和命令，不能替换全局安全、审批或设置页面。
+
+经营视图与专业视图共享 API 和事件，只改变展示密度。会话按工作区与业务对象组织；工具日志折叠为阶段与结果卡；自然语言输入先生成可审阅结构对象。以上交互原则参考了 [Vibe Cola 的 Mod 设计](https://colaos.ai/blog/vibe-cola-mod-design/) 与 [ColaOS Memory](https://docs.colaos.ai/en/memory-and-preferences/)，没有复制其代码、协议或插件实现。
+
+## 上游边界
+
+DeepSeek Harness 的架构适配只来自固定提交 `47f943859bef60e4160492346772ded9b24f765a` 与 `141eb6fef83422698aef7a981029e843e8161534`。Vendored Cordis 固定在提交 `99f6f02fecdb7dff40c3fbc9470f5907c29f74ca`。
+
+采用范围限于 Cordis、Scope、Agent、Session、AgentHandle、Inbox、Surface、Compaction 和 Scope 内贡献注册。木牛不引入上游 Web/CLI、ACP、Claude SDK payload、Linux Landlock、遥测、匿名标识或 feedback upload。
+
+固定提交、许可证、文件映射与摘要见 `docs/upstream-provenance/`。适配文件保留 MIT 声明；木牛新增代码使用 Apache-2.0。

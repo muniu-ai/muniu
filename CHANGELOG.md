@@ -1,52 +1,29 @@
 # Changelog
 
-All notable changes to this project are documented here. The format follows
-Keep a Changelog and versions follow Semantic Versioning where practical
-during the Developer Preview.
+Notable changes to Muniu Agent OS 0.2 are recorded here. Versions follow Semantic Versioning.
 
-## Unreleased
+## 0.2.0 - 2026-09-04
 
-## 0.1.1 - 2026-08-20
+### Changed
 
-### Added
+- Replaced separate Agent Session and Task/Run control planes with one Agent OS kernel and one event model.
+- Made `apps/host` the Cordis composition root and separated persistent work into `apps/worker`.
+- Moved product behavior into the bundled OPC and Coding plugins; made Claude and Codex CLI optional Runner adapters.
+- Introduced workspace-scoped Thread, Execution, Approval, Event, Memory, Deliverable, Asset, Job, and Agent Runtime contracts.
+- Replaced the public HTTP and CLI surfaces with the 0.2-only `/v2` and `mn` contracts.
+- Added a four-screen macOS onboarding flow, business and professional views, a unified inbox, result-first cards, and plugin failure isolation.
+- Added PostgreSQL/S3/Vault/KMS enterprise ports alongside the SQLite/file CAS/Keychain local implementation.
 
-- Embedded, event-sourced Agent runtime that connects directly to configured
-  model providers without requiring Claude Code or Codex CLI.
-- DeepSeek-first model provider with OpenAI-compatible, OpenAI Responses, and
-  Anthropic Messages adapters.
-- Versioned Agent session REST/SSE API, resumable sessions, durable approvals,
-  protected event history, and bounded model audit receipts.
-- Built-in policy-controlled workspace tools, Kubernetes candidate Pod
-  isolation, PostgreSQL/S3 enterprise persistence, Helm deployment, and
-  Cordis-based profiles and plugin lifecycle management.
+### Security
 
-### Fixed
+- Persisted model context and tool commitments before external dispatch.
+- Added effect classes, one-shot approvals, authority commitments, TOCTOU checks, Job fencing, and manual reconciliation for unknown side-effect results.
+- Added signed plugin repository metadata, monotonic release sequences, revocation handling, exact dependencies, projection replay, and atomic activation.
+- Added tenant/workspace isolation, encrypted protected payloads, event HMAC, governed memory sharing, and bounded attachment handling.
 
-- Deterministic built-in Agent session identifiers now use a non-numeric safe
-  alphabet, so a hash can never be mistaken for protected phone or identity
-  material.
-- Release recovery remains bound to immutable tags and emits a production-only
-  SPDX dependency SBOM while retaining complete npm/Cargo license inventories.
+### Removed
 
-## 0.1.0 - Withdrawn before release
+- Removed former control-plane packages, commands, projections, state loaders, protocol aliases, and active documentation.
+- Removed automatic access to external Runner configuration, prompts, skills, tools, proxies, and historical sessions.
 
-The immutable `v0.1.0` qualification tag did not produce a GitHub Release,
-release asset, or GHCR image. A release-gate defect was corrected in v0.1.1;
-the original tag remains unchanged for auditability.
-
-### Added
-
-- Initial open-source baseline for the Muniu governance control plane.
-- Apache-2.0 licensing, DCO contribution policy, security policy, upstream
-  provenance format, and release planning.
-- Full-history secret scanning and reproducible npm/Cargo license policy gates.
-
-### Known limitations
-
-- Developer Preview; interfaces may change.
-- macOS 12+ is the only formally supported host platform.
-- No npm package or signed/notarized desktop application is published.
-- The desktop runtime updater is not shipped; v0.1.x updates require an
-  immutable new release and manual installation.
-- Claude Code and Codex CLI are optional legacy compatibility executors. They
-  are not installation or runtime prerequisites for embedded Agent sessions.
+Earlier release history remains available from the repository's immutable [release tags](https://github.com/muniu-ai/muniu/tags).

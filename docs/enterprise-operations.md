@@ -1,21 +1,93 @@
 # 企业运维
 
-生产部署需要外部 PostgreSQL、S3、OIDC/JWKS、OTLP、Standard Pack trust secret 和 sandbox attestation secret。先复制 `deploy/helm/muniu/values.yaml`，只在私有 values 中填写地址，凭据使用 existing Secret。
+企业部署运行同一 Agent OS 内核，使用 PostgreSQL、S3 与 Vault/KMS 替换本地存储实现。生产拓扑至少包含两个 Host 与两个 Worker，并通过蓝绿方式切换完整 engine/plugin lock。
 
-启用默认拒绝 NetworkPolicy 时，必须在私有 values 中为 `networkPolicy.apiEgress` 配置 PostgreSQL、S3、OIDC/JWKS 和 OTLP 的精确 namespace selector 或 CIDR/端口，并在 `networkPolicy.kubernetesApiEgress` 中填写 Kubernetes API ClusterIP（通常为单个 `/32`）。若 CNI 在 Service DNAT 后执行出站策略，还必须加入 API Server 实际 endpoint CIDR，并在 `networkPolicy.kubernetesApiPorts` 中加入其目标端口。NetworkPolicy 不能可移植地按 DNS 名放行，Chart 不会猜测生产网段。
+## 上线前条件
 
-升级顺序：备份 PostgreSQL 与 S3 → `helm upgrade` → 等待 migration Job → 检查 `/healthz` → 提交一个只读验证任务 → 检查 OTLP 和审计事件。
+- PostgreSQL 已创建 `mn_v2` schema，并启用事务、备份和时间同步。
+- S3 bucket 的 `v2/` 前缀启用版本、加密和 create-only 语义。
+- Vault/KMS 能包装敏感 payload、CAS 与事件 HMAC 所需的密钥。
+- 身份层能提供 tenant 与 principal，并映射组织和工作区角色。
+- 业务、执行、成果和审计保留策略都已配置。
+- Host 与 Worker 使用相同的 engine lock、plugin lock 和镜像摘要。
+- Coding sandbox 使用明确的 RuntimeClass、无 token 的 ServiceAccount 与默认拒绝网络策略。
 
-恢复验证必须覆盖：API/Worker Pod 重建、过期租约回收、PostgreSQL 重启、S3 对象缺失/篡改失败关闭、OIDC 租户隔离。
+缺少保留策略、密钥、存储或 lock 一致性时，readiness 必须失败。
 
-API 与 Worker 使用不同 ServiceAccount。Worker 只拥有候选 Pod 的 create/get/delete 与 pods/exec；API 使用独立 Role 验证候选 Pod，并创建/执行/删除只读权威 Gate Pod。候选 ServiceAccount 禁止自动挂载 token 且没有任何 RBAC。不要把 Worker/API Role 绑定到候选 ServiceAccount。
+## 身份与隔离
 
-生产必须显式设置 `sandbox.runtimeClassName`，并在该 RuntimeClass 对应的运行时配置中落实 PID 限制。Chart 不会回退到默认运行时。共享 PVC 必须支持 API 与 Worker 副本并发挂载；多节点集群通常需要 RWX 存储。
+本地隐式身份不能用于企业 profile。认证层应把组织身份解析为 `Tenant`、`Principal` 与 `WorkspaceMembership`。内核角色包括组织管理员、治理管理员、审计员，以及工作区 owner、operator、reviewer、viewer。
 
-非 fixture Worker 默认只声明 `builtin`。模型 Provider 凭据仅配置在 API 的 secret/vault 中，不得写入 Worker 或候选 Pod。`node` 必须同时存在于 Harness command allowlist 和候选镜像，因为文件工具通过无 shell 的 Node runtime 执行；任意命令仍需命中签名租约的可执行文件白名单。
+所有查询、事件位置、投影、Job、CAS 引用、插件安装与记忆授权都带 tenant 范围。运维验收必须证明 tenant A 的插件、事件、成果和对象无法由 tenant B 读取或枚举。
 
-活动工具 broker 已使用 PostgreSQL generation、owner lease、mailbox 与运行绑定的审批决定，不依赖负载均衡粘滞。API Pod 名通过 Downward API 绑定为稳定 owner identity，优雅退出会 relinquish owner；租约过期或 claim 变更会创建新 generation，并在恢复 durable session 后继续。未确认工具不得自动重放：旧审批必须以 `interrupted/deny` 结束，恢复后的模型重新发起工具调用和审批。broker 表中的原始工具载荷只承担活动传输，长期证据仍写入受保护的 Agent session。运行绑定的 `on-risk` 审批由请求事件摘要、binding 摘要和决定共同幂等绑定，任意 API 副本均可提交；Run 查询和 Approval/Demo 批准读取 PostgreSQL 当前队列载荷，重复的同 actor/decision 请求返回既有决定。Gate CAS 句柄与权威回执是显式写入、不可由副本缓存对账裁剪的追加型元数据；消费前仍从 PostgreSQL 合并到当前副本，因此注册与 checkpoint 不需要命中同一 API。独立 `/v1/agent-sessions` 审批仍需命中持有本机会话 waiter 的 API。
+## 部署
 
-唯一租户 scope 的 Provider 非敏感目录元数据由 PostgreSQL 保存并在替换副本启动时恢复；旧的无 scope 或多租户目录保持进程本地兼容，不会被权威 restore 删除，也不具备跨副本保证。首次从旧企业快照升级时只追加迁移 provider kind，不用尚未 hydrate 的内存镜像覆盖权威数据。API key 等密钥不进入 provider 元数据，必须由每个 API 副本通过环境变量或 Vault/KMS 获取。
+复制 Helm values 到私有配置，凭据只通过现有 Secret 或 Vault/KMS 引用注入：
 
-上线前运行 `npm run verify:helm`；具备 Docker/Kind/kubectl/Helm/buildx/curl 的环境还应运行 `npm run verify:kind`。后者使用 Calico 启动两个 API 与两个 Worker，验证真实候选 Pod 的源码摘要、命令执行、token 缺失、Kubernetes API 网络隔离；随后删除精确 owner API Pod，验证 generation/会话/审批恢复与证据导出，再重启 PostgreSQL 并检查结果仍可读取及租约清理。候选 Pod 和独立 Gate Pod 的 CPU `limit` 采用签名 attestation 上限，调度 `request` 最高为 250m，使两类隔离执行可在小型节点重叠；并发总量仍由 Worker capacity、HPA 与资源限额共同约束。共享 PVC 上的候选源码使用可跨非 root Pod 读取的 `0644/0755` 模式，不承载 Provider 凭据或其他 secret。
+```bash
+helm upgrade --install muniu deploy/helm/muniu \
+  --namespace muniu \
+  --create-namespace \
+  -f values.production.yaml
+```
+
+不要把数据库口令、S3 secret 或模型 API Key 写入 values、镜像、ConfigMap 或仓库。Host 与 Worker 使用不同 ServiceAccount。Candidate Pod 不自动挂载 token，不使用 `hostPath`，不接收模型凭据或宿主 secret。
+
+若 NetworkPolicy 由 Service DNAT 之后的地址判断出站目标，还需显式放行实际 PostgreSQL、S3、KMS 和 Kubernetes API endpoint 的 CIDR/端口。Chart 不应猜测生产网段。
+
+## 蓝绿切换
+
+1. 备份 PostgreSQL、S3 版本与 plugin lock。
+2. 在绿色环境部署同一版本的 Host、Worker 和插件。
+3. 检查 `/v2/readiness`，并用只读任务验证数据库、CAS、KMS 与 sandbox。
+4. 停止蓝色环境接受新执行，等待活动执行到达安全边界。
+5. 原子切换流量和 Worker claim 权限。
+6. 观察事件位置、Job 租约、outbox 和人工核对队列。
+
+不得在同一 Job 队列中混合运行不同 engine/plugin lock。插件升级应先在独立投影 namespace 完成重放和校验，再原子切换。
+
+## Job 与故障恢复
+
+Job 是至少一次投递，默认租约为 30 秒，并携带 fencing token。Worker owner 丢失后，数据库在租约到期时允许新 Worker 领取；陈旧 owner 的续租、结果与 checkpoint 必须被拒绝。
+
+已提交事件的恢复目标是 RPO 0。Host 或 Worker 中断不应丢失已经提交的事件、审批或 outbox。模型上下文和工具承诺都在外部请求前持久化。
+
+外部副作用的结果未知时，执行进入 `needs_reconciliation`。恢复流程只能等待人工核对，不能自动重放。只读任务和明确可恢复的本地写入仍需遵循原幂等键、generation 和 authority commitment。
+
+## 备份与恢复
+
+备份应覆盖：
+
+- PostgreSQL `mn_v2` schema、事件 HMAC 元数据和保留期配置；
+- S3 `v2/` 对象、版本与对象锁设置；
+- plugin lock、engine lock、签名信任根和撤销元数据；
+- Vault/KMS key 标识、恢复权限和轮换记录，但不导出明文密钥。
+
+恢复演练先在隔离环境完成。按事件摘要链验证数据库，从 CAS 抽样重新计算 SHA-256，再重建投影并比较 checkpoint。KMS 不可用或事件 HMAC 失败时停止 readiness，不能跳过校验启动。
+
+## 保留与删除
+
+生产 profile 必须分别配置业务数据、执行、成果和审计保留期。删除敏感内容时销毁对应数据密钥并写入 tombstone；审计只保留操作者、时间、对象摘要与删除原因。
+
+撤销 share grant 立即阻止后续读取，并使派生记忆失效。已经发送到模型或外部服务的数据无法召回，操作界面与审计记录必须说明这一限制。
+
+## 运行检查
+
+```bash
+curl --fail http://HOST/v2/health
+curl --fail http://HOST/v2/readiness
+npm run verify:enterprise-fixture
+npm run verify:kind
+```
+
+发布验收还应覆盖：
+
+- 两个 Host、两个 Worker 的无粘滞请求；
+- tenant 交叉访问失败；
+- 删除活动 owner 后，租约在 30 秒后过期，并在 60 秒测试窗口内恢复；
+- PostgreSQL 重启后事件与 Job 状态一致；
+- S3 缺失或摘要篡改时 fail closed；
+- Candidate 与权威 Gate 在独立 sandbox 中运行；
+- 外部副作用未知结果只进入人工核对。
+
+`verify:kind` 需要 Docker、Kind、kubectl、Helm、buildx 和 curl。测试通过只证明仓库定义的故障注入场景，不等同于生产可用性或隔离认证。
