@@ -2582,35 +2582,56 @@ function launchManagedProcess(spec: ExternalRunnerSpawnSpec): ManagedExternalRun
     detached: process.platform !== "win32",
     windowsHide: true,
   });
-  child.stderr.resume();
-  child.stdin.end(spec.stdin);
-  const completed = new Promise<{ code: number | null; signal: string | null }>((resolveProcess) => {
+  const killChild = (signal: "SIGTERM" | "SIGKILL") => {
+    if (process.platform !== "win32" && child.pid) {
+      try {
+        process.kill(-child.pid, signal);
+        return;
+      } catch {
+        // The root process may already have exited; fall back to the child handle.
+      }
+    }
+    child.kill(signal);
+  };
+  let inputSettled = false;
+  let resolveInput: (accepted: boolean) => void = () => {};
+  const inputAccepted = new Promise<boolean>((resolveInputAccepted) => {
+    resolveInput = resolveInputAccepted;
+  });
+  const settleInput = (accepted: boolean) => {
+    if (inputSettled) return;
+    inputSettled = true;
+    resolveInput(accepted);
+  };
+  child.stdin.once("finish", () => settleInput(true));
+  child.stdin.once("error", () => {
+    settleInput(false);
+    killChild("SIGTERM");
+  });
+  const exited = new Promise<{ code: number | null; signal: string | null }>((resolveProcess) => {
     let settled = false;
     child.once("error", () => {
+      settleInput(false);
       if (settled) return;
       settled = true;
       resolveProcess({ code: null, signal: null });
     });
     child.once("close", (code, signal) => {
+      settleInput(false);
       if (settled) return;
       settled = true;
       resolveProcess({ code, signal });
     });
   });
+  const completed = Promise.all([exited, inputAccepted]).then(([result, accepted]) => accepted
+    ? result
+    : { code: null, signal: result.signal });
+  child.stderr.resume();
+  child.stdin.end(spec.stdin, "utf8");
   return {
     stdout: child.stdout,
     completed,
-    kill(signal) {
-      if (process.platform !== "win32" && child.pid) {
-        try {
-          process.kill(-child.pid, signal);
-          return;
-        } catch {
-          // The root process may already have exited; fall back to the child handle.
-        }
-      }
-      child.kill(signal);
-    },
+    kill: killChild,
   };
 }
 

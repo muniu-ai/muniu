@@ -191,6 +191,35 @@ test("Runner 没有可确认终态时进入人工核对，Job 不自动重放", 
   );
 });
 
+test("生产 launcher 遇到 stdin EPIPE 时失败关闭，Worker 不崩溃也不误判完成", {
+  skip: !SANDBOX_AVAILABLE,
+}, async (t) => {
+  const fixture = await externalFixture(
+    t,
+    "stdin_closed",
+    "claude-cli",
+    3_600_000,
+    "native",
+    `写入短消息\n${"x".repeat(512 * 1024)}`,
+  );
+  const polling = fixture.worker.pollOnce();
+  const approval = await waitForApproval(fixture.store, []);
+  await fixture.kernel.decideApproval(
+    "local", "local-owner", "approve-stdin-closed-runner", approval.id,
+    approval.streamVersion, "approve_once",
+  );
+
+  assert.deepEqual(await polling, { status: "needs_reconciliation", jobId: "job-1" });
+  const state = await fixture.store.transact("local", (transaction) => ({
+    execution: transaction.getProjection<Execution>("execution", "execution-1"),
+    run: transaction.getProjection<any>("coding.execution", "execution-1"),
+  }));
+  assert.equal(state.execution?.status, "needs_reconciliation");
+  assert.equal(state.run?.status, "needs_reconciliation");
+  assert.equal(state.run?.externalInvocation.status, "outcome_unknown");
+  assert.notEqual(state.run?.result?.status, "completed");
+});
+
 test("Worker 拒绝 npm/shebang 包装器并给出原生 macOS CLI 安装指引", {
   skip: !SANDBOX_AVAILABLE,
 }, async (t) => {
@@ -407,10 +436,11 @@ test("人工核对后由持久化受 fencing 保护的 Job 幂等清理 sandbox"
 
 async function externalFixture(
   t: test.TestContext,
-  terminal: "completed" | "unknown" | "hang",
+  terminal: "completed" | "unknown" | "hang" | "stdin_closed",
   runnerId: ExternalCodingRunnerId = "claude-cli",
   maxDurationMs = 3_600_000,
   binaryFormat: "native" | "shebang" = "native",
+  taskRequest = "把 message.txt 的 old value 改成 new value",
 ) {
   const root = await mkdtemp(join(tmpdir(), "muniu-external-runner-"));
   t.after(async () => rm(root, { recursive: true, force: true }));
@@ -442,7 +472,7 @@ async function externalFixture(
   });
   await store.initialize();
   t.after(async () => store.close());
-  await seed(store, fixedRepositoryPath, identity, runnerId, maxDurationMs);
+  await seed(store, fixedRepositoryPath, identity, runnerId, maxDurationMs, taskRequest);
 
   let modelCalls = 0;
   const modelInvoker: ByokModelInvoker = async () => {
@@ -503,13 +533,14 @@ async function seed(
   identity: CodingRunnerConfigurationV1["identity"],
   runnerId: ExternalCodingRunnerId,
   maxDurationMs: number,
+  taskRequest: string,
 ): Promise<void> {
   const task = createCodingTask({
     id: "task-1",
     workspaceId: "workspace-1",
     repositoryId: "repository-1",
     title: "更新消息",
-    request: "把 message.txt 的 old value 改成 new value",
+    request: taskRequest,
     createdAt: NOW,
   });
   const repository = createRepository({
@@ -747,7 +778,7 @@ async function enqueueSandboxCleanup(store: SqliteStorage): Promise<void> {
 
 async function compileRunnerBinary(
   binaryPath: string,
-  terminal: "completed" | "unknown" | "hang",
+  terminal: "completed" | "unknown" | "hang" | "stdin_closed",
   value: string,
   runnerId: ExternalCodingRunnerId = "claude-cli",
 ): Promise<void> {
@@ -756,7 +787,7 @@ async function compileRunnerBinary(
     ? '{"type":"system","subtype":"init","session_id":"claude-session-fixture"}'
     : '{"type":"thread.started","thread_id":"codex-session-fixture"}';
   const result = runnerId === "claude-cli"
-    ? terminal === "completed"
+    ? terminal === "completed" || terminal === "stdin_closed"
       ? '{"type":"result","is_error":false}'
       : '{"type":"assistant","message":"done without terminal"}'
     : terminal === "completed"
@@ -769,6 +800,7 @@ async function compileRunnerBinary(
     "#include <unistd.h>",
     "int main(int argc, char **argv) {",
     `  if (argc > 1 && strcmp(argv[1], "--version") == 0) { fputs(${JSON.stringify(`${version}\n`)}, stdout); return 0; }`,
+    terminal === "stdin_closed" ? "  close(STDIN_FILENO); usleep(200000);" : "",
     `  FILE *message = fopen("message.txt", "w"); if (!message) return 2; fputs(${JSON.stringify(`${value}\n`)}, message); fclose(message);`,
     "  FILE *added = fopen(\"added.txt\", \"w\"); if (!added) return 3; fputs(\"created by runner\\n\", added); fclose(added);",
     `  fputs(${JSON.stringify(`${session}\n`)}, stdout); fflush(stdout);`,
