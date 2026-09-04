@@ -6,7 +6,7 @@
 
 - PostgreSQL 已创建 `mn_v2` schema，并启用事务、备份和时间同步。
 - S3 bucket 的 `v2/` 前缀启用版本、加密和 create-only 语义。
-- Vault/KMS 能包装敏感 payload、CAS 与事件 HMAC 所需的密钥。
+- Vault/KMS 能包装敏感 payload 与受保护附件的 DEK，并提供事件 HMAC 所需的密钥。
 - 身份层能提供 tenant 与 principal，并映射组织和工作区角色。
 - 业务、执行、成果和审计保留策略都已配置。
 - Host 与 Worker 使用相同的 engine lock、plugin lock 和镜像摘要。
@@ -32,6 +32,8 @@ helm upgrade --install muniu deploy/helm/muniu \
 ```
 
 不要把数据库口令、S3 secret 或模型 API Key 写入 values、镜像、ConfigMap 或仓库。Host 与 Worker 使用不同 ServiceAccount。Candidate Pod 不自动挂载 token，不使用 `hostPath`，不接收模型凭据或宿主 secret。
+
+Host 通过 `MN_VAULT_TRANSIT_MOUNT` 和 `MN_VAULT_TRANSIT_KEY` 选择专用于 0.2 受保护数据的 Transit key。Vault policy 只授予该 key 的 `encrypt` 与 `decrypt`，token 由 Secret 或工作负载身份注入。未配置 Vault/KMS 时，普通附件仍可用，但受保护附件上传与读取失败关闭且不产生 Asset 事实事件。
 
 若 NetworkPolicy 由 Service DNAT 之后的地址判断出站目标，还需显式放行实际 PostgreSQL、S3、KMS 和 Kubernetes API endpoint 的 CIDR/端口。Chart 不应猜测生产网段。
 

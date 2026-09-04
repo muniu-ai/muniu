@@ -194,6 +194,15 @@ export interface Asset extends VersionedEntity {
   readonly byteLength: number;
   readonly fileName: string;
   readonly protected: boolean;
+  readonly protectedPayloadRef?: string;
+}
+
+export interface AssetTombstone extends VersionedEntity {
+  readonly workspaceId: WorkspaceId;
+  readonly protected: boolean;
+  readonly objectDigest: string;
+  readonly reasonDigest: string;
+  readonly deletedAt: IsoDateTime;
 }
 
 export interface MemoryRecord extends VersionedEntity {

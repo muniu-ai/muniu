@@ -49,6 +49,7 @@ interface KernelEventV1 {
 | thread / execution | `thread.created`、`thread.turn_submitted`、`execution.queued`、`execution.running`、`execution.waiting_approval`、终态事件 |
 | tool / approval | `tool.intent_recorded`、`approval.requested`、`approval.approved_once`、`approval.denied` |
 | memory / sharing | `memory.proposed`、`memory.accepted`、`memory.rejected`、`memory.shared`、`memory.deleted`、`share_grant.revoked` |
+| asset | `asset.created`、`asset.deleted` |
 | model connection | `model_connection.saved`、`model_connection.probed` |
 
 插件在自己的 `eventSchemas` 中声明领域事件。事件类型发布后不能重定义；结构或语义不兼容时必须新增类型。

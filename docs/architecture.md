@@ -104,6 +104,8 @@ Job 使用至少一次投递、30 秒租约与 fencing token。数据库拒绝�
 
 企业实现使用 PostgreSQL schema `mn_v2`、S3 `v2/` 对象前缀与 Vault/KMS。事件 HMAC 能检测没有密钥的数据库改写，不用于抵御宿主或 KMS 管理员失陷。
 
+受保护 Asset 的明文先由随机 DEK 和 AES-256-GCM 加密，CAS 只接收密文。Asset 保存密文摘要，独立的可删除密钥记录保存 wrapped DEK 与认证参数；两者在不同存储位置关联。密钥记录不是可重建的事实投影，因为删除操作必须能永久移除它。删除事务移除 Asset 与密钥记录，并追加只含对象摘要和原因摘要的 tombstone 事件；孤立密文由 CAS 保留期 GC 清理。
+
 Host、Worker 的 engine lock 与 plugin lock 摘要必须一致，否则 readiness 或 Job claim 失败。企业环境使用蓝绿切换，不进行混合版本滚动升级。
 
 ## 插件边界

@@ -32,6 +32,7 @@ export const API_OPERATIONS_V2: readonly ApiOperationV2[] = [
   { method: "get", path: "/v2/deliverables", operationId: "listDeliverables", mutation: false, versioned: false },
   { method: "post", path: "/v2/assets", operationId: "createAssets", mutation: true, versioned: true },
   { method: "get", path: "/v2/assets/{assetId}", operationId: "getAsset", mutation: false, versioned: false },
+  { method: "delete", path: "/v2/assets/{assetId}", operationId: "deleteAsset", mutation: true, versioned: true },
   { method: "get", path: "/v2/memories", operationId: "listMemories", mutation: false, versioned: false },
   { method: "post", path: "/v2/memories", operationId: "proposeMemory", mutation: true, versioned: false },
   { method: "patch", path: "/v2/memories/{memoryId}", operationId: "reviseMemoryProposal", mutation: true, versioned: true },
@@ -90,6 +91,8 @@ export function createOpenApiDocument(): JsonObject {
             "application/json": {
               schema: operation.operationId === "createAssets"
                 ? { $ref: "#/components/schemas/CreateAssetsMutation" }
+                : operation.operationId === "deleteAsset"
+                  ? { $ref: "#/components/schemas/DeleteAssetMutation" }
                 : operation.versioned
                 ? { $ref: "#/components/schemas/VersionedMutation" }
                 : { type: "object", additionalProperties: true },
@@ -176,9 +179,19 @@ export function createOpenApiDocument(): JsonObject {
                     ],
                   },
                   contentBase64: { type: "string", contentEncoding: "base64" },
+                  protected: { type: "boolean", default: false },
                 },
               },
             },
+          },
+        },
+        DeleteAssetMutation: {
+          type: "object",
+          additionalProperties: false,
+          required: ["expectedStreamVersion", "reason"],
+          properties: {
+            expectedStreamVersion: { type: "integer", minimum: 1 },
+            reason: { type: "string", minLength: 1 },
           },
         },
       },

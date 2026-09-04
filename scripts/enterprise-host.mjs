@@ -8,7 +8,12 @@ import { S3Cas } from "@mn/storage";
 import pg from "pg";
 
 import { PostgresKernelStore, probePostgres } from "./lib/postgres-kernel-store.mjs";
-import { UnavailableEnterpriseSecretStore, VaultModelSecretStore } from "./lib/enterprise-secrets.mjs";
+import {
+  UnavailableEnterpriseKeyProvider,
+  UnavailableEnterpriseSecretStore,
+  VaultModelSecretStore,
+  VaultTransitKeyProvider,
+} from "./lib/enterprise-secrets.mjs";
 import { OidcIdentityResolver } from "./lib/oidc-identity.mjs";
 import { SigV4S3Client } from "./lib/s3-client.mjs";
 
@@ -77,7 +82,8 @@ const s3Client = new SigV4S3Client({
 const bucket = required("MN_S3_BUCKET");
 const s3Prefix = process.env.MN_S3_PREFIX ?? "v2/";
 const cas = new S3Cas({ client: s3Client, bucket, prefix: s3Prefix });
-const secretStore = process.env.MN_VAULT_ADDR && process.env.MN_VAULT_TOKEN
+const vaultConfigured = Boolean(process.env.MN_VAULT_ADDR && process.env.MN_VAULT_TOKEN);
+const secretStore = vaultConfigured
   ? new VaultModelSecretStore({
       address: process.env.MN_VAULT_ADDR,
       token: process.env.MN_VAULT_TOKEN,
@@ -85,6 +91,15 @@ const secretStore = process.env.MN_VAULT_ADDR && process.env.MN_VAULT_TOKEN
       namespace: process.env.MN_VAULT_NAMESPACE,
     })
   : new UnavailableEnterpriseSecretStore();
+const protectedPayloadKeyProvider = vaultConfigured
+  ? new VaultTransitKeyProvider({
+      address: process.env.MN_VAULT_ADDR,
+      token: process.env.MN_VAULT_TOKEN,
+      mount: process.env.MN_VAULT_TRANSIT_MOUNT ?? "transit",
+      keyName: process.env.MN_VAULT_TRANSIT_KEY ?? "muniu-v2-protected-payloads",
+      namespace: process.env.MN_VAULT_NAMESPACE,
+    })
+  : new UnavailableEnterpriseKeyProvider();
 
 const retention = {
   businessDays: positiveInteger("MN_RETENTION_BUSINESS_DAYS"),
@@ -136,6 +151,7 @@ const host = await createAgentOsHost({
   store,
   cas,
   secretStore,
+  protectedPayloadKeyProvider,
   readiness,
   identityResolver: (request) => oidc.resolve(request),
 });

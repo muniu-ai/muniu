@@ -28,11 +28,11 @@ Agent OS 0.2 的安全模型以显式信任、最小权限、先持久化后执�
 
 ## 数据保护
 
-本地 SQLite 文件权限收紧并使用 WAL/FULL；敏感 payload 与 CAS 使用 AES-256-GCM，数据密钥由 macOS Keychain 包装。企业使用 PostgreSQL、S3 与 Vault/KMS。
+本地 SQLite 文件权限收紧并使用 WAL/FULL；敏感 payload 与 CAS 使用 AES-256-GCM，数据密钥由 macOS Keychain 包装。企业使用 PostgreSQL、S3 与 Vault/KMS。受保护附件先加密再写 CAS，wrapped DEK 不与密文存放在同一对象中。
 
 模型 API Key、访问 token、私钥和密码不得进入事件公开 payload、日志、诊断、fixture 或导出物。原始访谈、客户资料与敏感附件存入加密 payload/CAS，只公开必要摘要。
 
-删除敏感内容时销毁对应数据密钥并追加 tombstone。不可变审计保留操作者、时间、对象摘要与原因，不保留已删除明文。
+删除敏感内容时，数据库事务删除 wrapped DEK 与内容投影并追加 tombstone。不可变审计只保留操作者、时间、对象摘要与原因摘要，不保留已删除明文、CAS 摘要或密钥材料。CAS 中的孤立密文等待保留期 GC；没有 wrapped DEK 时，Host 无法恢复明文。
 
 ## 网络与内容
 

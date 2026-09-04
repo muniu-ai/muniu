@@ -12,6 +12,8 @@
 
 本地 profile 使用隐式 `local` tenant 和 `local-owner`，权威状态位于 `~/.muniu/v2`。企业 profile 通过注入的 PostgreSQL、S3 与 Vault/KMS 端口运行，使用 `mn_v2` schema 和 `v2/` 对象前缀。
 
+本地组合根默认使用 v2 Keychain provider 包装受保护附件的随机 DEK。企业组合根通过相同 `KeyProvider` 端口接入 Vault Transit 或 KMS。Host 先把 AES-256-GCM 密文写入 CAS，再在事件事务中保存 Asset 与独立 wrapped DEK 记录；删除事务移除 wrapped DEK，只留下摘要 tombstone。
+
 ## 本地运行
 
 ```bash

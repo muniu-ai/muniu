@@ -49,6 +49,7 @@ Agent OS 0.2 默认监听 `http://127.0.0.1:7318`。成功的 JSON 响应使用 
 | `GET` | `/v2/deliverables` | `listDeliverables` | — | — |
 | `POST` | `/v2/assets` | `createAssets` | 必需 | 必需 |
 | `GET` | `/v2/assets/{assetId}` | `getAsset` | — | — |
+| `DELETE` | `/v2/assets/{assetId}` | `deleteAsset` | 必需 | 必需 |
 | `GET` | `/v2/memories` | `listMemories` | — | — |
 | `POST` | `/v2/memories` | `proposeMemory` | 必需 | — |
 | `PATCH` | `/v2/memories/{memoryId}` | `reviseMemoryProposal` | 必需 | 必需 |
@@ -77,13 +78,15 @@ Agent OS 0.2 默认监听 `http://127.0.0.1:7318`。成功的 JSON 响应使用 
 
 <!-- generated:contracts-routes:end -->
 
-`POST /v2/assets` 接受 1 至 20 个 Base64 编码附件，新建请求的 `expectedStreamVersion` 固定为 `0`。Host 先校验文件名、MIME、内容签名和大小，再以 create-only 语义写入 CAS；全部对象写入成功后，Asset 投影、事件和幂等记录才在同一事务提交。当前接口只创建 `protected: false` 的 Asset，需要 KMS 加密的敏感内容不得通过该接口上传。
+`POST /v2/assets` 接受 1 至 20 个 Base64 编码附件，新建请求的 `expectedStreamVersion` 固定为 `0`。Host 先校验文件名、MIME、内容签名和大小。`protected: true` 的附件先使用 AES-256-GCM 加密，再以 create-only 语义写入 CAS；wrapped DEK 与 CAS 摘要分开保存。全部对象写入成功后，Asset、wrapped DEK 记录、事件和幂等记录才在同一数据库事务提交。客户端不能提交 `protectedPayloadRef`。
+
+`GET /v2/assets/{assetId}?content=1` 先校验工作区权限，再读取 CAS。受保护附件还需通过 Keychain 或 Vault/KMS 解包 DEK 并完成认证解密。`DELETE /v2/assets/{assetId}` 只允许工作区 owner 调用，要求当前 `expectedStreamVersion` 和删除原因；事务会删除 Asset 与 wrapped DEK，保留对象摘要和原因摘要 tombstone。CAS 密文作为孤立对象等待保留期 GC，删除后的 API 不再提供解密路径。
 
 工作区与会话路由负责创建 Thread 和 turn。创建 turn 会先持久化模型可见输入，再返回 queued Execution；客户端从 SSE 或活动页跟踪后续状态。
 
 执行命令包括 `follow_up`、`steer`、`cancel` 和 `resume`。审批决定只接受 `approve_once` 或 `deny`。调用参数、资源、工具版本、generation 或 authority commitment 变化后，原批准失效。
 
-记忆创建接口只生成 proposal，不代表用户接受。跨 namespace 读取需要显式 share grant；接受、修改、拒绝、撤销和删除都应产生事件。
+记忆创建接口只生成 proposal，不代表用户接受。客户端不能指定 `protectedPayloadRef`；该引用只能由 Host 的受保护存储链生成。跨 namespace 读取需要显式 share grant；接受、修改、拒绝、撤销和删除都应产生事件。
 
 模型连接使用 `presetId`、`apiKey` 与可选 `displayName`。Host 拒绝底层 Base URL、报文格式和内部 ID；响应不会包含 Keychain 引用或 API Key。
 

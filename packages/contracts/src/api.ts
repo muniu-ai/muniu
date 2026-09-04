@@ -27,7 +27,7 @@ export interface VersionedMutationBody extends JsonObject {
   readonly expectedStreamVersion: number;
 }
 
-export interface AssetAttachmentUploadV2 extends JsonObject {
+export type AssetAttachmentUploadV2 = JsonObject & {
   readonly fileName: string;
   readonly mediaType:
     | "text/plain"
@@ -39,12 +39,17 @@ export interface AssetAttachmentUploadV2 extends JsonObject {
     | "image/jpeg"
     | "image/webp";
   readonly contentBase64: string;
-}
+  readonly protected?: boolean;
+};
 
 export interface CreateAssetsMutationBodyV2 extends VersionedMutationBody {
   readonly expectedStreamVersion: 0;
   readonly workspaceId: string;
   readonly attachments: readonly AssetAttachmentUploadV2[];
+}
+
+export interface DeleteAssetMutationBodyV2 extends VersionedMutationBody {
+  readonly reason: string;
 }
 
 export const CORE_API_ROUTES = [

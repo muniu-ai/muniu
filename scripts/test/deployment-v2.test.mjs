@@ -6,6 +6,10 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { EnvelopeCipher } from "@mn/storage";
+
+import { VaultTransitKeyProvider } from "../lib/enterprise-secrets.mjs";
+
 const root = fileURLToPath(new URL("../..", import.meta.url));
 const read = (file) => readFileSync(join(root, file), "utf8");
 const legacyControlPlane = /apps\/api|mn-api|["'`]\/v1(?:\/|["'`])/u;
@@ -23,6 +27,41 @@ test("enterprise compose runs two v2 Hosts and two 30-second-lease Workers", () 
   assert.doesNotMatch(compose, legacyControlPlane);
 });
 
+test("企业 Host 可通过 Vault Transit 端口包装和解包受保护数据的 DEK", async () => {
+  const calls = [];
+  let encodedDataKey;
+  const provider = new VaultTransitKeyProvider({
+    address: "https://vault.example.test",
+    token: "fixture-token",
+    mount: "transit-v2",
+    keyName: "protected-assets",
+    fetchImplementation: async (url, init) => {
+      const request = JSON.parse(init.body);
+      calls.push({ url: String(url), init, request });
+      if (String(url).includes("/encrypt/")) {
+        encodedDataKey = request.plaintext;
+        return Response.json({ data: { ciphertext: "vault:v1:wrapped-dek" } });
+      }
+      return Response.json({ data: { plaintext: encodedDataKey } });
+    },
+  });
+  const cipher = new EnvelopeCipher(provider);
+  const plaintext = Buffer.from("enterprise protected asset");
+  const envelope = await cipher.encrypt(plaintext, {
+    tenantId: "tenant-a",
+    purpose: "asset:asset-1",
+  });
+  assert.deepEqual(await cipher.decrypt(envelope), plaintext);
+  assert.match(calls[0].url, /\/v1\/transit-v2\/encrypt\/protected-assets$/u);
+  assert.match(calls[1].url, /\/v1\/transit-v2\/decrypt\/protected-assets$/u);
+  assert.equal(calls[0].init.headers["x-vault-token"], "fixture-token");
+  assert.equal(calls[0].request.context, calls[1].request.context);
+  assert.doesNotMatch(calls.map((call) => call.url).join("\n"), /fixture-token|enterprise protected asset/u);
+  const host = read("scripts/enterprise-host.mjs");
+  assert.match(host, /protectedPayloadKeyProvider/u);
+  assert.match(host, /VaultTransitKeyProvider/u);
+});
+
 test("Helm chart deploys matching Host and Worker replicas with fail-closed readiness", () => {
   const values = read("deploy/helm/muniu/values.yaml");
   const host = read("deploy/helm/muniu/templates/deployment-host.yaml");
@@ -37,6 +76,8 @@ test("Helm chart deploys matching Host and Worker replicas with fail-closed read
   assert.match(worker, /scripts\/enterprise-worker\.mjs/);
   assert.match(config, /MN_POSTGRES_SCHEMA:\s+mn_v2/);
   assert.match(config, /MN_TELEMETRY_ENABLED:\s+"false"/);
+  assert.match(config, /MN_VAULT_TRANSIT_MOUNT/);
+  assert.match(config, /MN_VAULT_TRANSIT_KEY/);
   assert.match(config, /MN_EXPECTED_ENGINE_LOCK_DIGEST/);
   assert.match(config, /MN_EXPECTED_PLUGIN_LOCK_DIGEST/);
   assert.doesNotMatch(`${values}\n${host}\n${worker}\n${config}`, legacyControlPlane);

@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { FileCas, SqliteStorage } from "@mn/storage";
+import { FileCas, MacOsKeychainKeyProvider, SqliteStorage } from "@mn/storage";
 import { createNodePublicWebReader } from "@mn/plugin-opc";
 import {
   AgentOsWorker,
@@ -59,6 +59,8 @@ export async function startLocalAgentOsHost(options: StartLocalHostOptions = {})
     store,
     profile: "local",
     cas: new FileCas({ rootDir: paths.cas }),
+    protectedPayloadKeyProvider: options.protectedPayloadKeyProvider
+      ?? new MacOsKeychainKeyProvider({ account: "protected-payload-wrapping-key" }),
     secretStore,
     ...(options.modelProbe ? { modelProbe: options.modelProbe } : {}),
     ...(options.officialPlugins ? { officialPlugins: options.officialPlugins } : {}),

@@ -354,6 +354,29 @@ paths:
         default:
           $ref: "#/components/responses/Error"
       x-muniu-versioned: false
+    delete:
+      operationId: deleteAsset
+      parameters:
+        - in: path
+          name: assetId
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeleteAssetMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        default:
+          $ref: "#/components/responses/Error"
+      x-muniu-versioned: true
   /v2/memories:
     get:
       operationId: listMemories
@@ -947,6 +970,22 @@ components:
               contentBase64:
                 type: string
                 contentEncoding: base64
+              protected:
+                type: boolean
+                default: false
+    DeleteAssetMutation:
+      type: object
+      additionalProperties: false
+      required:
+        - expectedStreamVersion
+        - reason
+      properties:
+        expectedStreamVersion:
+          type: integer
+          minimum: 1
+        reason:
+          type: string
+          minLength: 1
     Envelope:
       type: object
       required:

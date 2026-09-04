@@ -135,6 +135,8 @@ function openApiDocument(operations) {
             "application/json": {
               schema: operation.operationId === "createAssets"
                 ? { $ref: "#/components/schemas/CreateAssetsMutation" }
+                : operation.operationId === "deleteAsset"
+                  ? { $ref: "#/components/schemas/DeleteAssetMutation" }
                 : operation.versioned
                 ? { $ref: "#/components/schemas/VersionedMutation" }
                 : { $ref: "#/components/schemas/Mutation" },
@@ -224,9 +226,19 @@ function openApiDocument(operations) {
                     ],
                   },
                   contentBase64: { type: "string", contentEncoding: "base64" },
+                  protected: { type: "boolean", default: false },
                 },
               },
             },
+          },
+        },
+        DeleteAssetMutation: {
+          type: "object",
+          additionalProperties: false,
+          required: ["expectedStreamVersion", "reason"],
+          properties: {
+            expectedStreamVersion: { type: "integer", minimum: 1 },
+            reason: { type: "string", minLength: 1 },
           },
         },
         Envelope: {

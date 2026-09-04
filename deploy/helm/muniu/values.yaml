@@ -124,6 +124,8 @@ oidc:
 vault:
   address: ""
   kvMount: secret
+  transitMount: transit
+  transitKey: muniu-v2-protected-payloads
   namespace: ""
   existingSecret: ""
   tokenKey: token

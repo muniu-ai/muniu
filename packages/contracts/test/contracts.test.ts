@@ -136,6 +136,14 @@ test("OpenAPI 目录只有 v2，所有写操作要求幂等键", () => {
     .schemas.CreateAssetsMutation;
   assert.equal(assetSchema.properties.expectedStreamVersion.const, 0);
   assert.equal(assetSchema.properties.attachments.maxItems, 20);
+  assert.equal(assetSchema.properties.attachments.items.properties.protected.type, "boolean");
+  const assetDelete = (document.paths as Record<string, Record<string, {
+    requestBody?: { content?: Record<string, { schema?: { $ref?: string } }> };
+  }>>)["/v2/assets/{assetId}"]?.delete;
+  assert.equal(
+    assetDelete?.requestBody?.content?.["application/json"]?.schema?.$ref,
+    "#/components/schemas/DeleteAssetMutation",
+  );
   assert.equal(
     (document.components as { schemas: Record<string, unknown> }).schemas.ApiError !== undefined,
     true,

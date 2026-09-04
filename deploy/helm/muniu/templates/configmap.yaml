@@ -37,6 +37,8 @@ data:
   MN_OIDC_JWKS_URL: {{ required "oidc.jwksUrl is required" .Values.oidc.jwksUrl | quote }}
   MN_VAULT_ADDR: {{ .Values.vault.address | quote }}
   MN_VAULT_KV_MOUNT: {{ .Values.vault.kvMount | quote }}
+  MN_VAULT_TRANSIT_MOUNT: {{ .Values.vault.transitMount | quote }}
+  MN_VAULT_TRANSIT_KEY: {{ .Values.vault.transitKey | quote }}
   MN_VAULT_NAMESPACE: {{ .Values.vault.namespace | quote }}
   MN_TELEMETRY_ENABLED: "false"
   MN_SANDBOX_RUNTIME_DRIVER: kubernetes

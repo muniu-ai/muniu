@@ -7,6 +7,7 @@ import {
   createOpenApiDocument,
   type Approval,
   type Asset,
+  type AssetTombstone,
   type Deliverable,
   type Execution,
   type JsonObject,
@@ -44,11 +45,17 @@ import {
   IdempotencyConflictError,
   StreamVersionConflictError as StorageStreamVersionConflictError,
   type ContentAddressedStorage,
+  type KeyProvider,
 } from "@mn/storage";
 import { codingPlugin } from "@mn/plugin-coding";
 import { createOpcPluginDefinition, exportOpportunityDeliverables, OpcService } from "@mn/plugin-opc";
 import type { EnterpriseReadiness } from "./config.js";
-import { createAssets } from "./assets.js";
+import {
+  ASSET_TOMBSTONE_NAMESPACE,
+  createAssets,
+  deleteAsset,
+  readAssetContent,
+} from "./assets.js";
 import {
   KernelOpcRepository,
   captureCodingRepository,
@@ -125,6 +132,8 @@ export interface AgentOsHostOptions {
   /** 仅用于本地开发或测试宿主附加受信 WebView 来源。 */
   readonly allowedOrigins?: readonly string[];
   readonly protectedPayloadKeys?: ProtectedPayloadKeyDestroyer;
+  /** 本地注入 Keychain provider；企业注入 Vault/KMS provider。 */
+  readonly protectedPayloadKeyProvider?: KeyProvider;
   /** 默认由 profile 决定：本地 Keychain，企业 Vault/KMS。 */
   readonly acceptsModelSecretReference?: (reference: string) => boolean;
   /** 组合根用于先停止共享同一 Store 的 Worker。 */
@@ -1130,6 +1139,9 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         return json(await createAssets({
           store: options.store,
           cas: options.cas,
+          ...(options.protectedPayloadKeyProvider
+            ? { protectedPayloadKeyProvider: options.protectedPayloadKeyProvider }
+            : {}),
           tenantId: TENANT_ID,
           workspaceId,
           actorId: ACTOR_ID,
@@ -1148,18 +1160,54 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
       }
       const assetMatch = url.pathname.match(/^\/v2\/assets\/([^/]+)$/u);
       if (assetMatch && request.method === "GET") {
-        const asset = await projectionGet<Asset>(options.store, TENANT_ID, "asset", decodeURIComponent(assetMatch[1]!));
+        const asset = await projectionGet<Asset>(
+          options.store,
+          TENANT_ID,
+          "asset",
+          decodeURIComponent(assetMatch[1]!),
+        );
         if (!asset) return notFound(traceId);
         await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, asset.workspaceId);
         if (url.searchParams.get("content") !== "1") return json(asset, 200, traceId);
         if (!options.cas) throw new KernelError("ASSET_STORE_UNAVAILABLE", "成果文件暂不可用", "检查对象存储连接");
-        return new Response(await options.cas.get(asset.digest), {
+        return new Response(await readAssetContent({
+          store: options.store,
+          cas: options.cas,
+          tenantId: TENANT_ID,
+          asset,
+          ...(options.protectedPayloadKeyProvider
+            ? { protectedPayloadKeyProvider: options.protectedPayloadKeyProvider }
+            : {}),
+        }), {
           headers: {
             "content-type": asset.mediaType,
             "content-length": String(asset.byteLength),
             "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(asset.fileName)}`,
           },
         });
+      }
+      if (assetMatch && request.method === "DELETE") {
+        const body = await readBody(request);
+        if (Object.keys(body).some((field) => !["expectedStreamVersion", "reason"].includes(field))) {
+          throw new KernelError("INVALID_BODY", "附件删除请求包含不支持的字段", "删除未在 OpenAPI 中声明的字段");
+        }
+        const assetId = decodeURIComponent(assetMatch[1]!);
+        const target = await options.store.transact(TENANT_ID, (transaction) =>
+          transaction.getProjection<Asset>("asset", assetId)
+          ?? transaction.getProjection<AssetTombstone>(ASSET_TOMBSTONE_NAMESPACE, assetId));
+        if (!target) throw new KernelError("ASSET_NOT_FOUND", "附件不存在", "刷新成果列表");
+        await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, target.workspaceId, "owner");
+        return json(await deleteAsset({
+          store: options.store,
+          tenantId: TENANT_ID,
+          actorId: ACTOR_ID,
+          assetId,
+          idempotencyKey: mutationKey as string,
+          expectedStreamVersion: expectedVersion(body),
+          reason: stringField(body, "reason")!,
+          now,
+          id: nextId,
+        }), 200, traceId);
       }
       if (url.pathname === "/v2/memories" && request.method === "GET") {
         const namespace = url.searchParams.get("namespace");
@@ -1183,6 +1231,13 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
       }
       if (url.pathname === "/v2/memories" && request.method === "POST") {
         const body = await readBody(request);
+        if (Object.hasOwn(body, "protectedPayloadRef")) {
+          throw new KernelError(
+            "PROTECTED_PAYLOAD_REF_FORBIDDEN",
+            "客户端不能指定受保护数据引用",
+            "提交明文输入，由 Host 创建受保护数据引用",
+          );
+        }
         await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, stringField(body, "workspaceId")!, "operate");
         const memory = await kernel.proposeMemory(TENANT_ID, ACTOR_ID, mutationKey as string, {
           workspaceId: stringField(body, "workspaceId")!,
@@ -1192,7 +1247,6 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           sourceEventId: stringField(body, "sourceEventId")!,
           confidence: typeof body.confidence === "number" ? body.confidence : 0,
           ...(isObject(body.value) ? { value: body.value as JsonObject } : {}),
-          ...(typeof body.protectedPayloadRef === "string" ? { protectedPayloadRef: body.protectedPayloadRef } : {}),
           ...(typeof body.derivedFromMemoryId === "string"
             ? { derivedFromMemoryId: body.derivedFromMemoryId } : {}),
           ...(typeof body.derivedViaShareGrantId === "string"
