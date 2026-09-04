@@ -140,6 +140,153 @@ test("桌面首次向导与首页使用真实 0.2 接口和官方产品插件", 
   await host.close();
 });
 
+test("OPC /v2 完成证据、访谈、收费方案、人工决策与成果导出全流程", async () => {
+  let id = 0;
+  const host = await createAgentOsHost({
+    store: new InMemoryKernelStore(),
+    secretStore: secrets,
+    now: () => "2026-09-04T09:00:00.000Z",
+    id: (kind) => `${kind}-${++id}`,
+  });
+  const workspace = (await responseJson(await host.dispatch(jsonRequest("/v2/workspaces", {
+    name: "机会验证", viewMode: "business", pluginIds: ["opc"],
+  }, "opc-workspace")))).data;
+  let opportunity = (await responseJson(await host.dispatch(jsonRequest("/v2/plugins/opc/opportunities", {
+    workspaceId: workspace.id,
+    expectedStreamVersion: 0,
+    input: "目标客户：独立开发者；问题：不会做有效访谈；假设：五次访谈中至少一人承诺试用",
+  }, "opc-capture")))).data;
+
+  async function command(name: string, input: Record<string, unknown>, key = `opc-${name}`) {
+    const response = await host.dispatch(jsonRequest(
+      `/v2/plugins/opc/opportunities/${opportunity.id}/commands`,
+      { workspaceId: workspace.id, expectedStreamVersion: opportunity.streamVersion, command: name, input },
+      key,
+    ));
+    assert.equal(response.status, 200, `${name}: ${JSON.stringify(await response.clone().json())}`);
+    opportunity = (await responseJson(response)).data;
+    return opportunity;
+  }
+
+  await command("frame", {
+    targetCustomer: "独立开发者",
+    problem: "不会做有效访谈",
+    falsifiableHypothesis: "五次访谈中至少一人承诺试用",
+  });
+  await command("start_research", {});
+  const supportVersion = opportunity.streamVersion;
+  const supportBody = {
+    workspaceId: workspace.id,
+    expectedStreamVersion: supportVersion,
+    command: "record_signal",
+    input: {
+      sourceKind: "public_web",
+      sourceUrl: "https://example.com/research",
+      observedAt: "2026-09-04T08:30:00.000Z",
+      excerpt: "访谈准备耗时",
+      summary: "目标群体会搜索访谈模板",
+      relationship: "support",
+      evidenceKind: "context",
+    },
+  };
+  const support = await host.dispatch(jsonRequest(
+    `/v2/plugins/opc/opportunities/${opportunity.id}/commands`, supportBody, "opc-support",
+  ));
+  assert.equal(support.status, 200);
+  opportunity = (await responseJson(support)).data;
+  const replayedSupport = await responseJson(await host.dispatch(jsonRequest(
+    `/v2/plugins/opc/opportunities/${opportunity.id}/commands`, supportBody, "opc-support",
+  )));
+  assert.equal(replayedSupport.data.streamVersion, opportunity.streamVersion);
+  const reusedKey = await host.dispatch(jsonRequest(
+    `/v2/plugins/opc/opportunities/${opportunity.id}/commands`,
+    { ...supportBody, input: { ...supportBody.input, summary: "不同内容" } },
+    "opc-support",
+  ));
+  assert.equal(reusedKey.status, 409);
+
+  await command("record_signal", {
+    sourceKind: "pasted",
+    observedAt: "2026-09-04T08:40:00.000Z",
+    excerpt: "免费模板已经很多",
+    summary: "免费替代方案降低付费意愿",
+    relationship: "oppose",
+    evidenceKind: "context",
+  });
+  await command("start_interviewing", {});
+  await command("record_interview", {
+    interviewId: "interview-a",
+    participantRef: "受访者 A",
+    occurredAt: "2026-09-03T10:00:00.000Z",
+    rawRecord: "我下载过模板，但不知道问题是否带有诱导性。",
+  });
+  await command("annotate_interview", {
+    interviewId: "interview-a",
+    annotation: "问题集中在访谈质量，而不是模板数量",
+  });
+  await command("start_evaluation", {});
+  await command("record_experiment", {
+    question: "受访者是否会采取明确下一步",
+    method: "提供七天试用方案并记录回应",
+    successCriterion: "至少一人承诺试用",
+    status: "planned",
+  });
+
+  const preview = await responseJson(await host.dispatch(new Request(
+    `http://host.test/v2/plugins/opc/opportunities/${opportunity.id}/deliverables?workspaceId=${workspace.id}`,
+  )));
+  assert.equal(preview.data.length, 6);
+  assert.match(JSON.stringify(preview.data), /方案待验证/u);
+  assert.doesNotMatch(JSON.stringify(preview.data), /已验证/u);
+  assert.match(JSON.stringify(preview.data), /免费替代方案降低付费意愿/u);
+  const missing = await host.dispatch(new Request(
+    `http://host.test/v2/plugins/opc/opportunities/missing?workspaceId=${workspace.id}`,
+  ));
+  assert.equal(missing.status, 404);
+
+  await command("prepare_offer", {
+    targetCustomer: "独立开发者",
+    promisedOutcome: "七天内形成继续或停止的证据",
+    inScope: ["访谈提纲", "证据账本"],
+    outOfScope: ["代替访谈", "自动外联"],
+    price: { amountMinor: "9900", currency: "CNY", assumption: "首批测试价" },
+    deliveryFormat: "在线文档与复盘会",
+    duration: "7 天",
+    acceptanceMethod: "完成五次访谈并形成结论",
+    nextCustomerAction: "确认参与试用",
+    risks: ["样本招募不足"],
+  });
+  await command("propose_commitment", {
+    level: "commitment",
+    description: "客户确认愿意按测试价试用",
+    sourceRef: "interview-a",
+  });
+  const evidenceId = opportunity.commitmentEvidence[0]?.id;
+  assert.ok(evidenceId);
+  await command("confirm_commitment", { evidenceId });
+  assert.equal(opportunity.evidenceLevel, "commitment");
+  await command("decide", {
+    decision: "pursue",
+    rationale: "有明确承诺，同时保留免费替代方案风险",
+  });
+  assert.equal(opportunity.decision.choice, "pursue");
+  assert.equal(opportunity.interviews[0].rawRecord, "我下载过模板，但不知道问题是否带有诱导性。");
+
+  const exported = await responseJson(await host.dispatch(jsonRequest(
+    `/v2/plugins/opc/opportunities/${opportunity.id}/exports`,
+    { workspaceId: workspace.id, expectedStreamVersion: opportunity.streamVersion },
+    "opc-export",
+  )));
+  assert.equal(exported.data.length, 6);
+  assert.match(JSON.stringify(exported.data), /人工确认的承诺证据/u);
+  const listed = await responseJson(await host.dispatch(new Request(
+    `http://host.test/v2/deliverables?workspaceId=${workspace.id}`,
+  )));
+  assert.equal(listed.data.length, 6);
+  assert.deepEqual(new Set(listed.data.map((item: any) => item.pluginId)), new Set(["opc"]));
+  await host.close();
+});
+
 test("thread turn 只接受插件 Agent 与已连接模型，并原子排入 Worker Job", async () => {
   const store = new InMemoryKernelStore();
   const host = await createAgentOsHost({
@@ -431,6 +578,30 @@ test("模型连接只接受厂商预设，密钥写入 v2 Keychain 后探测默�
   await host.close();
 });
 
+test("企业模型连接只接受组合根配置的 v2 Vault 引用", async () => {
+  const host = await createAgentOsHost({
+    profile: "enterprise",
+    store: new InMemoryKernelStore(),
+    secretStore: {
+      async save(id) { return `vault://muniu/v2/${id}`; },
+      async read() { return "stored"; },
+    },
+    identityResolver() { return { tenantId: "tenant-a", principalId: "owner" }; },
+  });
+  const response = await host.dispatch(new Request("http://host.test/v2/model-connections", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "Idempotency-Key": "enterprise-model",
+      authorization: "Bearer enterprise",
+    },
+    body: JSON.stringify({ presetId: "openai", apiKey: "secret" }),
+  }));
+  assert.equal(response.status, 201);
+  assert.equal(JSON.stringify(await responseJson(response)).includes("vault://"), false);
+  await host.close();
+});
+
 test("本地权威状态固定在 ~/.muniu/v2，不触碰旧目录", () => {
   assert.deepEqual(defaultLocalStatePaths("/Users/tester"), {
     root: "/Users/tester/.muniu/v2",
@@ -550,12 +721,28 @@ test("SQLite 重启后保留已提交事件与投影", async () => {
     const created = await responseJson(await first.dispatch(jsonRequest("/v2/workspaces", {
       name: "可恢复工作区", viewMode: "business", pluginIds: ["opc"],
     }, "sqlite-create")));
-    const opportunity = await first.dispatch(jsonRequest("/v2/plugins/opc/opportunities", {
+    const opportunityResponse = await first.dispatch(jsonRequest("/v2/plugins/opc/opportunities", {
       workspaceId: created.data.id,
       expectedStreamVersion: 0,
       input: "面向自由职业者，解决需求验证周期过长的问题",
     }, "sqlite-opportunity"));
-    assert.equal(opportunity.status, 201);
+    assert.equal(opportunityResponse.status, 201);
+    const opportunity = (await responseJson(opportunityResponse)).data;
+    const frameBody = {
+      workspaceId: created.data.id,
+      expectedStreamVersion: opportunity.streamVersion,
+      command: "frame",
+      input: {
+        targetCustomer: "自由职业者",
+        problem: "需求验证周期过长",
+        falsifiableHypothesis: "五次访谈内至少一人承诺采取下一步",
+      },
+    };
+    const framed = await first.dispatch(jsonRequest(
+      `/v2/plugins/opc/opportunities/${opportunity.id}/commands`, frameBody, "sqlite-frame",
+    ));
+    assert.equal(framed.status, 200);
+    assert.equal((await responseJson(framed)).data.streamVersion, 2);
     await first.close();
 
     const second = await createAgentOsHost({
@@ -567,6 +754,15 @@ test("SQLite 重启后保留已提交事件与投影", async () => {
       `http://host.test/v2/plugins/opc/opportunities?workspaceId=${created.data.id}`,
     )));
     assert.equal(opportunities.data.length, 1);
+    const replayedFrame = await second.dispatch(jsonRequest(
+      `/v2/plugins/opc/opportunities/${opportunity.id}/commands`, frameBody, "sqlite-frame",
+    ));
+    assert.equal(replayedFrame.status, 200);
+    assert.equal((await responseJson(replayedFrame)).data.streamVersion, 2);
+    const restored = await responseJson(await second.dispatch(new Request(
+      `http://host.test/v2/plugins/opc/opportunities/${opportunity.id}?workspaceId=${created.data.id}`,
+    )));
+    assert.equal(restored.data.hypotheses[0].targetCustomer, "自由职业者");
     const captureAfterRestart = await second.dispatch(jsonRequest("/v2/plugins/opc/opportunities", {
       workspaceId: created.data.id,
       expectedStreamVersion: 0,

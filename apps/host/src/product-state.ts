@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import type { Approval, Deliverable, JsonObject, Workspace } from "@mn/contracts";
+import type { Approval, Deliverable, JsonObject, Thread, Workspace } from "@mn/contracts";
 import {
   KernelError,
   sha256,
@@ -15,6 +15,7 @@ import {
 } from "@mn/plugin-coding";
 import {
   createOpportunityDraft,
+  exportOpportunityDeliverables,
   OpcDomainError,
   reduceOpcEvents,
   type OpcAppendRequest,
@@ -52,6 +53,15 @@ interface ProductMutationOptions extends ProductStateOptions {
   readonly idempotencyKey: string;
   readonly expectedStreamVersion: number;
   readonly input: string;
+}
+
+interface OpcExportOptions extends Omit<ProductMutationOptions, "input"> {
+  readonly opportunityId: string;
+}
+
+interface StoredOpcDeliverable extends Deliverable {
+  readonly validationStatus: string;
+  readonly content: JsonObject;
 }
 
 export function encodePluginWorkspace(tenantId: string, workspaceId: string): string {
@@ -127,46 +137,59 @@ export class KernelOpcRepository implements OpcRepository {
     }
     const scope = decodePluginWorkspace(request.workspaceId);
     return this.options.store.transact(scope.tenantId, (transaction) => {
-      ensureWorkspace(transaction, scope.workspaceId);
-      const key = opcEventsKey(scope.workspaceId, request.opportunityId);
-      const current = transaction.getProjection<readonly StoredOpcEvent[]>(OPC_EVENTS_PROJECTION, key) ?? [];
-      if (current.length !== request.expectedStreamVersion) {
-        throw new OpcDomainError(
-          "STREAM_VERSION_CONFLICT",
-          `预期版本 ${request.expectedStreamVersion}，实际版本 ${current.length}`,
-          "重新读取机会后重试",
-        );
-      }
-      const ids = new Set(current.map((event) => event.eventId));
-      const appended = request.events.map((event, index): StoredOpcEvent => {
-        const eventId = event.eventId ?? this.options.id("opc-event");
-        if (ids.has(eventId)) throw new OpcDomainError("DUPLICATE_ID", "领域事件 ID 已存在", "生成新的事件 ID 后重试");
-        ids.add(eventId);
-        return { ...event, eventId, streamVersion: current.length + index + 1 } as StoredOpcEvent;
-      });
-      const events = [...current, ...appended];
-      const aggregate = reduceOpcEvents(scope.workspaceId, request.opportunityId, events);
-      if (!aggregate) throw new OpcDomainError("INVALID_INPUT", "事件未生成机会", "先提交机会捕获事件");
-      transaction.putProjection(OPC_EVENTS_PROJECTION, key, events);
-      transaction.putProjection(OPC_PROJECTION, request.opportunityId, aggregate);
-      for (const event of appended) {
-        transaction.appendEvent({
-          tenantId: scope.tenantId,
-          aggregateType: "opc.opportunity",
-          aggregateId: request.opportunityId,
-          expectedStreamVersion: event.streamVersion - 1,
-          type: event.type,
-          actorId: event.actor.id,
-          generation: 0,
-          correlationId: this.options.id("correlation"),
-          publicPayload: {
-            workspaceId: scope.workspaceId,
-            state: aggregate.state,
-            evidenceLevel: aggregate.evidenceLevel,
-          },
+      const append = () => {
+        ensureWorkspace(transaction, scope.workspaceId);
+        const key = opcEventsKey(scope.workspaceId, request.opportunityId);
+        const current = transaction.getProjection<readonly StoredOpcEvent[]>(OPC_EVENTS_PROJECTION, key) ?? [];
+        if (current.length !== request.expectedStreamVersion) {
+          throw new OpcDomainError(
+            "STREAM_VERSION_CONFLICT",
+            `预期版本 ${request.expectedStreamVersion}，实际版本 ${current.length}`,
+            "重新读取机会后重试",
+          );
+        }
+        const ids = new Set(current.map((event) => event.eventId));
+        const appended = request.events.map((event, index): StoredOpcEvent => {
+          const eventId = event.eventId ?? this.options.id("opc-event");
+          if (ids.has(eventId)) throw new OpcDomainError("DUPLICATE_ID", "领域事件 ID 已存在", "生成新的事件 ID 后重试");
+          ids.add(eventId);
+          return { ...event, eventId, streamVersion: current.length + index + 1 } as StoredOpcEvent;
         });
-      }
-      return aggregate;
+        const events = [...current, ...appended];
+        const aggregate = reduceOpcEvents(scope.workspaceId, request.opportunityId, events);
+        if (!aggregate) throw new OpcDomainError("INVALID_INPUT", "事件未生成机会", "先提交机会捕获事件");
+        transaction.putProjection(OPC_EVENTS_PROJECTION, key, events);
+        transaction.putProjection(OPC_PROJECTION, request.opportunityId, aggregate);
+        for (const event of appended) {
+          transaction.appendEvent({
+            tenantId: scope.tenantId,
+            aggregateType: "opc.opportunity",
+            aggregateId: request.opportunityId,
+            expectedStreamVersion: event.streamVersion - 1,
+            type: event.type,
+            actorId: event.actor.id,
+            generation: 0,
+            correlationId: this.options.id("correlation"),
+            publicPayload: {
+              workspaceId: scope.workspaceId,
+              state: aggregate.state,
+              evidenceLevel: aggregate.evidenceLevel,
+            },
+          });
+        }
+        return aggregate;
+      };
+      return request.idempotency
+        ? idempotentMutation(
+            transaction,
+            scope.tenantId,
+            `${request.idempotency.scope}:${scope.workspaceId}:${request.opportunityId}`,
+            request.idempotency.key,
+            request.idempotency.request,
+            this.options.now(),
+            append,
+          )
+        : append();
     });
   }
 
@@ -206,8 +229,37 @@ export async function captureOpportunity(options: ProductMutationOptions): Promi
       const storedEvent = { ...domainEvent, streamVersion: 1 } as StoredOpcEvent;
       const aggregate = reduceOpcEvents(options.workspaceId, opportunityId, [storedEvent]);
       if (!aggregate) throw new OpcDomainError("INVALID_INPUT", "机会创建失败", "检查输入后重试");
+      const threadId = options.id("thread");
+      const thread: Thread = {
+        id: threadId,
+        tenantId: options.tenantId,
+        workspaceId: options.workspaceId,
+        subject: aggregate.title,
+        pluginId: "opc",
+        resourceRef: { namespace: "opc.opportunity", resourceId: opportunityId },
+        streamVersion: 1,
+        createdAt: options.now(),
+        updatedAt: options.now(),
+      };
       transaction.putProjection(OPC_EVENTS_PROJECTION, opcEventsKey(options.workspaceId, opportunityId), [storedEvent]);
       transaction.putProjection(OPC_PROJECTION, opportunityId, aggregate);
+      transaction.putProjection("thread", threadId, thread);
+      transaction.appendEvent({
+        tenantId: options.tenantId,
+        aggregateType: "thread",
+        aggregateId: threadId,
+        expectedStreamVersion: 0,
+        type: "thread.created",
+        actorId: options.actorId,
+        generation: 0,
+        correlationId: options.id("correlation"),
+        publicPayload: {
+          workspaceId: options.workspaceId,
+          pluginId: "opc",
+          resourceNamespace: "opc.opportunity",
+          resourceId: opportunityId,
+        },
+      });
       transaction.appendEvent({
         tenantId: options.tenantId,
         aggregateType: "opc.opportunity",
@@ -227,6 +279,78 @@ export async function captureOpportunity(options: ProductMutationOptions): Promi
         },
       });
       return aggregate;
+    },
+  ));
+}
+
+export async function exportOpcOpportunity(options: OpcExportOptions): Promise<readonly StoredOpcDeliverable[]> {
+  return options.store.transact(options.tenantId, (transaction) => idempotentMutation(
+    transaction,
+    options.tenantId,
+    `opc.opportunity.export:${options.workspaceId}:${options.opportunityId}`,
+    options.idempotencyKey,
+    { expectedStreamVersion: options.expectedStreamVersion, opportunityId: options.opportunityId },
+    options.now(),
+    () => {
+      const workspace = ensureWorkspace(transaction, options.workspaceId);
+      if (!workspace.activePluginIds.includes("opc")) {
+        throw new KernelError("PLUGIN_NOT_ACTIVE", "工作区尚未启用 OPC", "先在工作区启用 OPC");
+      }
+      const opportunity = transaction.getProjection<OpportunityAggregate>(OPC_PROJECTION, options.opportunityId);
+      if (!opportunity || opportunity.workspaceId !== options.workspaceId) {
+        throw new OpcDomainError("NOT_FOUND", "机会不存在", "刷新工作区后重试");
+      }
+      if (opportunity.streamVersion !== options.expectedStreamVersion) {
+        throw new OpcDomainError(
+          "STREAM_VERSION_CONFLICT",
+          `预期版本 ${options.expectedStreamVersion}，实际版本 ${opportunity.streamVersion}`,
+          "重新读取机会后重试",
+        );
+      }
+      const thread = transaction.listProjections<Thread>("thread").find((candidate) =>
+        candidate.workspaceId === options.workspaceId
+        && candidate.resourceRef?.namespace === "opc.opportunity"
+        && candidate.resourceRef.resourceId === options.opportunityId);
+      if (!thread) throw new KernelError("THREAD_NOT_FOUND", "机会会话不存在", "重新创建机会后重试");
+      const createdAt = options.now();
+      return exportOpportunityDeliverables(opportunity).map((item): StoredOpcDeliverable => {
+        const deliverable: StoredOpcDeliverable = {
+          id: options.id("deliverable"),
+          tenantId: options.tenantId,
+          workspaceId: options.workspaceId,
+          pluginId: "opc",
+          threadId: thread.id,
+          kind: item.kind,
+          title: item.title,
+          summary: item.summary,
+          validationStatus: item.validationStatus,
+          content: item.content as JsonObject,
+          assetIds: [],
+          nextAction: item.nextAction,
+          streamVersion: 1,
+          createdAt,
+          updatedAt: createdAt,
+        };
+        transaction.putProjection("deliverable", deliverable.id, deliverable);
+        transaction.appendEvent({
+          tenantId: options.tenantId,
+          aggregateType: "deliverable",
+          aggregateId: deliverable.id,
+          expectedStreamVersion: 0,
+          type: "deliverable.created",
+          actorId: options.actorId,
+          generation: 0,
+          correlationId: options.id("correlation"),
+          publicPayload: {
+            workspaceId: options.workspaceId,
+            pluginId: "opc",
+            opportunityId: options.opportunityId,
+            kind: item.kind,
+            validationStatus: item.validationStatus,
+          },
+        });
+        return deliverable;
+      });
     },
   ));
 }

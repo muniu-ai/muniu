@@ -17,6 +17,7 @@
     "dev": "npm run build && node dist/index.js"
   },
   "dependencies": {
-    "@mn/contracts": "0.2.0"
+    "@mn/contracts": "0.2.0",
+    "@mn/storage": "0.2.0"
   }
 }

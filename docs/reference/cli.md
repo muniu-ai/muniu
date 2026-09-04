@@ -14,15 +14,20 @@
   ask               在当前工作区提交问题
   inbox             查看审批、问题、失败和人工核对
   resume            恢复暂停或中断的执行
-  doctor --fix      检查并修复本地连接
+  doctor --fix      检查连接与可安全修复项
   plugin            查看或启用插件
   opc               管理机会验证工作
   code              管理 Coding 任务
-  backup            创建或校验加密备份
+  backup            创建、校验或恢复本地加密备份
 
 全局参数：
   --json            输出稳定 JSON
   --help            显示帮助
+
+备份示例：
+  mn backup create state.mnbackup --verify
+  mn backup check state.mnbackup
+  mn backup restore state.mnbackup --destination restored.sqlite3
 ```
 
 <!-- generated:cli-help:end -->

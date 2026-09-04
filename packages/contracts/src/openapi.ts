@@ -45,6 +45,10 @@ export const API_OPERATIONS_V2: readonly ApiOperationV2[] = [
   { method: "post", path: "/v2/plugins/installations", operationId: "installPlugin", mutation: true, versioned: false },
   { method: "get", path: "/v2/plugins/installations", operationId: "listPluginInstallations", mutation: false, versioned: false },
   { method: "post", path: "/v2/workspaces/{workspaceId}/plugin-activations", operationId: "activatePlugin", mutation: true, versioned: true },
+  { method: "get", path: "/v2/plugins/opc/opportunities/{opportunityId}", operationId: "getOpcOpportunity", mutation: false, versioned: false },
+  { method: "post", path: "/v2/plugins/opc/opportunities/{opportunityId}/commands", operationId: "commandOpcOpportunity", mutation: true, versioned: true },
+  { method: "get", path: "/v2/plugins/opc/opportunities/{opportunityId}/deliverables", operationId: "previewOpcDeliverables", mutation: false, versioned: false },
+  { method: "post", path: "/v2/plugins/opc/opportunities/{opportunityId}/exports", operationId: "exportOpcDeliverables", mutation: true, versioned: true },
   { method: "get", path: "/v2/plugins/{pluginId}/{path}", operationId: "getPluginResource", mutation: false, versioned: false },
   { method: "post", path: "/v2/plugins/{pluginId}/{path}", operationId: "mutatePluginResource", mutation: true, versioned: true },
 ] as const;

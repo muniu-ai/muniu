@@ -1,7 +1,17 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ApiErrorV2 } from "@mn/contracts";
+import {
+  LocalBackupError,
+  LocalSqliteBackup,
+  MacOsKeychainKeyProvider,
+  type LocalBackupCheckResult,
+  type LocalBackupCreateResult,
+  type LocalBackupRestoreResult,
+} from "@mn/storage";
 
 const DEFAULT_API_URL = "http://127.0.0.1:7318";
 
@@ -18,11 +28,16 @@ const HELP = `木牛 Agent OS 0.2
   plugin            查看或启用插件
   opc               管理机会验证工作
   code              管理 Coding 任务
-  backup            查看 Host 的备份支持状态
+  backup            创建、校验或恢复本地加密备份
 
 全局参数：
   --json            输出稳定 JSON
   --help            显示帮助
+
+备份示例：
+  mn backup create state.mnbackup --verify
+  mn backup check state.mnbackup
+  mn backup restore state.mnbackup --destination restored.sqlite3
 `;
 
 export interface CliIo {
@@ -35,6 +50,15 @@ export interface CliDependencies {
   readonly fetch?: typeof globalThis.fetch;
   readonly apiUrl?: string;
   readonly idempotencyKey?: () => string;
+  readonly backup?: CliBackup;
+  readonly stateRoot?: string;
+  readonly now?: () => Date;
+}
+
+export interface CliBackup {
+  create(fileName: string): Promise<LocalBackupCreateResult>;
+  check(fileName: string): Promise<LocalBackupCheckResult>;
+  restore(fileName: string, destinationName: string): Promise<LocalBackupRestoreResult>;
 }
 
 interface ParsedArguments {
@@ -356,16 +380,151 @@ async function productCommand(
   return { command, data, human };
 }
 
-async function backup(parsed: ParsedArguments): Promise<CliResult> {
-  assertAllowedFlags(parsed, ["output", "verify"]);
-  throw new CliCommandError({
-    code: "BACKUP_NOT_SUPPORTED",
-    message: "当前 Host 尚未提供备份接口",
-    action: "不要依赖此命令创建备份；请等待 Host 提供受控备份接口",
-    fieldIssues: [],
-    traceId: "cli-local",
-    retryable: false,
-  }, 501);
+const OPC_DOMAIN_COMMANDS = new Set([
+  "frame",
+  "start_research",
+  "record_signal",
+  "start_interviewing",
+  "record_interview",
+  "annotate_interview",
+  "start_evaluation",
+  "record_experiment",
+  "propose_commitment",
+  "confirm_commitment",
+  "prepare_offer",
+  "decide",
+  "pause",
+  "resume",
+  "abandon",
+]);
+
+async function opc(parsed: ParsedArguments, api: ApiClient): Promise<CliResult> {
+  assertAllowedFlags(parsed, ["workspace", "version", "input"]);
+  const operation = parsed.positional[0] ?? "list";
+  const workspaceId = flag(parsed, "workspace", true)!;
+  if (operation === "list") {
+    const data = await api.get(`/v2/plugins/opc/opportunities?workspaceId=${encodeURIComponent(workspaceId)}`);
+    return { command: "opc", data, human: "已列出机会与下一步" };
+  }
+  if (operation === "capture" || operation === "sample") {
+    return productCommand("opc", "opc", parsed, api);
+  }
+  if (!["show", "deliverables", "export"].includes(operation) && !OPC_DOMAIN_COMMANDS.has(operation)) {
+    throw new CliUsageError("opc 支持 list、capture、show、deliverables、export、sample 或领域推进命令");
+  }
+  const opportunityId = parsed.positional[1];
+  if (!opportunityId) throw new CliUsageError(`opc ${operation} 需要机会 ID`);
+  const encodedId = encodeURIComponent(opportunityId);
+  const workspaceQuery = `workspaceId=${encodeURIComponent(workspaceId)}`;
+  if (operation === "show") {
+    const data = await api.get(`/v2/plugins/opc/opportunities/${encodedId}?${workspaceQuery}`);
+    return { command: "opc", data, human: "已读取机会档案" };
+  }
+  if (operation === "deliverables") {
+    const data = await api.get(`/v2/plugins/opc/opportunities/${encodedId}/deliverables?${workspaceQuery}`);
+    return { command: "opc", data, human: "已生成成果预览，结论会标明证据等级" };
+  }
+  if (operation === "export") {
+    const data = await api.mutate(`/v2/plugins/opc/opportunities/${encodedId}/exports`, {
+      workspaceId,
+      expectedStreamVersion: integerFlag(parsed, "version", 1),
+    });
+    return { command: "opc", data, human: "六类 OPC 成果已写入成果页" };
+  }
+  const rawInput = flag(parsed, "input");
+  let input: Record<string, unknown> = {};
+  if (rawInput) {
+    try {
+      const parsedInput = JSON.parse(rawInput) as unknown;
+      if (!parsedInput || typeof parsedInput !== "object" || Array.isArray(parsedInput)) throw new Error();
+      input = parsedInput as Record<string, unknown>;
+    } catch {
+      throw new CliUsageError("OPC 领域命令的 --input 必须是 JSON 对象");
+    }
+  }
+  const data = await api.mutate(`/v2/plugins/opc/opportunities/${encodedId}/commands`, {
+    workspaceId,
+    expectedStreamVersion: integerFlag(parsed, "version", 1),
+    command: operation,
+    input,
+  });
+  return { command: "opc", data, human: "机会已推进，证据、反证和下一步已更新" };
+}
+
+async function backup(
+  parsed: ParsedArguments,
+  getClient: () => CliBackup,
+  now: () => Date,
+): Promise<CliResult> {
+  assertAllowedFlags(parsed, ["output", "file", "destination", "verify"]);
+  const operation = parsed.positional[0] ?? "create";
+  try {
+    if (operation === "create") {
+      const fileName = flag(parsed, "output") ?? parsed.positional[1]
+        ?? `muniu-${now().toISOString().replace(/[:.]/gu, "-")}.mnbackup`;
+      if (parsed.positional.length > 2) throw new CliUsageError("backup create 只接受一个备份文件名");
+      const client = getClient();
+      const created = await client.create(fileName);
+      const checked = parsed.flags.has("verify") ? await client.check(fileName) : undefined;
+      return {
+        command: "backup",
+        data: { operation, created, ...(checked ? { checked } : {}) },
+        human: checked
+          ? `加密备份已创建并校验：${created.file}`
+          : `加密备份已创建：${created.file}`,
+      };
+    }
+    if (operation === "check") {
+      const fileName = flag(parsed, "file") ?? parsed.positional[1];
+      if (!fileName || parsed.positional.length > 2) {
+        throw new CliUsageError("用法：mn backup check <备份文件名>");
+      }
+      const checked = await getClient().check(fileName);
+      return { command: "backup", data: { operation, checked }, human: `备份校验通过：${checked.file}` };
+    }
+    if (operation === "restore") {
+      const fileName = flag(parsed, "file") ?? parsed.positional[1];
+      if (!fileName || parsed.positional.length > 2) {
+        throw new CliUsageError("用法：mn backup restore <备份文件名> --destination <新数据库文件名>");
+      }
+      const destination = flag(parsed, "destination", true)!;
+      const restored = await getClient().restore(fileName, destination);
+      return {
+        command: "backup",
+        data: { operation, restored },
+        human: `备份已恢复到独立文件：${restored.file}；确认后再切换状态目录`,
+      };
+    }
+    throw new CliUsageError("backup 仅支持 create、check 或 restore");
+  } catch (error) {
+    if (!(error instanceof LocalBackupError)) throw error;
+    throw new CliCommandError({
+      code: error.code,
+      message: error.message,
+      action: backupErrorAction(error.code),
+      fieldIssues: [],
+      traceId: "cli-local",
+      retryable: error.code === "BACKUP_IO_FAILED",
+    }, error.code === "BACKUP_DESTINATION_EXISTS" ? 409 : 422);
+  }
+}
+
+function backupErrorAction(code: string): string {
+  if (code === "BACKUP_DESTINATION_EXISTS") return "使用新的文件名；木牛不会覆盖已有备份或数据库";
+  if (code === "BACKUP_DECRYPTION_FAILED") return "确认当前 Keychain 仍包含创建备份时使用的 v2 包装密钥";
+  if (code === "BACKUP_SOURCE_NOT_FOUND") return "检查备份文件名或先创建备份";
+  if (code === "BACKUP_INTEGRITY_FAILED" || code === "BACKUP_SQLITE_INVALID") return "不要恢复该文件，改用另一份已校验备份";
+  return "检查本地 v2 状态目录与文件权限后重试";
+}
+
+function createDefaultBackup(dependencies: CliDependencies): CliBackup {
+  const stateRoot = resolve(dependencies.stateRoot ?? process.env.MN_STATE_ROOT ?? join(homedir(), ".muniu", "v2"));
+  return new LocalSqliteBackup({
+    databaseFile: join(stateRoot, "state.sqlite3"),
+    backupDirectory: join(stateRoot, "backups"),
+    restoreDirectory: join(stateRoot, "restore"),
+    keyProvider: new MacOsKeychainKeyProvider({ account: "backup-wrapping-key" }),
+  });
 }
 
 export async function runCli(arguments_: readonly string[], dependencies: CliDependencies = {}): Promise<number> {
@@ -397,9 +556,13 @@ export async function runCli(arguments_: readonly string[], dependencies: CliDep
       case "resume": result = await resume(parsed, api); break;
       case "doctor": result = await doctor(parsed, api); break;
       case "plugin": result = await plugin(parsed, api); break;
-      case "opc": result = await productCommand("opc", "opc", parsed, api); break;
+      case "opc": result = await opc(parsed, api); break;
       case "code": result = await productCommand("coding", "code", parsed, api); break;
-      case "backup": result = await backup(parsed); break;
+      case "backup": result = await backup(
+        parsed,
+        () => dependencies.backup ?? createDefaultBackup(dependencies),
+        dependencies.now ?? (() => new Date()),
+      ); break;
       default: throw new CliUsageError(`未知命令：${command}`);
     }
     if (parsedAll.flags.has("json")) {

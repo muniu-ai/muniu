@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type {
+  LocalBackupCheckResult,
+  LocalBackupCreateResult,
+  LocalBackupRestoreResult,
+} from "@mn/storage";
 import { runCli, type CliIo } from "../src/index.js";
 
 interface CapturedRequest {
@@ -208,6 +213,27 @@ test("OPC 与 Coding 命令只映射已实现的插件资源", async () => {
       path: "/v2/plugins/opc/samples/read-only",
       body: { workspaceId: "w-1", expectedStreamVersion: 0 },
     },
+    {
+      arguments: [
+        "opc", "frame", "opportunity-1", "--workspace", "w-1", "--version", "1",
+        "--input", JSON.stringify({
+          targetCustomer: "独立开发者",
+          problem: "访谈质量不稳定",
+          falsifiableHypothesis: "五次访谈至少一人承诺下一步",
+        }),
+      ],
+      path: "/v2/plugins/opc/opportunities/opportunity-1/commands",
+      body: {
+        workspaceId: "w-1",
+        expectedStreamVersion: 1,
+        command: "frame",
+        input: {
+          targetCustomer: "独立开发者",
+          problem: "访谈质量不稳定",
+          falsifiableHypothesis: "五次访谈至少一人承诺下一步",
+        },
+      },
+    },
   ] as const;
 
   for (const entry of cases) {
@@ -227,7 +253,7 @@ test("OPC 与 Coding 命令只映射已实现的插件资源", async () => {
   const fetch: typeof globalThis.fetch = async () => { called = true; return ok({}); };
   assert.equal(await runCli(["opc", "publish", "--workspace", "w-1"], { io: output, fetch }), 2);
   assert.equal(called, false);
-  assert.match(output.err[0] ?? "", /仅支持 capture 或 sample/);
+  assert.match(output.err[0] ?? "", /opc 支持/);
 });
 
 test("doctor --fix 明确报告无需修复且不发起写请求", async () => {
@@ -274,23 +300,57 @@ test("doctor --fix 不把需人工处理的问题报告为已修复", async () =
   });
 });
 
-test("backup 在 Host 无接口时明确返回不支持且不发送请求", async () => {
+test("backup 在本地创建、校验并恢复加密 SQLite 快照", async () => {
   const output = io();
   let called = false;
   const fetch: typeof globalThis.fetch = async () => { called = true; return ok({}); };
-  assert.equal(await runCli(["backup", "--json"], { io: output, fetch }), 2);
-  assert.equal(called, false);
-  assert.deepEqual(JSON.parse(output.out[0] ?? ""), {
-    ok: false,
-    command: "backup",
-    error: {
-      code: "BACKUP_NOT_SUPPORTED",
-      message: "当前 Host 尚未提供备份接口",
-      action: "不要依赖此命令创建备份；请等待 Host 提供受控备份接口",
-      fieldIssues: [],
-      traceId: "cli-local",
-      retryable: false,
+  const manifest = {
+    format: "muniu-agent-os-local-backup",
+    manifestVersion: 1,
+    createdAt: "2026-09-04T08:00:00.000Z",
+    capabilities: { sqlite: true, cas: false },
+    payload: {
+      mediaType: "application/vnd.sqlite3",
+      bytes: 4096,
+      sha256: "a".repeat(64),
+      sqliteSchemaVersion: "2",
     },
+    encryption: { algorithm: "AES-256-GCM", keyManagement: "external-key-provider" },
+  } as const;
+  const calls: unknown[] = [];
+  const backup = {
+    async create(fileName: string): Promise<LocalBackupCreateResult> {
+      calls.push(["create", fileName]);
+      return { file: `/state/backups/${fileName}`, manifest };
+    },
+    async check(fileName: string): Promise<LocalBackupCheckResult> {
+      calls.push(["check", fileName]);
+      return { file: `/state/backups/${fileName}`, manifest, verified: true };
+    },
+    async restore(fileName: string, destinationName: string): Promise<LocalBackupRestoreResult> {
+      calls.push(["restore", fileName, destinationName]);
+      return { file: `/state/restore/${destinationName}`, manifest };
+    },
+  };
+  assert.equal(await runCli([
+    "backup", "create", "state.mnbackup", "--verify", "--json",
+  ], { io: output, fetch, backup }), 0);
+  assert.equal(await runCli([
+    "backup", "check", "state.mnbackup", "--json",
+  ], { io: output, fetch, backup }), 0);
+  assert.equal(await runCli([
+    "backup", "restore", "state.mnbackup", "--destination", "restored.sqlite3", "--json",
+  ], { io: output, fetch, backup }), 0);
+  assert.equal(called, false);
+  assert.deepEqual(calls, [
+    ["create", "state.mnbackup"],
+    ["check", "state.mnbackup"],
+    ["check", "state.mnbackup"],
+    ["restore", "state.mnbackup", "restored.sqlite3"],
+  ]);
+  assert.deepEqual(JSON.parse(output.out[0] ?? "").data.created.manifest.capabilities, {
+    sqlite: true,
+    cas: false,
   });
 });
 

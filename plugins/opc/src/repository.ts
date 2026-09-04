@@ -8,6 +8,12 @@ export interface OpcAppendRequest {
   readonly opportunityId: string;
   readonly expectedStreamVersion: number;
   readonly events: readonly OpcEvent[];
+  /** 由持久化实现与领域事件在同一事务记录，保证命令重放返回首次结果。 */
+  readonly idempotency?: {
+    readonly key: string;
+    readonly scope: string;
+    readonly request: unknown;
+  };
 }
 
 export interface OpcRepository {
@@ -18,6 +24,7 @@ export interface OpcRepository {
 
 export class InMemoryOpcRepository implements OpcRepository {
   readonly #streams = new Map<string, StoredOpcEvent[]>();
+  readonly #idempotency = new Map<string, { readonly request: string; readonly response: OpportunityAggregate }>();
   #fallbackEventId = 0;
 
   async load(workspaceId: string, opportunityId: string): Promise<OpportunityAggregate | undefined> {
@@ -26,6 +33,19 @@ export class InMemoryOpcRepository implements OpcRepository {
   }
 
   async append(request: OpcAppendRequest): Promise<OpportunityAggregate> {
+    const idempotencyKey = request.idempotency
+      ? `${key(request.workspaceId, request.opportunityId)}:${request.idempotency.scope}:${request.idempotency.key}`
+      : undefined;
+    if (idempotencyKey && request.idempotency) {
+      const previous = this.#idempotency.get(idempotencyKey);
+      const normalized = canonicalJson(request.idempotency.request);
+      if (previous) {
+        if (previous.request !== normalized) {
+          throw new OpcDomainError("IDEMPOTENCY_KEY_REUSED", "幂等键已用于不同请求", "使用新的 Idempotency-Key");
+        }
+        return structuredClone(previous.response);
+      }
+    }
     if (request.events.length === 0) {
       throw new OpcDomainError("INVALID_INPUT", "事件列表不能为空", "至少提交一个领域事件");
     }
@@ -56,6 +76,12 @@ export class InMemoryOpcRepository implements OpcRepository {
       throw new OpcDomainError("INVALID_INPUT", "事件未生成机会", "先提交机会捕获事件");
     }
     this.#streams.set(streamKey, next);
+    if (idempotencyKey && request.idempotency) {
+      this.#idempotency.set(idempotencyKey, {
+        request: canonicalJson(request.idempotency.request),
+        response: structuredClone(aggregate),
+      });
+    }
     return structuredClone(aggregate);
   }
 
@@ -66,4 +92,13 @@ export class InMemoryOpcRepository implements OpcRepository {
 
 function key(workspaceId: string, opportunityId: string): string {
   return `${workspaceId.length}:${workspaceId}${opportunityId}`;
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record).sort().map((name) => `${JSON.stringify(name)}:${canonicalJson(record[name])}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
 }

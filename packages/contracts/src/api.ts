@@ -54,6 +54,10 @@ export const CORE_API_ROUTES = [
   "/v2/model-connections/{connectionId}/probe",
   "/v2/plugins/installations",
   "/v2/workspaces/{workspaceId}/plugin-activations",
+  "/v2/plugins/opc/opportunities/{opportunityId}",
+  "/v2/plugins/opc/opportunities/{opportunityId}/commands",
+  "/v2/plugins/opc/opportunities/{opportunityId}/deliverables",
+  "/v2/plugins/opc/opportunities/{opportunityId}/exports",
   "/v2/plugins/{pluginId}/{path}",
 ] as const;
 

@@ -25,6 +25,10 @@ interface ExistingOpportunityCommand {
   readonly opportunityId: string;
   readonly expectedStreamVersion: number;
   readonly actor: Actor;
+  readonly idempotency?: {
+    readonly key: string;
+    readonly request: unknown;
+  };
 }
 
 export interface CaptureOpportunityCommand extends ExistingOpportunityCommand {
@@ -336,6 +340,12 @@ export class OpcService {
       opportunityId: command.opportunityId,
       expectedStreamVersion: command.expectedStreamVersion,
       events,
+      ...(command.idempotency ? {
+        idempotency: {
+          ...command.idempotency,
+          scope: `opc.opportunity.command:${command.opportunityId}`,
+        },
+      } : {}),
     });
   }
 }

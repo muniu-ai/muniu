@@ -22,6 +22,8 @@ import type { KernelStore, KernelTransaction } from "./store.js";
 export interface KernelOptions {
   readonly now?: () => string;
   readonly id?: (kind: string) => string;
+  /** 由组合根限定当前部署可接受的密钥引用；内核从不读取密钥正文。 */
+  readonly acceptsModelSecretReference?: (reference: string) => boolean;
 }
 
 export interface ProtectedPayloadKeyDestroyer {
@@ -50,9 +52,12 @@ function payload(value: unknown): JsonObject {
 export class AgentOsKernel {
   private readonly now: () => string;
   private readonly nextId: (kind: string) => string;
+  private readonly acceptsModelSecretReference: (reference: string) => boolean;
 
   constructor(private readonly store: KernelStore, options: KernelOptions = {}) {
     this.now = options.now ?? (() => new Date().toISOString());
+    this.acceptsModelSecretReference = options.acceptsModelSecretReference
+      ?? ((reference) => reference.startsWith("keychain://muniu.v2/"));
     let counter = 0;
     this.nextId = options.id ?? ((kind) => `${kind}-${++counter}`);
   }
@@ -893,8 +898,12 @@ export class AgentOsKernel {
     input: Omit<ModelConnection, "id" | "tenantId" | "streamVersion" | "status">,
   ): Promise<ModelConnection> {
     return this.mutation(tenantId, "modelConnection.create", idempotencyKey, input, (transaction) => {
-      if (!input.secretRef.startsWith("keychain://muniu.v2/")) {
-        throw new KernelError("INVALID_SECRET_REFERENCE", "模型密钥必须存入 v2 Keychain", "重新保存密钥");
+      if (!this.acceptsModelSecretReference(input.secretRef)) {
+        throw new KernelError(
+          "INVALID_SECRET_REFERENCE",
+          "模型密钥引用不属于当前部署的受信存储",
+          "通过当前部署配置的密钥存储重新保存密钥",
+        );
       }
       const connection: ModelConnection = {
         ...input, id: this.nextId("model-connection"), tenantId, streamVersion: 1, status: "pending",

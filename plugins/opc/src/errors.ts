@@ -2,11 +2,13 @@ export type OpcDomainErrorCode =
   | "ALREADY_EXISTS"
   | "DUPLICATE_ID"
   | "HUMAN_REQUIRED"
+  | "IDEMPOTENCY_KEY_REUSED"
   | "INVALID_INPUT"
   | "INVALID_TRANSITION"
   | "NOT_FOUND"
   | "REQUIRED_FIELD"
-  | "STREAM_VERSION_CONFLICT";
+  | "STREAM_VERSION_CONFLICT"
+  | "UNKNOWN_COMMAND";
 
 export class OpcDomainError extends Error {
   constructor(

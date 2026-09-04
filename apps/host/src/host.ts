@@ -41,7 +41,7 @@ import {
   type ContentAddressedStorage,
 } from "@mn/storage";
 import { codingPlugin } from "@mn/plugin-coding";
-import { createOpcPluginDefinition, OpcService } from "@mn/plugin-opc";
+import { createOpcPluginDefinition, exportOpportunityDeliverables, OpcService } from "@mn/plugin-opc";
 import type { EnterpriseReadiness } from "./config.js";
 import {
   KernelOpcRepository,
@@ -50,12 +50,14 @@ import {
   captureOpportunity,
   deliverableSummary,
   encodePluginWorkspace,
+  exportOpcOpportunity,
   listCodingTaskSummaries,
   listOpportunitySummaries,
   runReadOnlySample,
   workspaceActivity,
   workspaceHome,
 } from "./product-state.js";
+import { executeOpcCommand } from "./opc-api.js";
 import type { ModelSecretStore } from "./secrets.js";
 
 const LOCAL_TENANT_ID = "local";
@@ -102,6 +104,8 @@ export interface AgentOsHostOptions {
   /** 仅用于本地开发或测试宿主附加受信 WebView 来源。 */
   readonly allowedOrigins?: readonly string[];
   readonly protectedPayloadKeys?: ProtectedPayloadKeyDestroyer;
+  /** 默认由 profile 决定：本地 Keychain，企业 Vault/KMS。 */
+  readonly acceptsModelSecretReference?: (reference: string) => boolean;
 }
 
 export interface ListenOptions {
@@ -175,13 +179,16 @@ function safeError(error: unknown, traceId: string): Response {
     status = error.code === "STREAM_VERSION_CONFLICT" ? 409
       : error.code === "AUTHENTICATION_REQUIRED" ? 401
         : error.code === "WORKSPACE_ACCESS_DENIED" ? 403
-        : 422;
+          : error.code === "NOT_FOUND" || error.code.endsWith("_NOT_FOUND") ? 404
+            : 422;
     code = error.code; message = error.message; action = error.action; retryable = error.retryable;
   } else if (isObject(error)
     && typeof error.code === "string"
     && typeof error.message === "string"
     && typeof error.action === "string") {
-    status = error.code === "NOT_FOUND" ? 404 : 422;
+    status = error.code === "NOT_FOUND" ? 404
+      : error.code === "IDEMPOTENCY_KEY_REUSED" ? 409
+        : 422;
     code = error.code;
     message = error.message;
     action = error.action;
@@ -337,18 +344,25 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
   const profile = options.profile ?? "local";
   const now = options.now ?? (() => new Date().toISOString());
   const nextId = options.id ?? ((kind: string) => `${kind}-${randomUUID()}`);
-  const kernel = new AgentOsKernel(options.store, { now, id: nextId });
+  const acceptsModelSecretReference = options.acceptsModelSecretReference
+    ?? (options.profile === "enterprise"
+      ? (reference: string) => reference.startsWith("vault://muniu/v2/")
+      : (reference: string) => reference.startsWith("keychain://muniu.v2/"));
+  const kernel = new AgentOsKernel(options.store, {
+    now,
+    id: nextId,
+    acceptsModelSecretReference,
+  });
   if (profile === "local") await kernel.bootstrapLocal("agent-os-v2-local-bootstrap");
   const plugins = new PluginContributionHost({ isAvailable: () => true });
   const opcRepository = new KernelOpcRepository({ store: options.store, now, id: nextId });
+  const opcService = new OpcService({
+    repository: opcRepository,
+    clock: now,
+    createId: nextId,
+  });
   const officialPlugins = options.officialPlugins ?? [
-    createOpcPluginDefinition({
-      service: new OpcService({
-        repository: opcRepository,
-        clock: now,
-        createId: nextId,
-      }),
-    }),
+    createOpcPluginDefinition({ service: opcService }),
     codingPlugin,
   ];
   const pluginDefinitions = new Map(officialPlugins.map((plugin) => [plugin.id, plugin]));
@@ -933,6 +947,70 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId);
         await ensurePluginsActive(TENANT_ID, workspace);
         return json(await listOpportunitySummaries(options.store, TENANT_ID, workspaceId), 200, traceId);
+      }
+      const opcOpportunityMatch = url.pathname.match(/^\/v2\/plugins\/opc\/opportunities\/([^/]+)$/u);
+      if (opcOpportunityMatch && request.method === "GET") {
+        const workspaceId = url.searchParams.get("workspaceId");
+        if (!workspaceId) throw new KernelError("INVALID_BODY", "缺少 workspaceId", "选择工作区后重试");
+        const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId);
+        await ensurePluginsActive(TENANT_ID, workspace);
+        const opportunity = await opcService.get(
+          encodePluginWorkspace(TENANT_ID, workspaceId),
+          decodeURIComponent(opcOpportunityMatch[1]!),
+        );
+        if (!opportunity) throw new KernelError("NOT_FOUND", "机会不存在", "刷新机会列表");
+        return json(opportunity, 200, traceId);
+      }
+      const opcCommandMatch = url.pathname.match(/^\/v2\/plugins\/opc\/opportunities\/([^/]+)\/commands$/u);
+      if (opcCommandMatch && request.method === "POST") {
+        const body = await readBody(request);
+        const workspaceId = stringField(body, "workspaceId")!;
+        const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId, "operate");
+        await ensurePluginsActive(TENANT_ID, workspace);
+        return json(await executeOpcCommand({
+          service: opcService,
+          scopedWorkspaceId: encodePluginWorkspace(TENANT_ID, workspaceId),
+          opportunityId: decodeURIComponent(opcCommandMatch[1]!),
+          expectedStreamVersion: expectedVersion(body),
+          actorId: ACTOR_ID,
+          command: stringField(body, "command")!,
+          input: body.input,
+          idempotencyKey: mutationKey as string,
+          idempotencyRequest: body,
+        }), 200, traceId);
+      }
+      const opcDeliverablesMatch = url.pathname.match(
+        /^\/v2\/plugins\/opc\/opportunities\/([^/]+)\/deliverables$/u,
+      );
+      if (opcDeliverablesMatch && request.method === "GET") {
+        const workspaceId = url.searchParams.get("workspaceId");
+        if (!workspaceId) throw new KernelError("INVALID_BODY", "缺少 workspaceId", "选择工作区后重试");
+        const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId);
+        await ensurePluginsActive(TENANT_ID, workspace);
+        const opportunity = await opcService.get(
+          encodePluginWorkspace(TENANT_ID, workspaceId),
+          decodeURIComponent(opcDeliverablesMatch[1]!),
+        );
+        if (!opportunity) throw new KernelError("NOT_FOUND", "机会不存在", "刷新机会列表");
+        return json(exportOpportunityDeliverables(opportunity), 200, traceId);
+      }
+      const opcExportMatch = url.pathname.match(/^\/v2\/plugins\/opc\/opportunities\/([^/]+)\/exports$/u);
+      if (opcExportMatch && request.method === "POST") {
+        const body = await readBody(request);
+        const workspaceId = stringField(body, "workspaceId")!;
+        const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId, "operate");
+        await ensurePluginsActive(TENANT_ID, workspace);
+        return json(await exportOpcOpportunity({
+          store: options.store,
+          tenantId: TENANT_ID,
+          workspaceId,
+          opportunityId: decodeURIComponent(opcExportMatch[1]!),
+          actorId: ACTOR_ID,
+          idempotencyKey: mutationKey as string,
+          expectedStreamVersion: expectedVersion(body),
+          now,
+          id: nextId,
+        }), 201, traceId);
       }
       if (url.pathname === "/v2/plugins/coding/tasks" && request.method === "GET") {
         const workspaceId = url.searchParams.get("workspaceId");

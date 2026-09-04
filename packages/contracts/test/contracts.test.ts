@@ -115,6 +115,8 @@ test("OpenAPI 目录只有 v2，所有写操作要求幂等键", () => {
   assert.match(serialized, /\/v2\/setup/);
   assert.match(serialized, /\/v2\/workspaces\/\{workspaceId\}\/home/);
   assert.match(serialized, /\/v2\/memories\/\{memoryId\}\/decisions/);
+  assert.match(serialized, /\/v2\/plugins\/opc\/opportunities\/\{opportunityId\}\/commands/);
+  assert.match(serialized, /\/v2\/plugins\/opc\/opportunities\/\{opportunityId\}\/exports/);
   assert.equal(
     (document.components as { schemas: Record<string, unknown> }).schemas.ApiError !== undefined,
     true,

@@ -6,6 +6,52 @@ info:
 servers:
   - url: http://127.0.0.1:7318
 paths:
+  /v2/openapi.json:
+    get:
+      operationId: getOpenApi
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+      x-muniu-versioned: false
+  /v2/health:
+    get:
+      operationId: getHealth
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+      x-muniu-versioned: false
+  /v2/readiness:
+    get:
+      operationId: getReadiness
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+      x-muniu-versioned: false
+  /v2/setup:
+    post:
+      operationId: setup
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Mutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        default:
+          $ref: "#/components/responses/Error"
+      x-muniu-versioned: false
   /v2/workspaces:
     get:
       operationId: listWorkspaces
@@ -57,6 +103,21 @@ paths:
         default:
           $ref: "#/components/responses/Error"
       x-muniu-versioned: true
+  /v2/workspaces/{workspaceId}/home:
+    get:
+      operationId: getWorkspaceHome
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+      x-muniu-versioned: false
   /v2/workspaces/{workspaceId}/threads:
     get:
       operationId: listThreads
@@ -191,6 +252,15 @@ paths:
         default:
           $ref: "#/components/responses/Error"
       x-muniu-versioned: false
+  /v2/activity:
+    get:
+      operationId: listActivity
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+      x-muniu-versioned: false
   /v2/approvals/{approvalId}/decisions:
     post:
       operationId: decideApproval
@@ -279,7 +349,86 @@ paths:
         default:
           $ref: "#/components/responses/Error"
       x-muniu-versioned: false
+  /v2/memories/{memoryId}:
+    patch:
+      operationId: reviseMemoryProposal
+      parameters:
+        - in: path
+          name: memoryId
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VersionedMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        default:
+          $ref: "#/components/responses/Error"
+      x-muniu-versioned: true
+    delete:
+      operationId: deleteMemory
+      parameters:
+        - in: path
+          name: memoryId
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VersionedMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        default:
+          $ref: "#/components/responses/Error"
+      x-muniu-versioned: true
+  /v2/memories/{memoryId}/decisions:
+    post:
+      operationId: decideMemory
+      parameters:
+        - in: path
+          name: memoryId
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VersionedMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        default:
+          $ref: "#/components/responses/Error"
+      x-muniu-versioned: true
   /v2/share-grants:
+    get:
+      operationId: listShareGrants
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+      x-muniu-versioned: false
     post:
       operationId: createShareGrant
       parameters:
@@ -298,7 +447,48 @@ paths:
         default:
           $ref: "#/components/responses/Error"
       x-muniu-versioned: true
+  /v2/share-grants/{grantId}:
+    delete:
+      operationId: revokeShareGrant
+      parameters:
+        - in: path
+          name: grantId
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VersionedMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        default:
+          $ref: "#/components/responses/Error"
+      x-muniu-versioned: true
+  /v2/model-connections/presets:
+    get:
+      operationId: listModelPresets
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+      x-muniu-versioned: false
   /v2/model-connections:
+    get:
+      operationId: listModelConnections
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+      x-muniu-versioned: false
     post:
       operationId: createModelConnection
       parameters:
@@ -360,12 +550,98 @@ paths:
         default:
           $ref: "#/components/responses/Error"
       x-muniu-versioned: false
+    get:
+      operationId: listPluginInstallations
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+      x-muniu-versioned: false
   /v2/workspaces/{workspaceId}/plugin-activations:
     post:
       operationId: activatePlugin
       parameters:
         - in: path
           name: workspaceId
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VersionedMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        default:
+          $ref: "#/components/responses/Error"
+      x-muniu-versioned: true
+  /v2/plugins/opc/opportunities/{opportunityId}:
+    get:
+      operationId: getOpcOpportunity
+      parameters:
+        - in: path
+          name: opportunityId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+      x-muniu-versioned: false
+  /v2/plugins/opc/opportunities/{opportunityId}/commands:
+    post:
+      operationId: commandOpcOpportunity
+      parameters:
+        - in: path
+          name: opportunityId
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VersionedMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        default:
+          $ref: "#/components/responses/Error"
+      x-muniu-versioned: true
+  /v2/plugins/opc/opportunities/{opportunityId}/deliverables:
+    get:
+      operationId: previewOpcDeliverables
+      parameters:
+        - in: path
+          name: opportunityId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+      x-muniu-versioned: false
+  /v2/plugins/opc/opportunities/{opportunityId}/exports:
+    post:
+      operationId: exportOpcDeliverables
+      parameters:
+        - in: path
+          name: opportunityId
           required: true
           schema:
             type: string

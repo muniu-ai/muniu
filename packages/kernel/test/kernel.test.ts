@@ -50,6 +50,35 @@ test("本地身份、工作区、线程和执行共用同一事件流", async ()
   assert.equal(events.events.every((event) => event.hmac.length === 64), true);
 });
 
+test("模型密钥引用策略可按部署 profile 注入且默认只接受 v2 Keychain", async () => {
+  const connection = {
+    presetId: "openai",
+    displayName: "OpenAI",
+    secretRef: "vault://muniu/v2/model-openai",
+    defaultModel: "gpt-5",
+    discoveredModels: ["gpt-5"],
+  } as const;
+  const localKernel = new AgentOsKernel(new InMemoryKernelStore(), { now: () => now });
+  await assert.rejects(
+    localKernel.saveModelConnection("local", "local-owner", "local-secret", connection),
+    /密钥引用不属于当前部署的受信存储/,
+  );
+
+  const enterpriseKernel = new AgentOsKernel(new InMemoryKernelStore(), {
+    now: () => now,
+    acceptsModelSecretReference: (reference) => reference.startsWith("vault://muniu/v2/"),
+  });
+  const saved = await enterpriseKernel.saveModelConnection("tenant-a", "owner", "vault-secret", connection);
+  assert.equal(saved.secretRef, connection.secretRef);
+  await assert.rejects(
+    enterpriseKernel.saveModelConnection("tenant-a", "owner", "keychain-secret", {
+      ...connection,
+      secretRef: "keychain://muniu.v2/model-openai",
+    }),
+    /密钥引用不属于当前部署的受信存储/,
+  );
+});
+
 test("提交 turn 会原子持久化上下文、权限、Execution、Job 和 outbox", async () => {
   const store = new InMemoryKernelStore(undefined, () => now);
   const kernel = new AgentOsKernel(store, { now: () => now });
