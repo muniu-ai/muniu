@@ -435,6 +435,57 @@ export class AgentOsKernel {
         expectedStreamVersion, type: `execution.${nextStatus}`, actorId, executionId,
         generation: next.generation, publicPayload: { previousStatus: execution.status, status: nextStatus },
       });
+      if (command === "resume") {
+        const jobId = this.nextId("job");
+        const job: Job = {
+          id: jobId,
+          tenantId,
+          workspaceId: execution.workspaceId,
+          kind: "agent.execution.run",
+          payload: { executionId, command: "resume", generation: next.generation },
+          status: "available",
+          attempts: 0,
+          availableAt: now,
+          fencingToken: 0,
+          idempotencyKey: `execution:${executionId}:generation:${next.generation}`,
+          streamVersion: 1,
+          createdAt: now,
+          updatedAt: now,
+        };
+        transaction.putProjection("job", jobId, job);
+        this.append(transaction, {
+          tenantId,
+          aggregateType: "job",
+          aggregateId: jobId,
+          expectedStreamVersion: 0,
+          type: "job.available",
+          actorId,
+          executionId,
+          generation: next.generation,
+          publicPayload: {
+            workspaceId: execution.workspaceId,
+            executionId,
+            kind: job.kind,
+            command: "resume",
+          },
+        });
+        transaction.putJob({
+          id: job.id,
+          tenantId,
+          workspaceId: job.workspaceId,
+          kind: job.kind,
+          payload: job.payload,
+          availableAt: job.availableAt,
+          idempotencyKey: job.idempotencyKey,
+        });
+        transaction.putOutbox({
+          id: this.nextId("outbox"),
+          tenantId,
+          topic: "job.available",
+          payload: { workspaceId: execution.workspaceId, executionId, jobId },
+          availableAt: now,
+        });
+      }
       return next;
     });
   }

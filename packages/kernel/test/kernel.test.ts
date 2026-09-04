@@ -176,6 +176,46 @@ test("执行只允许明确状态转换，恢复会递增 generation", async () 
   assert.equal(unknownEffectStatus("external_read", false), undefined);
 });
 
+test("恢复执行会在同一事务创建新 generation 的 Job 与 outbox", async () => {
+  const store = new InMemoryKernelStore(undefined, () => now);
+  let sequence = 0;
+  const kernel = new AgentOsKernel(store, {
+    now: () => now,
+    id: (kind) => `${kind}-${++sequence}`,
+  });
+  await kernel.bootstrapLocal("resume-setup");
+  const workspace = await kernel.createWorkspace("local", "local-owner", "resume-workspace", {
+    name: "恢复测试", viewMode: "professional", pluginIds: ["opc"],
+  });
+  const thread = await kernel.createThread("local", "local-owner", "resume-thread", {
+    workspaceId: workspace.id, subject: "恢复机会验证", pluginId: "opc",
+  });
+  const execution = await kernel.createExecution("local", "local-owner", "resume-execution", {
+    workspaceId: workspace.id, threadId: thread.id, pluginId: "opc",
+    agentDefinitionId: "opc.opportunity-validator", modelBindingId: "model-1",
+    executionPrincipalId: "agent-1", authority: { ...authority("resume"), workspaceId: workspace.id },
+  });
+  const running = await kernel.commandExecution(
+    "local", "local-owner", "resume-start", execution.id, execution.streamVersion, "start",
+  );
+  const interrupted = await kernel.commandExecution(
+    "local", "local-owner", "resume-interrupt", execution.id, running.streamVersion, "interrupt",
+  );
+  const resumed = await kernel.commandExecution(
+    "local", "local-owner", "resume-command", execution.id, interrupted.streamVersion, "resume",
+  );
+
+  assert.equal(resumed.status, "queued");
+  assert.equal(resumed.generation, 2);
+  assert.deepEqual(store.readJobs("local").map((job) => job.payload), [
+    { executionId: execution.id, command: "resume", generation: 2 },
+  ]);
+  assert.deepEqual(store.readOutbox("local").map((message) => message.topic), ["job.available"]);
+  const jobs = await store.transact("local", (transaction) =>
+    transaction.listProjections<import("@mn/contracts").Job>("job"));
+  assert.equal(jobs[0]?.idempotencyKey, `execution:${execution.id}:generation:2`);
+});
+
 test("子 Agent 的工具、数据和预算必须是父权限的严格子集", () => {
   const parent: ExecutionAuthority = {
     ...authority("parent"), id: "parent", tenantId: "local", executionId: "parent",
