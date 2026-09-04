@@ -16,6 +16,13 @@ export const CODING_DEFAULT_LIMITS = Object.freeze({
   maxDurationMs: 3_600_000,
 });
 
+export class RunnerKnownFailureError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RunnerKnownFailureError";
+  }
+}
+
 export interface CodingExecutionLimits {
   readonly maxRepairAttempts: number;
   readonly maxDurationMs: number;
@@ -194,8 +201,18 @@ export class CodingExecutionEngine {
         explicitlySelected: runner.external,
       });
     } catch (error) {
-      return outcome(input, runnerId, limits, candidates, gates, "failed", undefined,
-        `Runner 启动失败：${safeMessage(error)}`);
+      return outcome(
+        input,
+        runnerId,
+        limits,
+        candidates,
+        gates,
+        runner.external && !(error instanceof RunnerKnownFailureError)
+          ? "needs_reconciliation"
+          : "failed",
+        undefined,
+        `Runner 启动失败：${safeMessage(error)}`,
+      );
     }
 
     while (true) {
@@ -306,8 +323,10 @@ export class CodingExecutionEngine {
           explicitlySelected: runner.external,
         });
       } catch (error) {
-        return outcome(input, runnerId, limits, candidates, gates, "needs_reconciliation", undefined,
-          `修复请求结果未知：${safeMessage(error)}`);
+        const known = error instanceof RunnerKnownFailureError;
+        return outcome(input, runnerId, limits, candidates, gates,
+          known ? "failed" : "needs_reconciliation", undefined,
+          `${known ? "修复请求失败" : "修复请求结果未知"}：${safeMessage(error)}`);
       }
     }
   }

@@ -5,8 +5,8 @@ import { spawn } from "node:child_process";
 import {
   assertRunnerIdentity,
   copySafeEnvironment,
-  inspectRunnerBinary,
   RunnerSecurityError,
+  verifyRunnerBinaryIdentity,
   type RunnerBinaryIdentity,
 } from "./identity.ts";
 
@@ -103,6 +103,7 @@ export interface CreateClaudeCliRunnerOptions {
   readonly inspectRepository?: (path: string) => Promise<RepositoryIdentity>;
   readonly launch?: (spec: SafeSpawnSpec) => ManagedRunnerProcess;
   readonly createSessionId?: () => string;
+  readonly cancelGraceMs?: number;
 }
 
 interface SessionState {
@@ -115,10 +116,15 @@ interface SessionState {
 }
 
 export function createClaudeCliRunner(options: CreateClaudeCliRunnerOptions): ClaudeCliRunner {
-  const inspectIdentity = options.inspectIdentity ?? ((path) => inspectRunnerBinary(path));
+  const inspectIdentity = options.inspectIdentity
+    ?? (() => verifyRunnerBinaryIdentity(options.confirmedIdentity));
   const inspectRepository = options.inspectRepository ?? inspectRepositoryPath;
   const launch = options.launch ?? launchRunner;
   const createSessionId = options.createSessionId ?? randomUUID;
+  const cancelGraceMs = options.cancelGraceMs ?? 2_000;
+  if (!Number.isSafeInteger(cancelGraceMs) || cancelGraceMs < 1) {
+    throw new Error("Runner 取消宽限期必须是正整数");
+  }
   const sessions = new Map<string, SessionState>();
 
   async function prepare(
@@ -156,7 +162,10 @@ export function createClaudeCliRunner(options: CreateClaudeCliRunnerOptions): Cl
         preparedInput: input.preparedInput,
       }));
       const sessionId = createSessionId();
-      if (!sessionId || sessions.has(sessionId)) throw new Error("Runner 会话 ID 无效或重复");
+      if (!sessionId || sessions.has(sessionId)) {
+        await terminateRunnerProcess(process, cancelGraceMs);
+        throw new Error("Runner 会话 ID 无效或重复");
+      }
       sessions.set(sessionId, {
         id: sessionId,
         input: { ...input },
@@ -239,7 +248,7 @@ export function createClaudeCliRunner(options: CreateClaudeCliRunnerOptions): Cl
     async cancel(sessionId) {
       const session = requireSession(sessions, sessionId);
       session.cancelled = true;
-      session.process.kill("SIGTERM");
+      await terminateRunnerProcess(session.process, cancelGraceMs);
     },
     async resume(sessionId, input) {
       const session = requireSession(sessions, sessionId);
@@ -257,6 +266,30 @@ export function createClaudeCliRunner(options: CreateClaudeCliRunnerOptions): Cl
       session.eventsConsumed = false;
     },
   };
+}
+
+async function terminateRunnerProcess(process: ManagedRunnerProcess, graceMs: number): Promise<void> {
+  process.kill("SIGTERM");
+  if (await settlesWithin(process.completed, graceMs)) return;
+  process.kill("SIGKILL");
+  if (!await settlesWithin(process.completed, graceMs)) {
+    throw new Error("Runner 在 SIGKILL 后仍未退出");
+  }
+}
+
+async function settlesWithin(promise: Promise<unknown>, milliseconds: number): Promise<boolean> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise.then(() => true, () => true),
+      new Promise<false>((resolveTimeout) => {
+        timer = setTimeout(() => resolveTimeout(false), milliseconds);
+        timer.unref();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 async function inspectRepositoryPath(path: string): Promise<RepositoryIdentity> {
@@ -345,7 +378,7 @@ function launchRunner(spec: SafeSpawnSpec): ManagedRunnerProcess {
     cwd: spec.cwd,
     env: { ...spec.env },
     shell: false,
-    detached: false,
+    detached: process.platform !== "win32",
     windowsHide: true,
     stdio: ["pipe", "pipe", "ignore"],
   });
@@ -368,6 +401,16 @@ function launchRunner(spec: SafeSpawnSpec): ManagedRunnerProcess {
   return {
     stdout: child.stdout,
     completed,
-    kill(signal) { child.kill(signal); },
+    kill(signal) {
+      if (process.platform !== "win32" && child.pid) {
+        try {
+          process.kill(-child.pid, signal);
+          return;
+        } catch {
+          // The root process may already have exited; fall back to the child handle.
+        }
+      }
+      child.kill(signal);
+    },
   };
 }

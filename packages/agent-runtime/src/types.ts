@@ -175,6 +175,8 @@ export type RuntimeRecordType =
   | "turn/completed"
   | "model/request"
   | "model/response"
+  | "runner/event"
+  | "runner/diagnostic"
   | "tool/intent"
   | "tool/result"
   | "tool/outcome_unknown";

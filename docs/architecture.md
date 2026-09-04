@@ -135,7 +135,9 @@ Coding 的一等对象是 `Repository`、`Service`、`Spec`、`CodingTask`、`Ca
 discover → specify → impact → implement → verify → approve → learn
 ```
 
-内置 Agent 是默认 Runner。Claude 与 Codex CLI 只实现 `start/events/cancel/resume`，不接管模型连接、代理、MCP、Prompt、Skill 或历史会话。
+内置 Agent 是默认 Runner。Claude 与 Codex CLI 必须由用户显式选择，并先按工作区确认二进制绝对真实路径、版本、SHA-256 和文件身份。Host 把 Runner ID 与工具权限原子写入 Execution；Worker 在外部副作用前重新检查身份，变化时 fail closed。
+
+外部 CLI 在隔离候选仓库中运行，不能直接修改源仓库。适配器只实现 `start/events/cancel/resume`，不接管模型连接、代理、MCP、Prompt、Skill 或历史会话。Worker 在启动前持久化不可自动重放检查点；缺少确定终态时进入 `needs_reconciliation`。
 
 ## 记忆与共享
 

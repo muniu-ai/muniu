@@ -1,18 +1,10 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFile, realpath, stat } from "node:fs/promises";
-import { resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
+import type { RunnerBinaryIdentityV1 } from "@mn/contracts";
 
-export interface RunnerBinaryIdentity {
-  readonly requestedPath: string;
-  readonly realPath: string;
-  readonly version: string;
-  readonly sha256: string;
-  readonly device: string;
-  readonly inode: string;
-  readonly byteLength: number;
-  readonly modifiedAtMs: number;
-}
+export type RunnerBinaryIdentity = RunnerBinaryIdentityV1;
 
 export interface InspectRunnerBinaryOptions {
   readonly readVersion?: (realPath: string) => Promise<string>;
@@ -39,6 +31,7 @@ export async function inspectRunnerBinary(
   options: InspectRunnerBinaryOptions = {},
 ): Promise<RunnerBinaryIdentity> {
   if (!binaryPath || binaryPath.includes("\0")) throw invalidBinary("Runner 路径无效");
+  if (!isAbsolute(binaryPath)) throw invalidBinary("Runner 必须使用绝对路径");
   const requestedPath = resolve(binaryPath);
   const resolvedPath = await realpath(requestedPath);
   const before = await stat(resolvedPath);
@@ -73,6 +66,55 @@ export async function inspectRunnerBinary(
   });
 }
 
+export async function verifyRunnerBinaryIdentity(
+  confirmed: RunnerBinaryIdentity,
+  options: InspectRunnerBinaryOptions = {},
+): Promise<RunnerBinaryIdentity> {
+  if (!isAbsolute(confirmed.requestedPath) || confirmed.requestedPath.includes("\0")) {
+    throw invalidBinary("已确认的 Runner 路径无效");
+  }
+  const requestedPath = resolve(confirmed.requestedPath);
+  const resolvedPath = await realpath(requestedPath);
+  const before = await stat(resolvedPath);
+  if (!before.isFile() || (before.mode & 0o111) === 0) {
+    throw invalidBinary("Runner 必须是可执行的普通文件");
+  }
+  if (before.size > 512 * 1024 * 1024) throw invalidBinary("Runner 二进制超过 512 MiB 限制");
+  const firstBytes = await readFile(resolvedPath);
+  const firstDigest = createHash("sha256").update(firstBytes).digest("hex");
+  const checked = await stat(resolvedPath);
+  const passiveIdentity = {
+    requestedPath,
+    realPath: resolvedPath,
+    sha256: firstDigest,
+    device: String(checked.dev),
+    inode: String(checked.ino),
+    byteLength: checked.size,
+    modifiedAtMs: checked.mtimeMs,
+  };
+  if (!sameFile(before, checked) || passiveIdentityChanged(confirmed, passiveIdentity)) {
+    throw reconfirmationRequired();
+  }
+
+  // Execute --version only after passive file identity matches the confirmed binary.
+  const rawVersion = await (options.readVersion ?? readBinaryVersion)(resolvedPath);
+  const secondBytes = await readFile(resolvedPath);
+  const secondDigest = createHash("sha256").update(secondBytes).digest("hex");
+  const after = await stat(resolvedPath);
+  if (firstDigest !== secondDigest || !sameFile(checked, after)) {
+    throw new RunnerSecurityError(
+      "RUNNER_RESOURCE_CHANGED",
+      "复核身份期间 Runner 二进制发生变化",
+      "重新选择二进制并确认身份",
+    );
+  }
+  const version = rawVersion.trim().split(/\r?\n/u)[0]?.slice(0, 256) ?? "";
+  if (!version) throw invalidBinary("Runner 未返回版本");
+  const current = Object.freeze({ ...passiveIdentity, version });
+  assertRunnerIdentity(confirmed, current);
+  return current;
+}
+
 export function assertRunnerIdentity(
   confirmed: RunnerBinaryIdentity,
   current: RunnerBinaryIdentity,
@@ -94,6 +136,30 @@ export function assertRunnerIdentity(
       "检查新身份并重新确认后再执行",
     );
   }
+}
+
+function passiveIdentityChanged(
+  confirmed: RunnerBinaryIdentity,
+  current: Omit<RunnerBinaryIdentity, "version">,
+): boolean {
+  const fields = [
+    "requestedPath",
+    "realPath",
+    "sha256",
+    "device",
+    "inode",
+    "byteLength",
+    "modifiedAtMs",
+  ] as const;
+  return fields.some((field) => confirmed[field] !== current[field]);
+}
+
+function reconfirmationRequired(): RunnerSecurityError {
+  return new RunnerSecurityError(
+    "RUNNER_RECONFIRMATION_REQUIRED",
+    "Runner 路径、版本或二进制摘要已变化",
+    "检查新身份并重新确认后再执行",
+  );
 }
 
 async function readBinaryVersion(path: string): Promise<string> {

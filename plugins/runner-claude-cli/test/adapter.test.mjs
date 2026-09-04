@@ -10,6 +10,7 @@ import {
   createClaudeCliRunner,
   inspectRunnerBinary,
   runnerClaudeCliPlugin,
+  verifyRunnerBinaryIdentity,
 } from "../src/index.ts";
 
 test("Claude Runner 记录 realpath、版本和 SHA-256，摘要变化后要求重新确认", async () => {
@@ -24,11 +25,26 @@ test("Claude Runner 记录 realpath、版本和 SHA-256，摘要变化后要求�
 
   await writeFile(binary, "#!/bin/sh\necho changed\n");
   await chmod(binary, 0o755);
+  let versionReads = 0;
+  await assert.rejects(
+    () => verifyRunnerBinaryIdentity(confirmed, {
+      readVersion: async () => { versionReads += 1; return "1.2.3"; },
+    }),
+    (error) => error.code === "RUNNER_RECONFIRMATION_REQUIRED",
+  );
+  assert.equal(versionReads, 0);
   const changed = await inspectRunnerBinary(binary, { readVersion: async () => "1.2.3" });
   assert.throws(() => assertRunnerIdentity(confirmed, changed), (error) => {
     assert.equal(error.code, "RUNNER_RECONFIRMATION_REQUIRED");
     return true;
   });
+});
+
+test("Claude Runner 拒绝相对二进制路径", async () => {
+  await assert.rejects(
+    () => inspectRunnerBinary("bin/claude", { readVersion: async () => "1.2.3" }),
+    (error) => error.code === "RUNNER_BINARY_INVALID" && /\u7edd\u5bf9\u8def\u5f84/u.test(error.message),
+  );
 });
 
 test("Claude 调用使用 stdin 和 shell:false，不注入 Provider、代理、MCP 或 Skill 配置", () => {
@@ -52,6 +68,10 @@ test("Claude Runner 是独立的显式选择插件", () => {
   assert.equal(runnerClaudeCliPlugin.defaultEnabled, false);
   assert.equal(runnerClaudeCliPlugin.explicitSelectionRequired, true);
   assert.deepEqual(runnerClaudeCliPlugin.capabilities, ["start", "events", "cancel", "resume"]);
+  assert.equal(
+    runnerClaudeCliPlugin.definition.contributions.tools[0].effectClass,
+    "external_side_effect",
+  );
 });
 
 test("Claude Runner 在每次 start/resume 前复核身份和仓库真实路径", async () => {
@@ -129,6 +149,49 @@ test("Claude Runner 在每次 start/resume 前复核身份和仓库真实路径"
   assert.equal(inspectionCount, 2);
   await runner.cancel(session.sessionId);
   assert.deepEqual(killed, ["SIGTERM"]);
+});
+
+test("Claude Runner 取消超时后升级为 SIGKILL 并等待进程退出", async () => {
+  const identity = {
+    requestedPath: "/tools/claude",
+    realPath: "/opt/tools/claude",
+    version: "1.2.3",
+    sha256: "a".repeat(64),
+    device: "1",
+    inode: "2",
+    byteLength: 100,
+    modifiedAtMs: 1,
+  };
+  const signals = [];
+  let resolveCompletion;
+  const completion = new Promise((resolve) => { resolveCompletion = resolve; });
+  const runner = createClaudeCliRunner({
+    binaryPath: identity.requestedPath,
+    confirmedIdentity: identity,
+    inspectIdentity: async () => identity,
+    inspectRepository: async () => ({ realPath: "/repo", device: "3", inode: "4" }),
+    launch: () => ({
+      stdout: (async function* () {})(),
+      completed: completion,
+      kill(signal) {
+        signals.push(signal);
+        if (signal === "SIGKILL") resolveCompletion({ code: null, signal });
+      },
+    }),
+    createSessionId: () => "cancel-session",
+    cancelGraceMs: 1,
+  });
+  const session = await runner.start({
+    executionId: "execution-1",
+    repositoryPath: "/repo",
+    expectedRepositoryRealPath: "/repo",
+    resourceDigest: "b".repeat(64),
+    preparedInput: "执行 Spec",
+    explicitlySelected: true,
+  });
+
+  await runner.cancel(session.sessionId);
+  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
 });
 
 test("Claude Runner 缺少明确终态时返回 unknown，交由内核人工核对", async () => {

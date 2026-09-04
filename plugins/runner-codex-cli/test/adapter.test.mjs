@@ -10,6 +10,7 @@ import {
   createCodexCliRunner,
   inspectRunnerBinary,
   runnerCodexCliPlugin,
+  verifyRunnerBinaryIdentity,
 } from "../src/index.ts";
 
 test("Codex Runner 记录 realpath、版本和 SHA-256，摘要变化后要求重新确认", async () => {
@@ -23,11 +24,26 @@ test("Codex Runner 记录 realpath、版本和 SHA-256，摘要变化后要求�
 
   await writeFile(binary, "#!/bin/sh\necho changed\n");
   await chmod(binary, 0o755);
+  let versionReads = 0;
+  await assert.rejects(
+    () => verifyRunnerBinaryIdentity(confirmed, {
+      readVersion: async () => { versionReads += 1; return "4.5.6"; },
+    }),
+    (error) => error.code === "RUNNER_RECONFIRMATION_REQUIRED",
+  );
+  assert.equal(versionReads, 0);
   const changed = await inspectRunnerBinary(binary, { readVersion: async () => "4.5.6" });
   assert.throws(() => assertRunnerIdentity(confirmed, changed), (error) => {
     assert.equal(error.code, "RUNNER_RECONFIRMATION_REQUIRED");
     return true;
   });
+});
+
+test("Codex Runner 拒绝相对二进制路径", async () => {
+  await assert.rejects(
+    () => inspectRunnerBinary("bin/codex", { readVersion: async () => "4.5.6" }),
+    (error) => error.code === "RUNNER_BINARY_INVALID" && /\u7edd\u5bf9\u8def\u5f84/u.test(error.message),
+  );
 });
 
 test("Codex 调用使用 stdin 和 shell:false，不注入 Provider、代理、MCP 或 Skill 配置", () => {
@@ -48,6 +64,10 @@ test("Codex Runner 是独立的显式选择插件", () => {
   assert.equal(runnerCodexCliPlugin.defaultEnabled, false);
   assert.equal(runnerCodexCliPlugin.explicitSelectionRequired, true);
   assert.deepEqual(runnerCodexCliPlugin.capabilities, ["start", "events", "cancel", "resume"]);
+  assert.equal(
+    runnerCodexCliPlugin.definition.contributions.tools[0].effectClass,
+    "external_side_effect",
+  );
 });
 
 test("Codex Runner 规范化 thread/turn 事件并使用安全 resume 调用", async () => {

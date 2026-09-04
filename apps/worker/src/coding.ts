@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   lstat,
@@ -20,17 +20,22 @@ import {
   type ToolApprovalPort,
 } from "@mn/agent-runtime";
 import type {
+  CodingRunnerConfigurationV1,
   Deliverable,
   Execution,
   ExecutionAuthority,
+  ExternalCodingRunnerId,
   JsonObject,
   JsonValue,
+  RunnerBinaryIdentityV1,
   Thread,
   ToolCallIntent,
 } from "@mn/contracts";
+import { CODING_RUNNER_CONFIGURATION_NAMESPACE } from "@mn/contracts";
 import { sha256, type InboxItem, type KernelStore } from "@mn/kernel";
 import {
   buildRepositoryIndex,
+  CODING_DEFAULT_LIMITS,
   CodingExecutionEngine,
   decideCodingExecution,
   type Candidate,
@@ -43,8 +48,17 @@ import {
   type Repository,
   type RepositoryIndex,
   type RunnerEvent,
+  RunnerKnownFailureError,
 } from "@mn/plugin-coding";
 import type { StoredJob } from "@mn/storage";
+import {
+  createClaudeCliRunner,
+  verifyRunnerBinaryIdentity as verifyClaudeBinaryIdentity,
+} from "@mn/runner-claude-cli";
+import {
+  createCodexCliRunner,
+  verifyRunnerBinaryIdentity as verifyCodexBinaryIdentity,
+} from "@mn/runner-codex-cli";
 
 import { createKernelToolApprovalPort, type ToolApprovalKernel } from "./approval.js";
 import {
@@ -91,6 +105,16 @@ interface StoredCodingRun {
   readonly status: "running" | CodingExecutionResult["status"];
   readonly controlPlane: CodingControlPlaneCommitment;
   readonly baseRevision: string;
+  readonly runnerId: "builtin" | ExternalCodingRunnerId;
+  readonly externalInvocation?: {
+    readonly runnerId: ExternalCodingRunnerId;
+    readonly attempt: number;
+    readonly identityDigest: string;
+    readonly sandboxPath: string;
+    readonly status: "started" | "settled" | "outcome_unknown";
+    readonly startedAt: string;
+    readonly updatedAt: string;
+  };
   readonly result?: CodingExecutionResult;
   readonly approvalIntent?: ToolCallIntent;
   readonly streamVersion: number;
@@ -109,6 +133,49 @@ interface RepositorySnapshot {
 interface CandidateMaterial {
   readonly diff: string;
   readonly sandboxPath: string;
+}
+
+interface ExternalRunnerAdapterEvent {
+  readonly type: "runner_event" | "diagnostic" | "result";
+  readonly payload?: Readonly<Record<string, unknown>>;
+  readonly message?: string;
+  readonly status?: "completed" | "failed" | "cancelled" | "unknown";
+  readonly reason?: string;
+  readonly reconciliationRequired?: boolean;
+}
+
+interface ExternalRunnerAdapter {
+  readonly id: string;
+  readonly external: true;
+  start(input: {
+    readonly executionId: string;
+    readonly repositoryPath: string;
+    readonly expectedRepositoryRealPath: string;
+    readonly resourceDigest: string;
+    readonly preparedInput: string;
+    readonly explicitlySelected: boolean;
+  }): Promise<{ readonly sessionId: string }>;
+  events(sessionId: string): AsyncIterable<ExternalRunnerAdapterEvent>;
+  cancel(sessionId: string): Promise<void>;
+  resume(sessionId: string, input: {
+    readonly preparedInput: string;
+    readonly explicitlySelected: boolean;
+  }): Promise<void>;
+}
+
+interface ExternalRunnerSpawnSpec {
+  readonly executable: string;
+  readonly cwd: string;
+  readonly args: readonly string[];
+  readonly stdin: string;
+  readonly shell: false;
+  readonly env: Readonly<Record<string, string | undefined>>;
+}
+
+interface ManagedExternalRunnerProcess {
+  readonly stdout: AsyncIterable<string | Uint8Array>;
+  readonly completed: Promise<{ readonly code: number | null; readonly signal: string | null }>;
+  kill(signal: "SIGTERM" | "SIGKILL"): void;
 }
 
 interface CommandResult {
@@ -162,7 +229,10 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
     }
     const state = await loadCodingState(options.store, job.tenantId, executionId);
     assertCodingState(job, state);
-    if (options.acceptsSecretReference && !options.acceptsSecretReference(state.model.secretRef)) {
+    const runnerId = state.execution.runnerId ?? "builtin";
+    if (runnerId === "builtin"
+      && options.acceptsSecretReference
+      && !options.acceptsSecretReference(state.model.secretRef)) {
       throw new Error("模型密钥引用不属于当前运行环境");
     }
     const runtime = new KernelProjectionRuntimeStore({
@@ -195,6 +265,50 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
         now,
       });
     }
+    if (recovered?.generation === state.execution.generation
+      && recovered.externalInvocation?.status === "started") {
+      const nextStep = "核对外部执行结果，再选择终止、标记完成或创建新调用";
+      await runtime.append({
+        executionId,
+        type: "tool/outcome_unknown",
+        payload: {
+          runnerId: recovered.externalInvocation.runnerId,
+          attempt: recovered.externalInvocation.attempt,
+          reason: "Worker 恢复时发现外部 Runner 启动检查点没有确定终态",
+        },
+      });
+      await persistCodingResult({
+        store: options.store,
+        tenantId: job.tenantId,
+        state,
+        controlPlane: recovered.controlPlane,
+        baseRevision: recovered.baseRevision,
+        result: {
+          task: state.task,
+          runnerId: recovered.runnerId,
+          status: "needs_reconciliation",
+          candidates: [],
+          gates: [],
+          nextStep,
+          limits: {
+            maxRepairAttempts: CODING_DEFAULT_LIMITS.maxRepairAttempts,
+            maxDurationMs: state.authority.budget.maxDurationMs,
+          },
+          controlPlane: recovered.controlPlane,
+        },
+        material: new Map(),
+        now: now(),
+      });
+      throw new CodingWorkerOutcomeError(
+        executionId,
+        "needs_reconciliation",
+        nextStep,
+      );
+    }
+
+    if (runnerId !== "builtin") {
+      await assertCurrentRunnerIdentity(state.runnerConfiguration!);
+    }
 
     const snapshot = await inspectRepositoryControlled({
       repository: state.repository,
@@ -205,10 +319,18 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
       signal: context.signal,
       now,
     });
-    const controlPlane = await sandbox.controlPlane(snapshot, state.task);
-    await persistRunning(options.store, job.tenantId, state, controlPlane, snapshot.baseRevision, now());
+    const controlPlane = await sandbox.controlPlane(snapshot, state.task, runnerId);
+    await persistRunning(
+      options.store,
+      job.tenantId,
+      state,
+      controlPlane,
+      snapshot.baseRevision,
+      runnerId,
+      now(),
+    );
 
-    const runner = new BuiltinCodingRunner({
+    const builtinRunner = new BuiltinCodingRunner({
       execution: state.execution,
       authority: state.authority,
       task: state.task,
@@ -223,9 +345,32 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
       signal: context.signal,
       now,
     });
+    const runner = runnerId === "builtin"
+      ? builtinRunner
+      : new ExternalCodingRunner({
+          runnerId,
+          configuration: state.runnerConfiguration!,
+          execution: state.execution,
+          authority: state.authority,
+          task: state.task,
+          snapshot,
+          controlPlane,
+          runtime,
+          approval,
+          sandbox,
+          store: options.store,
+          tenantId: job.tenantId,
+          signal: context.signal,
+          now,
+    });
     let run: StoredCodingRun;
+    let preserveForReconciliation = true;
     try {
-      const result = await new CodingExecutionEngine({ runners: [runner], now: () => Date.parse(now()) })
+      const registeredRunners = runnerId === "builtin" ? [builtinRunner] : [builtinRunner, runner];
+      const result = await new CodingExecutionEngine({
+        runners: registeredRunners,
+        now: () => Date.parse(now()),
+      })
         .execute({
           task: state.task,
           controlPlane,
@@ -233,6 +378,8 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
           executionId,
           repositoryPath: snapshot.realPath,
           expectedRepositoryRealPath: state.repository.rootRealPath,
+          selectedRunnerId: runnerId,
+          externalRunnerConfirmed: runnerId !== "builtin",
           limits: { maxDurationMs: state.authority.budget.maxDurationMs },
         });
       if (context.signal.aborted) throw new Error("Coding 执行已中断");
@@ -250,8 +397,9 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
         material: runner.material,
         now: now(),
       });
+      preserveForReconciliation = result.status === "needs_reconciliation";
     } finally {
-      await runner.cleanup();
+      await runner.cleanup(preserveForReconciliation);
     }
     return settlePersistedResult({
       options,
@@ -330,6 +478,7 @@ interface CodingState {
   readonly task: CodingTask;
   readonly repository: VersionedRepository;
   readonly model: StoredModelConnection;
+  readonly runnerConfiguration?: CodingRunnerConfigurationV1;
 }
 
 async function loadCodingState(
@@ -359,7 +508,22 @@ async function loadCodingState(
       execution.modelBindingId,
     );
     if (!model) throw new Error("模型连接不存在");
-    return { execution, authority, thread, task, repository, model };
+    const runnerId = execution.runnerId ?? "builtin";
+    const runnerConfiguration = runnerId === "builtin"
+      ? undefined
+      : transaction.getProjection<CodingRunnerConfigurationV1>(
+          CODING_RUNNER_CONFIGURATION_NAMESPACE,
+          `${execution.workspaceId}:${runnerId}`,
+        );
+    return {
+      execution,
+      authority,
+      thread,
+      task,
+      repository,
+      model,
+      ...(runnerConfiguration ? { runnerConfiguration } : {}),
+    };
   });
 }
 
@@ -387,6 +551,23 @@ function assertCodingState(job: StoredJob, state: CodingState): void {
   if (state.model.status !== "ready" || !state.model.defaultModel.trim()) {
     throw new Error("模型连接尚未就绪");
   }
+  const runnerId = state.execution.runnerId ?? "builtin";
+  if (runnerId !== "builtin" && runnerId !== "claude-cli" && runnerId !== "codex-cli") {
+    throw new Error(`Coding Runner 不受支持：${String(runnerId)}`);
+  }
+  if (runnerId !== "builtin") {
+    const configuration = state.runnerConfiguration;
+    if (!configuration
+      || configuration.tenantId !== job.tenantId
+      || configuration.workspaceId !== state.execution.workspaceId
+      || configuration.runnerId !== runnerId
+      || configuration.status !== "confirmed") {
+      throw new Error("外部 Runner 没有当前工作区的已确认配置");
+    }
+    if (!state.authority.toolIds.includes(runnerToolId(runnerId))) {
+      throw new Error(`外部 Runner 缺少工具权限：${runnerToolId(runnerId)}`);
+    }
+  }
   for (const toolId of [
     "coding.repository.read",
     "coding.sandbox.write",
@@ -394,7 +575,7 @@ function assertCodingState(job: StoredJob, state: CodingState): void {
     "coding.candidate.accept",
   ]) {
     if (!state.authority.toolIds.includes(toolId)) {
-      throw new Error(`Coding builtin 缺少工具权限：${toolId}`);
+      throw new Error(`Coding 执行缺少工具权限：${toolId}`);
     }
   }
 }
@@ -484,7 +665,448 @@ async function inspectRepository(
   };
 }
 
-class BuiltinCodingRunner implements CodingRunnerAdapter {
+interface ManagedCodingRunner extends CodingRunnerAdapter {
+  readonly material: ReadonlyMap<string, CandidateMaterial>;
+  readonly gateVerifier: GateVerifier;
+  cleanup(preserveForReconciliation?: boolean): Promise<void>;
+}
+
+interface ExternalCodingRunnerOptions {
+  readonly runnerId: ExternalCodingRunnerId;
+  readonly configuration: CodingRunnerConfigurationV1;
+  readonly execution: Execution;
+  readonly authority: ExecutionAuthority;
+  readonly task: CodingTask;
+  readonly snapshot: RepositorySnapshot;
+  readonly controlPlane: CodingControlPlaneCommitment;
+  readonly runtime: RuntimeStore;
+  readonly approval: ToolApprovalPort;
+  readonly sandbox: MacOsCodingSandbox;
+  readonly store: KernelStore;
+  readonly tenantId: string;
+  readonly signal: AbortSignal;
+  readonly now: () => string;
+}
+
+class ExternalCodingRunner implements ManagedCodingRunner {
+  readonly external = true;
+  readonly material = new Map<string, CandidateMaterial>();
+  readonly gateVerifier: GateVerifier;
+  readonly id: ExternalCodingRunnerId;
+  readonly #options: ExternalCodingRunnerOptions;
+  #adapter?: ExternalRunnerAdapter;
+  #sessionId?: string;
+  #sandboxPath?: string;
+  #sequence = 0;
+  #intent?: ToolCallIntent;
+  #abortListener?: () => void;
+  #deadlineTimer?: NodeJS.Timeout;
+  #timedOut = false;
+  #terminalObserved = false;
+  #hasCheckpoint = false;
+
+  constructor(options: ExternalCodingRunnerOptions) {
+    this.#options = options;
+    this.id = options.runnerId;
+    this.gateVerifier = { verify: (candidate, controlPlane) => this.#verify(candidate, controlPlane) };
+  }
+
+  async start(input: {
+    readonly executionId: string;
+    readonly repositoryPath: string;
+    readonly expectedRepositoryRealPath: string;
+    readonly resourceDigest: string;
+    readonly preparedInput: string;
+  }): Promise<{ readonly sessionId: string }> {
+    try {
+      if (input.executionId !== this.#options.execution.id
+        || input.repositoryPath !== this.#options.snapshot.realPath
+        || input.expectedRepositoryRealPath !== this.#options.snapshot.realPath
+        || input.resourceDigest !== this.#options.controlPlane.repositoryIndexDigest) {
+        throw new Error("外部 Runner 输入与已固定的 Execution 或仓库不一致");
+      }
+      this.#sequence = 1;
+      await assertCurrentRunnerIdentity(this.#options.configuration);
+      await this.#assertSourceUnchanged();
+      this.#sandboxPath = await this.#options.sandbox.createWorkingCopy(
+        this.#options.snapshot,
+        this.#sequence,
+      );
+      const launch = await this.#options.sandbox.externalLauncher(this.#sandboxPath);
+      this.#adapter = createExternalRunnerAdapter({
+        runnerId: this.id,
+        identity: this.#options.configuration.identity,
+        launch,
+      });
+    } catch (error) {
+      throw knownRunnerFailure(error);
+    }
+    await this.#authorizeAndCheckpoint("start");
+    const session = await this.#adapter.start({
+      executionId: input.executionId,
+      repositoryPath: this.#sandboxPath,
+      expectedRepositoryRealPath: this.#sandboxPath,
+      resourceDigest: input.resourceDigest,
+      preparedInput: externalRunnerInput(this.#options, input.preparedInput, this.#sequence),
+      explicitlySelected: true,
+    });
+    this.#sessionId = session.sessionId;
+    this.#terminalObserved = false;
+    this.#abortListener = () => {
+      if (this.#sessionId) void this.#adapter?.cancel(this.#sessionId).catch(() => undefined);
+    };
+    this.#options.signal.addEventListener("abort", this.#abortListener, { once: true });
+    if (this.#options.signal.aborted) this.#abortListener();
+    this.#deadlineTimer = setTimeout(() => {
+      this.#timedOut = true;
+      if (this.#sessionId) void this.#adapter?.cancel(this.#sessionId).catch(() => undefined);
+    }, this.#options.authority.budget.maxDurationMs);
+    this.#deadlineTimer.unref();
+    return session;
+  }
+
+  async *events(sessionId: string): AsyncIterable<RunnerEvent> {
+    if (!this.#adapter || !this.#sandboxPath || sessionId !== this.#sessionId) {
+      throw new Error("外部 Runner 会话不存在");
+    }
+    for await (const event of this.#adapter.events(sessionId)) {
+      if (event.type === "runner_event" && event.payload) {
+        await this.#options.runtime.append({
+          executionId: this.#options.execution.id,
+          type: "runner/event",
+          payload: {
+            runnerId: this.id,
+            eventType: typeof event.payload.type === "string" ? event.payload.type : "unknown",
+            eventDigest: sha256(event.payload),
+          },
+        });
+        yield { type: "runner_event", payload: event.payload };
+        continue;
+      }
+      if (event.type === "diagnostic") {
+        const message = event.message?.slice(0, 512) || "Runner 返回了诊断信息";
+        await this.#options.runtime.append({
+          executionId: this.#options.execution.id,
+          type: "runner/diagnostic",
+          payload: { runnerId: this.id, message },
+        });
+        yield { type: "diagnostic", message };
+        continue;
+      }
+      if (event.type !== "result" || !event.status) continue;
+      this.#terminalObserved = true;
+      const resultStatus = this.#timedOut ? "unknown" as const : event.status;
+      const result = this.#timedOut
+        ? {
+            ...event,
+            status: "unknown" as const,
+            reason: "Runner 超过 Execution 时限后被终止，外部结果需要人工核对",
+            reconciliationRequired: true,
+          }
+        : event;
+      await this.#recordOutcome(result);
+      if (resultStatus !== "completed") {
+        yield { type: "result", status: resultStatus, ...(result.reason ? { reason: result.reason } : {}) };
+        return;
+      }
+      const diff = await this.#options.sandbox.stageAndDiff(this.#sandboxPath);
+      if (!diff.trim()) {
+        yield { type: "result", status: "failed", reason: "Runner 已完成，但没有生成可审阅 Diff" };
+        return;
+      }
+      const candidateId = `${this.#options.execution.id}:generation:${this.#options.execution.generation}:candidate:${this.#sequence}`;
+      const diffDigest = hashBytes(Buffer.from(diff));
+      this.material.set(candidateId, { diff, sandboxPath: this.#sandboxPath });
+      yield {
+        type: "candidate",
+        candidate: {
+          id: candidateId,
+          sequence: this.#sequence,
+          baseRevision: this.#options.snapshot.baseRevision,
+          diffDigest,
+          summary: `${runnerDisplayName(this.id)} 生成的候选变更`,
+          sandbox: {
+            enforced: true,
+            fallbackUsed: false,
+            evidenceDigest: this.#options.controlPlane.sandboxDigest,
+          },
+        },
+      };
+      return;
+    }
+  }
+
+  async cancel(sessionId: string): Promise<void> {
+    if (!this.#adapter || sessionId !== this.#sessionId) return;
+    await this.#adapter.cancel(sessionId);
+  }
+
+  async resume(sessionId: string, input: { readonly preparedInput: string }): Promise<void> {
+    if (!this.#adapter || sessionId !== this.#sessionId || !this.#sandboxPath) {
+      throw new Error("外部 Runner 会话不存在");
+    }
+    this.#sequence += 1;
+    try {
+      await assertCurrentRunnerIdentity(this.#options.configuration);
+      await this.#assertSourceUnchanged();
+    } catch (error) {
+      throw knownRunnerFailure(error);
+    }
+    await this.#authorizeAndCheckpoint("resume");
+    this.#terminalObserved = false;
+    await this.#adapter.resume(sessionId, {
+      preparedInput: externalRunnerInput(this.#options, input.preparedInput, this.#sequence),
+      explicitlySelected: true,
+    });
+  }
+
+  async cleanup(preserveForReconciliation = false): Promise<void> {
+    if (this.#deadlineTimer) {
+      clearTimeout(this.#deadlineTimer);
+      this.#deadlineTimer = undefined;
+    }
+    if (this.#abortListener) {
+      this.#options.signal.removeEventListener("abort", this.#abortListener);
+      this.#abortListener = undefined;
+    }
+    if (this.#adapter && this.#sessionId && !this.#terminalObserved) {
+      await this.#adapter.cancel(this.#sessionId);
+      this.#terminalObserved = true;
+    }
+    if (this.#sandboxPath) {
+      if (!(preserveForReconciliation && this.#hasCheckpoint)) {
+        await this.#options.sandbox.cleanup(this.#sandboxPath);
+      }
+      this.#sandboxPath = undefined;
+    }
+  }
+
+  async #authorizeAndCheckpoint(mode: "start" | "resume"): Promise<void> {
+    if (!this.#sandboxPath) throw new Error("候选仓库尚未创建");
+    const intent = createIntent({
+      execution: this.#options.execution,
+      authority: this.#options.authority,
+      toolId: runnerToolId(this.id),
+      effectClass: "external_side_effect",
+      intent: `在受控候选仓库中${mode === "start" ? "启动" : "恢复"} ${runnerDisplayName(this.id)}`,
+      normalizedArguments: {
+        runnerId: this.id,
+        mode,
+        attempt: this.#sequence,
+        binaryPath: this.#options.configuration.identity.realPath,
+        binaryVersion: this.#options.configuration.identity.version,
+        binarySha256: this.#options.configuration.identity.sha256,
+        identityDigest: this.#options.configuration.identityDigest,
+        repositoryIndexDigest: this.#options.controlPlane.repositoryIndexDigest,
+      },
+      resourceRefs: [{
+        namespace: "repository",
+        resourceId: this.#options.snapshot.repository.id,
+        digest: this.#options.controlPlane.repositoryIndexDigest,
+      }],
+      now: this.#options.now(),
+    });
+    try {
+      await authorizeTool(this.#options.runtime, this.#options.approval, intent, this.#options.signal);
+    } catch (error) {
+      throw knownRunnerFailure(error);
+    }
+    await persistExternalInvocationStarted({
+      store: this.#options.store,
+      tenantId: this.#options.tenantId,
+      state: {
+        execution: this.#options.execution,
+        task: this.#options.task,
+      },
+      runnerId: this.id,
+      attempt: this.#sequence,
+      identityDigest: this.#options.configuration.identityDigest,
+      sandboxPath: this.#sandboxPath,
+      occurredAt: this.#options.now(),
+    });
+    this.#hasCheckpoint = true;
+    this.#intent = intent;
+  }
+
+  async #recordOutcome(event: ExternalRunnerAdapterEvent): Promise<void> {
+    if (!this.#intent || !event.status) throw new Error("Runner 结果缺少已持久化意图");
+    if (event.status === "unknown") {
+      await this.#options.runtime.append({
+        executionId: this.#options.execution.id,
+        type: "tool/outcome_unknown",
+        payload: {
+          toolCallId: this.#intent.id,
+          runnerId: this.id,
+          reason: event.reason ?? "Runner 没有返回可确认终态",
+        },
+      });
+      return;
+    }
+    await this.#options.runtime.append({
+      executionId: this.#options.execution.id,
+      type: "tool/result",
+      payload: {
+        toolCallId: this.#intent.id,
+        status: event.status === "completed" ? "completed" : event.status,
+        runnerId: this.id,
+      },
+    });
+  }
+
+  async #assertSourceUnchanged(): Promise<void> {
+    const actual = await realpath(this.#options.snapshot.realPath);
+    const current = await inspectRepository(this.#options.snapshot.repository, actual);
+    if (current.realPath !== this.#options.snapshot.realPath
+      || current.baseRevision !== this.#options.snapshot.baseRevision
+      || current.index.digest !== this.#options.controlPlane.repositoryIndexDigest) {
+      throw new Error("源仓库在外部 Runner 边界前已变化，拒绝使用旧确认");
+    }
+  }
+
+  #verify(candidate: Candidate, controlPlane: CodingControlPlaneCommitment) {
+    return verifySandboxCandidate({
+      candidate,
+      controlPlane,
+      material: this.material,
+      execution: this.#options.execution,
+      authority: this.#options.authority,
+      repository: this.#options.snapshot.repository,
+      runtime: this.#options.runtime,
+      approval: this.#options.approval,
+      sandbox: this.#options.sandbox,
+      signal: this.#options.signal,
+      now: this.#options.now,
+    });
+  }
+}
+
+function createExternalRunnerAdapter(input: {
+  readonly runnerId: ExternalCodingRunnerId;
+  readonly identity: RunnerBinaryIdentityV1;
+  readonly launch: (spec: ExternalRunnerSpawnSpec) => ManagedExternalRunnerProcess;
+}): ExternalRunnerAdapter {
+  const options = {
+    binaryPath: input.identity.requestedPath,
+    confirmedIdentity: input.identity,
+    launch: input.launch,
+  };
+  return input.runnerId === "claude-cli"
+    ? createClaudeCliRunner(options)
+    : createCodexCliRunner(options);
+}
+
+async function assertCurrentRunnerIdentity(configuration: CodingRunnerConfigurationV1): Promise<void> {
+  if (configuration.identityDigest !== sha256(configuration.identity)) {
+    throw new Error("Runner 确认记录摘要无效，已拒绝执行");
+  }
+  if (configuration.runnerId === "claude-cli") {
+    await verifyClaudeBinaryIdentity(configuration.identity);
+    return;
+  }
+  await verifyCodexBinaryIdentity(configuration.identity);
+}
+
+function runnerToolId(runnerId: ExternalCodingRunnerId): string {
+  return runnerId === "claude-cli" ? "runner.claude.execute" : "runner.codex.execute";
+}
+
+function runnerDisplayName(runnerId: ExternalCodingRunnerId): string {
+  return runnerId === "claude-cli" ? "Claude CLI" : "Codex CLI";
+}
+
+function knownRunnerFailure(error: unknown): RunnerKnownFailureError {
+  return error instanceof RunnerKnownFailureError
+    ? error
+    : new RunnerKnownFailureError(safeMessage(error));
+}
+
+function externalRunnerInput(
+  options: ExternalCodingRunnerOptions,
+  input: string,
+  attempt: number,
+): string {
+  return [
+    "你正在木牛创建的受控候选仓库中工作。",
+    "只修改当前工作目录内的文件；不要提交、推送或改写 Git 历史。",
+    `任务：${options.task.request}`,
+    `基础版本：${options.snapshot.baseRevision}`,
+    `Spec：${options.controlPlane.specDigest}`,
+    `Governance：${options.controlPlane.governanceDigest}`,
+    `Harness：${options.controlPlane.harnessDigest}`,
+    `尝试：${attempt}`,
+    input === options.task.request ? "" : `Gate 反馈：\n${input}`,
+  ].filter(Boolean).join("\n\n");
+}
+
+async function verifySandboxCandidate(input: {
+  readonly candidate: Candidate;
+  readonly controlPlane: CodingControlPlaneCommitment;
+  readonly material: ReadonlyMap<string, CandidateMaterial>;
+  readonly execution: Execution;
+  readonly authority: ExecutionAuthority;
+  readonly repository: Repository;
+  readonly runtime: RuntimeStore;
+  readonly approval: ToolApprovalPort;
+  readonly sandbox: MacOsCodingSandbox;
+  readonly signal: AbortSignal;
+  readonly now: () => string;
+}) {
+  const material = input.material.get(input.candidate.id);
+  if (!material) throw new Error("Gate 找不到候选隔离目录");
+  if (hashBytes(Buffer.from(material.diff)) !== input.candidate.diffDigest) {
+    throw new Error("Gate 前候选 Diff 摘要不一致");
+  }
+  const intent = createIntent({
+    execution: input.execution,
+    authority: input.authority,
+    toolId: "coding.gate.verify",
+    effectClass: "local_read",
+    intent: `验证候选 ${input.candidate.id}`,
+    normalizedArguments: {
+      candidateId: input.candidate.id,
+      diffDigest: input.candidate.diffDigest,
+    },
+    resourceRefs: [{
+      namespace: "repository",
+      resourceId: input.repository.id,
+      digest: input.controlPlane.repositoryIndexDigest,
+    }],
+    now: input.now(),
+  });
+  await authorizeTool(input.runtime, input.approval, intent, input.signal);
+  const currentDiff = await input.sandbox.diff(material.sandboxPath);
+  if (hashBytes(Buffer.from(currentDiff)) !== input.candidate.diffDigest) {
+    throw new Error("Gate 执行前隔离目录中的 Diff 已变化");
+  }
+  const gate = await input.sandbox.verify(material.sandboxPath);
+  const evidenceDigest = sha256({
+    candidateId: input.candidate.id,
+    diffDigest: input.candidate.diffDigest,
+    sandboxDigest: input.controlPlane.sandboxDigest,
+    command: "git diff --check HEAD --",
+    ...gate,
+  });
+  await recordToolResult(input.runtime, intent, {
+    candidateId: input.candidate.id,
+    status: gate.exitCode === 0 ? "passed" : "failed",
+    evidenceDigest,
+  });
+  return {
+    status: gate.exitCode === 0 ? "passed" as const : "failed" as const,
+    authoritative: true,
+    evidenceDigest,
+    checks: [{
+      id: "git.diff-check",
+      status: gate.exitCode === 0 ? "passed" as const : "failed" as const,
+      summary: gate.exitCode === 0
+        ? "git diff --check 通过"
+        : (gate.stderr || gate.stdout || "git diff --check 未通过").trim(),
+    }],
+    ...(gate.exitCode === 0 ? {} : { reason: "候选 Diff 未通过权威 Gate" }),
+  };
+}
+
+class BuiltinCodingRunner implements ManagedCodingRunner {
   readonly id = "builtin";
   readonly external = false;
   readonly material = new Map<string, CandidateMaterial>();
@@ -732,6 +1354,7 @@ class MacOsCodingSandbox {
   readonly #root: string;
   readonly #executable: string;
   #realRoot?: string;
+  readonly #candidateBaseRevisions = new Map<string, string>();
 
   constructor(options: { readonly root: string; readonly executable: string }) {
     if (!isAbsolute(options.root)) throw new Error("Coding sandbox 根目录必须是绝对路径");
@@ -743,6 +1366,7 @@ class MacOsCodingSandbox {
   async controlPlane(
     snapshot: RepositorySnapshot,
     task: CodingTask,
+    runnerId: "builtin" | ExternalCodingRunnerId,
   ): Promise<CodingControlPlaneCommitment> {
     const root = await this.#initialize();
     return {
@@ -758,7 +1382,8 @@ class MacOsCodingSandbox {
         executable: this.#executable,
         root,
         writeScope: "candidate-directory",
-        network: "denied",
+        network: runnerId === "builtin" ? "denied" : "external-runner-provider-access",
+        runnerId,
         fallback: "forbidden",
       }),
       repositoryIndexDigest: snapshot.index.digest,
@@ -766,26 +1391,10 @@ class MacOsCodingSandbox {
   }
 
   async applyPatch(snapshot: RepositorySnapshot, patch: string, sequence: number) {
-    const root = await this.#initialize();
-    const prefix = `${safePathPart(snapshot.repository.id)}-${sequence}-`;
-    const candidateRoot = await mkdtemp(join(root, prefix));
-    assertWithin(root, candidateRoot, "候选目录");
-    const repositoryPath = join(candidateRoot, "repository");
+    const repositoryPath = await this.createWorkingCopy(snapshot, sequence);
+    const candidateRoot = resolve(repositoryPath, "..");
     const patchPath = join(candidateRoot, "candidate.patch");
-    await mkdir(join(candidateRoot, "tmp"), { mode: 0o700 });
-    await writeFile(join(candidateRoot, "empty.gitconfig"), "", { flag: "wx", mode: 0o600 });
     await writeFile(patchPath, patch, { encoding: "utf8", flag: "wx", mode: 0o600 });
-    await requireSuccess(await this.#run(candidateRoot, undefined, [
-      "-c", "protocol.file.allow=always",
-      "clone", "--no-local", "--no-hardlinks", "--no-checkout", "--quiet",
-      snapshot.realPath,
-      repositoryPath,
-    ]), "隔离仓库创建失败");
-    await requireSuccess(await this.#run(candidateRoot, repositoryPath, [
-      "-c", "core.hooksPath=/dev/null",
-      "-c", "core.fsmonitor=false",
-      "checkout", "--detach", "--quiet", snapshot.baseRevision,
-    ]), "固定基础版本失败");
     await requireSuccess(await this.#run(candidateRoot, repositoryPath, [
       "-c", "core.hooksPath=/dev/null",
       "apply", "--check", "--index", "--whitespace=nowarn", patchPath,
@@ -803,14 +1412,53 @@ class MacOsCodingSandbox {
     };
   }
 
+  async createWorkingCopy(snapshot: RepositorySnapshot, sequence: number): Promise<string> {
+    const root = await this.#initialize();
+    const prefix = `${safePathPart(snapshot.repository.id)}-${sequence}-`;
+    const candidateRoot = await mkdtemp(join(root, prefix));
+    assertWithin(root, candidateRoot, "候选目录");
+    const repositoryPath = join(candidateRoot, "repository");
+    await mkdir(join(candidateRoot, "tmp"), { mode: 0o700 });
+    await writeFile(join(candidateRoot, "empty.gitconfig"), "", { flag: "wx", mode: 0o600 });
+    await requireSuccess(await this.#run(candidateRoot, undefined, [
+      "-c", "protocol.file.allow=always",
+      "clone", "--no-local", "--no-hardlinks", "--no-checkout", "--quiet",
+      snapshot.realPath,
+      repositoryPath,
+    ]), "隔离仓库创建失败");
+    await requireSuccess(await this.#run(candidateRoot, repositoryPath, [
+      "-c", "core.hooksPath=/dev/null",
+      "-c", "core.fsmonitor=false",
+      "checkout", "--detach", "--quiet", snapshot.baseRevision,
+    ]), "固定基础版本失败");
+    const actualRepository = await realpath(repositoryPath);
+    this.#candidateBaseRevisions.set(actualRepository, snapshot.baseRevision);
+    return actualRepository;
+  }
+
   async diff(repositoryPath: string): Promise<string> {
     const candidateRoot = await this.#candidateRoot(repositoryPath);
+    const head = await this.#run(candidateRoot, repositoryPath, ["rev-parse", "HEAD"]);
+    await requireSuccess(head, "读取候选基础版本失败");
+    if (head.stdout.trim() !== this.#candidateBaseRevisions.get(repositoryPath)) {
+      throw new Error("候选仓库基础版本已变化，拒绝产生 Diff");
+    }
     const result = await this.#run(candidateRoot, repositoryPath, [
       "-c", "core.hooksPath=/dev/null",
       "diff", "--binary", "--no-ext-diff", "--no-color", "HEAD", "--",
     ]);
     await requireSuccess(result, "读取候选 Diff 失败");
     return result.stdout;
+  }
+
+  async stageAndDiff(repositoryPath: string): Promise<string> {
+    const candidateRoot = await this.#candidateRoot(repositoryPath);
+    await requireSuccess(await this.#run(candidateRoot, repositoryPath, [
+      "-c", "core.hooksPath=/dev/null",
+      "-c", "core.autocrlf=false",
+      "add", "-A", "--",
+    ]), "无法固定候选仓库的新增与删除文件");
+    return this.diff(repositoryPath);
   }
 
   async verify(repositoryPath: string): Promise<CommandResult> {
@@ -821,11 +1469,33 @@ class MacOsCodingSandbox {
     ]);
   }
 
+  async externalLauncher(
+    repositoryPath: string,
+  ): Promise<(spec: ExternalRunnerSpawnSpec) => ManagedExternalRunnerProcess> {
+    const candidateRoot = await this.#candidateRoot(repositoryPath);
+    const actualRepository = await realpath(repositoryPath);
+    const profile = this.#profile(candidateRoot, true);
+    return (spec) => {
+      if (spec.cwd !== actualRepository || !isAbsolute(spec.executable) || spec.shell !== false) {
+        throw new Error("外部 Runner 启动参数未固定到候选仓库");
+      }
+      return launchManagedProcess({
+        executable: this.#executable,
+        cwd: actualRepository,
+        args: ["-p", profile, spec.executable, ...spec.args],
+        stdin: spec.stdin,
+        shell: false,
+        env: { ...spec.env, TMPDIR: join(candidateRoot, "tmp") },
+      });
+    };
+  }
+
   async cleanup(repositoryPath: string): Promise<void> {
     const root = await this.#initialize();
     const candidateRoot = resolve(repositoryPath, "..");
     assertWithin(root, candidateRoot, "候选目录");
     if (basename(repositoryPath) !== "repository") throw new Error("候选仓库目录结构无效");
+    this.#candidateBaseRevisions.delete(repositoryPath);
     await rm(candidateRoot, { recursive: true, force: true });
   }
 
@@ -853,7 +1523,15 @@ class MacOsCodingSandbox {
     const root = this.#realRoot;
     if (!root) throw new Error("Coding sandbox 尚未初始化");
     assertWithin(root, candidateRoot, "候选目录");
-    const profile = [
+    const profile = this.#profile(candidateRoot, false);
+    return command(this.#executable, ["-p", profile, GIT, ...gitArguments], cwd, {
+      TMPDIR: join(candidateRoot, "tmp"),
+      GIT_CONFIG_GLOBAL: join(candidateRoot, "empty.gitconfig"),
+    });
+  }
+
+  #profile(candidateRoot: string, allowNetwork: boolean): string {
+    return [
       "(version 1)",
       "(deny default)",
       "(allow process*)",
@@ -861,12 +1539,8 @@ class MacOsCodingSandbox {
       "(allow file-read*)",
       `(allow file-write* (subpath \"${schemeString(candidateRoot)}\"))`,
       "(allow file-write* (literal \"/dev/null\"))",
-      "(deny network*)",
+      allowNetwork ? "(allow network*)" : "(deny network*)",
     ].join("\n");
-    return command(this.#executable, ["-p", profile, GIT, ...gitArguments], cwd, {
-      TMPDIR: join(candidateRoot, "tmp"),
-      GIT_CONFIG_GLOBAL: join(candidateRoot, "empty.gitconfig"),
-    });
   }
 }
 
@@ -876,6 +1550,7 @@ async function persistRunning(
   state: CodingState,
   controlPlane: CodingControlPlaneCommitment,
   baseRevision: string,
+  runnerId: "builtin" | ExternalCodingRunnerId,
   occurredAt: string,
 ): Promise<void> {
   await store.transact(tenantId, (transaction) => {
@@ -883,7 +1558,8 @@ async function persistRunning(
     if (current?.generation === state.execution.generation) {
       if (current.controlPlane.repositoryIndexDigest !== controlPlane.repositoryIndexDigest
         || current.controlPlane.sandboxDigest !== controlPlane.sandboxDigest
-        || current.baseRevision !== baseRevision) {
+        || current.baseRevision !== baseRevision
+        || current.runnerId !== runnerId) {
         throw new Error("Coding 执行恢复时控制面或仓库快照已变化");
       }
       return;
@@ -897,6 +1573,7 @@ async function persistRunning(
       status: "running",
       controlPlane,
       baseRevision,
+      runnerId,
       streamVersion: streamVersion + 1,
       createdAt: current?.createdAt ?? occurredAt,
       updatedAt: occurredAt,
@@ -923,9 +1600,67 @@ async function persistRunning(
         workspaceId: state.execution.workspaceId,
         taskId: state.task.id,
         repositoryId: state.repository.id,
-        runnerId: "builtin",
+        runnerId,
         baseRevision,
         ...controlPlane,
+      },
+    });
+  });
+}
+
+async function persistExternalInvocationStarted(input: {
+  readonly store: KernelStore;
+  readonly tenantId: string;
+  readonly state: Pick<CodingState, "execution" | "task">;
+  readonly runnerId: ExternalCodingRunnerId;
+  readonly attempt: number;
+  readonly identityDigest: string;
+  readonly sandboxPath: string;
+  readonly occurredAt: string;
+}): Promise<void> {
+  await input.store.transact(input.tenantId, (transaction) => {
+    const current = transaction.getProjection<StoredCodingRun>(
+      "coding.execution",
+      input.state.execution.id,
+    );
+    if (!current || current.generation !== input.state.execution.generation || current.result) {
+      throw new Error("外部 Runner 启动检查点不存在或已终结");
+    }
+    if (current.runnerId !== input.runnerId
+      || (current.externalInvocation && current.externalInvocation.attempt >= input.attempt)) {
+      throw new Error("外部 Runner 尝试序号或身份与检查点不一致");
+    }
+    const next: StoredCodingRun = {
+      ...current,
+      externalInvocation: {
+        runnerId: input.runnerId,
+        attempt: input.attempt,
+        identityDigest: input.identityDigest,
+        sandboxPath: input.sandboxPath,
+        status: "started",
+        startedAt: input.occurredAt,
+        updatedAt: input.occurredAt,
+      },
+      streamVersion: current.streamVersion + 1,
+      updatedAt: input.occurredAt,
+    };
+    transaction.putProjection("coding.execution", input.state.execution.id, next);
+    transaction.appendEvent({
+      tenantId: input.tenantId,
+      aggregateType: "coding.execution",
+      aggregateId: input.state.execution.id,
+      expectedStreamVersion: current.streamVersion,
+      type: "coding.external_runner_started",
+      actorId: input.state.execution.executionPrincipalId,
+      executionId: input.state.execution.id,
+      generation: input.state.execution.generation,
+      correlationId: `coding:${input.state.execution.id}:${input.state.execution.generation}`,
+      publicPayload: {
+        workspaceId: input.state.execution.workspaceId,
+        taskId: input.state.task.id,
+        runnerId: input.runnerId,
+        attempt: input.attempt,
+        identityDigest: input.identityDigest,
       },
     });
   });
@@ -1081,6 +1816,15 @@ async function persistCodingResult(input: {
       ...current,
       status: input.result.status,
       result: input.result,
+      ...(current.externalInvocation ? {
+        externalInvocation: {
+          ...current.externalInvocation,
+          status: input.result.status === "needs_reconciliation"
+            ? "outcome_unknown" as const
+            : "settled" as const,
+          updatedAt: input.now,
+        },
+      } : {}),
       ...(input.approvalIntent ? { approvalIntent: input.approvalIntent } : {}),
       streamVersion: current.streamVersion + 1,
       updatedAt: input.now,
@@ -1384,6 +2128,47 @@ function command(
       rejectCommand(new Error("受控命令无法启动", { cause: error }));
     });
   });
+}
+
+function launchManagedProcess(spec: ExternalRunnerSpawnSpec): ManagedExternalRunnerProcess {
+  const child = spawn(spec.executable, [...spec.args], {
+    cwd: spec.cwd,
+    env: { ...spec.env },
+    shell: false,
+    stdio: ["pipe", "pipe", "pipe"],
+    detached: process.platform !== "win32",
+    windowsHide: true,
+  });
+  child.stderr.resume();
+  child.stdin.end(spec.stdin);
+  const completed = new Promise<{ code: number | null; signal: string | null }>((resolveProcess) => {
+    let settled = false;
+    child.once("error", () => {
+      if (settled) return;
+      settled = true;
+      resolveProcess({ code: null, signal: null });
+    });
+    child.once("close", (code, signal) => {
+      if (settled) return;
+      settled = true;
+      resolveProcess({ code, signal });
+    });
+  });
+  return {
+    stdout: child.stdout,
+    completed,
+    kill(signal) {
+      if (process.platform !== "win32" && child.pid) {
+        try {
+          process.kill(-child.pid, signal);
+          return;
+        } catch {
+          // The root process may already have exited; fall back to the child handle.
+        }
+      }
+      child.kill(signal);
+    },
+  };
 }
 
 async function requireSuccess(result: CommandResult, message: string): Promise<void> {
