@@ -12,6 +12,7 @@ import {
   type ModelRequest,
   type RuntimeAuthority,
   type RuntimeRecordInput,
+  type ToolApprovalPort,
   type ToolContribution,
 } from "../src/index.js";
 
@@ -30,6 +31,14 @@ const authority: RuntimeAuthority = {
     maxCostMinorUnits: "1000",
     currency: "CNY",
     maxDurationMs: 60_000,
+  },
+};
+
+const approveAuthorizedTools: ToolApprovalPort = {
+  async authorize(intent) {
+    return ["local_read", "external_read", "local_reversible_write"].includes(intent.effectClass)
+      ? { mode: "auto", intent }
+      : { mode: "approve_once", approvedIntent: intent };
   },
 };
 
@@ -93,6 +102,7 @@ test("模型上下文和工具承诺均先持久化再产生外部调用", async
     store,
     definition: { id: "assistant", llmId: "main", promptIds: ["system"] },
     authority,
+    approval: approveAuthorizedTools,
   });
 
   await handle.followUp("检查仓库");
@@ -106,6 +116,7 @@ test("模型上下文和工具承诺均先持久化再产生外部调用", async
     "argumentsDigest",
     "authorityCommitment",
     "effectClass",
+    "expiresAt",
     "generation",
     "intent",
     "normalizedArguments",
@@ -148,6 +159,7 @@ test("follow_up 保持 FIFO；turn 内 generation 固定，HMR 只切换下一 t
     store,
     definition: { id: "assistant", llmId: "main", promptIds: [] },
     authority,
+    approval: approveAuthorizedTools,
   });
 
   await handle.followUp("第一步");
@@ -205,6 +217,7 @@ test("steer 不进入在途请求，只在下一模型边界注入", async () =>
     store,
     definition: { id: "assistant", llmId: "main", promptIds: [] },
     authority,
+    approval: approveAuthorizedTools,
   });
 
   await handle.followUp("开始");
@@ -238,6 +251,7 @@ test("cancel 中止在途模型；resume 只接受 paused 或 interrupted", asyn
     store,
     definition: { id: "assistant", llmId: "main", promptIds: [] },
     authority,
+    approval: approveAuthorizedTools,
   });
   await handle.followUp("开始");
   await modelStarted;
@@ -255,6 +269,7 @@ test("cancel 中止在途模型；resume 只接受 paused 或 interrupted", asyn
       store: resumedStore,
       definition: { id: "assistant", llmId: "main", promptIds: [] },
       authority,
+      approval: approveAuthorizedTools,
     });
     await resumed.resume();
     assert.equal(resumed.status, "queued");
@@ -291,6 +306,7 @@ test("不确定外部副作用进入 needs_reconciliation，重启后不自动�
     store,
     definition: { id: "assistant", llmId: "main", promptIds: [] },
     authority,
+    approval: approveAuthorizedTools,
   } as const;
   const handle = await AgentHandle.open(options);
   await handle.followUp("发布");
@@ -335,10 +351,207 @@ test("重启发现未闭合的外部工具意图时直接进入人工核对", as
     store,
     definition: { id: "assistant", llmId: "main", promptIds: [] },
     authority,
+    approval: approveAuthorizedTools,
   });
 
   assert.equal(recovered.status, "needs_reconciliation");
   const records = await store.readExecution("execution-a");
   assert.equal(records.filter((record) => record.type === "tool/outcome_unknown").length, 1);
   assert.equal(records.at(-1)?.payload.status, "needs_reconciliation");
+});
+
+test("人工副作用在中央批准完成前绝不执行", async () => {
+  const store = new InMemoryRuntimeStore();
+  const scope = executionScope();
+  let modelCalls = 0;
+  let executions = 0;
+  let observedIntent: Parameters<ToolApprovalPort["authorize"]>[0] | undefined;
+  let approve!: () => void;
+  const decision = new Promise<void>((resolve) => { approve = resolve; });
+  scope.register("llm", {
+    id: "main",
+    async complete() {
+      modelCalls += 1;
+      return modelCalls === 1
+        ? { text: "准备发布", toolCalls: [{ id: "publish", toolId: "web.publish", arguments: { body: "draft" } }] }
+        : { text: "完成", toolCalls: [] };
+    },
+  });
+  scope.register("tool", {
+    id: "web.publish",
+    version: "1.0.0",
+    effectClass: "external_side_effect",
+    prepare: (arguments_) => ({
+      normalizedArguments: arguments_,
+      resourceRefs: [{ namespace: "web", resourceId: "target" }],
+    }),
+    async execute() { executions += 1; return { published: true }; },
+  });
+  const handle = await AgentHandle.open({
+    executionId: "execution-a",
+    scope,
+    store,
+    definition: { id: "assistant", llmId: "main", promptIds: [] },
+    authority,
+    approval: {
+      async authorize(intent) {
+        observedIntent = intent;
+        await decision;
+        return { mode: "approve_once", approvedIntent: intent };
+      },
+    },
+  });
+
+  await handle.followUp("发布内容");
+  while (observedIntent === undefined) await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(handle.status, "waiting_approval");
+  assert.equal(executions, 0);
+  assert.ok((await store.readExecution("execution-a")).some((record) => record.type === "tool/intent"));
+
+  approve();
+  await handle.whenIdle();
+  assert.equal(executions, 1);
+  assert.equal(handle.status, "completed");
+});
+
+test("等待批准时取消会中止授权等待且绝不执行工具", async () => {
+  const store = new InMemoryRuntimeStore();
+  const scope = executionScope();
+  let executions = 0;
+  let approvalStarted!: () => void;
+  const started = new Promise<void>((resolve) => { approvalStarted = resolve; });
+  scope.register("llm", {
+    id: "main",
+    async complete() {
+      return { text: "发布", toolCalls: [{ id: "publish", toolId: "web.publish", arguments: {} }] };
+    },
+  });
+  scope.register("tool", {
+    id: "web.publish",
+    version: "1.0.0",
+    effectClass: "external_side_effect",
+    prepare: (arguments_) => ({
+      normalizedArguments: arguments_,
+      resourceRefs: [{ namespace: "web", resourceId: "target" }],
+    }),
+    async execute() { executions += 1; return { published: true }; },
+  });
+  const handle = await AgentHandle.open({
+    executionId: "execution-a",
+    scope,
+    store,
+    definition: { id: "assistant", llmId: "main", promptIds: [] },
+    authority,
+    approval: {
+      authorize(_intent, signal) {
+        approvalStarted();
+        return new Promise((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new Error("approval aborted")), { once: true });
+        });
+      },
+    },
+  });
+
+  await handle.followUp("发布内容");
+  await started;
+  await handle.cancel("用户取消");
+  await handle.whenIdle();
+  assert.equal(handle.status, "cancelled");
+  assert.equal(executions, 0);
+});
+
+test("批准后执行会复核代次、工具版本、参数、资源和权限承诺", async (t) => {
+  const staleFields = {
+    generation: (intent: Parameters<ToolApprovalPort["authorize"]>[0]) => ({ ...intent, generation: intent.generation + 1 }),
+    toolVersion: (intent: Parameters<ToolApprovalPort["authorize"]>[0]) => ({ ...intent, toolVersion: "2.0.0" }),
+    argumentsDigest: (intent: Parameters<ToolApprovalPort["authorize"]>[0]) => ({ ...intent, argumentsDigest: "stale-arguments" }),
+    resourcesDigest: (intent: Parameters<ToolApprovalPort["authorize"]>[0]) => ({ ...intent, resourcesDigest: "stale-resources" }),
+    authorityCommitment: (intent: Parameters<ToolApprovalPort["authorize"]>[0]) => ({ ...intent, authorityCommitment: "stale-authority" }),
+  } as const;
+
+  for (const [field, makeStale] of Object.entries(staleFields)) {
+    await t.test(field, async () => {
+      const store = new InMemoryRuntimeStore();
+      const scope = executionScope();
+      let executions = 0;
+      scope.register("llm", {
+        id: "main",
+        async complete() {
+          return { text: "发布", toolCalls: [{ id: `publish-${field}`, toolId: "web.publish", arguments: { body: "draft" } }] };
+        },
+      });
+      scope.register("tool", {
+        id: "web.publish",
+        version: "1.0.0",
+        effectClass: "external_side_effect",
+        prepare: (arguments_) => ({
+          normalizedArguments: arguments_,
+          resourceRefs: [{ namespace: "web", resourceId: "target" }],
+        }),
+        async execute() { executions += 1; return { published: true }; },
+      });
+      const handle = await AgentHandle.open({
+        executionId: "execution-a",
+        scope,
+        store,
+        definition: { id: "assistant", llmId: "main", promptIds: [] },
+        authority,
+        approval: {
+          async authorize(intent) {
+            return { mode: "approve_once", approvedIntent: makeStale(intent) };
+          },
+        },
+      });
+      await handle.followUp("发布内容");
+      await handle.whenIdle();
+      assert.equal(executions, 0);
+      assert.equal(handle.status, "failed");
+    });
+  }
+});
+
+test("执行前复核期间发生 HMR 会使批准失效", async () => {
+  const store = new InMemoryRuntimeStore();
+  const scope = executionScope();
+  let modelCalls = 0;
+  let prepares = 0;
+  let executions = 0;
+  scope.register("llm", {
+    id: "main",
+    async complete() {
+      modelCalls += 1;
+      return modelCalls === 1
+        ? { text: "发布", toolCalls: [{ id: "publish", toolId: "web.publish", arguments: {} }] }
+        : { text: "完成", toolCalls: [] };
+    },
+  });
+  scope.register("tool", {
+    id: "web.publish",
+    version: "1.0.0",
+    effectClass: "external_side_effect",
+    prepare: (arguments_) => {
+      prepares += 1;
+      if (prepares === 2) {
+        scope.register("prompt", { id: "hot-reload", render: () => "新提示" });
+      }
+      return {
+        normalizedArguments: arguments_,
+        resourceRefs: [{ namespace: "web", resourceId: "target" }],
+      };
+    },
+    async execute() { executions += 1; return { published: true }; },
+  });
+  const handle = await AgentHandle.open({
+    executionId: "execution-a",
+    scope,
+    store,
+    definition: { id: "assistant", llmId: "main", promptIds: [] },
+    authority,
+    approval: approveAuthorizedTools,
+  });
+
+  await handle.followUp("发布内容");
+  await handle.whenIdle();
+  assert.equal(executions, 0);
+  assert.equal(handle.status, "failed");
 });

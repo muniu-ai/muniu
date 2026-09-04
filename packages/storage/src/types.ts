@@ -93,6 +93,13 @@ export interface JobClaimOptions {
   readonly kinds?: readonly string[];
 }
 
+export interface NeedsReconciliationInput {
+  readonly jobId: string;
+  readonly workerId: string;
+  readonly fencingToken: number;
+  readonly occurredAt: string;
+}
+
 export interface StoragePort {
   initialize(): Promise<void>;
   commit(batch: StorageCommit): Promise<StorageCommitResult>;
@@ -102,6 +109,7 @@ export interface StoragePort {
   listOutbox(tenantId: string, limit: number): Promise<readonly StoredOutboxMessage[]>;
   getApproval(tenantId: string, id: string): Promise<StoredApproval | undefined>;
   claimJob(workerId: string, now: string, options?: JobClaimOptions): Promise<StoredJob | undefined>;
+  renewJobLease(jobId: string, workerId: string, fencingToken: number, now: string): Promise<void>;
   completeJob(
     jobId: string,
     workerId: string,
@@ -116,6 +124,7 @@ export interface StoragePort {
     failure: JsonObject,
     now: string
   ): Promise<void>;
+  markNeedsReconciliation(executionId: string, input: NeedsReconciliationInput): Promise<void>;
   getJob(jobId: string): Promise<StoredJob | undefined>;
   close(): Promise<void>;
 }

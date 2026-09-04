@@ -18,6 +18,7 @@ import {
   type JobClaimOptions,
   type KernelIdempotencyRecordLike,
   type KernelTransactionLike,
+  type NeedsReconciliationInput,
   type StorageCommit,
   type StorageCommitResult,
   type StoragePort,
@@ -709,6 +710,22 @@ export class SqliteStorage implements StoragePort {
     if (Number(change.changes) !== 1) throw new StaleFencingTokenError(jobId);
   }
 
+  async renewJobLease(
+    jobId: string,
+    workerId: string,
+    fencingToken: number,
+    now: string
+  ): Promise<void> {
+    this.#assertOpen();
+    const leaseExpiresAt = new Date(validTimestamp(now) + JOB_LEASE_MILLISECONDS).toISOString();
+    const change = this.#database.prepare(`
+      update jobs set lease_expires_at = ?, updated_at = ?
+      where job_id = ? and status = 'leased' and lease_owner = ? and fencing_token = ?
+        and lease_expires_at > ?
+    `).run(leaseExpiresAt, now, jobId, workerId, fencingToken, now);
+    if (Number(change.changes) !== 1) throw new StaleFencingTokenError(jobId);
+  }
+
   async failJob(
     jobId: string,
     workerId: string,
@@ -723,6 +740,124 @@ export class SqliteStorage implements StoragePort {
         and lease_expires_at > ?
     `).run(JSON.stringify(failure), now, jobId, workerId, fencingToken, now);
     if (Number(change.changes) !== 1) throw new StaleFencingTokenError(jobId);
+  }
+
+  async markNeedsReconciliation(
+    executionId: string,
+    input: NeedsReconciliationInput
+  ): Promise<void> {
+    this.#assertOpen();
+    validTimestamp(input.occurredAt);
+    this.#database.exec("begin immediate");
+    try {
+      const job = this.#database.prepare(`
+        select * from jobs
+        where job_id = ? and status = 'leased' and lease_owner = ? and fencing_token = ?
+          and lease_expires_at > ?
+      `).get(
+        input.jobId,
+        input.workerId,
+        input.fencingToken,
+        input.occurredAt
+      ) as RecordRow | undefined;
+      if (!job) throw new StaleFencingTokenError(input.jobId);
+      const jobPayload = parseJson<JsonObject>(job.payload_json);
+      if (jobPayload.executionId !== executionId) {
+        throw new Error("Job 与待核对的 Execution 不一致");
+      }
+      const tenantId = String(job.tenant_id);
+      const projectionRow = this.#database.prepare(`
+        select value_json from projections
+        where tenant_id = ? and namespace = 'execution' and projection_key = ?
+      `).get(tenantId, executionId) as RecordRow | undefined;
+      if (!projectionRow) throw new Error(`Execution ${executionId} 的投影不存在`);
+      const execution = parseJson<JsonObject>(projectionRow.value_json);
+      const streamVersion = requiredSafeInteger(execution.streamVersion, "execution streamVersion");
+      const generation = requiredSafeInteger(execution.generation, "execution generation");
+      const workspaceId = requiredString(execution.workspaceId, "execution workspaceId");
+      const updatedExecution: JsonObject = {
+        ...execution,
+        status: "needs_reconciliation",
+        failureCode: "UNKNOWN_EXTERNAL_SIDE_EFFECT",
+        streamVersion: streamVersion + 1,
+        updatedAt: input.occurredAt,
+      };
+      const inboxId = `reconciliation:${executionId}:${input.jobId}`;
+      const inbox: JsonObject = {
+        id: inboxId,
+        tenantId,
+        workspaceId,
+        executionId,
+        kind: "reconciliation",
+        title: "外部操作结果需要人工核对",
+        summary: "外部操作可能已经发生。请核对后选择终止、标记已完成或创建新调用",
+        risk: "unknown",
+        resourceSummary: input.jobId,
+        createdAt: input.occurredAt,
+        status: "open",
+      };
+      const failure: JsonObject = {
+        code: "UNKNOWN_EXTERNAL_SIDE_EFFECT",
+        message: "外部操作结果未知，需要人工核对",
+        retryable: false,
+        executionId,
+      };
+      const jobChange = this.#database.prepare(`
+        update jobs set status = 'failed', result_json = null, failure_json = ?,
+          lease_owner = null, lease_expires_at = null, updated_at = ?
+        where job_id = ? and status = 'leased' and lease_owner = ? and fencing_token = ?
+          and lease_expires_at > ?
+      `).run(
+        JSON.stringify(failure),
+        input.occurredAt,
+        input.jobId,
+        input.workerId,
+        input.fencingToken,
+        input.occurredAt
+      );
+      if (Number(jobChange.changes) !== 1) throw new StaleFencingTokenError(input.jobId);
+      this.#appendEvent({
+        tenantId,
+        aggregateType: "execution",
+        aggregateId: executionId,
+        expectedStreamVersion: streamVersion,
+        type: "execution.needs_reconciliation",
+        actorId: `worker:${input.workerId}`,
+        executionId,
+        generation,
+        correlationId: `reconciliation:${input.jobId}:${input.fencingToken}`,
+        publicPayload: { workspaceId, jobId: input.jobId, status: "needs_reconciliation" },
+      }, input.occurredAt);
+      const writeProjection = this.#database.prepare(`
+        insert into projections (
+          tenant_id, namespace, projection_key, stream_version, value_json, updated_at
+        ) values (?, ?, ?, ?, ?, ?)
+        on conflict(tenant_id, namespace, projection_key) do update set
+          stream_version = excluded.stream_version,
+          value_json = excluded.value_json,
+          updated_at = excluded.updated_at
+      `);
+      writeProjection.run(
+        tenantId,
+        "execution",
+        executionId,
+        streamVersion + 1,
+        JSON.stringify(updatedExecution),
+        input.occurredAt
+      );
+      writeProjection.run(
+        tenantId,
+        "inbox",
+        inboxId,
+        0,
+        JSON.stringify(inbox),
+        input.occurredAt
+      );
+      this.#database.exec("commit");
+    } catch (error) {
+      this.#database.exec("rollback");
+      throw error;
+    }
   }
 
   async getJob(jobId: string): Promise<StoredJob | undefined> {
@@ -741,4 +876,22 @@ export class SqliteStorage implements StoragePort {
   #assertOpen(): void {
     if (this.#closed) throw new Error("Storage is closed");
   }
+}
+
+function validTimestamp(value: string): number {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) throw new TypeError("时间戳无效");
+  return timestamp;
+}
+
+function requiredSafeInteger(value: JsonValue | undefined, label: string): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new TypeError(`${label} 无效`);
+  }
+  return value;
+}
+
+function requiredString(value: JsonValue | undefined, label: string): string {
+  if (typeof value !== "string" || !value) throw new TypeError(`${label} 无效`);
+  return value;
 }

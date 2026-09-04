@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { ExecutionAuthority, MemoryRecord, ToolCallIntent } from "@mn/contracts";
+import type { Execution, ExecutionAuthority, MemoryRecord, ToolCallIntent } from "@mn/contracts";
 import {
   AgentOsKernel,
   InMemoryKernelStore,
@@ -105,6 +105,35 @@ test("只读工具可自动执行，高影响操作进入审批收件箱", async
     const decided = await kernel.decideApproval("local", "local-owner", "decision", manual.approval.id, 1, "approve_once");
     assert.equal(decided.status, "approved_once");
     assert.equal((await kernel.listInbox("local")).length, 0);
+    const updatedExecution = await store.transact("local", (transaction) =>
+      transaction.getProjection<Execution>("execution", execution.id));
+    assert.equal(updatedExecution?.status, "running");
+    assert.equal(updatedExecution?.streamVersion, 4);
+    const executionEvents = (await store.readEvents("local", 0, 30)).events
+      .filter((event) => event.aggregateType === "execution" && event.aggregateId === execution.id);
+    assert.equal(executionEvents.at(-1)?.type, "execution.approval_approved_once");
+    assert.equal(executionEvents.at(-1)?.streamVersion, 4);
+
+    const stale = await kernel.requestToolApproval("local", "agent", "write-stale", {
+      ...base, id: "call-3", effectClass: "external_side_effect", intent: "再次发布内容",
+    });
+    assert.equal(stale.mode, "approval");
+    if (stale.mode === "approval") {
+      const cancelled = await kernel.commandExecution(
+        "local", "local-owner", "cancel-waiting", execution.id, 5, "cancel",
+      );
+      assert.equal(cancelled.status, "cancelled");
+      await assert.rejects(
+        kernel.decideApproval(
+          "local", "local-owner", "stale-decision", stale.approval.id, 1, "approve_once",
+        ),
+        /不再等待批准/,
+      );
+      const stillCancelled = await store.transact("local", (transaction) =>
+        transaction.getProjection<Execution>("execution", execution.id));
+      assert.equal(stillCancelled?.status, "cancelled");
+      assert.equal(stillCancelled?.streamVersion, 6);
+    }
   }
 });
 

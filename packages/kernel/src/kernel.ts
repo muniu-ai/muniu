@@ -343,6 +343,32 @@ export class AgentOsKernel {
       if (approval.expiresAt <= now) {
         throw new KernelError("APPROVAL_EXPIRED", "批准请求已过期", "让 Agent 生成新的操作请求");
       }
+      const execution = transaction.getProjection<Execution>("execution", approval.executionId);
+      if (!execution) {
+        throw new KernelError(
+          "EXECUTION_NOT_FOUND",
+          "批准请求关联的执行不存在",
+          "停止处理并检查审计记录",
+        );
+      }
+      if (execution.status !== "waiting_approval") {
+        throw new KernelError(
+          "APPROVAL_EXECUTION_NOT_WAITING",
+          "关联执行已不再等待批准",
+          "刷新执行与收件箱状态",
+        );
+      }
+      const intent = transaction.getProjection<ToolCallIntent>("toolIntent", approval.toolCallId);
+      if (!intent
+        || intent.executionId !== execution.id
+        || intent.generation !== execution.generation
+        || intent.authorityCommitment !== approval.authorityCommitment) {
+        throw new KernelError(
+          "STALE_APPROVAL",
+          "工具调用代次或权限承诺已变化",
+          "让 Agent 生成新的操作请求",
+        );
+      }
       const next: Approval = {
         ...approval,
         status: decision === "approve_once" ? "approved_once" : "denied",
@@ -355,20 +381,37 @@ export class AgentOsKernel {
       const inboxId = `approval:${approvalId}`;
       const inbox = transaction.getProjection<InboxItem>("inbox", inboxId);
       if (inbox) transaction.putProjection("inbox", inboxId, { ...inbox, status: "resolved" });
-      const execution = transaction.getProjection<Execution>("execution", approval.executionId);
-      if (execution) {
-        transaction.putProjection("execution", execution.id, {
-          ...execution,
-          status: decision === "approve_once" ? "running" : "failed",
-          updatedAt: now,
-        });
-      }
+      const executionStatus = decision === "approve_once" ? "running" : "failed";
+      const updatedExecution: Execution = {
+        ...execution,
+        status: executionStatus,
+        streamVersion: execution.streamVersion + 1,
+        updatedAt: now,
+        ...(decision === "deny" ? { finishedAt: now, failureCode: "TOOL_APPROVAL_DENIED" } : {}),
+      };
+      transaction.putProjection("execution", execution.id, updatedExecution);
       this.append(transaction, {
         tenantId, aggregateType: "approval", aggregateId: approvalId, expectedStreamVersion,
         type: decision === "approve_once" ? "approval.approved_once" : "approval.denied",
         actorId, executionId: approval.executionId,
-        generation: execution?.generation ?? 0,
+        generation: execution.generation,
         publicPayload: { toolCallId: approval.toolCallId, decision },
+      });
+      this.append(transaction, {
+        tenantId,
+        aggregateType: "execution",
+        aggregateId: execution.id,
+        expectedStreamVersion: execution.streamVersion,
+        type: `execution.approval_${decision === "approve_once" ? "approved_once" : "denied"}`,
+        actorId,
+        executionId: execution.id,
+        generation: execution.generation,
+        publicPayload: {
+          approvalId,
+          toolCallId: approval.toolCallId,
+          decision,
+          status: executionStatus,
+        },
       });
       return next;
     });

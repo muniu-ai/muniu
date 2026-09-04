@@ -3,6 +3,12 @@
 import { createHash } from "node:crypto";
 
 import {
+  approvalStillMatches,
+  isPotentiallyAutoApprovable,
+  type ToolCallIntent,
+} from "@mn/contracts";
+
+import {
   assertToolAuthority,
   snapshotRuntimeAuthority,
   SubagentAuthorityAllocator,
@@ -25,6 +31,7 @@ import type {
   RuntimeStore,
   SessionSurface,
   SubagentSpawnRequest,
+  ToolApprovalPort,
   ToolContribution,
   ToolEffectClass,
 } from "./types.js";
@@ -37,6 +44,7 @@ const NON_REPLAYABLE_EFFECTS = new Set<ToolEffectClass>([
   "privileged",
   "unknown",
 ]);
+const DEFAULT_TOOL_INTENT_TTL_MS = 5 * 60_000;
 
 export class UnknownToolOutcomeError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -58,8 +66,11 @@ export class AgentHandle {
   readonly #store: RuntimeStore;
   readonly #definition: AgentHandleOptions["definition"];
   readonly #authority: AgentHandleOptions["authority"];
+  readonly #approval: ToolApprovalPort;
   readonly #surface: SessionSurface;
   readonly #maxModelBoundariesPerTurn: number;
+  readonly #toolIntentTtlMs: number;
+  readonly #now: () => string;
   readonly #inbox: PersistentInbox;
   readonly #sessionLog: PersistentSessionLog;
   readonly #subagentAllocator: SubagentAuthorityAllocator;
@@ -76,11 +87,17 @@ export class AgentHandle {
     this.#store = options.store;
     this.#definition = options.definition;
     this.#authority = snapshotRuntimeAuthority(options.authority);
+    this.#approval = options.approval;
     this.#surface = options.surface ?? new DefaultSessionSurface();
     this.#maxModelBoundariesPerTurn = options.maxModelBoundariesPerTurn ?? 16;
     if (!Number.isSafeInteger(this.#maxModelBoundariesPerTurn) || this.#maxModelBoundariesPerTurn < 1) {
       throw new Error("每 turn 的模型边界上限必须是正整数");
     }
+    this.#toolIntentTtlMs = options.toolIntentTtlMs ?? DEFAULT_TOOL_INTENT_TTL_MS;
+    if (!Number.isSafeInteger(this.#toolIntentTtlMs) || this.#toolIntentTtlMs < 1) {
+      throw new Error("工具调用批准有效期必须是正整数毫秒");
+    }
+    this.#now = options.now ?? (() => new Date().toISOString());
     this.#inbox = new PersistentInbox(this.#store, this.#executionId);
     this.#sessionLog = new PersistentSessionLog(this.#store, this.#executionId);
     this.#subagentAllocator = new SubagentAuthorityAllocator(this.#authority);
@@ -369,52 +386,128 @@ export class AgentHandle {
     assertToolAuthority(this.#authority, tool.id, tool.effectClass, prepared.resourceRefs);
     const argumentsDigest = digestJson(prepared.normalizedArguments);
     const resourcesDigest = digestResources(prepared.resourceRefs);
+    const requestedAt = this.#now();
+    const requestedAtMs = Date.parse(requestedAt);
+    if (!Number.isFinite(requestedAtMs)) throw new AgentRuntimeError("工具调用时间无效");
+    const intent = snapshotToolIntent({
+      id: call.id,
+      executionId: this.#executionId,
+      generation: contributions.generation,
+      toolId: tool.id,
+      toolVersion: tool.version,
+      effectClass: tool.effectClass,
+      intent: call.intent ?? `调用 ${tool.id}`,
+      normalizedArguments: prepared.normalizedArguments,
+      argumentsDigest,
+      resourceRefs: prepared.resourceRefs,
+      resourcesDigest,
+      authorityCommitment: this.#authority.commitment,
+      expiresAt: new Date(requestedAtMs + this.#toolIntentTtlMs).toISOString(),
+    });
     await this.#store.append({
       executionId: this.#executionId,
       type: "tool/intent",
       payload: {
-        toolCallId: call.id,
-        toolId: tool.id,
-        toolVersion: tool.version,
-        effectClass: tool.effectClass,
-        intent: call.intent ?? `调用 ${tool.id}`,
-        normalizedArguments: prepared.normalizedArguments,
-        argumentsDigest,
-        resourceRefs: prepared.resourceRefs.map((resource) => ({
+        toolCallId: intent.id,
+        toolId: intent.toolId,
+        toolVersion: intent.toolVersion,
+        effectClass: intent.effectClass,
+        intent: intent.intent,
+        normalizedArguments: intent.normalizedArguments,
+        argumentsDigest: intent.argumentsDigest,
+        resourceRefs: intent.resourceRefs.map((resource) => ({
           namespace: resource.namespace,
           resourceId: resource.resourceId,
           ...(resource.digest === undefined ? {} : { digest: resource.digest }),
         })),
-        resourcesDigest,
-        generation: contributions.generation,
-        authorityCommitment: this.#authority.commitment,
+        resourcesDigest: intent.resourcesDigest,
+        generation: intent.generation,
+        authorityCommitment: intent.authorityCommitment,
+        expiresAt: intent.expiresAt,
       },
     });
 
-    const revalidated = snapshotPrepared(await tool.prepare(
+    const requiresManualApproval = !isPotentiallyAutoApprovable(intent.effectClass);
+    if (requiresManualApproval) {
+      await this.#transition("waiting_approval", "工具调用等待人工批准");
+    }
+    const approvalSignal = context.signal;
+    const authorization = await raceAbort(
+      this.#approval.authorize(snapshotToolIntent(intent), approvalSignal),
+      approvalSignal,
+    );
+    if (this.#status === "cancelled") return;
+    if (authorization.mode === "deny") {
+      throw new AgentRuntimeError(authorization.reason ?? "工具调用已被拒绝");
+    }
+    if (requiresManualApproval && authorization.mode !== "approve_once") {
+      throw new AgentRuntimeError("高影响工具只能由人工单次批准");
+    }
+    const approvedIntent = authorization.mode === "auto"
+      ? authorization.intent
+      : authorization.approvedIntent;
+    if (!sameApprovedIntent(approvedIntent, intent)) {
+      throw new AgentRuntimeError("批准内容与已持久化工具调用不一致");
+    }
+    if (requiresManualApproval) {
+      await this.#transition("running", "工具调用已获单次批准");
+    }
+
+    const currentContributions = this.#scope.resolveTurn();
+    if (currentContributions.generation !== intent.generation) {
+      throw new AgentRuntimeError("批准后插件代次已变化，必须重新请求批准");
+    }
+    const currentTool = requiredContribution(currentContributions, "tool", call.toolId);
+    if (currentTool.version !== intent.toolVersion || currentTool.effectClass !== intent.effectClass) {
+      throw new AgentRuntimeError("批准后工具版本或副作用类型已变化，必须重新请求批准");
+    }
+    if (this.#authority.commitment !== intent.authorityCommitment) {
+      throw new AgentRuntimeError("批准后执行权限已变化，必须重新请求批准");
+    }
+
+    const revalidated = snapshotPrepared(await currentTool.prepare(
       structuredClone(originalArguments) as JsonObject,
       context,
     ));
-    assertToolAuthority(this.#authority, tool.id, tool.effectClass, revalidated.resourceRefs);
-    if (
-      digestJson(revalidated.normalizedArguments) !== argumentsDigest ||
-      digestResources(revalidated.resourceRefs) !== resourcesDigest
-    ) {
-      throw new AgentRuntimeError("工具参数或资源在持久化后发生变化，已拒绝执行");
+    if (this.#scope.resolveTurn().generation !== intent.generation) {
+      throw new AgentRuntimeError("工具复核期间插件代次已变化，必须重新请求批准");
+    }
+    assertToolAuthority(
+      this.#authority,
+      currentTool.id,
+      currentTool.effectClass,
+      revalidated.resourceRefs,
+    );
+    const currentIntent: ToolCallIntent = {
+      ...intent,
+      toolVersion: currentTool.version,
+      effectClass: currentTool.effectClass,
+      normalizedArguments: revalidated.normalizedArguments,
+      argumentsDigest: digestJson(revalidated.normalizedArguments),
+      resourceRefs: revalidated.resourceRefs,
+      resourcesDigest: digestResources(revalidated.resourceRefs),
+      authorityCommitment: this.#authority.commitment,
+    };
+    if (!sameApprovedIntent(intent, currentIntent)
+      || !sameApprovedIntent(approvedIntent, currentIntent)) {
+      throw new AgentRuntimeError("工具参数、资源或授权在批准后发生变化，已拒绝执行");
+    }
+    if (Date.parse(intent.expiresAt) <= validCurrentTime(this.#now())) {
+      throw new AgentRuntimeError("工具调用批准已过期，必须重新请求批准");
     }
 
     let result: JsonValue;
     try {
-      result = await tool.execute(revalidated, context);
+      result = await currentTool.execute(revalidated, context);
     } catch (error: unknown) {
-      if (error instanceof UnknownToolOutcomeError && NON_REPLAYABLE_EFFECTS.has(tool.effectClass)) {
+      if (error instanceof UnknownToolOutcomeError && NON_REPLAYABLE_EFFECTS.has(currentTool.effectClass)) {
         await this.#store.append({
           executionId: this.#executionId,
           type: "tool/outcome_unknown",
           payload: {
             toolCallId: call.id,
-            toolId: tool.id,
-            effectClass: tool.effectClass,
+            toolId: currentTool.id,
+            effectClass: currentTool.effectClass,
             generation: contributions.generation,
             message: error.message,
           },
@@ -427,13 +520,18 @@ export class AgentHandle {
     await this.#store.append({
       executionId: this.#executionId,
       type: "tool/result",
-      payload: { toolCallId: call.id, toolId: tool.id, generation: contributions.generation, result },
+      payload: {
+        toolCallId: call.id,
+        toolId: currentTool.id,
+        generation: contributions.generation,
+        result,
+      },
     });
     await this.#sessionLog.append({
       role: "tool",
       content: jsonText(result),
       turn,
-      name: tool.id,
+      name: currentTool.id,
       toolCallId: call.id,
     });
   }
@@ -452,6 +550,45 @@ export class AgentHandle {
       throw error;
     }
   }
+}
+
+function sameApprovedIntent(approved: ToolCallIntent, current: ToolCallIntent): boolean {
+  return approvalStillMatches(approved, current)
+    && approved.id === current.id
+    && approved.effectClass === current.effectClass
+    && approved.expiresAt === current.expiresAt;
+}
+
+function snapshotToolIntent(intent: ToolCallIntent): ToolCallIntent {
+  return {
+    ...intent,
+    normalizedArguments: structuredClone(intent.normalizedArguments) as JsonObject,
+    resourceRefs: intent.resourceRefs.map((resource) => ({ ...resource })),
+  };
+}
+
+async function raceAbort<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) throw new AgentRuntimeError("执行已取消");
+  return new Promise<T>((resolve, reject) => {
+    const aborted = () => reject(new AgentRuntimeError("执行已取消"));
+    signal.addEventListener("abort", aborted, { once: true });
+    void operation.then(
+      (value) => {
+        signal.removeEventListener("abort", aborted);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", aborted);
+        reject(error);
+      },
+    );
+  });
+}
+
+function validCurrentTime(value: string): number {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) throw new AgentRuntimeError("当前时间无效");
+  return timestamp;
 }
 
 function requiredContribution<K extends "llm" | "prompt" | "tool">(

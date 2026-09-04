@@ -260,6 +260,107 @@ test("job leases last thirty seconds and fencing rejects a stale worker", async 
   }
 });
 
+test("续租与未知副作用核对均受 fencing 保护并原子终止 Job", async () => {
+  const storage = new SqliteStorage({
+    databaseFile: temporaryPath("state.sqlite"),
+    hmacKey: randomBytes(32),
+    now: () => new Date("2026-09-04T00:00:20.000Z")
+  });
+  const execution = {
+    id: "execution-1", tenantId: "tenant-a", workspaceId: "workspace-1", threadId: "thread-1",
+    pluginId: "coding", agentDefinitionId: "coding.builtin", modelBindingId: "model-1",
+    initiatedBy: "owner", executionPrincipalId: "agent:coding", generation: 1,
+    status: "running", authorityId: "authority-1", streamVersion: 1,
+    createdAt: "2026-09-04T00:00:00.000Z", updatedAt: "2026-09-04T00:00:00.000Z"
+  } as const;
+  try {
+    await storage.transact("tenant-a", (transaction) => {
+      transaction.putProjection("execution", execution.id, execution);
+      transaction.appendEvent({
+        tenantId: "tenant-a", aggregateType: "execution", aggregateId: execution.id,
+        expectedStreamVersion: 0, type: "execution.running", actorId: "agent:coding",
+        executionId: execution.id, generation: 1, correlationId: "execution-start",
+        publicPayload: { workspaceId: execution.workspaceId, status: "running" }
+      });
+    });
+    await storage.commit({ jobs: [{
+      id: "job-1", tenantId: "tenant-a", workspaceId: "workspace-1", kind: "agent.turn",
+      payload: { executionId: execution.id, message: "实现修复" },
+      availableAt: "2026-09-04T00:00:00.000Z", idempotencyKey: "turn-1"
+    }] });
+    const claimed = await storage.claimJob("worker-a", "2026-09-04T00:00:00.000Z");
+    assert.equal(claimed?.fencingToken, 1);
+    await storage.renewJobLease("job-1", "worker-a", 1, "2026-09-04T00:00:20.000Z");
+    assert.equal((await storage.getJob("job-1"))?.leaseExpiresAt, "2026-09-04T00:00:50.000Z");
+    assert.equal(await storage.claimJob("worker-b", "2026-09-04T00:00:30.000Z"), undefined);
+
+    await storage.markNeedsReconciliation(execution.id, {
+      jobId: "job-1", workerId: "worker-a", fencingToken: 1,
+      occurredAt: "2026-09-04T00:00:21.000Z"
+    });
+    assert.equal((await storage.getJob("job-1"))?.status, "failed");
+    const updated = await storage.getProjection("tenant-a", "execution", execution.id);
+    assert.equal(updated?.status, "needs_reconciliation");
+    assert.equal(updated?.streamVersion, 2);
+    const inbox = await storage.getProjection("tenant-a", "inbox", "reconciliation:execution-1:job-1");
+    assert.equal(inbox?.kind, "reconciliation");
+    assert.equal(inbox?.status, "open");
+    const events = await storage.readEvents("tenant-a", { afterPosition: 0, limit: 20 });
+    assert.equal(events.events.at(-1)?.type, "execution.needs_reconciliation");
+    await assert.rejects(
+      storage.completeJob("job-1", "worker-a", 1, { replayed: true }, "2026-09-04T00:00:22.000Z"),
+      StaleFencingTokenError
+    );
+  } finally {
+    await storage.close();
+  }
+});
+
+test("未知副作用核对遇到版本冲突时回滚 Job、Inbox 和 Execution", async () => {
+  const storage = new SqliteStorage({
+    databaseFile: temporaryPath("state.sqlite"),
+    hmacKey: randomBytes(32)
+  });
+  const execution = {
+    id: "execution-conflict", tenantId: "tenant-a", workspaceId: "workspace-1",
+    generation: 1, status: "running", streamVersion: 2,
+    updatedAt: "2026-09-04T00:00:00.000Z"
+  } as const;
+  try {
+    await storage.transact("tenant-a", (transaction) => {
+      transaction.putProjection("execution", execution.id, execution);
+      transaction.appendEvent({
+        tenantId: "tenant-a", aggregateType: "execution", aggregateId: execution.id,
+        expectedStreamVersion: 0, type: "execution.running", actorId: "agent:coding",
+        executionId: execution.id, generation: 1, correlationId: "execution-start",
+        publicPayload: { workspaceId: execution.workspaceId, status: "running" }
+      });
+    });
+    await storage.commit({ jobs: [{
+      id: "job-conflict", tenantId: "tenant-a", workspaceId: "workspace-1", kind: "agent.turn",
+      payload: { executionId: execution.id, message: "实现修复" },
+      availableAt: "2026-09-04T00:00:00.000Z", idempotencyKey: "turn-conflict"
+    }] });
+    await storage.claimJob("worker-a", "2026-09-04T00:00:00.000Z");
+
+    await assert.rejects(storage.markNeedsReconciliation(execution.id, {
+      jobId: "job-conflict", workerId: "worker-a", fencingToken: 1,
+      occurredAt: "2026-09-04T00:00:01.000Z"
+    }), StreamVersionConflictError);
+    assert.equal((await storage.getJob("job-conflict"))?.status, "leased");
+    assert.equal((await storage.getProjection("tenant-a", "execution", execution.id))?.status, "running");
+    assert.equal(
+      await storage.getProjection(
+        "tenant-a", "inbox", `reconciliation:${execution.id}:job-conflict`
+      ),
+      undefined
+    );
+    assert.equal((await storage.readEvents("tenant-a", { afterPosition: 0, limit: 20 })).events.length, 1);
+  } finally {
+    await storage.close();
+  }
+});
+
 test("SQLite is structurally compatible with KernelStore transactions", async () => {
   const storage = new SqliteStorage({
     databaseFile: temporaryPath("state.sqlite"),

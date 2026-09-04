@@ -6,6 +6,7 @@ import type {
   JsonObject,
   JsonValue,
   ResourceRef,
+  ToolCallIntent,
   ToolEffectClass,
 } from "@mn/contracts";
 
@@ -189,6 +190,20 @@ export interface RuntimeStore {
   readExecution(executionId: string): Promise<readonly RuntimeRecord[]>;
 }
 
+export type ToolAuthorization =
+  | { readonly mode: "auto"; readonly intent: ToolCallIntent }
+  | { readonly mode: "approve_once"; readonly approvedIntent: ToolCallIntent }
+  | { readonly mode: "deny"; readonly reason?: string };
+
+/**
+ * The runtime deliberately delegates every tool authorization to the kernel.
+ * Implementations may return auto immediately, or resolve only after a human
+ * has approved or denied the exact persisted intent.
+ */
+export interface ToolApprovalPort {
+  authorize(intent: ToolCallIntent, signal: AbortSignal): Promise<ToolAuthorization>;
+}
+
 export interface SessionLogEntryInput {
   readonly role: ModelMessage["role"];
   readonly content: string;
@@ -239,8 +254,11 @@ export interface AgentHandleOptions {
   readonly store: RuntimeStore;
   readonly definition: RuntimeAgentDefinition;
   readonly authority: RuntimeAuthority;
+  readonly approval: ToolApprovalPort;
   readonly surface?: SessionSurface;
   readonly maxModelBoundariesPerTurn?: number;
+  readonly toolIntentTtlMs?: number;
+  readonly now?: () => string;
 }
 
 export interface SubagentSpawnRequest {
@@ -249,4 +267,12 @@ export interface SubagentSpawnRequest {
   readonly authority: RequestedSubagentAuthority;
 }
 
-export type { ExecutionBudget, ExecutionStatus, JsonObject, JsonValue, ResourceRef, ToolEffectClass };
+export type {
+  ExecutionBudget,
+  ExecutionStatus,
+  JsonObject,
+  JsonValue,
+  ResourceRef,
+  ToolCallIntent,
+  ToolEffectClass,
+};
