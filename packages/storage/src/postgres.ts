@@ -158,6 +158,29 @@ export interface PostgresStorageOptions {
 
 type Row = Record<string, unknown>;
 
+const AGENT_EXECUTION_JOB_KIND = "agent.execution.run";
+const UNKNOWN_SIDE_EFFECT_FAILURE = {
+  code: "UNKNOWN_EXTERNAL_SIDE_EFFECT",
+  message: "外部操作可能已经发生。请人工核对后选择终止、标记已完成或创建新调用",
+  retryable: false
+} as const;
+
+interface LockedProjection {
+  readonly value: JsonObject;
+  readonly streamVersion: number;
+}
+
+interface AgentJobContext {
+  readonly tenantId: string;
+  readonly executionId: string;
+  readonly workspaceId: string;
+  readonly generation: number;
+  readonly execution: JsonObject;
+  readonly executionStreamVersion: number;
+  readonly job?: JsonObject;
+  readonly jobStreamVersion?: number;
+}
+
 function safeInteger(value: unknown, label: string): number {
   const result = Number(value);
   if (!Number.isSafeInteger(result)) throw new RangeError(`${label} exceeds JavaScript safe integer range`);
@@ -595,11 +618,573 @@ export class PostgresStorage implements StoragePort {
     } : undefined;
   }
 
+  async #loadProjectionForUpdate(
+    client: PostgresClientLike,
+    tenantId: string,
+    namespace: string,
+    key: string,
+    label: string
+  ): Promise<LockedProjection> {
+    const result = await client.query(`
+      select stream_version, value_json from mn_v2.projections
+      where tenant_id = $1 and namespace = $2 and projection_key = $3
+      for update
+    `, [tenantId, namespace, key]);
+    const row = result.rows[0];
+    if (!row) throw new Error(`${label} ${key} 的投影不存在`);
+    const value = json<JsonObject>(row.value_json);
+    const streamVersion = safeInteger(row.stream_version, `${label} projection streamVersion`);
+    if (requiredSafeInteger(value.streamVersion, `${label} streamVersion`) !== streamVersion) {
+      throw new Error(`${label} ${key} 的投影版本不一致`);
+    }
+    return { value, streamVersion };
+  }
+
+  async #loadAgentJobContext(
+    client: PostgresClientLike,
+    row: Row,
+    requireAgentJob = true
+  ): Promise<AgentJobContext | undefined> {
+    const isAgentJob = String(row.kind) === AGENT_EXECUTION_JOB_KIND;
+    if (requireAgentJob && !isAgentJob) return undefined;
+    const payload = json<JsonObject>(row.payload_json);
+    const executionId = requiredString(payload.executionId, "Job executionId");
+    const tenantId = String(row.tenant_id);
+    const executionProjection = await this.#loadProjectionForUpdate(
+      client,
+      tenantId,
+      "execution",
+      executionId,
+      "Execution"
+    );
+    const execution = executionProjection.value;
+    if (execution.tenantId !== tenantId) throw new Error("Job 与 Execution 所属租户不一致");
+    const context: AgentJobContext = {
+      tenantId,
+      executionId,
+      workspaceId: requiredString(execution.workspaceId, "Execution workspaceId"),
+      generation: requiredSafeInteger(execution.generation, "Execution generation"),
+      execution,
+      executionStreamVersion: executionProjection.streamVersion
+    };
+    if (!isAgentJob) return context;
+    const jobId = String(row.job_id);
+    const jobProjection = await this.#loadProjectionForUpdate(client, tenantId, "job", jobId, "Job");
+    if (jobProjection.value.tenantId !== tenantId
+      || jobProjection.value.kind !== AGENT_EXECUTION_JOB_KIND
+      || requiredString(jobProjection.value.id, "Job id") !== jobId) {
+      throw new Error("Agent Job 物理记录与查询投影不一致");
+    }
+    return {
+      ...context,
+      job: jobProjection.value,
+      jobStreamVersion: jobProjection.streamVersion
+    };
+  }
+
+  #assertJobProjectionMatchesPhysical(
+    context: AgentJobContext | undefined,
+    row: Row,
+    mode: "claim" | "owned",
+    workerId: string,
+    fencingToken: number
+  ): void {
+    if (!context?.job) return;
+    const projectedFencingToken = requiredSafeInteger(context.job.fencingToken, "Job fencingToken");
+    const physicalFencingToken = safeInteger(row.fencing_token, "Job fencing token");
+    const projectedAttempts = requiredSafeInteger(context.job.attempts, "Job attempts");
+    const physicalAttempts = safeInteger(row.attempts, "Job attempts");
+    if (context.job.status !== String(row.status)
+      || projectedFencingToken !== physicalFencingToken
+      || projectedAttempts !== physicalAttempts) {
+      throw new Error("Agent Job 物理状态与查询投影不一致");
+    }
+    if (row.status === "leased"
+      && (context.job.leaseOwner !== row.lease_owner
+        || context.job.leaseExpiresAt !== iso(row.lease_expires_at))) {
+      throw new Error("Agent Job 租约与查询投影不一致");
+    }
+    if (mode === "owned" && (context.job.status !== "leased"
+      || context.job.leaseOwner !== workerId
+      || projectedFencingToken !== fencingToken)) {
+      throw new Error("Agent Job 租约与查询投影不一致");
+    }
+  }
+
+  async #updateProjection(
+    client: PostgresClientLike,
+    context: AgentJobContext,
+    namespace: string,
+    key: string,
+    previousVersion: number,
+    value: JsonObject,
+    occurredAt: string
+  ): Promise<void> {
+    const nextVersion = requiredSafeInteger(value.streamVersion, `${namespace} streamVersion`);
+    const changed = await client.query(`
+      update mn_v2.projections set stream_version = $4, value_json = $5::jsonb,
+        updated_at = $6::timestamptz
+      where tenant_id = $1 and namespace = $2 and projection_key = $3
+        and stream_version = $7
+    `, [
+      context.tenantId,
+      namespace,
+      key,
+      nextVersion,
+      JSON.stringify(value),
+      occurredAt,
+      previousVersion
+    ]);
+    if (changed.rowCount !== 1) throw new Error(`${namespace} ${key} 的投影并发更新失败`);
+  }
+
+  async #upsertProjection(
+    client: PostgresClientLike,
+    tenantId: string,
+    namespace: string,
+    key: string,
+    streamVersion: number,
+    value: JsonObject,
+    occurredAt: string
+  ): Promise<void> {
+    await client.query(`
+      insert into mn_v2.projections (
+        tenant_id, namespace, projection_key, stream_version, value_json, updated_at
+      ) values ($1, $2, $3, $4, $5::jsonb, $6::timestamptz)
+      on conflict (tenant_id, namespace, projection_key) do update set
+        stream_version = excluded.stream_version,
+        value_json = excluded.value_json,
+        updated_at = excluded.updated_at
+    `, [tenantId, namespace, key, streamVersion, JSON.stringify(value), occurredAt]);
+  }
+
+  async #appendLifecycleEvent(
+    client: PostgresClientLike,
+    request: EventAppendRequest,
+    occurredAt: string
+  ): Promise<KernelEventV1> {
+    const event = await this.#appendEvent(client, request, occurredAt);
+    await client.query(`
+      insert into mn_v2.outbox (
+        message_id, tenant_id, topic, payload_json, available_at, created_at
+      ) values ($1, $2, $3, $4::jsonb, $5::timestamptz, $5::timestamptz)
+    `, [
+      `${event.aggregateType}:${event.aggregateId}:${event.streamVersion}:${event.type}`,
+      event.tenantId,
+      event.type,
+      JSON.stringify(event.publicPayload),
+      occurredAt
+    ]);
+    return event;
+  }
+
+  async #recordAgentJobClaim(
+    client: PostgresClientLike,
+    context: AgentJobContext | undefined,
+    row: Row,
+    workerId: string,
+    leaseExpiresAt: string,
+    fencingToken: number,
+    occurredAt: string
+  ): Promise<void> {
+    if (!context?.job || context.jobStreamVersion === undefined) return;
+    this.#assertJobProjectionMatchesPhysical(context, row, "claim", workerId, fencingToken);
+    const jobId = String(row.job_id);
+    const correlationId = `job:${jobId}:fence:${fencingToken}`;
+    const updatedJob: JsonObject = {
+      ...context.job,
+      status: "leased",
+      attempts: safeInteger(row.attempts, "Job attempts") + 1,
+      leaseOwner: workerId,
+      leaseExpiresAt,
+      fencingToken,
+      streamVersion: context.jobStreamVersion + 1,
+      updatedAt: occurredAt
+    };
+    await this.#appendLifecycleEvent(client, {
+      tenantId: context.tenantId,
+      aggregateType: "job",
+      aggregateId: jobId,
+      expectedStreamVersion: context.jobStreamVersion,
+      type: "job.leased",
+      actorId: `worker:${workerId}`,
+      executionId: context.executionId,
+      generation: context.generation,
+      correlationId,
+      publicPayload: {
+        workspaceId: context.workspaceId,
+        executionId: context.executionId,
+        workerId,
+        fencingToken,
+        leaseExpiresAt
+      }
+    }, occurredAt);
+    await this.#updateProjection(
+      client,
+      context,
+      "job",
+      jobId,
+      context.jobStreamVersion,
+      updatedJob,
+      occurredAt
+    );
+
+    if (context.execution.status === "running" || context.execution.status === "waiting_approval") {
+      return;
+    }
+    if (context.execution.status !== "queued") {
+      throw new Error(`状态为 ${String(context.execution.status)} 的 Execution 不能领取 Agent Job`);
+    }
+    const updatedExecution: JsonObject = {
+      ...context.execution,
+      status: "running",
+      startedAt: context.execution.startedAt ?? occurredAt,
+      streamVersion: context.executionStreamVersion + 1,
+      updatedAt: occurredAt
+    };
+    await this.#appendLifecycleEvent(client, {
+      tenantId: context.tenantId,
+      aggregateType: "execution",
+      aggregateId: context.executionId,
+      expectedStreamVersion: context.executionStreamVersion,
+      type: "execution.running",
+      actorId: `worker:${workerId}`,
+      executionId: context.executionId,
+      generation: context.generation,
+      correlationId,
+      publicPayload: {
+        workspaceId: context.workspaceId,
+        jobId,
+        status: "running",
+        workerId,
+        fencingToken
+      }
+    }, occurredAt);
+    await this.#updateProjection(
+      client,
+      context,
+      "execution",
+      context.executionId,
+      context.executionStreamVersion,
+      updatedExecution,
+      occurredAt
+    );
+  }
+
+  async #recordAgentJobRenewal(
+    client: PostgresClientLike,
+    context: AgentJobContext | undefined,
+    row: Row,
+    workerId: string,
+    leaseExpiresAt: string,
+    fencingToken: number,
+    occurredAt: string
+  ): Promise<void> {
+    if (!context?.job || context.jobStreamVersion === undefined) return;
+    this.#assertJobProjectionMatchesPhysical(context, row, "owned", workerId, fencingToken);
+    const jobId = String(row.job_id);
+    const updatedJob: JsonObject = {
+      ...context.job,
+      leaseExpiresAt,
+      streamVersion: context.jobStreamVersion + 1,
+      updatedAt: occurredAt
+    };
+    await this.#appendLifecycleEvent(client, {
+      tenantId: context.tenantId,
+      aggregateType: "job",
+      aggregateId: jobId,
+      expectedStreamVersion: context.jobStreamVersion,
+      type: "job.lease_renewed",
+      actorId: `worker:${workerId}`,
+      executionId: context.executionId,
+      generation: context.generation,
+      correlationId: `job:${jobId}:fence:${fencingToken}`,
+      publicPayload: {
+        workspaceId: context.workspaceId,
+        executionId: context.executionId,
+        workerId,
+        fencingToken,
+        leaseExpiresAt
+      }
+    }, occurredAt);
+    await this.#updateProjection(
+      client,
+      context,
+      "job",
+      jobId,
+      context.jobStreamVersion,
+      updatedJob,
+      occurredAt
+    );
+  }
+
+  async #recordAgentJobTerminal(
+    client: PostgresClientLike,
+    context: AgentJobContext | undefined,
+    row: Row,
+    workerId: string,
+    fencingToken: number,
+    outcome: "completed" | "failed",
+    value: JsonValue,
+    occurredAt: string
+  ): Promise<void> {
+    if (!context?.job || context.jobStreamVersion === undefined) return;
+    this.#assertJobProjectionMatchesPhysical(context, row, "owned", workerId, fencingToken);
+    const jobId = String(row.job_id);
+    const correlationId = `job:${jobId}:fence:${fencingToken}`;
+    const {
+      leaseOwner: _leaseOwner,
+      leaseExpiresAt: _leaseExpiresAt,
+      result: _priorResult,
+      failure: _priorFailure,
+      ...jobWithoutLease
+    } = context.job;
+    const updatedJob: JsonObject = {
+      ...jobWithoutLease,
+      status: outcome,
+      ...(outcome === "completed" ? { result: value } : { failure: value }),
+      streamVersion: context.jobStreamVersion + 1,
+      updatedAt: occurredAt
+    };
+    await this.#appendLifecycleEvent(client, {
+      tenantId: context.tenantId,
+      aggregateType: "job",
+      aggregateId: jobId,
+      expectedStreamVersion: context.jobStreamVersion,
+      type: `job.${outcome}`,
+      actorId: `worker:${workerId}`,
+      executionId: context.executionId,
+      generation: context.generation,
+      correlationId,
+      publicPayload: {
+        workspaceId: context.workspaceId,
+        executionId: context.executionId,
+        status: outcome,
+        fencingToken
+      }
+    }, occurredAt);
+    await this.#updateProjection(
+      client,
+      context,
+      "job",
+      jobId,
+      context.jobStreamVersion,
+      updatedJob,
+      occurredAt
+    );
+
+    const acceptedStatuses = outcome === "completed"
+      ? ["running"]
+      : ["running", "waiting_approval"];
+    if (!acceptedStatuses.includes(String(context.execution.status))) {
+      throw new Error(`状态为 ${String(context.execution.status)} 的 Execution 不能标记为 ${outcome}`);
+    }
+    const failureObject = outcome === "failed"
+      && typeof value === "object"
+      && value !== null
+      && !Array.isArray(value)
+      ? value as JsonObject
+      : undefined;
+    const failureCode = typeof failureObject?.code === "string" && failureObject.code
+      ? failureObject.code
+      : "WORKER_FAILED";
+    const updatedExecution: JsonObject = {
+      ...context.execution,
+      status: outcome,
+      ...(outcome === "failed" ? { failureCode } : {}),
+      finishedAt: occurredAt,
+      streamVersion: context.executionStreamVersion + 1,
+      updatedAt: occurredAt
+    };
+    await this.#appendLifecycleEvent(client, {
+      tenantId: context.tenantId,
+      aggregateType: "execution",
+      aggregateId: context.executionId,
+      expectedStreamVersion: context.executionStreamVersion,
+      type: `execution.${outcome}`,
+      actorId: `worker:${workerId}`,
+      executionId: context.executionId,
+      generation: context.generation,
+      correlationId,
+      publicPayload: {
+        workspaceId: context.workspaceId,
+        jobId,
+        status: outcome,
+        ...(outcome === "failed" ? { failureCode } : {})
+      }
+    }, occurredAt);
+    await this.#updateProjection(
+      client,
+      context,
+      "execution",
+      context.executionId,
+      context.executionStreamVersion,
+      updatedExecution,
+      occurredAt
+    );
+  }
+
+  async #recordAgentJobInterrupted(
+    client: PostgresClientLike,
+    context: AgentJobContext | undefined,
+    row: Row,
+    workerId: string,
+    fencingToken: number,
+    failure: JsonObject,
+    occurredAt: string
+  ): Promise<void> {
+    if (!context?.job || context.jobStreamVersion === undefined) return;
+    this.#assertJobProjectionMatchesPhysical(context, row, "owned", workerId, fencingToken);
+    const jobId = String(row.job_id);
+    const correlationId = `job:${jobId}:fence:${fencingToken}`;
+    const {
+      leaseOwner: _leaseOwner,
+      leaseExpiresAt: _leaseExpiresAt,
+      result: _priorResult,
+      failure: _priorFailure,
+      ...jobWithoutLease
+    } = context.job;
+    const updatedJob: JsonObject = {
+      ...jobWithoutLease,
+      status: "failed",
+      failure,
+      streamVersion: context.jobStreamVersion + 1,
+      updatedAt: occurredAt
+    };
+    await this.#appendLifecycleEvent(client, {
+      tenantId: context.tenantId,
+      aggregateType: "job",
+      aggregateId: jobId,
+      expectedStreamVersion: context.jobStreamVersion,
+      type: "job.failed",
+      actorId: `worker:${workerId}`,
+      executionId: context.executionId,
+      generation: context.generation,
+      correlationId,
+      publicPayload: {
+        workspaceId: context.workspaceId,
+        executionId: context.executionId,
+        status: "failed",
+        failureCode: "EXECUTION_INTERRUPTED",
+        fencingToken
+      }
+    }, occurredAt);
+    await this.#updateProjection(
+      client,
+      context,
+      "job",
+      jobId,
+      context.jobStreamVersion,
+      updatedJob,
+      occurredAt
+    );
+
+    if (context.execution.status !== "running"
+      && context.execution.status !== "waiting_approval") {
+      throw new Error(`状态为 ${String(context.execution.status)} 的 Execution 不能中断`);
+    }
+    const {
+      finishedAt: _finishedAt,
+      failureCode: _failureCode,
+      ...executionWithoutTerminalState
+    } = context.execution;
+    const updatedExecution: JsonObject = {
+      ...executionWithoutTerminalState,
+      status: "interrupted",
+      streamVersion: context.executionStreamVersion + 1,
+      updatedAt: occurredAt
+    };
+    await this.#appendLifecycleEvent(client, {
+      tenantId: context.tenantId,
+      aggregateType: "execution",
+      aggregateId: context.executionId,
+      expectedStreamVersion: context.executionStreamVersion,
+      type: "execution.interrupted",
+      actorId: `worker:${workerId}`,
+      executionId: context.executionId,
+      generation: context.generation,
+      correlationId,
+      publicPayload: {
+        workspaceId: context.workspaceId,
+        jobId,
+        status: "interrupted",
+        reason: requiredString(failure.message, "中断原因"),
+        fencingToken
+      }
+    }, occurredAt);
+    await this.#updateProjection(
+      client,
+      context,
+      "execution",
+      context.executionId,
+      context.executionStreamVersion,
+      updatedExecution,
+      occurredAt
+    );
+  }
+
+  async #recordAgentJobNeedsReconciliation(
+    client: PostgresClientLike,
+    context: AgentJobContext,
+    row: Row,
+    workerId: string,
+    fencingToken: number,
+    failure: JsonObject,
+    occurredAt: string
+  ): Promise<void> {
+    if (!context.job || context.jobStreamVersion === undefined) return;
+    this.#assertJobProjectionMatchesPhysical(context, row, "owned", workerId, fencingToken);
+    const jobId = String(row.job_id);
+    const {
+      leaseOwner: _leaseOwner,
+      leaseExpiresAt: _leaseExpiresAt,
+      result: _priorResult,
+      failure: _priorFailure,
+      ...jobWithoutLease
+    } = context.job;
+    const updatedJob: JsonObject = {
+      ...jobWithoutLease,
+      status: "failed",
+      failure,
+      streamVersion: context.jobStreamVersion + 1,
+      updatedAt: occurredAt
+    };
+    await this.#appendLifecycleEvent(client, {
+      tenantId: context.tenantId,
+      aggregateType: "job",
+      aggregateId: jobId,
+      expectedStreamVersion: context.jobStreamVersion,
+      type: "job.failed",
+      actorId: `worker:${workerId}`,
+      executionId: context.executionId,
+      generation: context.generation,
+      correlationId: `reconciliation:${jobId}:${fencingToken}`,
+      publicPayload: {
+        workspaceId: context.workspaceId,
+        executionId: context.executionId,
+        status: "failed",
+        failureCode: UNKNOWN_SIDE_EFFECT_FAILURE.code,
+        needsReconciliation: true,
+        fencingToken
+      }
+    }, occurredAt);
+    await this.#updateProjection(
+      client,
+      context,
+      "job",
+      jobId,
+      context.jobStreamVersion,
+      updatedJob,
+      occurredAt
+    );
+  }
+
   async claimJob(workerId: string, now: string, options: JobClaimOptions = {}): Promise<StoredJob | undefined> {
+    const occurredAt = new Date(validTimestamp(now)).toISOString();
     const client = await this.#pool.connect();
     try {
       await client.query("begin");
-      const parameters: unknown[] = [now];
+      const parameters: unknown[] = [occurredAt];
       const conditions = [
         "available_at <= $1::timestamptz",
         "(status = 'available' or (status = 'leased' and lease_expires_at <= $1::timestamptz))"
@@ -622,16 +1207,106 @@ export class PostgresStorage implements StoragePort {
         await client.query("commit");
         return undefined;
       }
-      const leaseExpiresAt = new Date(Date.parse(now) + JOB_LEASE_MILLISECONDS).toISOString();
+      const context = await this.#loadAgentJobContext(client, row);
+      const leaseExpiresAt = new Date(
+        Date.parse(occurredAt) + JOB_LEASE_MILLISECONDS
+      ).toISOString();
+      const previousFencingToken = safeInteger(row.fencing_token, "Fencing token");
+      const fencingToken = previousFencingToken + 1;
       const updated = await client.query(`
         update mn_v2.jobs set status = 'leased', attempts = attempts + 1,
           lease_owner = $1, lease_expires_at = $2::timestamptz,
-          fencing_token = fencing_token + 1, updated_at = $3::timestamptz
-        where job_id = $4 returning *
-      `, [workerId, leaseExpiresAt, now, String(row.job_id)]);
+          fencing_token = $3, updated_at = $4::timestamptz
+        where job_id = $5 and status = $6 and fencing_token = $7
+        returning *
+      `, [
+        workerId,
+        leaseExpiresAt,
+        fencingToken,
+        occurredAt,
+        String(row.job_id),
+        String(row.status),
+        previousFencingToken
+      ]);
+      const claimed = updated.rows[0];
+      if (!claimed) throw new StaleFencingTokenError(String(row.job_id));
+      await this.#recordAgentJobClaim(
+        client,
+        context,
+        row,
+        workerId,
+        leaseExpiresAt,
+        fencingToken,
+        occurredAt
+      );
+      const storedJob = rowToJob(claimed);
       await client.query("commit");
-      if (!updated.rows[0]) throw new Error("Claimed job disappeared");
-      return rowToJob(updated.rows[0]);
+      return storedJob;
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async #ownedLeasedJob(
+    client: PostgresClientLike,
+    jobId: string,
+    workerId: string,
+    fencingToken: number,
+    occurredAt: string
+  ): Promise<Row> {
+    const selected = await client.query(`
+      select * from mn_v2.jobs
+      where job_id = $1 and status = 'leased' and lease_owner = $2 and fencing_token = $3
+        and lease_expires_at > $4::timestamptz
+      for update
+    `, [jobId, workerId, fencingToken, occurredAt]);
+    const row = selected.rows[0];
+    if (!row) throw new StaleFencingTokenError(jobId);
+    return row;
+  }
+
+  async #settleJob(
+    jobId: string,
+    workerId: string,
+    fencingToken: number,
+    value: JsonValue,
+    now: string,
+    outcome: "completed" | "failed"
+  ): Promise<void> {
+    const occurredAt = new Date(validTimestamp(now)).toISOString();
+    const client = await this.#pool.connect();
+    try {
+      await client.query("begin");
+      const row = await this.#ownedLeasedJob(client, jobId, workerId, fencingToken, occurredAt);
+      const context = await this.#loadAgentJobContext(client, row);
+      const changed = await client.query(outcome === "completed" ? `
+        update mn_v2.jobs set status = 'completed', result_json = $1::jsonb,
+          failure_json = null, lease_owner = null, lease_expires_at = null,
+          updated_at = $2::timestamptz
+        where job_id = $3 and status = 'leased' and lease_owner = $4 and fencing_token = $5
+          and lease_expires_at > $2::timestamptz
+      ` : `
+        update mn_v2.jobs set status = 'failed', failure_json = $1::jsonb,
+          result_json = null, lease_owner = null, lease_expires_at = null,
+          updated_at = $2::timestamptz
+        where job_id = $3 and status = 'leased' and lease_owner = $4 and fencing_token = $5
+          and lease_expires_at > $2::timestamptz
+      `, [JSON.stringify(value), occurredAt, jobId, workerId, fencingToken]);
+      if (changed.rowCount !== 1) throw new StaleFencingTokenError(jobId);
+      await this.#recordAgentJobTerminal(
+        client,
+        context,
+        row,
+        workerId,
+        fencingToken,
+        outcome,
+        value,
+        occurredAt
+      );
+      await client.query("commit");
     } catch (error) {
       await client.query("rollback");
       throw error;
@@ -647,13 +1322,7 @@ export class PostgresStorage implements StoragePort {
     result: JsonValue,
     now: string
   ): Promise<void> {
-    const change = await this.#pool.query(`
-      update mn_v2.jobs set status = 'completed', result_json = $1::jsonb,
-        lease_owner = null, lease_expires_at = null, updated_at = $2::timestamptz
-      where job_id = $3 and status = 'leased' and lease_owner = $4 and fencing_token = $5
-        and lease_expires_at > $2::timestamptz
-    `, [JSON.stringify(result), now, jobId, workerId, fencingToken]);
-    if (change.rowCount !== 1) throw new StaleFencingTokenError(jobId);
+    await this.#settleJob(jobId, workerId, fencingToken, result, now, "completed");
   }
 
   async renewJobLease(
@@ -662,13 +1331,37 @@ export class PostgresStorage implements StoragePort {
     fencingToken: number,
     now: string
   ): Promise<void> {
-    const leaseExpiresAt = new Date(validTimestamp(now) + JOB_LEASE_MILLISECONDS).toISOString();
-    const change = await this.#pool.query(`
-      update mn_v2.jobs set lease_expires_at = $1::timestamptz, updated_at = $2::timestamptz
-      where job_id = $3 and status = 'leased' and lease_owner = $4 and fencing_token = $5
-        and lease_expires_at > $2::timestamptz
-    `, [leaseExpiresAt, now, jobId, workerId, fencingToken]);
-    if (change.rowCount !== 1) throw new StaleFencingTokenError(jobId);
+    const occurredAt = new Date(validTimestamp(now)).toISOString();
+    const leaseExpiresAt = new Date(
+      Date.parse(occurredAt) + JOB_LEASE_MILLISECONDS
+    ).toISOString();
+    const client = await this.#pool.connect();
+    try {
+      await client.query("begin");
+      const row = await this.#ownedLeasedJob(client, jobId, workerId, fencingToken, occurredAt);
+      const context = await this.#loadAgentJobContext(client, row);
+      const changed = await client.query(`
+        update mn_v2.jobs set lease_expires_at = $1::timestamptz, updated_at = $2::timestamptz
+        where job_id = $3 and status = 'leased' and lease_owner = $4 and fencing_token = $5
+          and lease_expires_at > $2::timestamptz
+      `, [leaseExpiresAt, occurredAt, jobId, workerId, fencingToken]);
+      if (changed.rowCount !== 1) throw new StaleFencingTokenError(jobId);
+      await this.#recordAgentJobRenewal(
+        client,
+        context,
+        row,
+        workerId,
+        leaseExpiresAt,
+        fencingToken,
+        occurredAt
+      );
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async failJob(
@@ -678,75 +1371,84 @@ export class PostgresStorage implements StoragePort {
     failure: JsonObject,
     now: string
   ): Promise<void> {
-    const change = await this.#pool.query(`
-      update mn_v2.jobs set status = 'failed', failure_json = $1::jsonb,
-        lease_owner = null, lease_expires_at = null, updated_at = $2::timestamptz
-      where job_id = $3 and status = 'leased' and lease_owner = $4 and fencing_token = $5
-        and lease_expires_at > $2::timestamptz
-    `, [JSON.stringify(failure), now, jobId, workerId, fencingToken]);
-    if (change.rowCount !== 1) throw new StaleFencingTokenError(jobId);
+    await this.#settleJob(jobId, workerId, fencingToken, failure, now, "failed");
+  }
+
+  async interruptJob(
+    jobId: string,
+    workerId: string,
+    fencingToken: number,
+    reason: string,
+    now: string
+  ): Promise<void> {
+    const occurredAt = new Date(validTimestamp(now)).toISOString();
+    if (!reason.trim()) throw new TypeError("中断原因不能为空");
+    const failure: JsonObject = {
+      code: "EXECUTION_INTERRUPTED",
+      message: reason,
+      retryable: false
+    };
+    const client = await this.#pool.connect();
+    try {
+      await client.query("begin");
+      const row = await this.#ownedLeasedJob(client, jobId, workerId, fencingToken, occurredAt);
+      const context = await this.#loadAgentJobContext(client, row);
+      const changed = await client.query(`
+        update mn_v2.jobs set status = 'failed', failure_json = $1::jsonb,
+          result_json = null, lease_owner = null, lease_expires_at = null,
+          updated_at = $2::timestamptz
+        where job_id = $3 and status = 'leased' and lease_owner = $4 and fencing_token = $5
+          and lease_expires_at > $2::timestamptz
+      `, [JSON.stringify(failure), occurredAt, jobId, workerId, fencingToken]);
+      if (changed.rowCount !== 1) throw new StaleFencingTokenError(jobId);
+      await this.#recordAgentJobInterrupted(
+        client,
+        context,
+        row,
+        workerId,
+        fencingToken,
+        failure,
+        occurredAt
+      );
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async markNeedsReconciliation(
     executionId: string,
     input: NeedsReconciliationInput
   ): Promise<void> {
-    validTimestamp(input.occurredAt);
+    const occurredAt = new Date(validTimestamp(input.occurredAt)).toISOString();
     const client = await this.#pool.connect();
     try {
       await client.query("begin");
-      const selectedJob = await client.query(`
-        select * from mn_v2.jobs
-        where job_id = $1 and status = 'leased' and lease_owner = $2 and fencing_token = $3
-          and lease_expires_at > $4::timestamptz
-        for update
-      `, [input.jobId, input.workerId, input.fencingToken, input.occurredAt]);
-      const job = selectedJob.rows[0];
-      if (!job) throw new StaleFencingTokenError(input.jobId);
-      const jobPayload = json<JsonObject>(job.payload_json);
-      if (jobPayload.executionId !== executionId) {
+      const row = await this.#ownedLeasedJob(
+        client,
+        input.jobId,
+        input.workerId,
+        input.fencingToken,
+        occurredAt
+      );
+      const payload = json<JsonObject>(row.payload_json);
+      if (payload.executionId !== executionId) {
         throw new Error("Job 与待核对的 Execution 不一致");
       }
-      const tenantId = String(job.tenant_id);
-      const selectedExecution = await client.query(`
-        select value_json from mn_v2.projections
-        where tenant_id = $1 and namespace = 'execution' and projection_key = $2
-        for update
-      `, [tenantId, executionId]);
-      const executionRow = selectedExecution.rows[0];
-      if (!executionRow) throw new Error(`Execution ${executionId} 的投影不存在`);
-      const execution = json<JsonObject>(executionRow.value_json);
-      const streamVersion = requiredSafeInteger(execution.streamVersion, "execution streamVersion");
-      const generation = requiredSafeInteger(execution.generation, "execution generation");
-      const workspaceId = requiredString(execution.workspaceId, "execution workspaceId");
-      const updatedExecution: JsonObject = {
-        ...execution,
-        status: "needs_reconciliation",
-        failureCode: "UNKNOWN_EXTERNAL_SIDE_EFFECT",
-        streamVersion: streamVersion + 1,
-        updatedAt: input.occurredAt,
-      };
-      const inboxId = `reconciliation:${executionId}:${input.jobId}`;
-      const inbox: JsonObject = {
-        id: inboxId,
-        tenantId,
-        workspaceId,
-        executionId,
-        kind: "reconciliation",
-        title: "外部操作结果需要人工核对",
-        summary: "外部操作可能已经发生。请核对后选择终止、标记已完成或创建新调用",
-        risk: "unknown",
-        resourceSummary: input.jobId,
-        createdAt: input.occurredAt,
-        status: "open",
-      };
+      const context = await this.#loadAgentJobContext(client, row, false);
+      if (!context) throw new Error(`Execution ${executionId} 的上下文不存在`);
+      if (context.execution.status !== "running"
+        && context.execution.status !== "waiting_approval") {
+        throw new Error(`状态为 ${String(context.execution.status)} 的 Execution 不能核对`);
+      }
       const failure: JsonObject = {
-        code: "UNKNOWN_EXTERNAL_SIDE_EFFECT",
-        message: "外部操作结果未知，需要人工核对",
-        retryable: false,
-        executionId,
+        ...UNKNOWN_SIDE_EFFECT_FAILURE,
+        executionId
       };
-      const jobChange = await client.query(`
+      const changed = await client.query(`
         update mn_v2.jobs set status = 'failed', result_json = null,
           failure_json = $1::jsonb, lease_owner = null, lease_expires_at = null,
           updated_at = $2::timestamptz
@@ -754,45 +1456,94 @@ export class PostgresStorage implements StoragePort {
           and lease_expires_at > $2::timestamptz
       `, [
         JSON.stringify(failure),
-        input.occurredAt,
+        occurredAt,
         input.jobId,
         input.workerId,
-        input.fencingToken,
+        input.fencingToken
       ]);
-      if (jobChange.rowCount !== 1) throw new StaleFencingTokenError(input.jobId);
-      await this.#appendEvent(client, {
-        tenantId,
+      if (changed.rowCount !== 1) throw new StaleFencingTokenError(input.jobId);
+      await this.#recordAgentJobNeedsReconciliation(
+        client,
+        context,
+        row,
+        input.workerId,
+        input.fencingToken,
+        failure,
+        occurredAt
+      );
+
+      const updatedExecution: JsonObject = {
+        ...context.execution,
+        status: "needs_reconciliation",
+        failureCode: UNKNOWN_SIDE_EFFECT_FAILURE.code,
+        streamVersion: context.executionStreamVersion + 1,
+        updatedAt: occurredAt
+      };
+      await this.#appendLifecycleEvent(client, {
+        tenantId: context.tenantId,
         aggregateType: "execution",
         aggregateId: executionId,
-        expectedStreamVersion: streamVersion,
+        expectedStreamVersion: context.executionStreamVersion,
         type: "execution.needs_reconciliation",
         actorId: `worker:${input.workerId}`,
         executionId,
-        generation,
+        generation: context.generation,
         correlationId: `reconciliation:${input.jobId}:${input.fencingToken}`,
-        publicPayload: { workspaceId, jobId: input.jobId, status: "needs_reconciliation" },
-      }, input.occurredAt);
-      for (const projection of [
-        { namespace: "execution", key: executionId, streamVersion: streamVersion + 1, value: updatedExecution },
-        { namespace: "inbox", key: inboxId, streamVersion: 0, value: inbox },
-      ] as const) {
-        await client.query(`
-          insert into mn_v2.projections (
-            tenant_id, namespace, projection_key, stream_version, value_json, updated_at
-          ) values ($1, $2, $3, $4, $5::jsonb, $6::timestamptz)
-          on conflict (tenant_id, namespace, projection_key) do update set
-            stream_version = excluded.stream_version,
-            value_json = excluded.value_json,
-            updated_at = excluded.updated_at
-        `, [
-          tenantId,
-          projection.namespace,
-          projection.key,
-          projection.streamVersion,
-          JSON.stringify(projection.value),
-          input.occurredAt,
-        ]);
-      }
+        publicPayload: {
+          workspaceId: context.workspaceId,
+          jobId: input.jobId,
+          status: "needs_reconciliation",
+          reason: UNKNOWN_SIDE_EFFECT_FAILURE.code
+        }
+      }, occurredAt);
+      await this.#updateProjection(
+        client,
+        context,
+        "execution",
+        executionId,
+        context.executionStreamVersion,
+        updatedExecution,
+        occurredAt
+      );
+
+      const inboxId = `reconciliation:${executionId}:${input.jobId}`;
+      const inbox: JsonObject = {
+        id: inboxId,
+        tenantId: context.tenantId,
+        workspaceId: context.workspaceId,
+        executionId,
+        kind: "reconciliation",
+        title: "外部操作结果需要人工核对",
+        summary: UNKNOWN_SIDE_EFFECT_FAILURE.message,
+        risk: "unknown",
+        resourceSummary: input.jobId,
+        createdAt: occurredAt,
+        status: "open"
+      };
+      await this.#upsertProjection(
+        client,
+        context.tenantId,
+        "inbox",
+        inboxId,
+        0,
+        inbox,
+        occurredAt
+      );
+      await client.query(`
+        insert into mn_v2.outbox (
+          message_id, tenant_id, topic, payload_json, available_at, created_at
+        ) values ($1, $2, $3, $4::jsonb, $5::timestamptz, $5::timestamptz)
+      `, [
+        `reconciliation:${executionId}:${input.jobId}`,
+        context.tenantId,
+        "execution.reconciliation_required",
+        JSON.stringify({
+          executionId,
+          jobId: input.jobId,
+          workspaceId: context.workspaceId
+        }),
+        occurredAt
+      ]);
       await client.query("commit");
     } catch (error) {
       await client.query("rollback");

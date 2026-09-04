@@ -124,7 +124,7 @@ export interface StoragePort {
     failure: JsonObject,
     now: string
   ): Promise<void>;
-  interruptJob?(
+  interruptJob(
     jobId: string,
     workerId: string,
     fencingToken: number,
