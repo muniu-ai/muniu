@@ -14,11 +14,11 @@ const HELP = `木牛 Agent OS 0.2
   ask               在当前工作区提交问题
   inbox             查看审批、问题、失败和人工核对
   resume            恢复暂停或中断的执行
-  doctor --fix      检查并修复本地连接
+  doctor --fix      检查连接与可安全修复项
   plugin            查看或启用插件
   opc               管理机会验证工作
   code              管理 Coding 任务
-  backup            创建或校验加密备份
+  backup            查看 Host 的备份支持状态
 
 全局参数：
   --json            输出稳定 JSON
@@ -55,12 +55,16 @@ class CliUsageError extends Error {
   }
 }
 
-class ApiRequestError extends Error {
+class CliReportedError extends Error {
   constructor(readonly detail: ApiErrorV2, readonly status: number) {
     super(detail.message);
-    this.name = "ApiRequestError";
+    this.name = "CliReportedError";
   }
 }
+
+class ApiRequestError extends CliReportedError {}
+
+class CliCommandError extends CliReportedError {}
 
 class ApiClient {
   constructor(
@@ -71,6 +75,10 @@ class ApiClient {
 
   async get(path: string): Promise<unknown> {
     return this.request(path, { method: "GET" });
+  }
+
+  async readiness(): Promise<unknown> {
+    return this.request("/v2/readiness", { method: "GET" }, new Set([503]));
   }
 
   async mutate(path: string, body: unknown): Promise<unknown> {
@@ -84,17 +92,22 @@ class ApiClient {
     });
   }
 
-  async request(path: string, init: RequestInit): Promise<unknown> {
+  async request(path: string, init: RequestInit, acceptedDataStatuses: ReadonlySet<number> = new Set()): Promise<unknown> {
     const response = await this.fetchImplementation(`${this.baseUrl}${path}`, init);
-    const value = await response.json() as { data?: unknown } | ApiErrorV2;
-    if (!response.ok) {
+    let value: unknown;
+    try {
+      value = response.status === 204 ? undefined : await response.json();
+    } catch {
+      value = undefined;
+    }
+    if (!response.ok && !(acceptedDataStatuses.has(response.status) && hasData(value))) {
       const fallback: ApiErrorV2 = {
         code: "HTTP_ERROR", message: `请求失败（${response.status}）`, action: "运行 mn doctor",
         fieldIssues: [], traceId: response.headers.get("X-Trace-Id") ?? "unknown", retryable: response.status >= 500,
       };
       throw new ApiRequestError(isApiError(value) ? value : fallback, response.status);
     }
-    return "data" in value ? value.data : value;
+    return hasData(value) ? value.data : value;
   }
 }
 
@@ -102,7 +115,17 @@ function isApiError(value: unknown): value is ApiErrorV2 {
   return typeof value === "object" && value !== null
     && "code" in value && typeof value.code === "string"
     && "message" in value && typeof value.message === "string"
-    && "action" in value && typeof value.action === "string";
+    && "action" in value && typeof value.action === "string"
+    && "fieldIssues" in value && Array.isArray(value.fieldIssues)
+    && value.fieldIssues.every((issue) => typeof issue === "object" && issue !== null
+      && "field" in issue && typeof issue.field === "string"
+      && "message" in issue && typeof issue.message === "string")
+    && "traceId" in value && typeof value.traceId === "string"
+    && "retryable" in value && typeof value.retryable === "boolean";
+}
+
+function hasData(value: unknown): value is { readonly data: unknown } {
+  return typeof value === "object" && value !== null && "data" in value;
 }
 
 function parseArguments(arguments_: readonly string[]): ParsedArguments {
@@ -162,17 +185,23 @@ async function setup(parsed: ParsedArguments, api: ApiClient): Promise<CliResult
   assertAllowedFlags(parsed, ["view", "plugins", "provider", "key", "workspace", "first"]);
   const view = flag(parsed, "view") ?? "business";
   if (view !== "business" && view !== "professional") throw new CliUsageError("--view 只能是 business 或 professional");
-  const pluginIds = (flag(parsed, "plugins") ?? "opc,coding").split(",").map((item) => item.trim()).filter(Boolean);
+  const pluginIds = [...new Set(
+    (flag(parsed, "plugins") ?? "opc,coding").split(",").map((item) => item.trim()).filter(Boolean),
+  )];
+  if (pluginIds.length === 0) throw new CliUsageError("--plugins 至少包含 opc 或 coding");
   if (pluginIds.some((plugin) => plugin !== "opc" && plugin !== "coding")) {
     throw new CliUsageError("--plugins 只能包含 opc 和 coding");
   }
-  const workspaceName = flag(parsed, "workspace") ?? "我的工作区";
-  const workspace = await api.mutate("/v2/workspaces", { name: workspaceName, viewMode: view, pluginIds }) as { id?: string };
-  const provider = flag(parsed, "provider");
-  const apiKey = flag(parsed, "key");
+  const workspaceName = (flag(parsed, "workspace") ?? "我的工作区").trim();
+  const provider = flag(parsed, "provider")?.trim();
+  const apiKey = flag(parsed, "key")?.trim();
+  if ((provider && !apiKey) || (!provider && apiKey)) {
+    throw new CliUsageError("连接模型时必须同时提供 --provider 和 --key");
+  }
+  const first = flag(parsed, "first")?.trim();
+  const setupResult = await api.mutate("/v2/setup", {});
   let modelConnection: unknown;
-  if (provider || apiKey) {
-    if (!provider || !apiKey) throw new CliUsageError("连接模型时必须同时提供 --provider 和 --key");
+  if (provider && apiKey) {
     const connection = await api.mutate("/v2/model-connections", {
       presetId: provider, apiKey, displayName: provider,
     }) as { id?: string; streamVersion?: number };
@@ -181,10 +210,32 @@ async function setup(parsed: ParsedArguments, api: ApiClient): Promise<CliResult
       expectedStreamVersion: connection.streamVersion ?? 1,
     });
   }
-  const first = flag(parsed, "first");
+  const workspace = await api.mutate("/v2/workspaces", { name: workspaceName, viewMode: view, pluginIds }) as { id?: string };
+  let firstObject: unknown;
+  let sample: unknown;
+  if (first) {
+    if (!workspace.id) throw new CliUsageError("Host 未返回工作区 ID");
+    const primaryPlugin = pluginIds[0]!;
+    const resource = primaryPlugin === "opc" ? "opportunities" : "repositories";
+    firstObject = await api.mutate(`/v2/plugins/${primaryPlugin}/${resource}`, {
+      workspaceId: workspace.id,
+      expectedStreamVersion: 0,
+      input: first,
+    });
+    sample = await api.mutate(`/v2/plugins/${primaryPlugin}/samples/read-only`, {
+      workspaceId: workspace.id,
+      expectedStreamVersion: 0,
+    });
+  }
   return {
     command: "setup",
-    data: { workspace, ...(modelConnection ? { modelConnection } : {}), ...(first ? { first } : {}) },
+    data: {
+      setup: setupResult,
+      workspace,
+      ...(modelConnection ? { modelConnection } : {}),
+      ...(firstObject ? { firstObject } : {}),
+      ...(sample ? { sample } : {}),
+    },
     human: `设置完成：${workspaceName}`,
   };
 }
@@ -222,9 +273,34 @@ async function resume(parsed: ParsedArguments, api: ApiClient): Promise<CliResul
 
 async function doctor(parsed: ParsedArguments, api: ApiClient): Promise<CliResult> {
   assertAllowedFlags(parsed, ["fix"]);
-  const [health, readiness] = await Promise.all([api.get("/v2/health"), api.get("/v2/readiness")]);
-  const data = { health, readiness, fixRequested: parsed.flags.has("fix") };
-  return { command: "doctor", data, human: "Host 连接正常，已完成运行检查" };
+  const [health, readiness] = await Promise.all([api.get("/v2/health"), api.readiness()]);
+  const requested = parsed.flags.has("fix");
+  const ready = typeof readiness === "object" && readiness !== null
+    && "ready" in readiness && readiness.ready === true;
+  const issues = readinessIssues(readiness);
+  const fix = !requested
+    ? { requested: false as const, status: "not_requested" as const, actions: [] as const }
+    : ready && issues.length === 0
+      ? { requested: true as const, status: "not_needed" as const, actions: [] as const }
+      : {
+          requested: true as const,
+          status: "manual_action_required" as const,
+          actions: [] as const,
+          remainingIssues: issues,
+        };
+  const human = requested
+    ? fix.status === "not_needed"
+      ? "检查完成：未发现需要修复的项目"
+      : `检查完成：发现 ${issues.length || "未识别"} 项问题；当前没有可安全自动修复的项目`
+    : ready && issues.length === 0
+      ? "Host 已就绪"
+      : `Host 尚未就绪：${issues.length || "未识别"} 项问题`;
+  return { command: "doctor", data: { health, readiness, fix }, human };
+}
+
+function readinessIssues(value: unknown): readonly unknown[] {
+  if (typeof value !== "object" || value === null || !("issues" in value) || !Array.isArray(value.issues)) return [];
+  return value.issues;
 }
 
 async function plugin(parsed: ParsedArguments, api: ApiClient): Promise<CliResult> {
@@ -252,20 +328,44 @@ async function productCommand(
   assertAllowedFlags(parsed, ["workspace", "version", "input"]);
   const operation = parsed.positional[0] ?? (product === "opc" ? "capture" : "task");
   const workspaceId = flag(parsed, "workspace", true)!;
-  const text = flag(parsed, "input") ?? parsed.positional.slice(1).join(" ");
-  const data = await api.mutate(`/v2/plugins/${product}/${encodeURIComponent(operation)}`, {
-    workspaceId, expectedStreamVersion: integerFlag(parsed, "version", 0), text,
+  const input = (flag(parsed, "input") ?? parsed.positional.slice(1).join(" ")).trim();
+  let resource: "opportunities" | "repositories" | "tasks" | "samples/read-only";
+  let human: string;
+  if (product === "opc") {
+    if (operation !== "capture" && operation !== "sample") {
+      throw new CliUsageError("opc 仅支持 capture 或 sample");
+    }
+    resource = operation === "capture" ? "opportunities" : "samples/read-only";
+    human = operation === "capture" ? "机会已生成，等待审阅" : "OPC 只读样例已完成";
+  } else {
+    if (operation !== "repository" && operation !== "task" && operation !== "sample") {
+      throw new CliUsageError("code 仅支持 repository、task 或 sample");
+    }
+    resource = operation === "repository" ? "repositories"
+      : operation === "task" ? "tasks" : "samples/read-only";
+    human = operation === "repository" ? "仓库已登记，等待审阅"
+      : operation === "task" ? "Coding 任务已生成，等待审阅" : "Coding 只读样例已完成";
+  }
+  if (resource !== "samples/read-only" && !input) throw new CliUsageError("请通过 --input 提供要捕获的内容");
+  if (resource === "samples/read-only" && input) throw new CliUsageError("sample 不接受 --input 或额外文本");
+  const data = await api.mutate(`/v2/plugins/${product}/${resource}`, {
+    workspaceId,
+    expectedStreamVersion: integerFlag(parsed, "version", 0),
+    ...(input ? { input } : {}),
   });
-  return { command, data, human: product === "opc" ? "机会工作已更新" : "Coding 任务已更新" };
+  return { command, data, human };
 }
 
-async function backup(parsed: ParsedArguments, api: ApiClient): Promise<CliResult> {
+async function backup(parsed: ParsedArguments): Promise<CliResult> {
   assertAllowedFlags(parsed, ["output", "verify"]);
-  const data = await api.mutate("/v2/backups", {
-    output: flag(parsed, "output") ?? "muniu-v2-backup.mnbackup",
-    verify: parsed.flags.has("verify"),
-  });
-  return { command: "backup", data, human: "加密备份已创建并校验" };
+  throw new CliCommandError({
+    code: "BACKUP_NOT_SUPPORTED",
+    message: "当前 Host 尚未提供备份接口",
+    action: "不要依赖此命令创建备份；请等待 Host 提供受控备份接口",
+    fieldIssues: [],
+    traceId: "cli-local",
+    retryable: false,
+  }, 501);
 }
 
 export async function runCli(arguments_: readonly string[], dependencies: CliDependencies = {}): Promise<number> {
@@ -299,7 +399,7 @@ export async function runCli(arguments_: readonly string[], dependencies: CliDep
       case "plugin": result = await plugin(parsed, api); break;
       case "opc": result = await productCommand("opc", "opc", parsed, api); break;
       case "code": result = await productCommand("coding", "code", parsed, api); break;
-      case "backup": result = await backup(parsed, api); break;
+      case "backup": result = await backup(parsed); break;
       default: throw new CliUsageError(`未知命令：${command}`);
     }
     if (parsedAll.flags.has("json")) {
@@ -310,19 +410,45 @@ export async function runCli(arguments_: readonly string[], dependencies: CliDep
     return 0;
   } catch (error) {
     if (error instanceof CliUsageError) {
-      io.stderr(error.message);
+      if (parsedAll.flags.has("json")) {
+        io.stdout(JSON.stringify({
+          ok: false,
+          command,
+          error: {
+            code: "CLI_USAGE_ERROR",
+            message: error.message,
+            action: "运行 mn --help 查看可用参数",
+            fieldIssues: [],
+            traceId: "cli-local",
+            retryable: false,
+          },
+        }));
+      } else {
+        io.stderr(error.message);
+      }
       return 2;
     }
-    if (error instanceof ApiRequestError) {
+    if (error instanceof CliReportedError) {
       if (parsedAll.flags.has("json")) {
-        const { traceId: _traceId, fieldIssues: _fieldIssues, ...detail } = error.detail;
-        io.stdout(JSON.stringify({ ok: false, command, error: detail }));
+        io.stdout(JSON.stringify({ ok: false, command, error: error.detail }));
       } else {
         io.stderr(`${error.detail.message}。${error.detail.action}`);
       }
       return error.detail.retryable ? 1 : 2;
     }
-    io.stderr("命令执行失败。请运行 mn doctor 后重试");
+    const detail: ApiErrorV2 = {
+      code: "CLI_UNEXPECTED_ERROR",
+      message: "命令执行失败",
+      action: "运行 mn doctor 后重试",
+      fieldIssues: [],
+      traceId: "cli-local",
+      retryable: true,
+    };
+    if (parsedAll.flags.has("json")) {
+      io.stdout(JSON.stringify({ ok: false, command, error: detail }));
+    } else {
+      io.stderr(`${detail.message}。${detail.action}`);
+    }
     return 1;
   }
 }
