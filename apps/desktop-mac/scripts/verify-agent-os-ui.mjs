@@ -334,13 +334,32 @@ async function verifyCoding(page, requestLog) {
   await page.getByRole("button", { name: /收件箱/ }).click();
   await expectText(page, "模型凭据失效");
   await expectText(page, "重新连接模型后，等待中的任务才能继续");
+  await expectText(page, "外部 Runner 结果待核对");
+  await expectText(page, "尚无可用于标记完成的权威 Gate 与 CodeEvidence");
+  await expectText(page, "0 个候选 · 0 次 Gate");
+  if ((await page.locator("body").innerText()).includes("/private/var/tmp")) {
+    throw new Error("人工核对卡泄露了内部执行路径");
+  }
+  await page.getByRole("button", { name: "终止旧调用" }).click();
+  await expectText(page, "旧调用已终止，隔离资源正在清理");
+  const reconciliationGet = requestLog.find((entry) => entry.method === "GET"
+    && entry.path.endsWith("/reconciliation"));
+  const reconciliationDecision = requestLog.find((entry) => entry.method === "POST"
+    && entry.path.endsWith("/reconciliation-decisions"));
+  if (!reconciliationGet || !reconciliationDecision
+    || reconciliationDecision.body.expectedStreamVersion !== 1
+    || reconciliationDecision.body.expectedCodingStreamVersion !== 1
+    || reconciliationDecision.body.decision !== "terminate") {
+    throw new Error(`桌面人工核对没有自动提交并发版本：${JSON.stringify(reconciliationDecision)}`);
+  }
   await page.getByRole("button", { name: "Coding" }).click();
   await expectText(page, "统一 Agent OS API");
   await expectText(page, "差异");
   await expectText(page, "检查");
   await expectText(page, "审批");
   await expectText(page, "下一步");
-  await page.getByRole("button", { name: "打开任务" }).click();
+  await page.locator(".coding-card").filter({ hasText: "统一 Agent OS API" })
+    .getByRole("button", { name: "打开任务" }).click();
   await expectText(page, "Coding 任务");
   await page.getByRole("button", { name: "返回任务列表" }).click();
   await expectText(page, "统一 Agent OS API");
@@ -354,9 +373,11 @@ async function verifyCoding(page, requestLog) {
   await page.getByRole("button", { name: "设置" }).click();
   await page.getByRole("button", { name: "专业视图" }).click();
   await page.getByRole("button", { name: "Coding" }).click();
+  await page.getByText("正在读取 Coding 任务").waitFor({ state: "hidden" });
   await expectText(page, "高级执行设置");
-  await page.getByText("高级执行设置").click();
-  await expectText(page, "Harness 摘要");
+  const codingCard = page.locator(".coding-card").filter({ hasText: "统一 Agent OS API" });
+  await codingCard.getByText("高级执行设置").click();
+  await codingCard.getByText("Harness 摘要").waitFor({ state: "visible" });
   await page.getByRole("button", { name: "集成" }).click();
   await expectText(page, "与 Host 同进程运行");
   await expectText(page, "不是安全沙箱");

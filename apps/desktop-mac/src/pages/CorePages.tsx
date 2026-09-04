@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Activity, AlertCircle, ArrowRight, Bot, Check, Clock3, FileCheck2, KeyRound, Lightbulb, MemoryStick, ShieldCheck, Sparkles, X } from "lucide-react";
 import type { AgentOsClient } from "../api";
 import { EmptyState } from "../components/Status";
-import type { ActivitySummary, AgentCatalog, DeliverableSummary, HomeSummary, MemorySummary, ViewMode, WorkspaceMemberSummary, WorkspaceSummary } from "../types";
+import type { ActivitySummary, AgentCatalog, CodingReconciliationDecision, CodingReconciliationView, DeliverableSummary, HomeSummary, InboxItemSummary, MemorySummary, ViewMode, WorkspaceMemberSummary, WorkspaceSummary } from "../types";
 
 export function HomePage({ summary, onNavigate }: { readonly summary: HomeSummary; readonly onNavigate: (page: string) => void }) {
   return <div className="page-stack">
@@ -41,23 +41,98 @@ export function PanelHeading({ title, action, onAction }: { readonly title: stri
   return <header className="panel-heading"><h3>{title}</h3>{action && <button onClick={onAction}>{action}<ArrowRight size={14} /></button>}</header>;
 }
 
-export function InboxPage({ summary, api, onChanged }: { readonly summary: HomeSummary; readonly api: AgentOsClient; readonly onChanged: () => void }) {
+export function InboxPage({ workspaceId, summary, api, onChanged }: { readonly workspaceId: string; readonly summary: HomeSummary; readonly api: AgentOsClient; readonly onChanged: () => Promise<void> | void }) {
+  const [items, setItems] = useState<readonly InboxItemSummary[]>([]);
+  const [reconciliations, setReconciliations] = useState<Readonly<Record<string, CodingReconciliationView>>>({});
+  const [detailErrors, setDetailErrors] = useState<Readonly<Record<string, string>>>({});
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState<string>();
+  const [notice, setNotice] = useState<string>();
+
+  const refreshInbox = useCallback(async () => {
+    setLoading(true);
+    const next = await api.inbox(workspaceId);
+    const actionable = next.filter((item) => item.kind !== "approval");
+    setItems(actionable);
+    const reconciliationItems = actionable
+      .filter((item) => item.kind === "reconciliation" && item.executionId);
+    const settled = await Promise.allSettled(reconciliationItems
+      .map(async (item) => [item.id, await api.codingReconciliation(item.executionId!)] as const));
+    const details: Record<string, CodingReconciliationView> = {};
+    const errors: Record<string, string> = {};
+    for (let index = 0; index < settled.length; index += 1) {
+      const result = settled[index]!;
+      const item = reconciliationItems[index]!;
+      if (result.status === "fulfilled") details[result.value[0]] = result.value[1];
+      else errors[item.id] = safeInboxMessage(result.reason);
+    }
+    setReconciliations(details);
+    setDetailErrors(errors);
+    setLoading(false);
+  }, [api, workspaceId]);
+
+  useEffect(() => { void refreshInbox().catch((error) => { setDetailErrors({ inbox: safeInboxMessage(error) }); setLoading(false); }); }, [refreshInbox]);
+
   async function decide(id: string, version: number, decision: "approve_once" | "deny") {
     await api.decideApproval(id, version, decision);
-    onChanged();
+    await onChanged();
+  }
+
+  async function reconcile(detail: CodingReconciliationView, decision: CodingReconciliationDecision) {
+    setBusyId(detail.executionId); setNotice(undefined);
+    try {
+      await api.decideCodingReconciliation(detail, decision);
+      setNotice(decision === "terminate"
+        ? "旧调用已终止，隔离资源正在清理"
+        : decision === "mark_completed"
+          ? "已依据权威证据标记完成，隔离资源正在清理"
+          : "旧调用已终止，全新调用已经入队");
+      await Promise.all([refreshInbox(), onChanged()]);
+    } catch (error) {
+      setNotice(safeInboxMessage(error));
+    } finally {
+      setBusyId(undefined);
+    }
   }
   return <div className="page-stack"><PageTitle eyebrow="你的决定" title="收件箱" detail="审批、Agent 问题、凭据失效、失败和人工核对集中在这里。" />
+    {notice && <div className="governance-note" role="status"><ShieldCheck size={18} /><p>{notice}</p></div>}
     <div className="inbox-list">{summary.approvals.map((approval) => <article className="approval-card" key={approval.id}>
       <header><span className="pill risk">{approval.risk}</span><span className="expiry"><Clock3 size={14} />{new Date(approval.expiresAt).toLocaleString("zh-CN")}</span></header>
       <h3>{approval.title}</h3><p className="intent">{approval.intent}</p>
       <dl><div><dt>资源</dt><dd>{approval.resourceSummary}</dd></div><div><dt>风险</dt><dd>{approval.risk}</dd></div></dl>
       <footer><button className="danger-button" onClick={() => void decide(approval.id, approval.streamVersion, "deny")}><X size={15} />拒绝</button><button className="primary-button" onClick={() => void decide(approval.id, approval.streamVersion, "approve_once")}><Check size={15} />仅批准这一次</button></footer>
-    </article>)}{summary.blockers.map((item) => <article className="approval-card inbox-message-card" key={item.id}>
+    </article>)}{items.map((item) => item.kind === "reconciliation" && reconciliations[item.id]
+      ? <ReconciliationCard key={item.id} item={item} detail={reconciliations[item.id]!} busy={busyId === item.executionId} onDecide={reconcile} />
+      : <article className="approval-card inbox-message-card" key={item.id}>
       <header><span className="pill risk"><AlertCircle size={13} />需要处理</span></header>
-      <h3>{item.title}</h3><p className="intent">{item.detail}</p>
+      <h3>{item.title}</h3><p className="intent">{item.summary}</p>
+      {detailErrors[item.id] && <p className="inline-error" role="alert">{detailErrors[item.id]}</p>}
     </article>)}</div>
-    {summary.approvals.length + summary.blockers.length === 0 && <EmptyState title="收件箱已清空" detail="没有等待处理的审批、问题、故障或人工核对" />}
+    {detailErrors.inbox && <p className="inline-error" role="alert">{detailErrors.inbox}</p>}
+    {!loading && summary.approvals.length + items.length === 0 && <EmptyState title="收件箱已清空" detail="没有等待处理的审批、问题、故障或人工核对" />}
   </div>;
+}
+
+function ReconciliationCard({ item, detail, busy, onDecide }: { readonly item: InboxItemSummary; readonly detail: CodingReconciliationView; readonly busy: boolean; readonly onDecide: (detail: CodingReconciliationView, decision: CodingReconciliationDecision) => Promise<void> }) {
+  return <article className="approval-card reconciliation-card">
+    <header><span className="pill risk"><AlertCircle size={13} />结果未知</span><span className="expiry">{detail.runnerId === "claude-cli" ? "Claude Runner" : "Codex Runner"}</span></header>
+    <h3>{item.title}</h3><p className="intent">{item.summary}</p>
+    <dl><div><dt>任务</dt><dd>{detail.taskTitle}</dd></div><div><dt>保留结果</dt><dd>{detail.evidence.candidateCount} 个候选 · {detail.evidence.gateCount} 次 Gate</dd></div></dl>
+    <div className="governance-note"><ShieldCheck size={18} /><p>{detail.evidence.summary}<br />下一步：{detail.nextStep}</p></div>
+    <footer>
+      <button className="danger-button" disabled={busy || !detail.availableDecisions.includes("terminate")} onClick={() => void onDecide(detail, "terminate")}>终止旧调用</button>
+      {detail.availableDecisions.includes("mark_completed") && <button className="secondary-button" disabled={busy} onClick={() => void onDecide(detail, "mark_completed")}>依据证据标记完成</button>}
+      {detail.availableDecisions.includes("create_new_call") && <button className="primary-button" disabled={busy} onClick={() => void onDecide(detail, "create_new_call")}>创建全新调用</button>}
+    </footer>
+  </article>;
+}
+
+function safeInboxMessage(error: unknown): string {
+  if (typeof error === "object" && error !== null && "detail" in error) {
+    const detail = (error as { readonly detail?: { readonly message?: string; readonly action?: string } }).detail;
+    if (detail?.message) return `${detail.message}${detail.action ? `。${detail.action}` : ""}`;
+  }
+  return "收件箱暂时无法更新，请稍后重试";
 }
 
 export function DeliverablesPage({ items, onOpen }: { readonly items: readonly DeliverableSummary[]; readonly onOpen: (item: DeliverableSummary) => void }) {

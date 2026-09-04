@@ -92,6 +92,7 @@ async function seedWorkspace(seedMode) {
   await seedApproval(workspace.id);
   if (seedMode === "coding") {
     await seedFailure(workspace.id);
+    await seedReconciliation(workspace.id);
     await mutate(`/v2/workspaces/${workspace.id}`, {
       expectedStreamVersion: workspace.streamVersion,
       viewMode: "business",
@@ -113,6 +114,117 @@ async function seedFailure(workspaceId) {
       createdAt: now(),
       status: "open",
     });
+  });
+}
+
+async function seedReconciliation(workspaceId) {
+  const executionId = "fixture-reconciliation-execution";
+  const taskId = "fixture-reconciliation-task";
+  const repositoryId = "fixture-reconciliation-repository";
+  const controlPlane = {
+    protocol: "coding-v2",
+    specDigest: digest("fixture-spec"),
+    governanceDigest: digest("fixture-governance"),
+    harnessDigest: digest("fixture-harness"),
+    sandboxDigest: digest("fixture-sandbox"),
+    repositoryIndexDigest: digest("fixture-index"),
+  };
+  const task = {
+    id: taskId,
+    workspaceId,
+    repositoryId,
+    title: "核对外部 Runner 结果",
+    request: "确认未知结果后再决定",
+    stage: "verify",
+    status: "needs_reconciliation",
+    streamVersion: 1,
+    createdAt: now(),
+    updatedAt: now(),
+  };
+  await store.transact("local", (transaction) => {
+    transaction.putProjection("execution", executionId, {
+      id: executionId,
+      tenantId: "local",
+      workspaceId,
+      threadId: "fixture-reconciliation-thread",
+      pluginId: "coding",
+      agentDefinitionId: "coding.builtin",
+      modelBindingId: "fixture-model",
+      initiatedBy: "local-owner",
+      executionPrincipalId: "agent:coding",
+      generation: 1,
+      status: "needs_reconciliation",
+      authorityId: "fixture-reconciliation-authority",
+      runnerId: "codex-cli",
+      failureCode: "UNKNOWN_EXTERNAL_SIDE_EFFECT",
+      streamVersion: 1,
+      createdAt: now(),
+      updatedAt: now(),
+    });
+    transaction.putProjection("coding.task", taskId, task);
+    transaction.putProjection("coding.execution", executionId, {
+      executionId,
+      generation: 1,
+      taskId,
+      repositoryId,
+      status: "needs_reconciliation",
+      controlPlane,
+      baseRevision: digest("fixture-base"),
+      runnerId: "codex-cli",
+      externalInvocation: {
+        runnerId: "codex-cli",
+        attempt: 1,
+        identityDigest: digest("fixture-runner"),
+        sandboxPath: "/private/var/tmp/muniu/candidate-fixture/repository",
+        runnerArtifactPath: "/private/var/tmp/muniu/runner-fixture/runner",
+        status: "outcome_unknown",
+        startedAt: now(),
+        updatedAt: now(),
+      },
+      result: {
+        task,
+        runnerId: "codex-cli",
+        status: "needs_reconciliation",
+        candidates: [],
+        gates: [],
+        nextStep: "核对保留结果后终止旧调用或创建全新调用",
+        limits: { maxRepairAttempts: 3, maxDurationMs: 3_600_000 },
+        controlPlane,
+      },
+      streamVersion: 1,
+      createdAt: now(),
+      updatedAt: now(),
+    });
+    transaction.putProjection("inbox", `reconciliation:${executionId}:fixture-job`, {
+      id: `reconciliation:${executionId}:fixture-job`,
+      tenantId: "local",
+      workspaceId,
+      executionId,
+      kind: "reconciliation",
+      title: "外部 Runner 结果待核对",
+      summary: "外部操作可能已经发生，系统不会自动重放。",
+      risk: "unknown",
+      createdAt: now(),
+      status: "open",
+    });
+    for (const [aggregateType, aggregateId, type] of [
+      ["execution", executionId, "execution.needs_reconciliation"],
+      ["coding.task", taskId, "coding.execution_needs_reconciliation"],
+      ["coding.execution", executionId, "coding.execution_result_persisted"],
+    ]) {
+      transaction.appendEvent({
+        tenantId: "local",
+        aggregateType,
+        aggregateId,
+        expectedStreamVersion: 0,
+        type,
+        actorId: "worker:fixture",
+        executionId,
+        generation: 1,
+        correlationId: "fixture-reconciliation",
+        publicPayload: { workspaceId },
+      });
+    }
   });
 }
 

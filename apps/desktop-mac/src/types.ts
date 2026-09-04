@@ -65,6 +65,40 @@ export interface ApprovalSummary {
   readonly streamVersion: number;
 }
 
+export interface InboxItemSummary {
+  readonly id: string;
+  readonly workspaceId: string;
+  readonly executionId?: string;
+  readonly kind: "approval" | "agent_question" | "credential" | "failure" | "reconciliation";
+  readonly title: string;
+  readonly summary: string;
+  readonly risk?: string;
+  readonly resourceSummary?: string;
+  readonly createdAt: string;
+  readonly status: "open" | "resolved";
+}
+
+export type CodingReconciliationDecision = "terminate" | "mark_completed" | "create_new_call";
+
+export interface CodingReconciliationView {
+  readonly executionId: string;
+  readonly workspaceId: string;
+  readonly taskTitle: string;
+  readonly nextStep: string;
+  readonly runnerId: "claude-cli" | "codex-cli";
+  readonly status: "needs_reconciliation";
+  readonly expectedStreamVersion: number;
+  readonly expectedCodingStreamVersion: number;
+  readonly evidence: {
+    readonly candidateCount: number;
+    readonly gateCount: number;
+    readonly markCompletedAllowed: boolean;
+    readonly codeEvidenceDigest?: string;
+    readonly summary: string;
+  };
+  readonly availableDecisions: readonly CodingReconciliationDecision[];
+}
+
 export interface DeliverableSummary {
   readonly id: string;
   readonly pluginId: ProductPluginId;

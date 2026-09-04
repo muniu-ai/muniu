@@ -3,9 +3,12 @@ import type {
   ActivitySummary,
   ApiFailure,
   AssetSummary,
+  CodingReconciliationDecision,
+  CodingReconciliationView,
   CodingTaskSummary,
   DeliverableSummary,
   HomeSummary,
+  InboxItemSummary,
   MemorySummary,
   OpcDeliverablePreview,
   OpcOpportunityCommand,
@@ -125,6 +128,7 @@ export class AgentOsClient {
   }
 
   home(workspaceId: string) { return this.request<HomeSummary>(`/v2/workspaces/${workspaceId}/home`); }
+  inbox(workspaceId: string) { return this.request<readonly InboxItemSummary[]>(`/v2/inbox?workspaceId=${encodeURIComponent(workspaceId)}`); }
   deliverables(workspaceId: string) { return this.request<readonly DeliverableSummary[]>(`/v2/deliverables?workspaceId=${encodeURIComponent(workspaceId)}`); }
   activity(workspaceId: string) { return this.request<readonly ActivitySummary[]>(`/v2/activity?workspaceId=${encodeURIComponent(workspaceId)}`); }
   memories(workspaceId: string) { return this.request<readonly MemorySummary[]>(`/v2/memories?workspaceId=${encodeURIComponent(workspaceId)}`); }
@@ -185,6 +189,29 @@ export class AgentOsClient {
     return asset;
   }
   codingTasks(workspaceId: string) { return this.request<readonly CodingTaskSummary[]>(`/v2/plugins/coding/tasks?workspaceId=${encodeURIComponent(workspaceId)}`); }
+
+  codingReconciliation(executionId: string) {
+    return this.request<CodingReconciliationView>(
+      `/v2/plugins/coding/executions/${encodeURIComponent(executionId)}/reconciliation`,
+    );
+  }
+
+  decideCodingReconciliation(
+    reconciliation: CodingReconciliationView,
+    decision: CodingReconciliationDecision,
+  ) {
+    return this.request<unknown>(
+      `/v2/plugins/coding/executions/${encodeURIComponent(reconciliation.executionId)}/reconciliation-decisions`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          expectedStreamVersion: reconciliation.expectedStreamVersion,
+          expectedCodingStreamVersion: reconciliation.expectedCodingStreamVersion,
+          decision,
+        }),
+      },
+    );
+  }
 
   decideApproval(approvalId: string, streamVersion: number, decision: "approve_once" | "deny") {
     return this.request<unknown>(`/v2/approvals/${approvalId}/decisions`, {

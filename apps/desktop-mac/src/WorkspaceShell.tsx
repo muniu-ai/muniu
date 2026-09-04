@@ -183,7 +183,7 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces }: Wor
         {coreError && page === "home" && <ErrorState detail={coreError} action="检查 Host 后重试" onRetry={() => void refreshCore()} />}
         {!coreLoading && !coreError && page === "home" && <HomePage summary={home} onNavigate={(target) => setPage(target as PageId)} />}
         {page === "workspaces" && <WorkspacesPage workspaces={workspaces} currentId={workspace.id} members={members} onSelect={selectWorkspace} />}
-        {page === "inbox" && <InboxPage summary={home} api={api} onChanged={() => void refreshCore()} />}
+        {page === "inbox" && <InboxPage workspaceId={workspace.id} summary={home} api={api} onChanged={refreshCore} />}
         {page === "deliverables" && <DeliverablesPage items={deliverables} onOpen={(item) => setPage(item.pluginId)} />}
         {page === "activity" && <ActivityPage items={activity} professional={professional} />}
         {page === "agents" && <AgentsPage catalog={agentCatalog} />}
