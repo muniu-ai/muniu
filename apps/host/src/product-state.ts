@@ -478,18 +478,33 @@ export async function captureCodingTask(options: ProductMutationOptions): Promis
       const repository = transaction.listProjections<VersionedRepository>(CODING_REPOSITORY_PROJECTION)
         .find((item) => item.workspaceId === options.workspaceId);
       const title = options.input.trim().split(/[。；;\n]/u, 1)[0]?.slice(0, 80) || "新 Coding 任务";
+      const createdAt = options.now();
+      const correlationId = options.id("correlation");
+      const resourceRef = { namespace: "coding.task", resourceId: options.id("coding-task") } as const;
       const task = {
         ...createCodingTask({
-          id: options.id("coding-task"),
+          id: resourceRef.resourceId,
           workspaceId: options.workspaceId,
           repositoryId: repository?.id ?? "unassigned",
           title,
           request: options.input,
-          createdAt: options.now(),
+          createdAt,
         }),
         streamVersion: 1,
       };
+      const thread: Thread = {
+        id: options.id("thread"),
+        tenantId: options.tenantId,
+        workspaceId: options.workspaceId,
+        subject: task.title,
+        pluginId: "coding",
+        resourceRef,
+        streamVersion: 1,
+        createdAt,
+        updatedAt: createdAt,
+      };
       transaction.putProjection(CODING_TASK_PROJECTION, task.id, task);
+      transaction.putProjection("thread", thread.id, thread);
       transaction.appendEvent({
         tenantId: options.tenantId,
         aggregateType: "coding.task",
@@ -498,8 +513,24 @@ export async function captureCodingTask(options: ProductMutationOptions): Promis
         type: "coding.task_captured",
         actorId: options.actorId,
         generation: 0,
-        correlationId: options.id("correlation"),
+        correlationId,
         publicPayload: { workspaceId: options.workspaceId, repositoryId: task.repositoryId, title: task.title },
+      });
+      transaction.appendEvent({
+        tenantId: options.tenantId,
+        aggregateType: "thread",
+        aggregateId: thread.id,
+        expectedStreamVersion: 0,
+        type: "thread.created",
+        actorId: options.actorId,
+        generation: 0,
+        correlationId,
+        publicPayload: {
+          workspaceId: options.workspaceId,
+          pluginId: "coding",
+          resourceNamespace: resourceRef.namespace,
+          resourceId: task.id,
+        },
       });
       return task;
     },

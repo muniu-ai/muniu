@@ -430,6 +430,91 @@ test("thread turn 只接受插件 Agent 与已连接模型，并原子排入 Wor
   await host.close();
 });
 
+test("Coding 任务原子绑定 Thread，并通过通用 turns 提交 builtin Execution", async () => {
+  const store = new InMemoryKernelStore();
+  const host = await createAgentOsHost({
+    store,
+    secretStore: secrets,
+    modelProbe: async ({ preset }) => ({
+      models: preset.suggestedModels,
+      defaultModel: preset.suggestedModels[0]!,
+    }),
+  });
+  const workspace = (await responseJson(await host.dispatch(jsonRequest("/v2/workspaces", {
+    name: "Coding 工作区", viewMode: "professional", pluginIds: ["coding"],
+  }, "coding-thread-workspace")))).data;
+  await host.dispatch(jsonRequest("/v2/plugins/coding/repositories", {
+    workspaceId: workspace.id,
+    expectedStreamVersion: 0,
+    input: "/Users/tester/product",
+  }, "coding-thread-repository"));
+  const pendingConnection = (await responseJson(await host.dispatch(jsonRequest("/v2/model-connections", {
+    presetId: "deepseek", apiKey: "fixture-key", displayName: "DeepSeek",
+  }, "coding-thread-model")))).data;
+  const connection = (await responseJson(await host.dispatch(jsonRequest(
+    `/v2/model-connections/${pendingConnection.id}/probe`,
+    { expectedStreamVersion: pendingConnection.streamVersion },
+    "coding-thread-model-probe",
+  )))).data;
+  const captureBody = {
+    workspaceId: workspace.id,
+    expectedStreamVersion: 0,
+    input: "修复已提交事件在重启后丢失的问题",
+  };
+  const task = (await responseJson(await host.dispatch(jsonRequest(
+    "/v2/plugins/coding/tasks", captureBody, "coding-thread-task",
+  )))).data;
+  const replayedTask = (await responseJson(await host.dispatch(jsonRequest(
+    "/v2/plugins/coding/tasks", captureBody, "coding-thread-task",
+  )))).data;
+  assert.equal(replayedTask.id, task.id);
+
+  const threads = (await responseJson(await host.dispatch(new Request(
+    `http://host.test/v2/workspaces/${workspace.id}/threads`,
+  )))).data;
+  assert.equal(threads.length, 1);
+  assert.equal(threads[0].pluginId, "coding");
+  assert.deepEqual(threads[0].resourceRef, {
+    namespace: "coding.task",
+    resourceId: task.id,
+  });
+  assert.equal(threads[0].subject, task.title);
+  const capturedEvents = (await store.readEvents("local", 0, 100)).events.filter((event) =>
+    (event.aggregateType === "coding.task" && event.aggregateId === task.id)
+    || (event.aggregateType === "thread" && event.aggregateId === threads[0].id));
+  assert.deepEqual(capturedEvents.map((event) => event.type), [
+    "coding.task_captured",
+    "thread.created",
+  ]);
+  assert.equal(new Set(capturedEvents.map((event) => event.correlationId)).size, 1);
+
+  const response = await host.dispatch(jsonRequest(
+    `/v2/workspaces/${workspace.id}/threads/${threads[0].id}/turns`,
+    {
+      expectedStreamVersion: threads[0].streamVersion,
+      message: task.request,
+      agentDefinitionId: "coding.builtin",
+      modelBindingId: connection.id,
+    },
+    "coding-thread-turn",
+  ));
+  assert.equal(response.status, 202, JSON.stringify(await response.clone().json()));
+  const execution = (await responseJson(response)).data;
+  assert.equal(execution.pluginId, "coding");
+  assert.equal(execution.agentDefinitionId, "coding.builtin");
+  assert.equal(execution.status, "queued");
+  const authority = await store.transact("local", (transaction) =>
+    transaction.getProjection<any>("authority", execution.authorityId));
+  assert.deepEqual(authority.toolIds, [
+    "coding.repository.read",
+    "coding.sandbox.write",
+    "coding.gate.verify",
+  ]);
+  assert.equal(store.readJobs("local").length, 1);
+  assert.equal(store.readJobs("local")[0]?.payload.executionId, execution.id);
+  await host.close();
+});
+
 test("记忆可审阅修正，撤销共享会使派生记忆失效，删除写入 tombstone", async () => {
   const host = await createAgentOsHost({ store: new InMemoryKernelStore(), secretStore: secrets });
   const workspace = (await responseJson(await host.dispatch(jsonRequest("/v2/workspaces", {
