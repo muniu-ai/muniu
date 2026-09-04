@@ -39,6 +39,18 @@ jobs:
           cache: npm
       - run: npm install --global npm@${NPM_VERSION}
       - run: npm ci
+      - name: Build external Coding Runner test dependencies
+        run: |
+          npm run build:vendor
+          npm run build:core
+          npm run build -w @mn/plugin-coding
+          npm run build -w @mn/runner-claude-cli
+          npm run build -w @mn/runner-codex-cli
+      - name: Test external Coding Runner chain
+        run: |
+          npm test -w @mn/runner-claude-cli
+          npm test -w @mn/runner-codex-cli
+          npm test -w @mn/worker
       - run: npm run verify:mac-release
       - run: npm run typecheck:desktop
       - run: npm run build:desktop

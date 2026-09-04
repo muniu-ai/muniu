@@ -103,6 +103,29 @@ test("container and sidecar entrypoints are v2-only", () => {
   assert.equal(existsSync(join(root, "scripts/build-descriptor-lock-helper.mjs")), false);
 });
 
+test("macOS CI and release jobs exercise the external Coding Runner chain", () => {
+  for (const workflow of [".github/workflows/ci.yml", ".github/workflows/release.yml"]) {
+    const source = read(workflow);
+    const desktopJob = source.match(
+      /^  desktop:\n[\s\S]*?(?=^  [a-z][a-z-]+:\n|(?![\s\S]))/mu,
+    )?.[0] ?? "";
+    assert.match(desktopJob, /runs-on: macos-14/u);
+    assert.match(desktopJob, /npm run build:vendor/u);
+    assert.match(desktopJob, /npm run build:core/u);
+    assert.match(desktopJob, /npm run build -w @mn\/plugin-coding/u);
+    assert.match(desktopJob, /npm run build -w @mn\/runner-claude-cli/u);
+    assert.match(desktopJob, /npm run build -w @mn\/runner-codex-cli/u);
+    assert.match(desktopJob, /npm test -w @mn\/runner-claude-cli/u);
+    assert.match(desktopJob, /npm test -w @mn\/runner-codex-cli/u);
+    assert.match(desktopJob, /npm test -w @mn\/worker/u);
+    const installIndex = desktopJob.indexOf("npm ci");
+    assert.ok(installIndex >= 0);
+    for (const command of ["build:vendor", "build:core", "npm test -w @mn/worker"]) {
+      assert.ok(desktopJob.indexOf(command) > installIndex);
+    }
+  }
+});
+
 test("enterprise verification targets committed-event recovery and stale fencing", () => {
   const fixture = read("scripts/enterprise-e2e.mjs");
   const kind = read("scripts/kind-enterprise-failover.mjs");

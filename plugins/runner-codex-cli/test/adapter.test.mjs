@@ -116,3 +116,42 @@ test("Codex Runner 规范化 thread/turn 事件并使用安全 resume 调用", a
   assert.deepEqual(launches[1].args, ["exec", "resume", "codex-thread", "--json", "-"]);
   assert.equal(launches[1].shell, false);
 });
+
+test("Codex Runner 的 stdin 写入失败不会误报 completed", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "mn-codex-stdin-"));
+  const binary = join(directory, "codex");
+  await writeFile(binary, `#!/usr/bin/env node
+import { closeSync } from "node:fs";
+if (process.argv.includes("--version")) {
+  process.stdout.write("4.5.6\\n");
+  process.exit(0);
+}
+process.stdout.write('{"type":"turn.completed"}\\n', () => {
+  closeSync(0);
+  setTimeout(() => process.exit(0), 50);
+});
+`);
+  await chmod(binary, 0o755);
+  const identity = await inspectRunnerBinary(binary);
+  const repositoryPath = await realpath(directory);
+  const runner = createCodexCliRunner({
+    binaryPath: binary,
+    confirmedIdentity: identity,
+    createSessionId: () => "stdin-session",
+  });
+  const session = await runner.start({
+    executionId: "execution-stdin",
+    repositoryPath,
+    expectedRepositoryRealPath: repositoryPath,
+    resourceDigest: "e".repeat(64),
+    preparedInput: "x".repeat(7 * 1024 * 1024),
+    explicitlySelected: true,
+  });
+
+  const events = [];
+  for await (const event of runner.events(session.sessionId)) events.push(event);
+  assert.equal(events[0].type, "runner_event");
+  assert.equal(events[0].payload.type, "turn.completed");
+  assert.equal(events.at(-1).status, "unknown");
+  assert.equal(events.at(-1).reconciliationRequired, true);
+});

@@ -229,3 +229,42 @@ test("Claude Runner 缺少明确终态时返回 unknown，交由内核人工核�
   assert.equal(events.at(-1).status, "unknown");
   assert.equal(events.at(-1).reconciliationRequired, true);
 });
+
+test("Claude Runner 的 stdin 写入失败不会误报 completed", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "mn-claude-stdin-"));
+  const binary = join(directory, "claude");
+  await writeFile(binary, `#!/usr/bin/env node
+import { closeSync } from "node:fs";
+if (process.argv.includes("--version")) {
+  process.stdout.write("1.2.3\\n");
+  process.exit(0);
+}
+process.stdout.write('{"type":"result","is_error":false}\\n', () => {
+  closeSync(0);
+  setTimeout(() => process.exit(0), 50);
+});
+`);
+  await chmod(binary, 0o755);
+  const identity = await inspectRunnerBinary(binary);
+  const repositoryPath = await realpath(directory);
+  const runner = createClaudeCliRunner({
+    binaryPath: binary,
+    confirmedIdentity: identity,
+    createSessionId: () => "stdin-session",
+  });
+  const session = await runner.start({
+    executionId: "execution-stdin",
+    repositoryPath,
+    expectedRepositoryRealPath: repositoryPath,
+    resourceDigest: "e".repeat(64),
+    preparedInput: "x".repeat(7 * 1024 * 1024),
+    explicitlySelected: true,
+  });
+
+  const events = [];
+  for await (const event of runner.events(session.sessionId)) events.push(event);
+  assert.equal(events[0].type, "runner_event");
+  assert.equal(events[0].payload.type, "result");
+  assert.equal(events.at(-1).status, "unknown");
+  assert.equal(events.at(-1).reconciliationRequired, true);
+});
