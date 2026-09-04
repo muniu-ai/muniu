@@ -131,6 +131,59 @@ async function seedAgentExecutionJob(
   });
 }
 
+async function seedGenericProjectedJob(
+  storage: SqliteStorage,
+  options: {
+    readonly jobId: string;
+    readonly idempotencyKey: string;
+    readonly projectedStreamVersion?: number;
+  }
+): Promise<void> {
+  const createdAt = "2026-09-04T00:00:00.000Z";
+  const job = {
+    id: options.jobId,
+    tenantId: "tenant-a",
+    workspaceId: "workspace-1",
+    kind: "coding.sandbox.cleanup",
+    payload: { reconciliationExecutionId: "execution-retired" },
+    status: "available",
+    attempts: 0,
+    availableAt: createdAt,
+    fencingToken: 0,
+    idempotencyKey: options.idempotencyKey,
+    streamVersion: options.projectedStreamVersion ?? 1,
+    createdAt,
+    updatedAt: createdAt
+  } as const;
+  await storage.transact("tenant-a", (transaction) => {
+    transaction.putProjection("job", job.id, job);
+    transaction.appendEvent({
+      tenantId: "tenant-a",
+      aggregateType: "job",
+      aggregateId: job.id,
+      expectedStreamVersion: 0,
+      type: "job.available",
+      actorId: "local-owner",
+      generation: 1,
+      correlationId: `cleanup:${job.id}`,
+      publicPayload: {
+        workspaceId: "workspace-1",
+        jobId: job.id,
+        kind: job.kind
+      }
+    });
+    transaction.putJob({
+      id: job.id,
+      tenantId: job.tenantId,
+      workspaceId: job.workspaceId,
+      kind: job.kind,
+      payload: job.payload,
+      availableAt: job.availableAt,
+      idempotencyKey: job.idempotencyKey
+    });
+  });
+}
+
 test("SQLite uses WAL/FULL and appends a canonical HMAC chained event", async () => {
   const databaseFile = temporaryPath("state.sqlite");
   const hmacKey = randomBytes(32);
@@ -384,6 +437,140 @@ test("Kernel 业务事务在同一 SQLite 事务内拒绝过期或陈旧 Job fen
       transaction.putProjection("fixture", "stale", { value: true });
     }), StaleFencingTokenError);
     assert.equal(await storage.getProjection("tenant-a", "fixture", "stale"), undefined);
+  } finally {
+    await storage.close();
+  }
+});
+
+test("SQLite generic Job 在无 Execution 时同步投影、事件和 fencing", async () => {
+  const storage = new SqliteStorage({
+    databaseFile: temporaryPath("state.sqlite"),
+    hmacKey: randomBytes(32)
+  });
+  try {
+    await seedGenericProjectedJob(storage, {
+      jobId: "cleanup-complete",
+      idempotencyKey: "cleanup:complete"
+    });
+    await seedGenericProjectedJob(storage, {
+      jobId: "cleanup-fail",
+      idempotencyKey: "cleanup:fail"
+    });
+
+    const completedClaim = await storage.claimJob(
+      "worker-a",
+      "2026-09-04T00:00:01.000Z",
+      { kinds: ["coding.sandbox.cleanup"] }
+    );
+    assert.equal(completedClaim?.id, "cleanup-complete");
+    assert.equal(completedClaim?.fencingToken, 1);
+    assert.deepEqual(
+      await storage.getProjection("tenant-a", "job", "cleanup-complete"),
+      {
+        id: "cleanup-complete",
+        tenantId: "tenant-a",
+        workspaceId: "workspace-1",
+        kind: "coding.sandbox.cleanup",
+        payload: { reconciliationExecutionId: "execution-retired" },
+        status: "leased",
+        attempts: 1,
+        availableAt: "2026-09-04T00:00:00.000Z",
+        leaseOwner: "worker-a",
+        leaseExpiresAt: "2026-09-04T00:00:31.000Z",
+        fencingToken: 1,
+        idempotencyKey: "cleanup:complete",
+        streamVersion: 2,
+        createdAt: "2026-09-04T00:00:00.000Z",
+        updatedAt: "2026-09-04T00:00:01.000Z"
+      }
+    );
+    await storage.transact("tenant-a", (transaction) => {
+      transaction.assertJobLease?.({
+        jobId: "cleanup-complete",
+        workerId: "worker-a",
+        fencingToken: 1,
+        occurredAt: "2026-09-04T00:00:30.999Z"
+      });
+    });
+
+    await storage.renewJobLease(
+      "cleanup-complete",
+      "worker-a",
+      1,
+      "2026-09-04T00:00:20.000Z"
+    );
+    const renewed = await storage.getProjection("tenant-a", "job", "cleanup-complete");
+    assert.equal(renewed?.leaseExpiresAt, "2026-09-04T00:00:50.000Z");
+    assert.equal(renewed?.streamVersion, 3);
+    await storage.completeJob(
+      "cleanup-complete",
+      "worker-a",
+      1,
+      { cleaned: true },
+      "2026-09-04T00:00:21.000Z"
+    );
+    const completed = await storage.getProjection("tenant-a", "job", "cleanup-complete");
+    assert.equal(completed?.status, "completed");
+    assert.equal(completed?.streamVersion, 4);
+    assert.deepEqual(completed?.result, { cleaned: true });
+    assert.equal(completed?.leaseOwner, undefined);
+    assert.equal(completed?.leaseExpiresAt, undefined);
+
+    const failedClaim = await storage.claimJob(
+      "worker-b",
+      "2026-09-04T00:00:22.000Z",
+      { kinds: ["coding.sandbox.cleanup"] }
+    );
+    assert.equal(failedClaim?.id, "cleanup-fail");
+    await storage.failJob(
+      "cleanup-fail",
+      "worker-b",
+      1,
+      { code: "CLEANUP_FAILED", message: "清理失败" },
+      "2026-09-04T00:00:23.000Z"
+    );
+    const failed = await storage.getProjection("tenant-a", "job", "cleanup-fail");
+    assert.equal(failed?.status, "failed");
+    assert.equal(failed?.streamVersion, 3);
+    assert.deepEqual(failed?.failure, { code: "CLEANUP_FAILED", message: "清理失败" });
+
+    const events = await storage.readEvents("tenant-a", { afterPosition: 0, limit: 20 });
+    assert.deepEqual(events.events.map((event) => event.type), [
+      "job.available",
+      "job.available",
+      "job.leased",
+      "job.lease_renewed",
+      "job.completed",
+      "job.leased",
+      "job.failed"
+    ]);
+  } finally {
+    await storage.close();
+  }
+});
+
+test("SQLite generic Job 投影版本冲突时回滚物理租约和生命周期事件", async () => {
+  const storage = new SqliteStorage({
+    databaseFile: temporaryPath("state.sqlite"),
+    hmacKey: randomBytes(32)
+  });
+  try {
+    await seedGenericProjectedJob(storage, {
+      jobId: "cleanup-conflict",
+      idempotencyKey: "cleanup:conflict",
+      projectedStreamVersion: 2
+    });
+
+    await assert.rejects(
+      storage.claimJob("worker-a", "2026-09-04T00:00:01.000Z"),
+      StreamVersionConflictError
+    );
+    assert.equal((await storage.getJob("cleanup-conflict"))?.status, "available");
+    const projected = await storage.getProjection("tenant-a", "job", "cleanup-conflict");
+    assert.equal(projected?.status, "available");
+    assert.equal(projected?.streamVersion, 2);
+    const events = await storage.readEvents("tenant-a", { afterPosition: 0, limit: 20 });
+    assert.deepEqual(events.events.map((event) => event.type), ["job.available"]);
   } finally {
     await storage.close();
   }

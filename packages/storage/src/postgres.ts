@@ -181,6 +181,16 @@ interface AgentJobContext {
   readonly jobStreamVersion?: number;
 }
 
+interface GenericJobContext {
+  readonly tenantId: string;
+  readonly jobId: string;
+  readonly workspaceId?: string;
+  readonly executionId?: string;
+  readonly generation: number;
+  readonly job: JsonObject;
+  readonly jobStreamVersion: number;
+}
+
 function safeInteger(value: unknown, label: string): number {
   const result = Number(value);
   if (!Number.isSafeInteger(result)) throw new RangeError(`${label} exceeds JavaScript safe integer range`);
@@ -640,6 +650,77 @@ export class PostgresStorage implements StoragePort {
     return { value, streamVersion };
   }
 
+  async #loadOptionalProjectionForUpdate(
+    client: PostgresClientLike,
+    tenantId: string,
+    namespace: string,
+    key: string,
+    label: string
+  ): Promise<LockedProjection | undefined> {
+    const result = await client.query(`
+      select stream_version, value_json from mn_v2.projections
+      where tenant_id = $1 and namespace = $2 and projection_key = $3
+      for update
+    `, [tenantId, namespace, key]);
+    const row = result.rows[0];
+    if (!row) return undefined;
+    const value = json<JsonObject>(row.value_json);
+    const streamVersion = safeInteger(row.stream_version, `${label} projection streamVersion`);
+    if (requiredSafeInteger(value.streamVersion, `${label} streamVersion`) !== streamVersion) {
+      throw new Error(`${label} ${key} 的投影版本不一致`);
+    }
+    return { value, streamVersion };
+  }
+
+  async #loadGenericJobContext(
+    client: PostgresClientLike,
+    row: Row
+  ): Promise<GenericJobContext | undefined> {
+    if (String(row.kind) === AGENT_EXECUTION_JOB_KIND) return undefined;
+    const tenantId = String(row.tenant_id);
+    const jobId = String(row.job_id);
+    const projected = await this.#loadOptionalProjectionForUpdate(
+      client,
+      tenantId,
+      "job",
+      jobId,
+      "Job"
+    );
+    if (!projected) return undefined;
+    const job = projected.value;
+    if (job.tenantId !== tenantId
+      || job.kind !== String(row.kind)
+      || requiredString(job.id, "Job id") !== jobId) {
+      throw new Error("Job 物理记录与查询投影不一致");
+    }
+    const projectedWorkspaceId = typeof job.workspaceId === "string" ? job.workspaceId : undefined;
+    const physicalWorkspaceId = row.workspace_id == null ? undefined : String(row.workspace_id);
+    if (projectedWorkspaceId !== physicalWorkspaceId) {
+      throw new Error("Job 工作区与查询投影不一致");
+    }
+    const payload = json<JsonObject>(row.payload_json);
+    const correlatedExecutionId = typeof payload.executionId === "string"
+      ? payload.executionId
+      : typeof payload.reconciliationExecutionId === "string"
+        ? payload.reconciliationExecutionId
+        : undefined;
+    const payloadGeneration = payload.generation;
+    const generation = typeof payloadGeneration === "number"
+      && Number.isSafeInteger(payloadGeneration)
+      && payloadGeneration >= 1
+      ? payloadGeneration
+      : 1;
+    return {
+      tenantId,
+      jobId,
+      ...(physicalWorkspaceId ? { workspaceId: physicalWorkspaceId } : {}),
+      ...(correlatedExecutionId ? { executionId: correlatedExecutionId } : {}),
+      generation,
+      job,
+      jobStreamVersion: projected.streamVersion
+    };
+  }
+
   async #loadAgentJobContext(
     client: PostgresClientLike,
     row: Row,
@@ -711,9 +792,37 @@ export class PostgresStorage implements StoragePort {
     }
   }
 
+  #assertGenericJobProjectionMatchesPhysical(
+    context: GenericJobContext,
+    row: Row,
+    mode: "claim" | "owned",
+    workerId: string,
+    fencingToken: number
+  ): void {
+    const projectedFencingToken = requiredSafeInteger(context.job.fencingToken, "Job fencingToken");
+    const physicalFencingToken = safeInteger(row.fencing_token, "Job fencing token");
+    const projectedAttempts = requiredSafeInteger(context.job.attempts, "Job attempts");
+    const physicalAttempts = safeInteger(row.attempts, "Job attempts");
+    if (context.job.status !== String(row.status)
+      || projectedFencingToken !== physicalFencingToken
+      || projectedAttempts !== physicalAttempts) {
+      throw new Error("Job 物理状态与查询投影不一致");
+    }
+    if (row.status === "leased"
+      && (context.job.leaseOwner !== row.lease_owner
+        || context.job.leaseExpiresAt !== iso(row.lease_expires_at))) {
+      throw new Error("Job 租约与查询投影不一致");
+    }
+    if (mode === "owned" && (context.job.status !== "leased"
+      || context.job.leaseOwner !== workerId
+      || projectedFencingToken !== fencingToken)) {
+      throw new Error("Job 租约与查询投影不一致");
+    }
+  }
+
   async #updateProjection(
     client: PostgresClientLike,
-    context: AgentJobContext,
+    context: { readonly tenantId: string },
     namespace: string,
     key: string,
     previousVersion: number,
@@ -776,6 +885,180 @@ export class PostgresStorage implements StoragePort {
       occurredAt
     ]);
     return event;
+  }
+
+  async #recordGenericJobClaim(
+    client: PostgresClientLike,
+    context: GenericJobContext | undefined,
+    row: Row,
+    workerId: string,
+    leaseExpiresAt: string,
+    fencingToken: number,
+    occurredAt: string
+  ): Promise<void> {
+    if (!context) return;
+    this.#assertGenericJobProjectionMatchesPhysical(
+      context,
+      row,
+      "claim",
+      workerId,
+      fencingToken
+    );
+    const updatedJob: JsonObject = {
+      ...context.job,
+      status: "leased",
+      attempts: safeInteger(row.attempts, "Job attempts") + 1,
+      leaseOwner: workerId,
+      leaseExpiresAt,
+      fencingToken,
+      streamVersion: context.jobStreamVersion + 1,
+      updatedAt: occurredAt
+    };
+    await this.#appendLifecycleEvent(client, {
+      tenantId: context.tenantId,
+      aggregateType: "job",
+      aggregateId: context.jobId,
+      expectedStreamVersion: context.jobStreamVersion,
+      type: "job.leased",
+      actorId: `worker:${workerId}`,
+      ...(context.executionId ? { executionId: context.executionId } : {}),
+      generation: context.generation,
+      correlationId: `job:${context.jobId}:fence:${fencingToken}`,
+      publicPayload: {
+        ...(context.workspaceId ? { workspaceId: context.workspaceId } : {}),
+        ...(context.executionId ? { executionId: context.executionId } : {}),
+        jobId: context.jobId,
+        kind: String(row.kind),
+        workerId,
+        fencingToken,
+        leaseExpiresAt
+      }
+    }, occurredAt);
+    await this.#updateProjection(
+      client,
+      context,
+      "job",
+      context.jobId,
+      context.jobStreamVersion,
+      updatedJob,
+      occurredAt
+    );
+  }
+
+  async #recordGenericJobRenewal(
+    client: PostgresClientLike,
+    context: GenericJobContext | undefined,
+    row: Row,
+    workerId: string,
+    leaseExpiresAt: string,
+    fencingToken: number,
+    occurredAt: string
+  ): Promise<void> {
+    if (!context) return;
+    this.#assertGenericJobProjectionMatchesPhysical(
+      context,
+      row,
+      "owned",
+      workerId,
+      fencingToken
+    );
+    const updatedJob: JsonObject = {
+      ...context.job,
+      leaseExpiresAt,
+      streamVersion: context.jobStreamVersion + 1,
+      updatedAt: occurredAt
+    };
+    await this.#appendLifecycleEvent(client, {
+      tenantId: context.tenantId,
+      aggregateType: "job",
+      aggregateId: context.jobId,
+      expectedStreamVersion: context.jobStreamVersion,
+      type: "job.lease_renewed",
+      actorId: `worker:${workerId}`,
+      ...(context.executionId ? { executionId: context.executionId } : {}),
+      generation: context.generation,
+      correlationId: `job:${context.jobId}:fence:${fencingToken}`,
+      publicPayload: {
+        ...(context.workspaceId ? { workspaceId: context.workspaceId } : {}),
+        ...(context.executionId ? { executionId: context.executionId } : {}),
+        jobId: context.jobId,
+        kind: String(row.kind),
+        workerId,
+        fencingToken,
+        leaseExpiresAt
+      }
+    }, occurredAt);
+    await this.#updateProjection(
+      client,
+      context,
+      "job",
+      context.jobId,
+      context.jobStreamVersion,
+      updatedJob,
+      occurredAt
+    );
+  }
+
+  async #recordGenericJobTerminal(
+    client: PostgresClientLike,
+    context: GenericJobContext | undefined,
+    row: Row,
+    workerId: string,
+    fencingToken: number,
+    outcome: "completed" | "failed",
+    value: JsonValue,
+    occurredAt: string
+  ): Promise<void> {
+    if (!context) return;
+    this.#assertGenericJobProjectionMatchesPhysical(
+      context,
+      row,
+      "owned",
+      workerId,
+      fencingToken
+    );
+    const {
+      leaseOwner: _leaseOwner,
+      leaseExpiresAt: _leaseExpiresAt,
+      result: _priorResult,
+      failure: _priorFailure,
+      ...jobWithoutLease
+    } = context.job;
+    const updatedJob: JsonObject = {
+      ...jobWithoutLease,
+      status: outcome,
+      ...(outcome === "completed" ? { result: value } : { failure: value }),
+      streamVersion: context.jobStreamVersion + 1,
+      updatedAt: occurredAt
+    };
+    await this.#appendLifecycleEvent(client, {
+      tenantId: context.tenantId,
+      aggregateType: "job",
+      aggregateId: context.jobId,
+      expectedStreamVersion: context.jobStreamVersion,
+      type: `job.${outcome}`,
+      actorId: `worker:${workerId}`,
+      ...(context.executionId ? { executionId: context.executionId } : {}),
+      generation: context.generation,
+      correlationId: `job:${context.jobId}:fence:${fencingToken}`,
+      publicPayload: {
+        ...(context.workspaceId ? { workspaceId: context.workspaceId } : {}),
+        ...(context.executionId ? { executionId: context.executionId } : {}),
+        jobId: context.jobId,
+        kind: String(row.kind),
+        status: outcome,
+        fencingToken
+      }
+    }, occurredAt);
+    await this.#updateProjection(
+      client,
+      context,
+      "job",
+      context.jobId,
+      context.jobStreamVersion,
+      updatedJob,
+      occurredAt
+    );
   }
 
   async #settleTerminalAgentJobBeforeClaim(
@@ -1288,6 +1571,7 @@ export class PostgresStorage implements StoragePort {
             return undefined;
           }
           const context = await this.#loadAgentJobContext(client, row);
+          const genericContext = await this.#loadGenericJobContext(client, row);
           if (await this.#settleTerminalAgentJobBeforeClaim(
             client,
             context,
@@ -1323,6 +1607,15 @@ export class PostgresStorage implements StoragePort {
           await this.#recordAgentJobClaim(
             client,
             context,
+            row,
+            workerId,
+            leaseExpiresAt,
+            fencingToken,
+            occurredAt
+          );
+          await this.#recordGenericJobClaim(
+            client,
+            genericContext,
             row,
             workerId,
             leaseExpiresAt,
@@ -1374,6 +1667,7 @@ export class PostgresStorage implements StoragePort {
       await client.query("begin");
       const row = await this.#ownedLeasedJob(client, jobId, workerId, fencingToken, occurredAt);
       const context = await this.#loadAgentJobContext(client, row);
+      const genericContext = await this.#loadGenericJobContext(client, row);
       const changed = await client.query(outcome === "completed" ? `
         update mn_v2.jobs set status = 'completed', result_json = $1::jsonb,
           failure_json = null, lease_owner = null, lease_expires_at = null,
@@ -1391,6 +1685,16 @@ export class PostgresStorage implements StoragePort {
       await this.#recordAgentJobTerminal(
         client,
         context,
+        row,
+        workerId,
+        fencingToken,
+        outcome,
+        value,
+        occurredAt
+      );
+      await this.#recordGenericJobTerminal(
+        client,
+        genericContext,
         row,
         workerId,
         fencingToken,
@@ -1432,6 +1736,7 @@ export class PostgresStorage implements StoragePort {
       await client.query("begin");
       const row = await this.#ownedLeasedJob(client, jobId, workerId, fencingToken, occurredAt);
       const context = await this.#loadAgentJobContext(client, row);
+      const genericContext = await this.#loadGenericJobContext(client, row);
       const changed = await client.query(`
         update mn_v2.jobs set lease_expires_at = $1::timestamptz, updated_at = $2::timestamptz
         where job_id = $3 and status = 'leased' and lease_owner = $4 and fencing_token = $5
@@ -1441,6 +1746,15 @@ export class PostgresStorage implements StoragePort {
       await this.#recordAgentJobRenewal(
         client,
         context,
+        row,
+        workerId,
+        leaseExpiresAt,
+        fencingToken,
+        occurredAt
+      );
+      await this.#recordGenericJobRenewal(
+        client,
+        genericContext,
         row,
         workerId,
         leaseExpiresAt,
@@ -1485,6 +1799,7 @@ export class PostgresStorage implements StoragePort {
       await client.query("begin");
       const row = await this.#ownedLeasedJob(client, jobId, workerId, fencingToken, occurredAt);
       const context = await this.#loadAgentJobContext(client, row);
+      const genericContext = await this.#loadGenericJobContext(client, row);
       const changed = await client.query(`
         update mn_v2.jobs set status = 'failed', failure_json = $1::jsonb,
           result_json = null, lease_owner = null, lease_expires_at = null,
@@ -1499,6 +1814,16 @@ export class PostgresStorage implements StoragePort {
         row,
         workerId,
         fencingToken,
+        failure,
+        occurredAt
+      );
+      await this.#recordGenericJobTerminal(
+        client,
+        genericContext,
+        row,
+        workerId,
+        fencingToken,
+        "failed",
         failure,
         occurredAt
       );

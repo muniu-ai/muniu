@@ -35,6 +35,16 @@ export interface SqliteStorageOptions {
 
 type RecordRow = Record<string, unknown>;
 
+interface JobLifecycleContext {
+  readonly tenantId: string;
+  readonly jobId: string;
+  readonly workspaceId?: string;
+  readonly executionId?: string;
+  readonly generation: number;
+  readonly jobProjection: JsonObject;
+  readonly execution?: JsonObject;
+}
+
 const SQLITE_SCHEMA = `
   create table if not exists storage_meta (
     key text primary key,
@@ -762,7 +772,7 @@ export class SqliteStorage implements StoragePort {
           update jobs set status = 'leased', attempts = attempts + 1, lease_owner = ?,
             lease_expires_at = ?, fencing_token = ?, updated_at = ? where job_id = ?
         `).run(workerId, leaseExpiresAt, fencingToken, now, String(row.job_id));
-        this.#recordAgentJobClaim(row, workerId, leaseExpiresAt, fencingToken, now);
+        this.#recordJobClaim(row, workerId, leaseExpiresAt, fencingToken, now);
         const claimed = this.#database.prepare("select * from jobs where job_id = ?")
           .get(String(row.job_id)) as RecordRow;
         this.#database.exec("commit");
@@ -793,7 +803,7 @@ export class SqliteStorage implements StoragePort {
           and lease_expires_at > ?
       `).run(JSON.stringify(result), now, jobId, workerId, fencingToken, now);
       if (Number(change.changes) !== 1) throw new StaleFencingTokenError(jobId);
-      this.#recordAgentJobTerminal(job, workerId, fencingToken, "completed", result, now);
+      this.#recordJobTerminal(job, workerId, fencingToken, "completed", result, now);
       this.#database.exec("commit");
     } catch (error) {
       this.#database.exec("rollback");
@@ -818,7 +828,7 @@ export class SqliteStorage implements StoragePort {
           and lease_expires_at > ?
       `).run(leaseExpiresAt, now, jobId, workerId, fencingToken, now);
       if (Number(change.changes) !== 1) throw new StaleFencingTokenError(jobId);
-      this.#recordAgentJobLeaseRenewal(job, workerId, leaseExpiresAt, fencingToken, now);
+      this.#recordJobLeaseRenewal(job, workerId, leaseExpiresAt, fencingToken, now);
       this.#database.exec("commit");
     } catch (error) {
       this.#database.exec("rollback");
@@ -845,7 +855,7 @@ export class SqliteStorage implements StoragePort {
           and lease_expires_at > ?
       `).run(JSON.stringify(failure), now, jobId, workerId, fencingToken, now);
       if (Number(change.changes) !== 1) throw new StaleFencingTokenError(jobId);
-      this.#recordAgentJobTerminal(job, workerId, fencingToken, "failed", failure, now);
+      this.#recordJobTerminal(job, workerId, fencingToken, "failed", failure, now);
       this.#database.exec("commit");
     } catch (error) {
       this.#database.exec("rollback");
@@ -878,7 +888,7 @@ export class SqliteStorage implements StoragePort {
           and lease_expires_at > ?
       `).run(JSON.stringify(failure), now, jobId, workerId, fencingToken, now);
       if (Number(change.changes) !== 1) throw new StaleFencingTokenError(jobId);
-      this.#recordAgentJobInterrupted(job, workerId, fencingToken, failure, now);
+      this.#recordJobInterrupted(job, workerId, fencingToken, failure, now);
       this.#database.exec("commit");
     } catch (error) {
       this.#database.exec("rollback");
@@ -901,31 +911,65 @@ export class SqliteStorage implements StoragePort {
     return job;
   }
 
-  #agentJobContext(job: RecordRow): {
-    readonly tenantId: string;
-    readonly executionId: string;
-    readonly workspaceId: string;
-    readonly generation: number;
-    readonly execution: JsonObject;
-    readonly jobProjection: JsonObject;
-  } | undefined {
-    if (String(job.kind) !== "agent.execution.run") return undefined;
+  #jobContext(job: RecordRow): JobLifecycleContext | undefined {
     const tenantId = String(job.tenant_id);
+    const jobId = String(job.job_id);
     const payload = parseJson<JsonObject>(job.payload_json);
+    const isAgentJob = String(job.kind) === "agent.execution.run";
+    const projectionRow = this.#database.prepare(`
+      select value_json from projections
+      where tenant_id = ? and namespace = 'job' and projection_key = ?
+    `).get(tenantId, jobId) as RecordRow | undefined;
+    if (!projectionRow) {
+      if (isAgentJob) throw new Error(`Job ${jobId} 的投影不存在`);
+      return undefined;
+    }
+    const jobProjection = parseJson<JsonObject>(projectionRow.value_json);
+    if (jobProjection.tenantId !== tenantId
+      || jobProjection.kind !== String(job.kind)
+      || requiredString(jobProjection.id, "Job id") !== jobId) {
+      throw new Error("Job 物理记录与查询投影不一致");
+    }
+    const projectedWorkspaceId = typeof jobProjection.workspaceId === "string"
+      ? jobProjection.workspaceId
+      : undefined;
+    const physicalWorkspaceId = job.workspace_id === null ? undefined : String(job.workspace_id);
+    if (projectedWorkspaceId !== physicalWorkspaceId) {
+      throw new Error("Job 工作区与查询投影不一致");
+    }
+    if (!isAgentJob) {
+      const correlatedExecutionId = typeof payload.executionId === "string"
+        ? payload.executionId
+        : typeof payload.reconciliationExecutionId === "string"
+          ? payload.reconciliationExecutionId
+          : undefined;
+      const payloadGeneration = payload.generation;
+      const generation = typeof payloadGeneration === "number"
+        && Number.isSafeInteger(payloadGeneration)
+        && payloadGeneration >= 1
+        ? payloadGeneration
+        : 1;
+      return {
+        tenantId,
+        jobId,
+        ...(physicalWorkspaceId ? { workspaceId: physicalWorkspaceId } : {}),
+        ...(correlatedExecutionId ? { executionId: correlatedExecutionId } : {}),
+        generation,
+        jobProjection
+      };
+    }
     const executionId = requiredString(payload.executionId, "Job executionId");
     const execution = this.#requiredProjection(tenantId, "execution", executionId, "Execution");
-    const jobProjection = this.#requiredProjection(tenantId, "job", String(job.job_id), "Job");
-    if (execution.tenantId !== tenantId || jobProjection.tenantId !== tenantId) {
-      throw new Error("Agent Job 与投影所属租户不一致");
-    }
-    if (jobProjection.kind !== "agent.execution.run"
-      || requiredString(jobProjection.id, "Job id") !== String(job.job_id)) {
-      throw new Error("Agent Job 物理记录与查询投影不一致");
+    if (execution.tenantId !== tenantId) throw new Error("Job 与 Execution 所属租户不一致");
+    const executionWorkspaceId = requiredString(execution.workspaceId, "Execution workspaceId");
+    if (executionWorkspaceId !== physicalWorkspaceId) {
+      throw new Error("Job 与 Execution 所属工作区不一致");
     }
     return {
       tenantId,
+      jobId,
       executionId,
-      workspaceId: requiredString(execution.workspaceId, "Execution workspaceId"),
+      workspaceId: executionWorkspaceId,
       generation: requiredSafeInteger(execution.generation, "Execution generation"),
       execution,
       jobProjection
@@ -970,8 +1014,8 @@ export class SqliteStorage implements StoragePort {
     workerId: string,
     now: string
   ): boolean {
-    const context = this.#agentJobContext(job);
-    if (!context) return false;
+    const context = this.#jobContext(job);
+    if (!context?.execution || !context.executionId || !context.workspaceId) return false;
     const executionStatus = String(context.execution.status);
     const failure = terminalExecutionClaimFailure(executionStatus);
     if (!failure) return false;
@@ -990,7 +1034,7 @@ export class SqliteStorage implements StoragePort {
       || (job.status === "leased"
         && (context.jobProjection.leaseOwner !== job.lease_owner
           || context.jobProjection.leaseExpiresAt !== String(job.lease_expires_at)))) {
-      throw new Error("Agent Job 物理状态与查询投影不一致");
+      throw new Error("Job 物理状态与查询投影不一致");
     }
     const changed = this.#database.prepare(`
       update jobs set status = 'failed', result_json = null, failure_json = ?,
@@ -1048,14 +1092,14 @@ export class SqliteStorage implements StoragePort {
     return true;
   }
 
-  #recordAgentJobClaim(
+  #recordJobClaim(
     job: RecordRow,
     workerId: string,
     leaseExpiresAt: string,
     fencingToken: number,
     now: string
   ): void {
-    const context = this.#agentJobContext(job);
+    const context = this.#jobContext(job);
     if (!context) return;
     const jobStreamVersion = requiredSafeInteger(
       context.jobProjection.streamVersion,
@@ -1065,9 +1109,14 @@ export class SqliteStorage implements StoragePort {
       context.jobProjection.fencingToken,
       "Job fencingToken"
     );
+    const projectedAttempts = requiredSafeInteger(context.jobProjection.attempts, "Job attempts");
     if (context.jobProjection.status !== String(job.status)
-      || priorFencingToken !== Number(job.fencing_token)) {
-      throw new Error("Agent Job 物理状态与查询投影不一致");
+      || projectedAttempts !== Number(job.attempts)
+      || priorFencingToken !== Number(job.fencing_token)
+      || (job.status === "leased"
+        && (context.jobProjection.leaseOwner !== job.lease_owner
+          || context.jobProjection.leaseExpiresAt !== String(job.lease_expires_at)))) {
+      throw new Error("Job 物理状态与查询投影不一致");
     }
     const updatedJob: JsonObject = {
       ...context.jobProjection,
@@ -1086,12 +1135,14 @@ export class SqliteStorage implements StoragePort {
       expectedStreamVersion: jobStreamVersion,
       type: "job.leased",
       actorId: `worker:${workerId}`,
-      executionId: context.executionId,
+      ...(context.executionId ? { executionId: context.executionId } : {}),
       generation: context.generation,
       correlationId: `job:${String(job.job_id)}:fence:${fencingToken}`,
       publicPayload: {
-        workspaceId: context.workspaceId,
-        executionId: context.executionId,
+        ...(context.workspaceId ? { workspaceId: context.workspaceId } : {}),
+        ...(context.executionId ? { executionId: context.executionId } : {}),
+        jobId: context.jobId,
+        kind: String(job.kind),
         workerId,
         fencingToken,
         leaseExpiresAt
@@ -1106,6 +1157,7 @@ export class SqliteStorage implements StoragePort {
       now
     );
 
+    if (!context.execution || !context.executionId || !context.workspaceId) return;
     if (context.execution.status === "running" || context.execution.status === "waiting_approval") {
       return;
     }
@@ -1151,14 +1203,14 @@ export class SqliteStorage implements StoragePort {
     );
   }
 
-  #recordAgentJobLeaseRenewal(
+  #recordJobLeaseRenewal(
     job: RecordRow,
     workerId: string,
     leaseExpiresAt: string,
     fencingToken: number,
     now: string
   ): void {
-    const context = this.#agentJobContext(job);
+    const context = this.#jobContext(job);
     if (!context) return;
     const jobStreamVersion = requiredSafeInteger(
       context.jobProjection.streamVersion,
@@ -1166,8 +1218,9 @@ export class SqliteStorage implements StoragePort {
     );
     if (context.jobProjection.status !== "leased"
       || context.jobProjection.leaseOwner !== workerId
-      || context.jobProjection.fencingToken !== fencingToken) {
-      throw new Error("Agent Job 租约与查询投影不一致");
+      || context.jobProjection.fencingToken !== fencingToken
+      || context.jobProjection.leaseExpiresAt !== String(job.lease_expires_at)) {
+      throw new Error("Job 租约与查询投影不一致");
     }
     const updatedJob: JsonObject = {
       ...context.jobProjection,
@@ -1182,12 +1235,14 @@ export class SqliteStorage implements StoragePort {
       expectedStreamVersion: jobStreamVersion,
       type: "job.lease_renewed",
       actorId: `worker:${workerId}`,
-      executionId: context.executionId,
+      ...(context.executionId ? { executionId: context.executionId } : {}),
       generation: context.generation,
       correlationId: `job:${String(job.job_id)}:fence:${fencingToken}`,
       publicPayload: {
-        workspaceId: context.workspaceId,
-        executionId: context.executionId,
+        ...(context.workspaceId ? { workspaceId: context.workspaceId } : {}),
+        ...(context.executionId ? { executionId: context.executionId } : {}),
+        jobId: context.jobId,
+        kind: String(job.kind),
         workerId,
         fencingToken,
         leaseExpiresAt
@@ -1203,7 +1258,7 @@ export class SqliteStorage implements StoragePort {
     );
   }
 
-  #recordAgentJobTerminal(
+  #recordJobTerminal(
     job: RecordRow,
     workerId: string,
     fencingToken: number,
@@ -1211,7 +1266,7 @@ export class SqliteStorage implements StoragePort {
     value: JsonValue,
     now: string
   ): void {
-    const context = this.#agentJobContext(job);
+    const context = this.#jobContext(job);
     if (!context) return;
     const jobStreamVersion = requiredSafeInteger(
       context.jobProjection.streamVersion,
@@ -1219,8 +1274,9 @@ export class SqliteStorage implements StoragePort {
     );
     if (context.jobProjection.status !== "leased"
       || context.jobProjection.leaseOwner !== workerId
-      || context.jobProjection.fencingToken !== fencingToken) {
-      throw new Error("Agent Job 租约与查询投影不一致");
+      || context.jobProjection.fencingToken !== fencingToken
+      || context.jobProjection.leaseExpiresAt !== String(job.lease_expires_at)) {
+      throw new Error("Job 租约与查询投影不一致");
     }
     const {
       leaseOwner: _leaseOwner,
@@ -1243,12 +1299,14 @@ export class SqliteStorage implements StoragePort {
       expectedStreamVersion: jobStreamVersion,
       type: `job.${outcome}`,
       actorId: `worker:${workerId}`,
-      executionId: context.executionId,
+      ...(context.executionId ? { executionId: context.executionId } : {}),
       generation: context.generation,
       correlationId: `job:${String(job.job_id)}:fence:${fencingToken}`,
       publicPayload: {
-        workspaceId: context.workspaceId,
-        executionId: context.executionId,
+        ...(context.workspaceId ? { workspaceId: context.workspaceId } : {}),
+        ...(context.executionId ? { executionId: context.executionId } : {}),
+        jobId: context.jobId,
+        kind: String(job.kind),
         status: outcome,
         fencingToken
       }
@@ -1262,6 +1320,7 @@ export class SqliteStorage implements StoragePort {
       now
     );
 
+    if (!context.execution || !context.executionId || !context.workspaceId) return;
     const failureObject = outcome === "failed"
       && typeof value === "object"
       && value !== null
@@ -1322,14 +1381,14 @@ export class SqliteStorage implements StoragePort {
     );
   }
 
-  #recordAgentJobInterrupted(
+  #recordJobInterrupted(
     job: RecordRow,
     workerId: string,
     fencingToken: number,
     failure: JsonObject,
     now: string
   ): void {
-    const context = this.#agentJobContext(job);
+    const context = this.#jobContext(job);
     if (!context) return;
     const jobStreamVersion = requiredSafeInteger(
       context.jobProjection.streamVersion,
@@ -1337,8 +1396,9 @@ export class SqliteStorage implements StoragePort {
     );
     if (context.jobProjection.status !== "leased"
       || context.jobProjection.leaseOwner !== workerId
-      || context.jobProjection.fencingToken !== fencingToken) {
-      throw new Error("Agent Job 租约与查询投影不一致");
+      || context.jobProjection.fencingToken !== fencingToken
+      || context.jobProjection.leaseExpiresAt !== String(job.lease_expires_at)) {
+      throw new Error("Job 租约与查询投影不一致");
     }
     const {
       leaseOwner: _leaseOwner,
@@ -1361,12 +1421,14 @@ export class SqliteStorage implements StoragePort {
       expectedStreamVersion: jobStreamVersion,
       type: "job.failed",
       actorId: `worker:${workerId}`,
-      executionId: context.executionId,
+      ...(context.executionId ? { executionId: context.executionId } : {}),
       generation: context.generation,
       correlationId: `job:${String(job.job_id)}:fence:${fencingToken}`,
       publicPayload: {
-        workspaceId: context.workspaceId,
-        executionId: context.executionId,
+        ...(context.workspaceId ? { workspaceId: context.workspaceId } : {}),
+        ...(context.executionId ? { executionId: context.executionId } : {}),
+        jobId: context.jobId,
+        kind: String(job.kind),
         status: "failed",
         failureCode: "EXECUTION_INTERRUPTED",
         fencingToken
@@ -1381,6 +1443,7 @@ export class SqliteStorage implements StoragePort {
       now
     );
 
+    if (!context.execution || !context.executionId || !context.workspaceId) return;
     if (context.execution.status !== "running"
       && context.execution.status !== "waiting_approval") {
       throw new Error(`状态为 ${String(context.execution.status)} 的 Execution 不能中断`);
@@ -1431,16 +1494,17 @@ export class SqliteStorage implements StoragePort {
     failure: JsonObject,
     now: string
   ): void {
-    const context = this.#agentJobContext(job);
-    if (!context) return;
+    const context = this.#jobContext(job);
+    if (!context?.execution || !context.executionId || !context.workspaceId) return;
     const jobStreamVersion = requiredSafeInteger(
       context.jobProjection.streamVersion,
       "Job streamVersion"
     );
     if (context.jobProjection.status !== "leased"
       || context.jobProjection.leaseOwner !== workerId
-      || context.jobProjection.fencingToken !== fencingToken) {
-      throw new Error("Agent Job 租约与查询投影不一致");
+      || context.jobProjection.fencingToken !== fencingToken
+      || context.jobProjection.leaseExpiresAt !== String(job.lease_expires_at)) {
+      throw new Error("Job 租约与查询投影不一致");
     }
     const {
       leaseOwner: _leaseOwner,

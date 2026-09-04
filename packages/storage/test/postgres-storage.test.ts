@@ -76,6 +76,8 @@ class PostgresLifecycleFixture {
 
   constructor(options: {
     readonly kind?: string;
+    readonly projectJob?: boolean;
+    readonly projectedJobStreamVersion?: number;
     readonly projectedExecutionStreamVersion?: number;
   } = {}) {
     const kind = options.kind ?? "agent.execution.run";
@@ -109,7 +111,7 @@ class PostgresLifecycleFixture {
       createdAt: startedAt,
       updatedAt: startedAt
     });
-    if (kind === "agent.execution.run") {
+    if (kind === "agent.execution.run" || options.projectJob) {
       this.projections.set("job:job-a", {
         id: "job-a",
         tenantId: "tenant-a",
@@ -121,7 +123,7 @@ class PostgresLifecycleFixture {
         availableAt: startedAt,
         fencingToken: 0,
         idempotencyKey: this.job.idempotency_key,
-        streamVersion: 1,
+        streamVersion: options.projectedJobStreamVersion ?? 1,
         createdAt: startedAt,
         updatedAt: startedAt
       });
@@ -698,4 +700,88 @@ test("PostgreSQL 无 Execution 上下文的系统 Job 只推进受 fencing 保�
   assert.equal(projection(client, "execution", "execution-a").status, "queued");
   assert.equal(client.events.length, 0);
   assert.equal(client.outbox.length, 0);
+});
+
+test("PostgreSQL generic Job 在无 Execution 时同步投影、事件和 fencing", async () => {
+  const completedClient = new PostgresLifecycleFixture({
+    kind: "coding.sandbox.cleanup",
+    projectJob: true
+  });
+  completedClient.projections.delete("execution:execution-a");
+  const completedStorage = fixtureStorage(completedClient);
+
+  const claimed = await completedStorage.claimJob("worker-a", startedAt);
+  assert.equal(claimed?.fencingToken, 1);
+  assert.equal(projection(completedClient, "job", "job-a").status, "leased");
+  assert.equal(projection(completedClient, "job", "job-a").streamVersion, 2);
+  await completedStorage.renewJobLease(
+    "job-a",
+    "worker-a",
+    1,
+    "2025-01-02T03:04:10.000Z"
+  );
+  assert.equal(
+    projection(completedClient, "job", "job-a").leaseExpiresAt,
+    "2025-01-02T03:04:40.000Z"
+  );
+  await completedStorage.completeJob(
+    "job-a",
+    "worker-a",
+    1,
+    { cleaned: true },
+    "2025-01-02T03:04:11.000Z"
+  );
+  assert.equal(projection(completedClient, "job", "job-a").status, "completed");
+  assert.deepEqual(projection(completedClient, "job", "job-a").result, { cleaned: true });
+  assert.deepEqual(completedClient.events.map((event) => event.type), [
+    "job.leased",
+    "job.lease_renewed",
+    "job.completed"
+  ]);
+  assert.deepEqual(
+    completedClient.outbox.map((message) => message.topic),
+    completedClient.events.map((event) => event.type)
+  );
+
+  const failedClient = new PostgresLifecycleFixture({
+    kind: "coding.sandbox.cleanup",
+    projectJob: true
+  });
+  failedClient.projections.delete("execution:execution-a");
+  const failedStorage = fixtureStorage(failedClient);
+  await failedStorage.claimJob("worker-b", startedAt);
+  await failedStorage.failJob(
+    "job-a",
+    "worker-b",
+    1,
+    { code: "CLEANUP_FAILED", message: "清理失败" },
+    "2025-01-02T03:04:06.000Z"
+  );
+  assert.equal(projection(failedClient, "job", "job-a").status, "failed");
+  assert.deepEqual(projection(failedClient, "job", "job-a").failure, {
+    code: "CLEANUP_FAILED",
+    message: "清理失败"
+  });
+  assert.deepEqual(failedClient.events.map((event) => event.type), [
+    "job.leased",
+    "job.failed"
+  ]);
+});
+
+test("PostgreSQL generic Job 投影版本冲突时回滚物理租约和事件", async () => {
+  const client = new PostgresLifecycleFixture({
+    kind: "coding.sandbox.cleanup",
+    projectJob: true,
+    projectedJobStreamVersion: 2
+  });
+  client.projections.delete("execution:execution-a");
+  const storage = fixtureStorage(client);
+
+  await assert.rejects(storage.claimJob("worker-a", startedAt));
+  assert.equal(client.job.status, "available");
+  assert.equal(projection(client, "job", "job-a").status, "available");
+  assert.equal(projection(client, "job", "job-a").streamVersion, 2);
+  assert.equal(client.events.length, 0);
+  assert.equal(client.outbox.length, 0);
+  assert.equal(client.queries.at(-1)?.sql, "rollback");
 });
