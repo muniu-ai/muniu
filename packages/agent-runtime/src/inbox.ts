@@ -21,11 +21,11 @@ export class PersistentInbox {
     return { id, sequence: record.sequence, kind, text };
   }
 
-  async takeFollowUp(): Promise<InboxItem | undefined> {
-    const item = (await this.#pending("follow_up"))[0];
+  async takeFollowUp(): Promise<(InboxItem & { readonly kind: "follow_up" | "resume" }) | undefined> {
+    const item = (await this.#pending("resume"))[0] ?? (await this.#pending("follow_up"))[0];
     if (item === undefined) return undefined;
     await this.#consume(item);
-    return item;
+    return item as InboxItem & { readonly kind: "follow_up" | "resume" };
   }
 
   async takeSteersAtModelBoundary(): Promise<readonly InboxItem[]> {
@@ -35,7 +35,7 @@ export class PersistentInbox {
   }
 
   async hasFollowUps(): Promise<boolean> {
-    return (await this.#pending("follow_up")).length > 0;
+    return (await this.#pending("resume")).length > 0 || (await this.#pending("follow_up")).length > 0;
   }
 
   async #pending(kind: InboxItem["kind"]): Promise<InboxItem[]> {
@@ -63,7 +63,9 @@ export class PersistentInbox {
 
 function parseInboxItem(record: RuntimeRecord): InboxItem {
   const kind = requiredString(record.payload, "kind");
-  if (kind !== "follow_up" && kind !== "steer") throw new Error("Inbox 记录类型无效");
+  if (kind !== "follow_up" && kind !== "steer" && kind !== "resume") {
+    throw new Error("Inbox 记录类型无效");
+  }
   return {
     id: requiredString(record.payload, "id"),
     sequence: record.sequence,

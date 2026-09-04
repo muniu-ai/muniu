@@ -216,6 +216,59 @@ test("恢复执行会在同一事务创建新 generation 的 Job 与 outbox", as
   assert.equal(jobs[0]?.idempotencyKey, `execution:${execution.id}:generation:2`);
 });
 
+test("恢复会原子失效旧 generation 的待审批项", async () => {
+  const store = new InMemoryKernelStore(undefined, () => now);
+  const kernel = new AgentOsKernel(store, { now: () => now });
+  await kernel.bootstrapLocal("resume-approval-setup");
+  const workspace = await kernel.createWorkspace("local", "local-owner", "resume-approval-workspace", {
+    name: "审批恢复", viewMode: "professional", pluginIds: ["opc"],
+  });
+  const thread = await kernel.createThread("local", "local-owner", "resume-approval-thread", {
+    workspaceId: workspace.id, subject: "等待审批时中断", pluginId: "opc",
+  });
+  const execution = await kernel.createExecution("local", "local-owner", "resume-approval-execution", {
+    workspaceId: workspace.id, threadId: thread.id, pluginId: "opc",
+    agentDefinitionId: "opc.opportunity-validator", modelBindingId: "model-1",
+    executionPrincipalId: "agent-1", authority: { ...authority("resume-approval"), workspaceId: workspace.id },
+  });
+  const running = await kernel.commandExecution(
+    "local", "local-owner", "resume-approval-start", execution.id, execution.streamVersion, "start",
+  );
+  const request = await kernel.requestToolApproval("local", "agent-1", "resume-old-intent", {
+    id: "old-generation-call", executionId: execution.id, generation: 1,
+    toolId: "web.read", toolVersion: "1.0.0", effectClass: "external_side_effect",
+    intent: "发布旧代次结果", normalizedArguments: { url: "https://example.com" },
+    argumentsDigest: "args", resourcesDigest: "resources",
+    resourceRefs: [{ namespace: "web", resourceId: "https://example.com" }],
+    authorityCommitment: "authority:resume-approval", expiresAt: "2026-09-05T00:00:00.000Z",
+  });
+  assert.equal(request.mode, "approval");
+  if (request.mode !== "approval") return;
+  const waiting = await store.transact("local", (transaction) =>
+    transaction.getProjection<Execution>("execution", execution.id)!);
+  const interrupted = await kernel.commandExecution(
+    "local", "local-owner", "resume-approval-interrupt",
+    execution.id, waiting.streamVersion, "interrupt",
+  );
+  await kernel.commandExecution(
+    "local", "local-owner", "resume-approval-command",
+    execution.id, interrupted.streamVersion, "resume",
+  );
+
+  const expired = await store.transact("local", (transaction) =>
+    transaction.getProjection<import("@mn/contracts").Approval>("approval", request.approval.id));
+  assert.equal(expired?.status, "expired");
+  assert.equal(expired?.streamVersion, 2);
+  assert.equal((await kernel.listInbox("local")).length, 0);
+  await assert.rejects(
+    kernel.decideApproval(
+      "local", "local-owner", "resume-old-decision", request.approval.id, 2, "approve_once",
+    ),
+    /已经处理/u,
+  );
+  assert.equal(running.generation, 1);
+});
+
 test("子 Agent 的工具、数据和预算必须是父权限的严格子集", () => {
   const parent: ExecutionAuthority = {
     ...authority("parent"), id: "parent", tenantId: "local", executionId: "parent",

@@ -43,8 +43,8 @@ const approveAuthorizedTools: ToolApprovalPort = {
   },
 };
 
-function executionScope(): AgentScope {
-  return AgentScope.tenant("tenant-a")
+function executionScope(generation = 1): AgentScope {
+  return AgentScope.tenant("tenant-a", generation)
     .createChild("workspace", "workspace-a")
     .createChild("thread", "thread-a")
     .createChild("execution", "execution-a");
@@ -275,8 +275,95 @@ test("cancel 中止在途模型；resume 只接受 paused 或 interrupted", asyn
       approval: approveAuthorizedTools,
     });
     await resumed.resume();
-    assert.equal(resumed.status, "queued");
+    await resumed.whenIdle();
+    assert.equal(resumed.status, "completed");
   }
+});
+
+test("resume 用新 generation 继续中断 turn，不复用旧模型请求", async () => {
+  const store = new InMemoryRuntimeStore();
+  const firstScope = executionScope(1);
+  let firstStarted!: () => void;
+  const started = new Promise<void>((resolve) => { firstStarted = resolve; });
+  firstScope.register("llm", {
+    id: "main",
+    async complete(_request, context) {
+      firstStarted();
+      await new Promise<void>((_resolve, reject) => {
+        context.signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      });
+      return { text: "不可达", toolCalls: [] };
+    },
+  });
+  const first = await AgentHandle.open({
+    executionId: "execution-a", scope: firstScope, store,
+    definition: { id: "assistant", llmId: "main", promptIds: [] },
+    authority, approval: approveAuthorizedTools,
+  });
+  await first.followUp("整理中断前的证据");
+  await started;
+  await first.interrupt("Worker 已停止");
+  await first.whenIdle();
+
+  const requests: ModelRequest[] = [];
+  const resumedScope = executionScope(2);
+  resumedScope.register("llm", {
+    id: "main",
+    async complete(request) {
+      requests.push(request);
+      return { text: "已从持久上下文继续", toolCalls: [] };
+    },
+  });
+  const resumed = await AgentHandle.open({
+    executionId: "execution-a", scope: resumedScope, store,
+    definition: { id: "assistant", llmId: "main", promptIds: [] },
+    authority, approval: approveAuthorizedTools,
+  });
+  await resumed.resume();
+  await resumed.whenIdle();
+
+  assert.equal(resumed.status, "completed");
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0]?.generation, 2);
+  assert.ok(requests[0]?.messages.some((message) =>
+    message.role === "user" && message.content === "整理中断前的证据"));
+  assert.ok(requests[0]?.messages.some((message) =>
+    message.role === "system" && message.content.startsWith("[resume]")));
+  const records = await store.readExecution("execution-a");
+  assert.equal(records.filter((record) => record.type === "model/request").length, 2);
+  assert.deepEqual(records
+    .filter((record) => record.type === "model/request")
+    .map((record) => record.payload.generation), [1, 2]);
+});
+
+test("resume 不重放中断前结果未知的高影响工具", async () => {
+  const store = new InMemoryRuntimeStore();
+  await store.append({ executionId: "execution-a", type: "execution/status", payload: { status: "running" } });
+  await store.append({ executionId: "execution-a", type: "turn/started", payload: { turn: 1, generation: 1 } });
+  await store.append({
+    executionId: "execution-a", type: "tool/intent", payload: {
+      toolCallId: "publish", toolId: "web.publish", toolVersion: "1.0.0",
+      effectClass: "external_side_effect", generation: 1, intent: "发布",
+    },
+  });
+  await store.append({ executionId: "execution-a", type: "execution/status", payload: { status: "waiting_approval" } });
+  await store.append({ executionId: "execution-a", type: "execution/status", payload: { status: "running" } });
+  await store.append({ executionId: "execution-a", type: "execution/status", payload: { status: "interrupted" } });
+  let modelCalls = 0;
+  const scope = executionScope(2);
+  scope.register("llm", {
+    id: "main", async complete() { modelCalls += 1; return { text: "不可达", toolCalls: [] }; },
+  });
+  const resumed = await AgentHandle.open({
+    executionId: "execution-a", scope, store,
+    definition: { id: "assistant", llmId: "main", promptIds: [] },
+    authority, approval: approveAuthorizedTools,
+  });
+  await resumed.resume();
+  assert.equal(resumed.status, "needs_reconciliation");
+  assert.equal(modelCalls, 0);
+  assert.ok((await store.readExecution("execution-a"))
+    .some((record) => record.type === "tool/outcome_unknown"));
 });
 
 test("Worker 停止会把在途模型标记为 interrupted", async () => {

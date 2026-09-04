@@ -98,6 +98,13 @@ export class UnknownExternalSideEffectError extends Error {
   }
 }
 
+export class AgentExecutionInterruptedError extends Error {
+  constructor(readonly executionId: string) {
+    super("Agent turn 已中断，需要显式恢复");
+    this.name = "AgentExecutionInterruptedError";
+  }
+}
+
 class WorkerLeaseLostError extends Error {
   constructor(options?: ErrorOptions) {
     super("Worker 无法续租，已停止当前处理", options);
@@ -234,6 +241,25 @@ export class AgentOsWorker {
         }
         return { status: "needs_reconciliation", jobId: job.id };
       }
+      if (error instanceof AgentExecutionInterruptedError) {
+        try {
+          await this.#store.interruptJob(
+            job.id,
+            this.#id,
+            job.fencingToken,
+            error.message,
+            this.#now().toISOString(),
+          );
+          return { status: "interrupted", jobId: job.id };
+        } catch (interruptError) {
+          if (interruptError instanceof StaleFencingTokenError
+            || (typeof interruptError === "object" && interruptError !== null
+              && "code" in interruptError && interruptError.code === "STALE_FENCING_TOKEN")) {
+            return { status: "lost_lease", jobId: job.id };
+          }
+          throw interruptError;
+        }
+      }
       const message = error instanceof Error ? error.message : "任务执行失败";
       return this.#failKnown(job, "JOB_EXECUTION_FAILED", message, true);
     } finally {
@@ -297,7 +323,10 @@ export interface AgentTurnHandlerOptions {
 export function createAgentTurnHandler(options: AgentTurnHandlerOptions): WorkerJobHandler {
   return async (job, context) => {
     const executionId = requiredPayloadString(job.payload, "executionId");
-    const message = requiredPayloadString(job.payload, "message");
+    const command = optionalPayloadString(job.payload, "command");
+    const isResume = command === "resume";
+    if (command !== undefined && !isResume) throw new Error("Agent Job command 无效");
+    const message = isResume ? undefined : requiredPayloadString(job.payload, "message");
     const handleOptions = await options.resolveOptions(job, context);
     if (handleOptions.executionId !== executionId) {
       throw new Error("Job 的 executionId 与 Runtime 配置不一致");
@@ -312,8 +341,13 @@ export function createAgentTurnHandler(options: AgentTurnHandlerOptions): Worker
       throw new UnknownExternalSideEffectError(executionId);
     }
     if (handle.status === "paused" || handle.status === "interrupted") {
+      if (!isResume) {
+        await handleOptions.scope.dispose();
+        throw new AgentExecutionInterruptedError(executionId);
+      }
+    } else if (isResume) {
       await handleOptions.scope.dispose();
-      throw new Error("Agent turn 已中断，需要显式恢复");
+      throw new Error(`状态为 ${handle.status} 的 Agent turn 不能恢复`);
     }
     const interruptForWorkerStop = () => {
       void handle.interrupt("Worker 已停止").catch(() => {});
@@ -322,8 +356,10 @@ export function createAgentTurnHandler(options: AgentTurnHandlerOptions): Worker
     try {
       if (context.signal.aborted) {
         await handle.interrupt("Worker 已停止");
+      } else if (isResume) {
+        await handle.resume();
       } else {
-        await handle.followUp(message);
+        await handle.followUp(message!);
       }
       await handle.whenIdle();
     } finally {
@@ -339,10 +375,17 @@ export function createAgentTurnHandler(options: AgentTurnHandlerOptions): Worker
         ? handle.lastError
         : new Error("Agent turn 执行失败");
     }
-    if (finalStatus === "interrupted") throw new Error("Agent turn 已中断");
+    if (finalStatus === "interrupted") throw new AgentExecutionInterruptedError(executionId);
     if (finalStatus === "cancelled") throw new Error("Agent turn 已取消");
     return { executionId, status: handle.status };
   };
+}
+
+function optionalPayloadString(payload: JsonObject, field: string): string | undefined {
+  const value = payload[field];
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || !value.trim()) throw new Error(`Job payload 缺少 ${field}`);
+  return value;
 }
 
 interface StoredModelConnection {

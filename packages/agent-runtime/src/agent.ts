@@ -164,8 +164,26 @@ export class AgentHandle {
     if (this.#status !== "paused" && this.#status !== "interrupted") {
       throw new AgentRuntimeError("resume 只接受 paused 或 interrupted 状态");
     }
+    const records = await this.#store.readExecution(this.#executionId);
+    const uncertain = uncertainNonReplayableIntent(records);
+    if (uncertain !== undefined) {
+      await this.#store.append({
+        executionId: this.#executionId,
+        type: "tool/outcome_unknown",
+        payload: {
+          toolCallId: uncertain.toolCallId,
+          recoveredAfterInterrupt: true,
+          message: "中断前的高影响工具可能已经执行",
+        },
+      });
+      await this.#transition("needs_reconciliation", "外部副作用结果未知，需要人工核对");
+      return;
+    }
+    if (hasIncompleteTurn(records) && !await this.#inbox.hasFollowUps()) {
+      await this.#inbox.enqueue("resume", "继续中断前未完成的任务");
+    }
     await this.#transition("queued", "恢复执行");
-    if (await this.#inbox.hasFollowUps()) this.#kick();
+    this.#kick();
   }
 
   async whenIdle(): Promise<void> {
@@ -333,7 +351,7 @@ export class AgentHandle {
           await this.#transition("completed", "收件箱已处理完成");
           break;
         }
-        await this.#runTurn(followUp.text);
+        await this.#runTurn(followUp.text, followUp.kind);
       }
     } catch (error: unknown) {
       this.#lastError = error;
@@ -344,7 +362,7 @@ export class AgentHandle {
     }
   }
 
-  async #runTurn(text: string): Promise<void> {
+  async #runTurn(text: string, kind: "follow_up" | "resume"): Promise<void> {
     this.#turn += 1;
     const turn = this.#turn;
     const contributions = this.#scope.resolveTurn();
@@ -356,7 +374,11 @@ export class AgentHandle {
       type: "turn/started",
       payload: { turn, generation: contributions.generation },
     });
-    await this.#sessionLog.append({ role: "user", content: text, turn });
+    await this.#sessionLog.append({
+      role: kind === "resume" ? "system" : "user",
+      content: kind === "resume" ? `[resume] ${text}` : text,
+      turn,
+    });
 
     const prompts = await Promise.all(this.#definition.promptIds.map(async (id) => {
       const prompt = requiredContribution(contributions, "prompt", id);
@@ -759,6 +781,34 @@ function unresolvedToolIntents(records: readonly RuntimeRecord[]): readonly {
     });
 }
 
+function uncertainNonReplayableIntent(records: readonly RuntimeRecord[]): {
+  readonly toolCallId: string;
+} | undefined {
+  const unresolved = findUnresolvedToolIntentRecords(records)
+    .filter((record) => {
+      const effectClass = stringField(record.payload, "effectClass");
+      if (!isToolEffectClass(effectClass)) throw new AgentRuntimeError("持久化工具副作用类型无效");
+      if (!NON_REPLAYABLE_EFFECTS.has(effectClass)) return false;
+      return records.some((candidate) => candidate.sequence > record.sequence
+        && candidate.type === "execution/status"
+        && candidate.payload.status === "running");
+    })
+    .at(-1);
+  return unresolved === undefined
+    ? undefined
+    : { toolCallId: stringField(unresolved.payload, "toolCallId") };
+}
+
+function hasIncompleteTurn(records: readonly RuntimeRecord[]): boolean {
+  const started = records
+    .filter((record) => record.type === "turn/started")
+    .map((record) => positiveIntegerField(record.payload, "turn"));
+  const completed = new Set(records
+    .filter((record) => record.type === "turn/completed")
+    .map((record) => positiveIntegerField(record.payload, "turn")));
+  return started.some((turn) => !completed.has(turn));
+}
+
 function isToolEffectClass(value: string): value is ToolEffectClass {
   return [
     "local_read", "external_read", "local_reversible_write", "local_irreversible_write",
@@ -803,4 +853,12 @@ function stringField(payload: JsonObject, key: string): string {
   const value = payload[key];
   if (typeof value !== "string") throw new AgentRuntimeError(`持久化字段 ${key} 无效`);
   return value;
+}
+
+function positiveIntegerField(payload: JsonObject, key: string): number {
+  const value = payload[key];
+  if (!Number.isSafeInteger(value) || (value as number) < 1) {
+    throw new AgentRuntimeError(`持久化字段 ${key} 无效`);
+  }
+  return value as number;
 }

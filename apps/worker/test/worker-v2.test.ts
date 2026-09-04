@@ -4,6 +4,7 @@ import type { Approval, JsonObject, JsonValue, ToolCallIntent } from "@mn/contra
 import { StaleFencingTokenError, type StoredJob } from "@mn/storage";
 import {
   AgentOsWorker,
+  AgentExecutionInterruptedError,
   createByokModelInvoker,
   createAgentTurnHandler,
   createKernelToolApprovalPort,
@@ -226,6 +227,63 @@ test("Worker 重试已完成的 Agent turn 时不重复调用模型", async () =
     leaseExpiresAt: "2026-09-04T00:00:30.000Z", signal: new AbortController().signal,
   }), { executionId: "execution-1", status: "completed" });
   assert.equal(calls, 0);
+});
+
+test("resume Job 不需要原始 message，并以新 generation 继续持久化上下文", async () => {
+  const {
+    AgentScope, InMemoryRuntimeStore, PersistentSessionLog,
+  } = await import("@mn/agent-runtime");
+  const runtime = new InMemoryRuntimeStore();
+  await runtime.append({ executionId: "execution-1", type: "execution/status", payload: { status: "running" } });
+  await runtime.append({ executionId: "execution-1", type: "turn/started", payload: { turn: 1, generation: 1 } });
+  await new PersistentSessionLog(runtime, "execution-1").append({
+    role: "user", content: "原始任务", turn: 1,
+  });
+  await runtime.append({
+    executionId: "execution-1", type: "model/request",
+    payload: { turn: 1, boundary: 1, generation: 1 },
+  });
+  await runtime.append({ executionId: "execution-1", type: "execution/status", payload: { status: "interrupted" } });
+  const scope = AgentScope.tenant("local", 2)
+    .createChild("workspace", "workspace-1")
+    .createChild("thread", "thread-1")
+    .createChild("execution", "execution-1");
+  const requests: Array<{ generation: number }> = [];
+  scope.register("llm", {
+    id: "main",
+    async complete(request) { requests.push(request); return { text: "已恢复", toolCalls: [] }; },
+  });
+  const handler = createAgentTurnHandler({
+    resolveOptions: () => ({
+      executionId: "execution-1", scope, store: runtime,
+      definition: { id: "coding.builtin", llmId: "main", promptIds: [] },
+      authority: {
+        commitment: "authority", toolIds: [], dataScopes: [], effectClasses: [],
+        budget: { maxSubagentDepth: 0, maxSubagents: 0, maxTokens: 1000, maxCostMinorUnits: "0", currency: "CNY", maxDurationMs: 1000 },
+      },
+      approval: { async authorize(intent) { return { mode: "auto" as const, intent }; } },
+    }),
+  });
+  assert.deepEqual(await handler(job({
+    kind: "agent.execution.run",
+    payload: { executionId: "execution-1", command: "resume", generation: 2 },
+  }), {
+    workerId: "worker-2", fencingToken: 2,
+    leaseExpiresAt: "2026-09-04T00:00:30.000Z", signal: new AbortController().signal,
+  }), { executionId: "execution-1", status: "completed" });
+  assert.deepEqual(requests.map((request) => request.generation), [2]);
+});
+
+test("重领崩溃后的运行中 Agent Job 会转为 interrupted，不标为普通失败", async () => {
+  const store = new FakeStore();
+  const worker = new AgentOsWorker({
+    id: "worker-1", store,
+    lock: { engineLockDigest: "a", expectedEngineLockDigest: "a", pluginLockDigest: "b", expectedPluginLockDigest: "b" },
+    handlers: { "tool.execute": async () => { throw new AgentExecutionInterruptedError("execution-1"); } },
+  });
+  assert.deepEqual(await worker.pollOnce(), { status: "interrupted", jobId: "job-1" });
+  assert.deepEqual(store.interrupted, [["job-1", 7, "Agent turn 已中断，需要显式恢复"]]);
+  assert.equal(store.failed.length, 0);
 });
 
 test("内核审批端口只在同一持久化意图获单次批准后放行", async () => {

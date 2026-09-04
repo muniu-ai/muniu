@@ -424,3 +424,88 @@ test("关闭本地 Host 会中断在途模型后再关闭 SQLite", async () => {
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("中断后的 Execution 通过公开 resume 命令以新 generation 继续", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "muniu-local-runtime-resume-"));
+  const secrets = new FixtureSecrets();
+  const requests: ModelRequest[] = [];
+  let firstModelStarted!: () => void;
+  const started = new Promise<void>((resolve) => { firstModelStarted = resolve; });
+  const invoke: ByokModelInvoker = async ({ request, signal }) => {
+    requests.push(request);
+    if (requests.length === 1) {
+      firstModelStarted();
+      await new Promise<void>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      });
+      return { text: "不可达", toolCalls: [] };
+    }
+    return { text: "已从中断处继续", toolCalls: [] };
+  };
+  let first: AgentOsHost | undefined;
+  let second: AgentOsHost | undefined;
+  try {
+    first = await startLocalAgentOsHost({
+      stateRoot: directory, port: 0, secretStore: secrets, modelInvoker: invoke,
+      workerIdleDelayMs: 1,
+      modelProbe: async ({ preset }) => ({
+        models: preset.suggestedModels, defaultModel: preset.suggestedModels[0]!,
+      }),
+    });
+    const workspace = (await body(await first.dispatch(jsonRequest("/v2/workspaces", {
+      name: "恢复执行", viewMode: "professional", pluginIds: ["opc"],
+    }, "resume-workspace")))).data;
+    const pendingModel = (await body(await first.dispatch(jsonRequest("/v2/model-connections", {
+      presetId: "deepseek", apiKey: "fixture-byok-key", displayName: "DeepSeek",
+    }, "resume-model")))).data;
+    const model = (await body(await first.dispatch(jsonRequest(
+      `/v2/model-connections/${pendingModel.id}/probe`,
+      { expectedStreamVersion: pendingModel.streamVersion },
+      "resume-model-probe",
+    )))).data;
+    const thread = (await body(await first.dispatch(jsonRequest(
+      `/v2/workspaces/${workspace.id}/threads`,
+      { subject: "恢复机会验证", pluginId: "opc" },
+      "resume-thread",
+    )))).data;
+    const execution = (await body(await first.dispatch(jsonRequest(
+      `/v2/workspaces/${workspace.id}/threads/${thread.id}/turns`,
+      {
+        expectedStreamVersion: thread.streamVersion,
+        message: "整理证据并在中断后继续",
+        agentDefinitionId: "opc.opportunity-validator",
+        modelBindingId: model.id,
+      },
+      "resume-turn",
+    )))).data;
+    await started;
+    await first.close();
+    first = undefined;
+
+    second = await startLocalAgentOsHost({
+      stateRoot: directory, port: 0, secretStore: secrets, modelInvoker: invoke,
+      workerIdleDelayMs: 1,
+    });
+    const turnsPath = `/v2/workspaces/${workspace.id}/threads/${thread.id}/turns`;
+    const interrupted = (await body(await second.dispatch(new Request(`http://host.test${turnsPath}`))))
+      .data.turns[0].execution;
+    assert.equal(interrupted.status, "interrupted");
+    const resumed = await second.dispatch(jsonRequest(
+      `/v2/executions/${execution.id}/commands`,
+      { expectedStreamVersion: interrupted.streamVersion, command: "resume" },
+      "resume-command",
+    ));
+    assert.equal(resumed.status, 200, JSON.stringify(await resumed.clone().json()));
+    assert.equal((await body(resumed)).data.generation, 2);
+    const completed = await waitForCompletedTurn(second, turnsPath);
+    assert.equal(completed.turns[0].execution.status, "completed");
+    assert.deepEqual(requests.map((request) => request.generation), [1, 2]);
+    assert.ok(requests[1]?.messages.some((message) =>
+      message.role === "system" && message.content.startsWith("[resume]")));
+    assert.equal(completed.turns[0].entries.filter((entry: any) => entry.role === "user").length, 1);
+  } finally {
+    await first?.close();
+    await second?.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

@@ -237,7 +237,7 @@ export interface SessionSurface {
 export interface InboxItem {
   readonly id: string;
   readonly sequence: number;
-  readonly kind: "follow_up" | "steer";
+  readonly kind: "follow_up" | "steer" | "resume";
   readonly text: string;
 }
 

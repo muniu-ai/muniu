@@ -436,6 +436,33 @@ export class AgentOsKernel {
         generation: next.generation, publicPayload: { previousStatus: execution.status, status: nextStatus },
       });
       if (command === "resume") {
+        for (const approval of transaction.listProjections<Approval>("approval")) {
+          if (approval.executionId !== executionId || approval.status !== "pending") continue;
+          const expired: Approval = {
+            ...approval,
+            status: "expired",
+            streamVersion: approval.streamVersion + 1,
+            updatedAt: now,
+          };
+          transaction.putProjection("approval", approval.id, expired);
+          const inboxId = `approval:${approval.id}`;
+          const inbox = transaction.getProjection<InboxItem>("inbox", inboxId);
+          if (inbox) transaction.putProjection("inbox", inboxId, { ...inbox, status: "resolved" });
+          this.append(transaction, {
+            tenantId,
+            aggregateType: "approval",
+            aggregateId: approval.id,
+            expectedStreamVersion: approval.streamVersion,
+            type: "approval.expired",
+            actorId,
+            executionId,
+            generation: next.generation,
+            publicPayload: {
+              toolCallId: approval.toolCallId,
+              reason: "execution_resumed_with_new_generation",
+            },
+          });
+        }
         const jobId = this.nextId("job");
         const job: Job = {
           id: jobId,
