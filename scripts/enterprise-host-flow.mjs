@@ -8,7 +8,7 @@ async function token(jwksUrl, tenantId, principalId) {
   const endpoint = new URL("/token", jwksUrl);
   endpoint.searchParams.set("tenant", tenantId);
   endpoint.searchParams.set("sub", principalId);
-  endpoint.searchParams.set("role", "owner");
+  endpoint.searchParams.set("role", "organization_admin");
   const response = await fetch(endpoint, { method: "POST" });
   const text = await response.text();
   assert.equal(response.status, 200, text);

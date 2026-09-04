@@ -983,7 +983,7 @@ test("企业 profile 强制身份上下文并隔离 tenant", async () => {
     identityResolver(request) {
       const token = request.headers.get("authorization")?.replace(/^Bearer\s+/u, "") ?? "";
       return token.startsWith("tenant-")
-        ? { tenantId: token, principalId: `${token}-owner` }
+        ? { tenantId: token, principalId: `${token}-owner`, organizationRoles: ["organization_admin"] as const }
         : { tenantId: "", principalId: "" };
     },
   });
@@ -1018,6 +1018,47 @@ test("企业 profile 强制身份上下文并隔离 tenant", async () => {
   await host.close();
 });
 
+test("企业工作区创建要求组织管理员并保留经验证的组织角色", async () => {
+  const store = new InMemoryKernelStore();
+  const host = await createAgentOsHost({
+    profile: "enterprise",
+    store,
+    secretStore: secrets,
+    identityResolver(request) {
+      const principalId = request.headers.get("authorization")?.replace(/^Bearer\s+/u, "") ?? "";
+      return principalId === "owner"
+        ? {
+            tenantId: "tenant-a",
+            principalId,
+            organizationRoles: ["organization_admin", "auditor"] as const,
+          }
+        : principalId
+          ? { tenantId: "tenant-a", principalId, organizationRoles: [] as const }
+          : { tenantId: "", principalId: "", organizationRoles: [] as const };
+    },
+  });
+  const create = (principalId: string, key: string) => host.dispatch(new Request("http://host.test/v2/workspaces", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${principalId}`,
+      "content-type": "application/json",
+      "Idempotency-Key": key,
+    },
+    body: JSON.stringify({ name: "受管工作区", viewMode: "professional", pluginIds: [] }),
+  }));
+  const denied = await create("member", "workspace-denied");
+  assert.equal(denied.status, 403);
+  assert.equal((await responseJson(denied)).code, "ORGANIZATION_ACCESS_DENIED");
+
+  const allowed = await create("owner", "workspace-allowed");
+  assert.equal(allowed.status, 201);
+  const workspace = (await responseJson(allowed)).data;
+  const membership = await store.transact("tenant-a", (transaction) =>
+    transaction.getProjection<any>("membership", `${workspace.id}:owner`));
+  assert.deepEqual(membership.organizationRoles, ["organization_admin", "auditor"]);
+  await host.close();
+});
+
 test("同一 tenant 内仍按工作区成员隔离", async () => {
   const store = new InMemoryKernelStore();
   const host = await createAgentOsHost({
@@ -1026,7 +1067,9 @@ test("同一 tenant 内仍按工作区成员隔离", async () => {
     secretStore: secrets,
     identityResolver(request) {
       const principalId = request.headers.get("authorization")?.replace(/^Bearer\s+/u, "") ?? "";
-      return principalId ? { tenantId: "tenant-a", principalId } : { tenantId: "", principalId: "" };
+      return principalId
+        ? { tenantId: "tenant-a", principalId, organizationRoles: ["organization_admin"] as const }
+        : { tenantId: "", principalId: "" };
     },
   });
   const ownerHeaders = {

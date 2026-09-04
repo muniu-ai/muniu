@@ -12,6 +12,7 @@ import {
   type JsonObject,
   type JsonValue,
   type MemoryRecord,
+  type OrganizationRole,
   type Thread,
   type ThreadTurnSessionEntry,
   type ThreadTurnsView,
@@ -115,7 +116,12 @@ export interface AgentOsHostOptions {
   readonly identityResolver?: (request: Request) => {
     readonly tenantId: string;
     readonly principalId: string;
-  } | Promise<{ readonly tenantId: string; readonly principalId: string }>;
+    readonly organizationRoles?: readonly OrganizationRole[];
+  } | Promise<{
+    readonly tenantId: string;
+    readonly principalId: string;
+    readonly organizationRoles?: readonly OrganizationRole[];
+  }>;
   /** 仅用于本地开发或测试宿主附加受信 WebView 来源。 */
   readonly allowedOrigins?: readonly string[];
   readonly protectedPayloadKeys?: ProtectedPayloadKeyDestroyer;
@@ -199,7 +205,7 @@ function safeError(error: unknown, traceId: string): Response {
   } else if (error instanceof KernelError) {
     status = error.code === "STREAM_VERSION_CONFLICT" ? 409
       : error.code === "AUTHENTICATION_REQUIRED" ? 401
-        : error.code === "WORKSPACE_ACCESS_DENIED" ? 403
+        : error.code.endsWith("_ACCESS_DENIED") ? 403
           : error.code === "NOT_FOUND" || error.code.endsWith("_NOT_FOUND") ? 404
             : 422;
     code = error.code; message = error.message; action = error.action; retryable = error.retryable;
@@ -573,6 +579,19 @@ async function authorizedWorkspace(
   });
 }
 
+function requireOrganizationRole(
+  profile: "local" | "enterprise",
+  roles: readonly OrganizationRole[],
+  allowed: readonly OrganizationRole[],
+): void {
+  if (profile === "local" || roles.some((role) => allowed.includes(role))) return;
+  throw new KernelError(
+    "ORGANIZATION_ACCESS_DENIED",
+    "当前组织角色无权执行此操作",
+    "联系组织管理员授予所需角色",
+  );
+}
+
 function idempotentProjectionMutation<T>(input: {
   readonly store: KernelStore;
   readonly tenantId: string;
@@ -750,6 +769,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
       }
       const TENANT_ID = identity.tenantId;
       const ACTOR_ID = identity.principalId;
+      const ORGANIZATION_ROLES = identity.organizationRoles ?? [];
       const pluginWorkspaceKey = (workspaceId: string) => encodePluginWorkspace(TENANT_ID, workspaceId);
       const accessibleWorkspaceIds = async () => new Set(
         (await projectionList<WorkspaceMembership>(options.store, TENANT_ID, "membership"))
@@ -785,6 +805,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         return json(workspaces.filter((workspace) => allowed.has(workspace.id)), 200, traceId);
       }
       if (request.method === "POST" && url.pathname === "/v2/workspaces") {
+        requireOrganizationRole(profile, ORGANIZATION_ROLES, ["organization_admin"]);
         const body = await readBody(request);
         const pluginsInput = Array.isArray(body.pluginIds) && body.pluginIds.every((id) => typeof id === "string")
           ? body.pluginIds as string[] : [];
@@ -800,6 +821,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         const viewMode = body.viewMode === "professional" ? "professional" : "business";
         const workspace = await kernel.createWorkspace(TENANT_ID, ACTOR_ID, mutationKey as string, {
           name: stringField(body, "name")!, viewMode, pluginIds: pluginsInput,
+          organizationRoles: ORGANIZATION_ROLES,
         });
         for (const pluginId of pluginsInput) {
           if (!officialPluginIds.has(pluginId)) await pluginInstaller?.activate?.(pluginId);
@@ -1340,6 +1362,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         return json([...plugins.listOfficial(), ...installed], 200, traceId);
       }
       if (url.pathname === "/v2/plugins/installations" && request.method === "POST") {
+        requireOrganizationRole(profile, ORGANIZATION_ROLES, ["organization_admin", "governance_admin"]);
         if (!pluginInstaller) {
           throw new KernelError("PLUGIN_REGISTRY_UNAVAILABLE", "插件仓库暂不可用", "检查签名仓库连接");
         }
@@ -1356,6 +1379,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
       }
       const pluginInstallationMatch = url.pathname.match(/^\/v2\/plugins\/installations\/([^/]+)$/u);
       if (pluginInstallationMatch && request.method === "PATCH") {
+        requireOrganizationRole(profile, ORGANIZATION_ROLES, ["organization_admin", "governance_admin"]);
         if (!pluginInstaller?.update) {
           throw new KernelError("PLUGIN_REGISTRY_UNAVAILABLE", "插件更新暂不可用", "检查签名仓库连接");
         }

@@ -76,6 +76,30 @@ test("本地身份、工作区、线程和执行共用同一事件流", async ()
   assert.equal(events.events.every((event) => event.hmac.length === 64), true);
 });
 
+test("企业组织角色随工作区所有者成员关系持久化", async () => {
+  const store = new InMemoryKernelStore(undefined, () => now);
+  const kernel = new AgentOsKernel(store, { now: () => now });
+  const workspace = await kernel.createWorkspace("tenant-a", "owner", "enterprise-workspace", {
+    name: "企业工作区",
+    viewMode: "professional",
+    pluginIds: ["coding"],
+    organizationRoles: ["organization_admin", "auditor"],
+  });
+  const membership = await store.transact("tenant-a", (transaction) =>
+    transaction.getProjection("membership", `${workspace.id}:owner`));
+  assert.deepEqual(membership, {
+    id: `${workspace.id}:owner`,
+    tenantId: "tenant-a",
+    workspaceId: workspace.id,
+    principalId: "owner",
+    organizationRoles: ["organization_admin", "auditor"],
+    workspaceRole: "owner",
+    streamVersion: 1,
+    createdAt: now,
+    updatedAt: now,
+  });
+});
+
 test("模型密钥引用策略可按部署 profile 注入且默认只接受 v2 Keychain", async () => {
   const connection = {
     presetId: "openai",

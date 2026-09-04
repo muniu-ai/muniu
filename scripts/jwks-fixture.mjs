@@ -21,7 +21,9 @@ function encode(value) {
   return Buffer.from(JSON.stringify(value)).toString("base64url");
 }
 
-function accessToken(tenantId, principalId) {
+const organizationRoles = new Set(["organization_admin", "governance_admin", "auditor"]);
+
+function accessToken(tenantId, principalId, roles) {
   const now = Math.floor(Date.now() / 1000);
   const header = encode({ alg: "RS256", kid: keyId, typ: "JWT" });
   const payload = encode({
@@ -29,6 +31,7 @@ function accessToken(tenantId, principalId) {
     aud: audience,
     sub: principalId,
     tenant_id: tenantId,
+    organization_roles: roles,
     iat: now,
     nbf: now - 1,
     exp: now + ttlSeconds,
@@ -61,12 +64,17 @@ const server = createServer((request, response) => {
   if (request.method === "POST" && url.pathname === "/token") {
     const tenantId = url.searchParams.get("tenant")?.trim();
     const principalId = url.searchParams.get("sub")?.trim();
+    const roles = url.searchParams.getAll("role").map((role) => role.trim()).filter(Boolean);
     if (!tenantId || !principalId) {
       send(response, 400, { code: "TENANT_AND_SUB_REQUIRED" });
       return;
     }
+    if (roles.some((role) => !organizationRoles.has(role))) {
+      send(response, 400, { code: "ORGANIZATION_ROLE_INVALID" });
+      return;
+    }
     send(response, 200, {
-      access_token: accessToken(tenantId, principalId),
+      access_token: accessToken(tenantId, principalId, [...new Set(roles)]),
       token_type: "Bearer",
       expires_in: ttlSeconds,
     });

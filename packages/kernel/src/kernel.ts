@@ -6,6 +6,7 @@ import type {
   Job,
   JsonObject,
   MemoryRecord,
+  OrganizationRole,
   ShareGrant,
   Thread,
   ToolCallIntent,
@@ -131,7 +132,12 @@ export class AgentOsKernel {
     tenantId: string,
     actorId: string,
     idempotencyKey: string,
-    input: { readonly name: string; readonly viewMode: Workspace["viewMode"]; readonly pluginIds: readonly string[] },
+    input: {
+      readonly name: string;
+      readonly viewMode: Workspace["viewMode"];
+      readonly pluginIds: readonly string[];
+      readonly organizationRoles?: readonly OrganizationRole[];
+    },
   ): Promise<Workspace> {
     return this.mutation(tenantId, "workspace.create", idempotencyKey, input, (transaction) => {
       const now = this.now();
@@ -144,7 +150,8 @@ export class AgentOsKernel {
       transaction.putProjection("workspace", id, workspace);
       transaction.putProjection("membership", `${id}:${actorId}`, {
         id: `${id}:${actorId}`, tenantId, workspaceId: id, principalId: actorId,
-        organizationRoles: [], workspaceRole: "owner", streamVersion: 1, createdAt: now, updatedAt: now,
+        organizationRoles: [...(input.organizationRoles ?? [])], workspaceRole: "owner",
+        streamVersion: 1, createdAt: now, updatedAt: now,
       });
       this.append(transaction, {
         tenantId, aggregateType: "workspace", aggregateId: id, expectedStreamVersion: 0,
