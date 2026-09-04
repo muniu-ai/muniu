@@ -124,6 +124,35 @@ test("Worker 通过同一生产链显式执行 Codex CLI", {
   assert.equal(await readFile(join(fixture.repositoryPath, "message.txt"), "utf8"), "old value\n");
 });
 
+test("Runner 获批前原路径被替换时仍只执行 Worker 管理的已验副本", {
+  skip: !SANDBOX_AVAILABLE,
+}, async (t) => {
+  const fixture = await externalFixture(t, "completed");
+  const polling = fixture.worker.pollOnce();
+  const runnerApproval = await waitForApproval(fixture.store, []);
+  const marker = `${fixture.binaryPath}.replacement-ran`;
+  await writeFile(fixture.binaryPath, [
+    "#!/bin/sh",
+    `printf 'unsafe\\n' > '${marker}'`,
+    "exit 0",
+    "",
+  ].join("\n"), "utf8");
+  await chmod(fixture.binaryPath, 0o755);
+  await fixture.kernel.decideApproval(
+    "local", "local-owner", "approve-staged-runner", runnerApproval.id,
+    runnerApproval.streamVersion, "approve_once",
+  );
+  const candidateApproval = await waitForApproval(fixture.store, [runnerApproval.id]);
+  await fixture.kernel.decideApproval(
+    "local", "local-owner", "approve-staged-candidate", candidateApproval.id,
+    candidateApproval.streamVersion, "approve_once",
+  );
+
+  assert.deepEqual(await polling, { status: "completed", jobId: "job-1" });
+  await assert.rejects(() => readFile(marker), (error: NodeJS.ErrnoException) => error.code === "ENOENT");
+  assert.deepEqual(await readdir(fixture.sandboxRoot), []);
+});
+
 test("Runner 没有可确认终态时进入人工核对，Job 不自动重放", {
   skip: !SANDBOX_AVAILABLE,
 }, async (t) => {
@@ -159,6 +188,26 @@ test("Runner 没有可确认终态时进入人工核对，Job 不自动重放", 
   );
 });
 
+test("Worker 拒绝 npm/shebang 包装器并给出原生 macOS CLI 安装指引", {
+  skip: !SANDBOX_AVAILABLE,
+}, async (t) => {
+  const fixture = await externalFixture(t, "completed", "claude-cli", 3_600_000, "shebang");
+
+  assert.deepEqual(await fixture.worker.pollOnce(), { status: "failed", jobId: "job-1" });
+  const state = await fixture.store.transact("local", (transaction) => ({
+    execution: transaction.getProjection<Execution>("execution", "execution-1"),
+    approvals: transaction.listProjections<Approval>("approval"),
+    run: transaction.getProjection<any>("coding.execution", "execution-1"),
+  }));
+  assert.equal(state.execution?.status, "failed");
+  assert.equal(state.approvals.length, 0);
+  assert.match(
+    state.run?.result?.nextStep ?? "",
+    /不支持 npm\/shebang 包装器，请安装官方原生 CLI/u,
+  );
+  assert.deepEqual(await readdir(fixture.sandboxRoot), []);
+});
+
 test("Worker 发现已确认 Runner 的摘要变化时失败关闭，不启动进程", {
   skip: !SANDBOX_AVAILABLE,
 }, async (t) => {
@@ -184,7 +233,9 @@ test("Worker 发现已确认 Runner 的摘要变化时失败关闭，不启动�
   }));
   assert.equal(state.execution?.status, "failed");
   assert.equal(state.approvals.length, 0);
-  assert.equal(state.run, undefined);
+  assert.equal(state.run?.status, "failed");
+  assert.match(state.run?.result?.nextStep ?? "", /Runner 二进制已变化，需要重新确认/u);
+  assert.equal(state.run?.externalInvocation, undefined);
   assert.equal(await readFile(join(fixture.repositoryPath, "message.txt"), "utf8"), "old value\n");
   await assert.rejects(() => readFile(versionProbeMarker), (error: NodeJS.ErrnoException) => error.code === "ENOENT");
 });
@@ -237,6 +288,7 @@ async function externalFixture(
   terminal: "completed" | "unknown" | "hang",
   runnerId: ExternalCodingRunnerId = "claude-cli",
   maxDurationMs = 3_600_000,
+  binaryFormat: "native" | "shebang" = "native",
 ) {
   const root = await mkdtemp(join(tmpdir(), "muniu-external-runner-"));
   t.after(async () => rm(root, { recursive: true, force: true }));
@@ -252,8 +304,12 @@ async function externalFixture(
     "-c", "user.email=test@muniu.invalid",
     "commit", "--quiet", "-m", "fixture",
   ]);
-  await writeFile(binaryPath, runnerScript(terminal, "new value", runnerId), "utf8");
-  await chmod(binaryPath, 0o755);
+  if (binaryFormat === "native") {
+    await compileRunnerBinary(binaryPath, terminal, "new value", runnerId);
+  } else {
+    await writeFile(binaryPath, "#!/bin/sh\nprintf 'not allowed\\n'\n", "utf8");
+    await chmod(binaryPath, 0o755);
+  }
   const fixedRepositoryPath = await realpath(repositoryPath);
   const identity = await (runnerId === "claude-cli"
     ? inspectClaudeRunnerBinary(binaryPath)
@@ -465,11 +521,12 @@ async function waitForApproval(
   throw new Error("等待 Runner 批准超时");
 }
 
-function runnerScript(
+async function compileRunnerBinary(
+  binaryPath: string,
   terminal: "completed" | "unknown" | "hang",
   value: string,
   runnerId: ExternalCodingRunnerId = "claude-cli",
-): string {
+): Promise<void> {
   const version = runnerId === "claude-cli" ? "claude-fixture 1.0.0" : "codex-fixture 1.0.0";
   const session = runnerId === "claude-cli"
     ? '{"type":"system","subtype":"init","session_id":"claude-session-fixture"}'
@@ -481,20 +538,29 @@ function runnerScript(
     : terminal === "completed"
       ? '{"type":"turn.completed"}'
       : '{"type":"item.completed","item":{"type":"agent_message"}}';
-  return [
-    "#!/bin/sh",
-    "if [ \"${1:-}\" = \"--version\" ]; then",
-    `  printf '${version}\\n'`,
-    "  exit 0",
-    "fi",
-    `printf '${value}\\n' > message.txt`,
-    "printf 'created by runner\\n' > added.txt",
-    `printf '%s\\n' '${session}'`,
-    ...(terminal === "hang"
-      ? ["sleep 60"]
-      : [`printf '%s\\n' '${result}'`]),
+  const sourcePath = `${binaryPath}.c`;
+  await writeFile(sourcePath, [
+    "#include <stdio.h>",
+    "#include <string.h>",
+    "#include <unistd.h>",
+    "int main(int argc, char **argv) {",
+    `  if (argc > 1 && strcmp(argv[1], "--version") == 0) { fputs(${JSON.stringify(`${version}\n`)}, stdout); return 0; }`,
+    `  FILE *message = fopen("message.txt", "w"); if (!message) return 2; fputs(${JSON.stringify(`${value}\n`)}, message); fclose(message);`,
+    "  FILE *added = fopen(\"added.txt\", \"w\"); if (!added) return 3; fputs(\"created by runner\\n\", added); fclose(added);",
+    `  fputs(${JSON.stringify(`${session}\n`)}, stdout); fflush(stdout);`,
+    terminal === "hang"
+      ? "  sleep(60);"
+      : `  fputs(${JSON.stringify(`${result}\n`)}, stdout);`,
+    "  return 0;",
+    "}",
     "",
-  ].join("\n");
+  ].join("\n"), "utf8");
+  await new Promise<void>((resolveCommand, rejectCommand) => {
+    execFile("/usr/bin/clang", [sourcePath, "-o", binaryPath], (error) => {
+      if (error) rejectCommand(error);
+      else resolveCommand();
+    });
+  });
 }
 
 function runGit(cwd: string, arguments_: readonly string[]): Promise<void> {

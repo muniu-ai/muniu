@@ -2,10 +2,13 @@
 
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { constants as fsConstants } from "node:fs";
 import {
+  chmod,
   lstat,
   mkdir,
   mkdtemp,
+  open,
   readFile,
   realpath,
   rm,
@@ -55,14 +58,8 @@ import {
   RunnerKnownFailureError,
 } from "@mn/plugin-coding";
 import { StaleFencingTokenError, type StoredJob } from "@mn/storage";
-import {
-  createClaudeCliRunner,
-  verifyRunnerBinaryIdentity as verifyClaudeBinaryIdentity,
-} from "@mn/runner-claude-cli";
-import {
-  createCodexCliRunner,
-  verifyRunnerBinaryIdentity as verifyCodexBinaryIdentity,
-} from "@mn/runner-codex-cli";
+import { createClaudeCliRunner } from "@mn/runner-claude-cli";
+import { createCodexCliRunner } from "@mn/runner-codex-cli";
 
 import { createKernelToolApprovalPort, type ToolApprovalKernel } from "./approval.js";
 import {
@@ -137,6 +134,11 @@ interface RepositorySnapshot {
 interface CandidateMaterial {
   readonly diff: string;
   readonly sandboxPath: string;
+}
+
+interface StagedRunnerArtifact {
+  readonly rootPath: string;
+  readonly identity: RunnerBinaryIdentityV1;
 }
 
 interface ExternalRunnerAdapterEvent {
@@ -347,10 +349,6 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
         "needs_reconciliation",
         nextStep,
       );
-    }
-
-    if (runnerId !== "builtin") {
-      await assertCurrentRunnerIdentity(state.runnerConfiguration!);
     }
 
     const snapshot = await inspectRepositoryControlled({
@@ -738,6 +736,7 @@ class ExternalCodingRunner implements ManagedCodingRunner {
   readonly id: ExternalCodingRunnerId;
   readonly #options: ExternalCodingRunnerOptions;
   #adapter?: ExternalRunnerAdapter;
+  #artifact?: StagedRunnerArtifact;
   #sessionId?: string;
   #sandboxPath?: string;
   #sequence = 0;
@@ -768,23 +767,38 @@ class ExternalCodingRunner implements ManagedCodingRunner {
         || input.resourceDigest !== this.#options.controlPlane.repositoryIndexDigest) {
         throw new Error("外部 Runner 输入与已固定的 Execution 或仓库不一致");
       }
+      if (this.#options.configuration.identityDigest
+        !== sha256(this.#options.configuration.identity)) {
+        throw new Error("Runner 确认记录摘要无效，已拒绝执行");
+      }
       this.#sequence = 1;
-      await assertCurrentRunnerIdentity(this.#options.configuration);
       await this.#assertSourceUnchanged();
       this.#sandboxPath = await this.#options.sandbox.createWorkingCopy(
         this.#options.snapshot,
         this.#sequence,
       );
+      this.#artifact = await this.#options.sandbox.stageRunnerBinary(
+        this.#options.configuration.identity,
+      );
       const launch = await this.#options.sandbox.externalLauncher(this.#sandboxPath);
       this.#adapter = createExternalRunnerAdapter({
         runnerId: this.id,
-        identity: this.#options.configuration.identity,
+        identity: this.#artifact.identity,
         launch,
       });
     } catch (error) {
       throw knownRunnerFailure(error);
     }
     await this.#authorizeAndCheckpoint("start");
+    try {
+      await this.#options.sandbox.verifyRunnerArtifact(
+        this.#artifact!,
+        this.#options.configuration.identity.version,
+      );
+    } catch (error) {
+      throw knownRunnerFailure(error);
+    }
+    await this.#checkpointStarted();
     const session = await this.#adapter.start({
       executionId: input.executionId,
       repositoryPath: this.#sandboxPath,
@@ -890,12 +904,20 @@ class ExternalCodingRunner implements ManagedCodingRunner {
     }
     this.#sequence += 1;
     try {
-      await assertCurrentRunnerIdentity(this.#options.configuration);
       await this.#assertSourceUnchanged();
     } catch (error) {
       throw knownRunnerFailure(error);
     }
     await this.#authorizeAndCheckpoint("resume");
+    try {
+      await this.#options.sandbox.verifyRunnerArtifact(
+        this.#artifact!,
+        this.#options.configuration.identity.version,
+      );
+    } catch (error) {
+      throw knownRunnerFailure(error);
+    }
+    await this.#checkpointStarted();
     this.#terminalObserved = false;
     await this.#adapter.resume(sessionId, {
       preparedInput: externalRunnerInput(this.#options, input.preparedInput, this.#sequence),
@@ -922,10 +944,14 @@ class ExternalCodingRunner implements ManagedCodingRunner {
       }
       this.#sandboxPath = undefined;
     }
+    if (this.#artifact) {
+      await this.#options.sandbox.cleanupRunnerArtifact(this.#artifact);
+      this.#artifact = undefined;
+    }
   }
 
   async #authorizeAndCheckpoint(mode: "start" | "resume"): Promise<void> {
-    if (!this.#sandboxPath) throw new Error("候选仓库尚未创建");
+    if (!this.#sandboxPath || !this.#artifact) throw new Error("候选仓库或 Runner 制品尚未创建");
     const intent = createIntent({
       execution: this.#options.execution,
       authority: this.#options.authority,
@@ -940,6 +966,8 @@ class ExternalCodingRunner implements ManagedCodingRunner {
         binaryVersion: this.#options.configuration.identity.version,
         binarySha256: this.#options.configuration.identity.sha256,
         identityDigest: this.#options.configuration.identityDigest,
+        stagedBinarySha256: this.#artifact.identity.sha256,
+        stagedBinaryPathDigest: sha256(this.#artifact.identity.realPath),
         repositoryIndexDigest: this.#options.controlPlane.repositoryIndexDigest,
       },
       resourceRefs: [{
@@ -953,6 +981,13 @@ class ExternalCodingRunner implements ManagedCodingRunner {
       await authorizeTool(this.#options.runtime, this.#options.approval, intent, this.#options.signal);
     } catch (error) {
       throw knownRunnerFailure(error);
+    }
+    this.#intent = intent;
+  }
+
+  async #checkpointStarted(): Promise<void> {
+    if (!this.#sandboxPath || !this.#artifact) {
+      throw new Error("候选仓库或 Runner 制品尚未创建");
     }
     await persistExternalInvocationStarted({
       store: this.#options.store,
@@ -968,7 +1003,6 @@ class ExternalCodingRunner implements ManagedCodingRunner {
       occurredAt: this.#options.now(),
     });
     this.#hasCheckpoint = true;
-    this.#intent = intent;
   }
 
   async #recordOutcome(event: ExternalRunnerAdapterEvent): Promise<void> {
@@ -1031,22 +1065,12 @@ function createExternalRunnerAdapter(input: {
   const options = {
     binaryPath: input.identity.requestedPath,
     confirmedIdentity: input.identity,
+    inspectIdentity: () => inspectStagedRunnerIdentity(input.identity),
     launch: input.launch,
   };
   return input.runnerId === "claude-cli"
     ? createClaudeCliRunner(options)
     : createCodexCliRunner(options);
-}
-
-async function assertCurrentRunnerIdentity(configuration: CodingRunnerConfigurationV1): Promise<void> {
-  if (configuration.identityDigest !== sha256(configuration.identity)) {
-    throw new Error("Runner 确认记录摘要无效，已拒绝执行");
-  }
-  if (configuration.runnerId === "claude-cli") {
-    await verifyClaudeBinaryIdentity(configuration.identity);
-    return;
-  }
-  await verifyCodexBinaryIdentity(configuration.identity);
 }
 
 function runnerToolId(runnerId: ExternalCodingRunnerId): string {
@@ -1479,6 +1503,101 @@ class MacOsCodingSandbox {
     return actualRepository;
   }
 
+  async stageRunnerBinary(confirmed: RunnerBinaryIdentityV1): Promise<StagedRunnerArtifact> {
+    const root = await this.#initialize();
+    if (!isAbsolute(confirmed.realPath) || confirmed.realPath.includes("\0")) {
+      throw new Error("Runner 已确认真实路径无效");
+    }
+    const source = await open(
+      confirmed.realPath,
+      fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW,
+    );
+    let bytes: Buffer;
+    try {
+      const before = await source.stat();
+      if (!before.isFile() || (before.mode & 0o111) === 0 || before.size < 1) {
+        throw new Error("Runner 必须是非空可执行普通文件");
+      }
+      bytes = await source.readFile();
+      const after = await source.stat();
+      if (!sameFileInfo(before, after)
+        || String(after.dev) !== confirmed.device
+        || String(after.ino) !== confirmed.inode
+        || after.size !== confirmed.byteLength
+        || after.mtimeMs !== confirmed.modifiedAtMs
+        || hashBytes(bytes) !== confirmed.sha256) {
+        throw new Error("Runner 二进制已变化，需要重新确认");
+      }
+    } finally {
+      await source.close();
+    }
+    assertNativeMacExecutable(bytes);
+
+    const artifactRoot = await mkdtemp(join(root, `runner-${confirmed.sha256.slice(0, 16)}-`));
+    assertWithin(root, artifactRoot, "Runner 制品目录");
+    const artifactPath = join(artifactRoot, "runner");
+    const target = await open(artifactPath, "wx", 0o500);
+    try {
+      await target.writeFile(bytes);
+      await target.sync();
+    } finally {
+      await target.close();
+    }
+    await chmod(artifactPath, 0o500);
+    const info = await lstat(artifactPath);
+    if (!info.isFile() || hashBytes(await readFile(artifactPath)) !== confirmed.sha256) {
+      await rm(artifactRoot, { recursive: true, force: true });
+      throw new Error("Runner 不可变副本校验失败");
+    }
+    await chmod(artifactRoot, 0o500);
+    const identity: RunnerBinaryIdentityV1 = Object.freeze({
+      requestedPath: artifactPath,
+      realPath: artifactPath,
+      version: confirmed.version,
+      sha256: confirmed.sha256,
+      device: String(info.dev),
+      inode: String(info.ino),
+      byteLength: info.size,
+      modifiedAtMs: info.mtimeMs,
+    });
+    return Object.freeze({ rootPath: artifactRoot, identity });
+  }
+
+  async verifyRunnerArtifact(
+    artifact: StagedRunnerArtifact,
+    expectedVersion: string,
+  ): Promise<void> {
+    const root = await this.#initialize();
+    const current = await inspectStagedRunnerIdentity(artifact.identity);
+    assertWithin(root, artifact.rootPath, "Runner 制品目录");
+    if (resolve(current.realPath, "..") !== artifact.rootPath) {
+      throw new Error("Runner 制品目录结构无效");
+    }
+    const result = await command(
+      this.#executable,
+      ["-p", this.#runnerProbeProfile(), current.realPath, "--version"],
+      artifact.rootPath,
+      { TMPDIR: "/dev/null" },
+      5_000,
+    );
+    await requireSuccess(result, "Runner 版本探测失败");
+    const version = `${result.stdout}\n${result.stderr}`.trim().split(/\r?\n/u)[0]?.slice(0, 256) ?? "";
+    if (!version || version !== expectedVersion) {
+      throw new Error("Runner 不可变副本返回的版本与确认值不一致");
+    }
+    await inspectStagedRunnerIdentity(artifact.identity);
+  }
+
+  async cleanupRunnerArtifact(artifact: StagedRunnerArtifact): Promise<void> {
+    const root = await this.#initialize();
+    assertWithin(root, artifact.rootPath, "Runner 制品目录");
+    if (!basename(artifact.rootPath).startsWith("runner-")) {
+      throw new Error("Runner 制品目录结构无效");
+    }
+    await chmod(artifact.rootPath, 0o700).catch(() => undefined);
+    await rm(artifact.rootPath, { recursive: true, force: true });
+  }
+
   async diff(repositoryPath: string): Promise<string> {
     const candidateRoot = await this.#candidateRoot(repositoryPath);
     const head = await this.#run(candidateRoot, repositoryPath, ["rev-parse", "HEAD"]);
@@ -1583,6 +1702,18 @@ class MacOsCodingSandbox {
       `(allow file-write* (subpath \"${schemeString(candidateRoot)}\"))`,
       "(allow file-write* (literal \"/dev/null\"))",
       allowNetwork ? "(allow network*)" : "(deny network*)",
+    ].join("\n");
+  }
+
+  #runnerProbeProfile(): string {
+    return [
+      "(version 1)",
+      "(deny default)",
+      "(allow process*)",
+      "(allow sysctl-read)",
+      "(allow file-read*)",
+      "(allow file-write* (literal \"/dev/null\"))",
+      "(deny network*)",
     ].join("\n");
   }
 }
@@ -2130,6 +2261,62 @@ function hashBytes(value: Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
+function sameFileInfo(
+  left: { readonly dev: number | bigint; readonly ino: number | bigint; readonly size: number | bigint; readonly mtimeMs: number },
+  right: { readonly dev: number | bigint; readonly ino: number | bigint; readonly size: number | bigint; readonly mtimeMs: number },
+): boolean {
+  return left.dev === right.dev
+    && left.ino === right.ino
+    && left.size === right.size
+    && left.mtimeMs === right.mtimeMs;
+}
+
+function assertNativeMacExecutable(bytes: Buffer): void {
+  if (bytes.length < 4) throw new Error("Runner 二进制过短");
+  const magic = bytes.readUInt32BE(0);
+  if (!new Set([
+    0xfeedface,
+    0xcefaedfe,
+    0xfeedfacf,
+    0xcffaedfe,
+    0xcafebabe,
+    0xbebafeca,
+    0xcafebabf,
+    0xbfbafeca,
+  ]).has(magic)) {
+    throw new Error(
+      "Runner 必须是原生 macOS Mach-O 制品；不支持 npm/shebang 包装器，请安装官方原生 CLI",
+    );
+  }
+}
+
+async function inspectStagedRunnerIdentity(
+  confirmed: RunnerBinaryIdentityV1,
+): Promise<RunnerBinaryIdentityV1> {
+  const handle = await open(
+    confirmed.realPath,
+    fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW,
+  );
+  try {
+    const before = await handle.stat();
+    const bytes = await handle.readFile();
+    const after = await handle.stat();
+    if (!before.isFile()
+      || !sameFileInfo(before, after)
+      || confirmed.requestedPath !== confirmed.realPath
+      || String(after.dev) !== confirmed.device
+      || String(after.ino) !== confirmed.inode
+      || after.size !== confirmed.byteLength
+      || after.mtimeMs !== confirmed.modifiedAtMs
+      || hashBytes(bytes) !== confirmed.sha256) {
+      throw new Error("Runner 不可变副本已变化");
+    }
+    return confirmed;
+  } finally {
+    await handle.close();
+  }
+}
+
 function git(cwd: string, arguments_: readonly string[]): Promise<CommandResult> {
   return command(GIT, [
     "-c", "core.hooksPath=/dev/null",
@@ -2146,12 +2333,14 @@ function command(
   arguments_: readonly string[],
   cwd?: string,
   environment: Readonly<Record<string, string>> = {},
+  timeoutMs?: number,
 ): Promise<CommandResult> {
   return new Promise((resolveCommand, rejectCommand) => {
     execFile(executable, [...arguments_], {
       ...(cwd ? { cwd } : {}),
       encoding: "utf8",
       maxBuffer: 32 * 1024 * 1024,
+      ...(timeoutMs ? { timeout: timeoutMs, killSignal: "SIGKILL" as const } : {}),
       env: {
         PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
         GIT_CONFIG_GLOBAL: "/dev/null",
