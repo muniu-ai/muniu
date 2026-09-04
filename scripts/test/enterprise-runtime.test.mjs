@@ -35,15 +35,24 @@ test("OIDC resolver verifies RS256 identity and rejects malformed or expired tok
     aud: "muniu-v2",
     sub: "owner@example.test",
     tenant_id: "tenant-a",
+    organization_roles: ["organization_admin", "auditor"],
     nbf: 1_699_999_999,
     exp: 1_700_000_300,
   });
   assert.deepEqual(await resolver.resolve(new Request("https://host.test/v2/workspaces", {
     headers: { authorization: `Bearer ${token}` },
-  })), { tenantId: "tenant-a", principalId: "owner@example.test" });
+  })), {
+    tenantId: "tenant-a",
+    principalId: "owner@example.test",
+    organizationRoles: ["organization_admin", "auditor"],
+  });
   assert.deepEqual(await resolver.resolve(new Request("https://host.test/v2/workspaces", {
     headers: { authorization: `Bearer ${token}` },
-  })), { tenantId: "tenant-a", principalId: "owner@example.test" });
+  })), {
+    tenantId: "tenant-a",
+    principalId: "owner@example.test",
+    organizationRoles: ["organization_admin", "auditor"],
+  });
   assert.equal(jwksReads, 1, "JWKS should be cached for five minutes");
 
   const expired = jwt(privateKey, kid, {
@@ -55,6 +64,14 @@ test("OIDC resolver verifies RS256 identity and rejects malformed or expired tok
   })), { tenantId: "", principalId: "" });
   assert.deepEqual(await resolver.resolve(new Request("https://host.test/v2/workspaces", {
     headers: { authorization: "Bearer not-json.not-json.not-json" },
+  })), { tenantId: "", principalId: "" });
+
+  const unknownRole = jwt(privateKey, kid, {
+    iss: "https://identity.example.test", aud: "muniu-v2", sub: "owner", tenant_id: "tenant-a",
+    organization_roles: ["organization_admin", "superuser"], exp: 1_700_000_300,
+  });
+  assert.deepEqual(await resolver.resolve(new Request("https://host.test/v2/workspaces", {
+    headers: { authorization: `Bearer ${unknownRole}` },
   })), { tenantId: "", principalId: "" });
 });
 

@@ -14,6 +14,20 @@ function audienceMatches(value, expected) {
   return typeof value === "string" ? value === expected : Array.isArray(value) && value.includes(expected);
 }
 
+const ORGANIZATION_ROLES = new Set([
+  "organization_admin",
+  "governance_admin",
+  "auditor",
+]);
+
+function organizationRoles(value) {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.some((role) => typeof role !== "string" || !ORGANIZATION_ROLES.has(role))) {
+    return null;
+  }
+  return [...new Set(value)];
+}
+
 export class OidcIdentityResolver {
   #issuer;
   #audience;
@@ -74,6 +88,12 @@ export class OidcIdentityResolver {
       || typeof payload.tenant_id !== "string" || !payload.tenant_id) {
       return { tenantId: "", principalId: "" };
     }
-    return { tenantId: payload.tenant_id, principalId: payload.sub };
+    const roles = organizationRoles(payload.organization_roles);
+    if (roles === null) return { tenantId: "", principalId: "" };
+    return {
+      tenantId: payload.tenant_id,
+      principalId: payload.sub,
+      ...(roles === undefined ? {} : { organizationRoles: roles }),
+    };
   }
 }
