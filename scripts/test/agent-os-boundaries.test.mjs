@@ -8,6 +8,7 @@ const root = resolve(import.meta.dirname, "../..");
 function filesUnder(directory) {
   const output = [];
   if (!existsSync(directory)) return output;
+  if (!statSync(directory).isDirectory()) return [directory];
   for (const entry of readdirSync(directory)) {
     if (["dist", "dist-test", "node_modules", "target"].includes(entry)) continue;
     const path = join(directory, entry);
@@ -76,8 +77,23 @@ test("源代码和当前文档不暴露 v1 路由或旧协议", () => {
     for (const file of filesUnder(join(root, item))) {
       if (!/\.(?:ts|tsx|rs|json|ya?ml|md|mjs)$/.test(file)) continue;
       if (relative(root, file).split("/").includes("test")) continue;
-      const source = readFileSync(file, "utf8");
+      const source = maskApprovedProviderVersions(relative(root, file), readFileSync(file, "utf8"));
       assert.doesNotMatch(source, /["'`]\/v1(?:\/|\b)|mniu:\/\//, relative(root, file));
     }
   }
 });
+
+function maskApprovedProviderVersions(path, source) {
+  const replacements = new Map([
+    ["apps/worker/src/model-invoker.ts", [
+      "https://api.openai.com/v1/responses",
+      "https://api.anthropic.com/v1/messages",
+    ]],
+    ["packages/kernel/src/models.ts", ["https://api.openai.com/v1"]],
+    ["apps/host/src/host.ts", ['preset.id === "openai" ? "" : "/v1"']],
+  ]);
+  return (replacements.get(path) ?? []).reduce(
+    (masked, approved) => masked.replaceAll(approved, "approved-provider-version"),
+    source,
+  );
+}
