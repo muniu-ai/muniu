@@ -290,6 +290,150 @@ test("BYOK 模型调用按三家厂商的固定协议发送且只解析文本", 
   });
 });
 
+test("BYOK 模型适配器声明受限工具并还原三家厂商的工具调用", async (t) => {
+  const toolRequest = {
+    ...modelRequest,
+    availableToolIds: ["opc.public-web.read"],
+  };
+
+  await t.test("OpenAI Responses", async () => {
+    const invoke = createByokModelInvoker({
+      fetch: async (_input, init) => {
+        const body = JSON.parse(String(init?.body)) as {
+          tools: Array<{ name: string; parameters: unknown }>;
+        };
+        assert.deepEqual(body.tools, [{
+          type: "function",
+          name: "mn_tool_1",
+          description: "木牛受控工具：opc.public-web.read",
+          parameters: { type: "object", additionalProperties: true },
+          strict: false,
+        }]);
+        return Response.json({
+          output: [{
+            type: "function_call",
+            call_id: "call-openai",
+            name: "mn_tool_1",
+            arguments: JSON.stringify({ url: "https://example.com" }),
+          }],
+        });
+      },
+    });
+    assert.deepEqual(await invoke({
+      presetId: "openai", model: "gpt-5", apiKey: "key",
+      request: toolRequest, signal: new AbortController().signal,
+    }), {
+      text: "",
+      toolCalls: [{
+        id: "call-openai", toolId: "opc.public-web.read",
+        arguments: { url: "https://example.com" },
+      }],
+    });
+  });
+
+  await t.test("DeepSeek Chat Completions", async () => {
+    const invoke = createByokModelInvoker({
+      fetch: async (_input, init) => {
+        const body = JSON.parse(String(init?.body)) as { tools: unknown };
+        assert.deepEqual(body.tools, [{
+          type: "function",
+          function: {
+            name: "mn_tool_1",
+            description: "木牛受控工具：opc.public-web.read",
+            parameters: { type: "object", additionalProperties: true },
+          },
+        }]);
+        return Response.json({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{
+                id: "call-deepseek",
+                type: "function",
+                function: {
+                  name: "mn_tool_1",
+                  arguments: JSON.stringify({ url: "https://example.com/docs" }),
+                },
+              }],
+            },
+          }],
+        });
+      },
+    });
+    assert.deepEqual(await invoke({
+      presetId: "deepseek", model: "deepseek-chat", apiKey: "key",
+      request: toolRequest, signal: new AbortController().signal,
+    }), {
+      text: "",
+      toolCalls: [{
+        id: "call-deepseek", toolId: "opc.public-web.read",
+        arguments: { url: "https://example.com/docs" },
+      }],
+    });
+  });
+
+  await t.test("Anthropic Messages", async () => {
+    const invoke = createByokModelInvoker({
+      fetch: async (_input, init) => {
+        const body = JSON.parse(String(init?.body)) as { tools: unknown };
+        assert.deepEqual(body.tools, [{
+          name: "mn_tool_1",
+          description: "木牛受控工具：opc.public-web.read",
+          input_schema: { type: "object", additionalProperties: true },
+        }]);
+        return Response.json({
+          content: [{
+            type: "tool_use",
+            id: "call-anthropic",
+            name: "mn_tool_1",
+            input: { url: "https://example.com/pricing" },
+          }],
+        });
+      },
+    });
+    assert.deepEqual(await invoke({
+      presetId: "anthropic", model: "claude-sonnet-4-5", apiKey: "key",
+      request: toolRequest, signal: new AbortController().signal,
+    }), {
+      text: "",
+      toolCalls: [{
+        id: "call-anthropic", toolId: "opc.public-web.read",
+        arguments: { url: "https://example.com/pricing" },
+      }],
+    });
+  });
+});
+
+test("BYOK 模型适配器把持久化工具结果带入下一模型边界", async () => {
+  const invoke = createByokModelInvoker({
+    fetch: async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { input: unknown };
+      assert.deepEqual(body.input, [
+        { role: "system", content: "只陈述已有证据" },
+        { role: "user", content: "整理证据缺口" },
+        {
+          role: "user",
+          content: "[工具 opc.public-web.read 的结果]\n{\"status\":200}",
+        },
+      ]);
+      return Response.json({ output_text: "已整理" });
+    },
+  });
+  assert.deepEqual(await invoke({
+    presetId: "openai", model: "gpt-5", apiKey: "key",
+    request: {
+      ...modelRequest,
+      messages: [...modelRequest.messages, {
+        role: "tool" as const,
+        name: "opc.public-web.read",
+        toolCallId: "call-1",
+        content: "{\"status\":200}",
+      }],
+    },
+    signal: new AbortController().signal,
+  }), { text: "已整理", toolCalls: [] });
+});
+
 test("模型调用失败时不暴露密钥或响应正文", async () => {
   const invoke = createByokModelInvoker({
     fetch: async () => new Response("upstream leaked deepseek-key", { status: 401 }),
