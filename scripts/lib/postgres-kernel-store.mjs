@@ -193,6 +193,7 @@ export class PostgresKernelStore {
       const events = [];
       const jobs = [];
       const outbox = [];
+      const settledJobs = [];
 
       const transaction = {
         appendEvent: (request) => {
@@ -292,9 +293,141 @@ export class PostgresKernelStore {
             throw error;
           }
         },
+        settleJob: (input) => {
+          transaction.assertJobLease(input);
+          const projected = projections.get(projectionKey("job", input.jobId));
+          if (!projected || !Number.isSafeInteger(projected.streamVersion)) {
+            throw new Error(`Job ${input.jobId} 的投影不存在或版本无效`);
+          }
+          const payload = projected.payload && typeof projected.payload === "object"
+            ? projected.payload
+            : {};
+          const executionId = typeof payload.executionId === "string" ? payload.executionId : undefined;
+          const workspaceId = typeof projected.workspaceId === "string"
+            ? projected.workspaceId
+            : undefined;
+          const {
+            leaseOwner: _leaseOwner,
+            leaseExpiresAt: _leaseExpiresAt,
+            result: _priorResult,
+            failure: _priorFailure,
+            ...jobWithoutLease
+          } = projected;
+          const nextJob = {
+            ...jobWithoutLease,
+            status: input.outcome,
+            ...(input.outcome === "completed"
+              ? { result: input.value }
+              : { failure: input.value }),
+            streamVersion: projected.streamVersion + 1,
+            updatedAt: input.occurredAt,
+          };
+          transaction.appendEvent({
+            tenantId,
+            aggregateType: "job",
+            aggregateId: input.jobId,
+            expectedStreamVersion: projected.streamVersion,
+            type: `job.${input.outcome}`,
+            actorId: `worker:${input.workerId}`,
+            ...(executionId ? { executionId } : {}),
+            generation: Number.isSafeInteger(projected.generation) ? projected.generation : 1,
+            correlationId: `job:${input.jobId}:fence:${input.fencingToken}`,
+            publicPayload: {
+              ...(workspaceId ? { workspaceId } : {}),
+              ...(executionId ? { executionId } : {}),
+              jobId: input.jobId,
+              kind: projected.kind,
+              status: input.outcome,
+              fencingToken: input.fencingToken,
+            },
+          });
+          transaction.putProjection("job", input.jobId, nextJob);
+
+          if (executionId) {
+            const execution = projections.get(projectionKey("execution", executionId));
+            if (!execution || !Number.isSafeInteger(execution.streamVersion)) {
+              throw new Error(`Execution ${executionId} 的投影不存在或版本无效`);
+            }
+            const failure = input.outcome === "failed"
+              && input.value && typeof input.value === "object" && !Array.isArray(input.value)
+              ? input.value
+              : undefined;
+            const failureCode = typeof failure?.code === "string" && failure.code
+              ? failure.code
+              : "WORKER_FAILED";
+            const alreadyTerminal = input.outcome === "failed"
+              && (execution.status === "failed"
+                || execution.status === "completed"
+                || (execution.status === "cancelled" && failureCode === "EXECUTION_CANCELLED"));
+            if (!alreadyTerminal) {
+              const accepted = input.outcome === "completed"
+                ? execution.status === "running"
+                : execution.status === "running" || execution.status === "waiting_approval";
+              if (!accepted) {
+                throw new Error(`状态为 ${String(execution.status)} 的 Execution 不能标记为 ${input.outcome}`);
+              }
+              const nextExecution = {
+                ...execution,
+                status: input.outcome,
+                ...(input.outcome === "failed" ? { failureCode } : {}),
+                finishedAt: input.occurredAt,
+                streamVersion: execution.streamVersion + 1,
+                updatedAt: input.occurredAt,
+              };
+              transaction.appendEvent({
+                tenantId,
+                aggregateType: "execution",
+                aggregateId: executionId,
+                expectedStreamVersion: execution.streamVersion,
+                type: `execution.${input.outcome}`,
+                actorId: `worker:${input.workerId}`,
+                executionId,
+                generation: Number.isSafeInteger(execution.generation) ? execution.generation : 1,
+                correlationId: `job:${input.jobId}:fence:${input.fencingToken}`,
+                publicPayload: {
+                  ...(workspaceId ? { workspaceId } : {}),
+                  jobId: input.jobId,
+                  status: input.outcome,
+                  ...(input.outcome === "failed" ? { failureCode } : {}),
+                },
+              });
+              transaction.putProjection("execution", executionId, nextExecution);
+            }
+          }
+          settledJobs.push(input);
+          leasedJobs.delete(input.jobId);
+          return Object.freeze({ ...input, settled: true });
+        },
       };
 
       const result = await work(transaction);
+
+      for (const settlement of settledJobs) {
+        const changed = await client.query(settlement.outcome === "completed" ? `
+          update mn_v2.jobs set status = 'completed', result_json = $1::jsonb,
+            failure_json = null, lease_owner = null, lease_expires_at = null,
+            updated_at = $2::timestamptz
+          where job_id = $3 and status = 'leased' and lease_owner = $4 and fencing_token = $5
+            and lease_expires_at > $2::timestamptz
+        ` : `
+          update mn_v2.jobs set status = 'failed', failure_json = $1::jsonb,
+            result_json = null, lease_owner = null, lease_expires_at = null,
+            updated_at = $2::timestamptz
+          where job_id = $3 and status = 'leased' and lease_owner = $4 and fencing_token = $5
+            and lease_expires_at > $2::timestamptz
+        `, [
+          JSON.stringify(settlement.value),
+          settlement.occurredAt,
+          settlement.jobId,
+          settlement.workerId,
+          settlement.fencingToken,
+        ]);
+        if (changed.rowCount !== 1) {
+          const error = new Error(`Worker no longer owns job ${settlement.jobId}`);
+          error.code = "STALE_FENCING_TOKEN";
+          throw error;
+        }
+      }
 
       for (const key of deletedProjections) {
         const [namespace, id] = splitPair(key, "投影");

@@ -380,6 +380,18 @@ export class SqliteStorage implements StoragePort {
             || Date.parse(projection.leaseExpiresAt) <= Date.parse(input.occurredAt)) {
             throw new StaleFencingTokenError(input.jobId);
           }
+        },
+        settleJob: (input) => {
+          validTimestamp(input.occurredAt);
+          this.#settleLeasedJob(
+            input.jobId,
+            input.workerId,
+            input.fencingToken,
+            input.outcome,
+            input.value,
+            input.occurredAt
+          );
+          return { ...input, settled: true as const };
         }
       };
       const result = work(transaction);
@@ -795,15 +807,7 @@ export class SqliteStorage implements StoragePort {
     validTimestamp(now);
     this.#database.exec("begin immediate");
     try {
-      const job = this.#ownedLeasedJob(jobId, workerId, fencingToken, now);
-      const change = this.#database.prepare(`
-        update jobs set status = 'completed', result_json = ?, failure_json = null,
-          lease_owner = null, lease_expires_at = null, updated_at = ?
-        where job_id = ? and status = 'leased' and lease_owner = ? and fencing_token = ?
-          and lease_expires_at > ?
-      `).run(JSON.stringify(result), now, jobId, workerId, fencingToken, now);
-      if (Number(change.changes) !== 1) throw new StaleFencingTokenError(jobId);
-      this.#recordJobTerminal(job, workerId, fencingToken, "completed", result, now);
+      this.#settleLeasedJob(jobId, workerId, fencingToken, "completed", result, now);
       this.#database.exec("commit");
     } catch (error) {
       this.#database.exec("rollback");
@@ -847,15 +851,7 @@ export class SqliteStorage implements StoragePort {
     validTimestamp(now);
     this.#database.exec("begin immediate");
     try {
-      const job = this.#ownedLeasedJob(jobId, workerId, fencingToken, now);
-      const change = this.#database.prepare(`
-        update jobs set status = 'failed', failure_json = ?, result_json = null,
-          lease_owner = null, lease_expires_at = null, updated_at = ?
-        where job_id = ? and status = 'leased' and lease_owner = ? and fencing_token = ?
-          and lease_expires_at > ?
-      `).run(JSON.stringify(failure), now, jobId, workerId, fencingToken, now);
-      if (Number(change.changes) !== 1) throw new StaleFencingTokenError(jobId);
-      this.#recordJobTerminal(job, workerId, fencingToken, "failed", failure, now);
+      this.#settleLeasedJob(jobId, workerId, fencingToken, "failed", failure, now);
       this.#database.exec("commit");
     } catch (error) {
       this.#database.exec("rollback");
@@ -909,6 +905,30 @@ export class SqliteStorage implements StoragePort {
     `).get(jobId, workerId, fencingToken, now) as RecordRow | undefined;
     if (!job) throw new StaleFencingTokenError(jobId);
     return job;
+  }
+
+  #settleLeasedJob(
+    jobId: string,
+    workerId: string,
+    fencingToken: number,
+    outcome: "completed" | "failed",
+    value: JsonValue,
+    now: string
+  ): void {
+    const job = this.#ownedLeasedJob(jobId, workerId, fencingToken, now);
+    const change = this.#database.prepare(outcome === "completed" ? `
+      update jobs set status = 'completed', result_json = ?, failure_json = null,
+        lease_owner = null, lease_expires_at = null, updated_at = ?
+      where job_id = ? and status = 'leased' and lease_owner = ? and fencing_token = ?
+        and lease_expires_at > ?
+    ` : `
+      update jobs set status = 'failed', failure_json = ?, result_json = null,
+        lease_owner = null, lease_expires_at = null, updated_at = ?
+      where job_id = ? and status = 'leased' and lease_owner = ? and fencing_token = ?
+        and lease_expires_at > ?
+    `).run(JSON.stringify(value), now, jobId, workerId, fencingToken, now);
+    if (Number(change.changes) !== 1) throw new StaleFencingTokenError(jobId);
+    this.#recordJobTerminal(job, workerId, fencingToken, outcome, value, now);
   }
 
   #jobContext(job: RecordRow): JobLifecycleContext | undefined {

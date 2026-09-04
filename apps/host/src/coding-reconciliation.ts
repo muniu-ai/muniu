@@ -105,6 +105,12 @@ interface ExternalInvocationCheckpoint {
   readonly updatedAt: string;
   readonly reconciliationDecision?: CodingReconciliationDecision;
   readonly cleanupJobId?: string;
+  readonly supervision: {
+    readonly protocol: "mn-runner-supervisor-v1";
+    readonly statePath: string;
+    readonly tokenDigest: string;
+  };
+  readonly terminationStatus: "unconfirmed" | "confirmed";
   readonly verification?: {
     readonly status: "pending" | "failed" | "passed";
     readonly jobId: string;
@@ -174,10 +180,14 @@ export async function getCodingReconciliation(
       );
     }
     assertCleanupPaths(run.externalInvocation);
+    const runnerStopped = run.externalInvocation.terminationStatus === "confirmed";
     const verification = run.externalInvocation.verification;
-    const markCompletedAllowed = verification === undefined && verificationReadiness.ready;
+    const markCompletedAllowed = runnerStopped
+      && verification === undefined
+      && verificationReadiness.ready;
     const newCall = newCallReadiness(transaction, execution, run, task);
     const availableDecisions: CodingReconciliationDecision[] = verification?.status === "pending"
+      || !runnerStopped
       ? []
       : [
           "terminate",
@@ -198,7 +208,9 @@ export async function getCodingReconciliation(
         gateCount: run.result.gates.length,
         markCompletedAllowed,
         ...(run.result.evidence ? { codeEvidenceDigest: run.result.evidence.digest } : {}),
-        summary: verification?.status === "pending"
+        summary: !runnerStopped
+          ? "无法证明旧 Runner 已停止；为避免重复外联，暂不允许验证、清理或创建新调用"
+          : verification?.status === "pending"
           ? "正在对保留的候选运行权威 Gate；不会重放外部 Runner"
           : verification?.status === "failed"
             ? verification.failureReason ?? "保留候选未通过权威 Gate"
@@ -302,6 +314,7 @@ export async function decideCodingReconciliation(
       );
     }
     assertCleanupPaths(run.externalInvocation);
+    assertRunnerStopped(run.externalInvocation);
     if (input.decision === "mark_completed") {
       return requestReconciliationVerification(
         transaction,
@@ -564,7 +577,11 @@ function assertReviewer(
 }
 
 function assertCleanupPaths(invocation: ExternalInvocationCheckpoint): void {
-  for (const path of [invocation.sandboxPath, invocation.runnerArtifactPath]) {
+  for (const path of [
+    invocation.sandboxPath,
+    invocation.runnerArtifactPath,
+    invocation.supervision?.statePath,
+  ]) {
     if (!path || !isAbsolute(path) || normalize(path) !== path || path.includes("\0")) {
       throw new KernelError(
         "CODING_RECONCILIATION_STATE_INVALID",
@@ -579,6 +596,25 @@ function assertCleanupPaths(invocation: ExternalInvocationCheckpoint): void {
       "CODING_RECONCILIATION_STATE_INVALID",
       "外部 Runner 制品路径无效",
       "停止操作并检查受保护的执行检查点",
+    );
+  }
+  if (invocation.supervision?.protocol !== "mn-runner-supervisor-v1"
+    || basename(invocation.supervision.statePath) !== "state.json"
+    || !/^[a-f0-9]{64}$/u.test(invocation.supervision.tokenDigest)) {
+    throw new KernelError(
+      "CODING_RECONCILIATION_STATE_INVALID",
+      "外部 Runner 监督记录无效",
+      "停止操作并检查受保护的执行检查点",
+    );
+  }
+}
+
+function assertRunnerStopped(invocation: ExternalInvocationCheckpoint): void {
+  if (invocation.terminationStatus !== "confirmed") {
+    throw new KernelError(
+      "CODING_RUNNER_TERMINATION_UNCONFIRMED",
+      "无法证明旧 Runner 已停止，不能验证、清理或创建新调用",
+      "等待 Worker 监督器确认进程组终止；若长期未恢复，请保留现场并检查 Worker 日志",
     );
   }
 }
@@ -633,7 +669,8 @@ function newCallReadiness(
     parentAuthorityId: authority.parentAuthorityId,
     runnerId: externalRunnerId,
   }) : undefined;
-  const allowed = Boolean(workspace
+  const allowed = Boolean(run.externalInvocation?.terminationStatus === "confirmed"
+    && workspace
     && workspace.tenantId === execution.tenantId
     && workspace.activePluginIds.includes("coding")
     && (runnerPluginId === undefined || workspace.activePluginIds.includes(runnerPluginId))

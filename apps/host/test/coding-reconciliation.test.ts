@@ -283,6 +283,12 @@ async function createFixture<TStore extends KernelStore = InMemoryKernelStore>(
         identityDigest: runnerIdentityDigest,
         sandboxPath: "/private/var/tmp/muniu/candidate-reconciliation",
         runnerArtifactPath: "/private/var/tmp/muniu/runner-reconciliation/runner",
+        supervision: {
+          protocol: "mn-runner-supervisor-v1",
+          statePath: "/private/var/tmp/muniu/supervisors/runner-supervisor-fixture/state.json",
+          tokenDigest: "e".repeat(64),
+        },
+        terminationStatus: "confirmed",
         status: "outcome_unknown",
         startedAt: NOW,
         updatedAt: NOW,
@@ -483,6 +489,35 @@ test("terminate 原子终结未知 Coding 执行、关闭收件箱并入队清�
   assert.ok(fixture.store.readOutbox("local").some((message) =>
     message.topic === "job.available"
     && message.payload.jobId === response.cleanupJobId));
+  await fixture.host.close();
+});
+
+test("无法证明旧 Runner 停止时不暴露任何人工核对动作", async () => {
+  const fixture = await createFixture();
+  await fixture.store.transact("local", (transaction) => {
+    const run = transaction.getProjection<any>("coding.execution", fixture.executionId)!;
+    transaction.putProjection("coding.execution", fixture.executionId, {
+      ...run,
+      externalInvocation: { ...run.externalInvocation, terminationStatus: "unconfirmed" },
+    });
+  });
+  const path = `/v2/plugins/coding/executions/${fixture.executionId}/reconciliation`;
+  const detail = (await responseBody(await fixture.host.dispatch(new Request(
+    `http://host.test${path}`,
+  )))).data;
+  assert.deepEqual(detail.availableDecisions, []);
+  assert.equal(detail.evidence.markCompletedAllowed, false);
+  assert.equal(detail.newCall.allowed, false);
+  assert.match(detail.evidence.summary, /无法证明旧 Runner 已停止/u);
+
+  const decision = await fixture.host.dispatch(mutation(`${path}-decisions`, {
+    expectedStreamVersion: detail.expectedStreamVersion,
+    expectedCodingStreamVersion: detail.expectedCodingStreamVersion,
+    decision: "terminate",
+  }, "unconfirmed-runner-terminate"));
+  assert.equal(decision.status, 422);
+  assert.equal((await responseBody(decision)).code, "CODING_RUNNER_TERMINATION_UNCONFIRMED");
+  assert.equal(fixture.store.readJobs("local").length, 0);
   await fixture.host.close();
 });
 

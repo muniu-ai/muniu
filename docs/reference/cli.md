@@ -140,7 +140,7 @@ mn ask "修复事件游标" \
 
 `inspect` 不启用或执行 Runner，只读取绝对真实路径、SHA-256 和文件身份。`confirm` 会再次被动检查同一路径；摘要与提交值不一致时拒绝确认，并把用户声明的版本绑定到该文件身份。确认后，Worker 才会把制品复制到其管理的只读目录，在受限环境中探测版本并复核完整身份。二进制变化后，旧确认不再有效。
 
-Claude 与 Codex CLI 使用各自已有的登录、provider 和 MCP 配置。木牛只调用适配器的 `start/events/cancel/resume`，不会向外部 Runner 注入木牛的 BYOK 密钥、Prompt 注册表、Skill 或历史会话。每次外部启动仍需单次副作用审批；结果无法确认时进入 `needs_reconciliation`，不会自动重放。
+Claude 与 Codex CLI 使用各自已有的登录、provider 和 MCP 配置。木牛只调用适配器的 `start/events/cancel/resume`，不会向外部 Runner 注入木牛的 BYOK 密钥、Prompt 注册表、Skill 或历史会话。每次外部启动仍需单次副作用审批；结果无法确认时进入 `needs_reconciliation`，不会自动重放。Worker 崩溃时独立监督器会终止 Runner 进程组；只有终止证明已持久化，人工核对才会提供验证、清理或创建新调用。
 
 人工核对命令会先读取安全详情和 core/Coding 当前版本，再以同一快照提交决定。用户不需要查找或填写内部 stream version：
 

@@ -181,6 +181,38 @@ test("poll loop 会持续认领任务并可由 AbortSignal 安全停止", async 
   assert.equal(store.completed.length, 1);
 });
 
+test("handler 提交原子 Job 回执后，Worker 不重复终结 Job", async () => {
+  const store = new FakeStore();
+  const worker = new AgentOsWorker({
+    id: "worker-1",
+    store,
+    lock: {
+      engineLockDigest: "same",
+      expectedEngineLockDigest: "same",
+      pluginLockDigest: "same",
+      expectedPluginLockDigest: "same",
+    },
+    handlers: {
+      "tool.execute": async (claimed, context) => {
+        context.acknowledgeJobSettlement!({
+          jobId: claimed.id,
+          workerId: context.workerId,
+          fencingToken: context.fencingToken,
+          outcome: "completed",
+          value: { ok: true },
+          occurredAt: "2026-09-04T00:00:01.000Z",
+          settled: true,
+        });
+        return { ok: true };
+      },
+    },
+  });
+
+  assert.deepEqual(await worker.pollOnce(), { status: "completed", jobId: "job-1" });
+  assert.equal(store.completed.length, 0);
+  assert.equal(store.failed.length, 0);
+});
+
 test("停止信号中断在途 handler，且不提交未知结果", async () => {
   const store = new FakeStore();
   const stop = new AbortController();

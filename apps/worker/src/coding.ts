@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { execFile, spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import {
   chmod,
@@ -12,9 +12,11 @@ import {
   readFile,
   realpath,
   rm,
+  rmdir,
   writeFile,
 } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   KernelProjectionRuntimeStore,
@@ -40,7 +42,9 @@ import { CODING_RUNNER_CONFIGURATION_NAMESPACE } from "@mn/contracts";
 import {
   sha256,
   type InboxItem,
+  type KernelJobSettlementReceipt,
   type KernelStore,
+  type KernelTransaction,
 } from "@mn/kernel";
 import {
   buildRepositoryIndex,
@@ -114,6 +118,8 @@ interface ExternalInvocationState {
   readonly cleanedAt?: string;
   readonly reconciliationDecision?: "terminate" | "mark_completed" | "create_new_call";
   readonly cleanupJobId?: string;
+  readonly supervision: RunnerSupervisionCheckpoint;
+  readonly terminationStatus: "unconfirmed" | "confirmed";
   readonly verification?: {
     readonly status: "pending" | "failed" | "passed";
     readonly jobId: string;
@@ -124,6 +130,16 @@ interface ExternalInvocationState {
   };
   readonly startedAt: string;
   readonly updatedAt: string;
+}
+
+interface RunnerSupervisionCheckpoint {
+  readonly protocol: "mn-runner-supervisor-v1";
+  readonly statePath: string;
+  readonly tokenDigest: string;
+}
+
+interface RunnerSupervisionLease extends RunnerSupervisionCheckpoint {
+  readonly token: string;
 }
 
 interface StoredCodingRun {
@@ -204,6 +220,11 @@ interface ManagedExternalRunnerProcess {
   kill(signal: "SIGTERM" | "SIGKILL"): void;
 }
 
+interface ExternalRunnerLaunch {
+  (spec: ExternalRunnerSpawnSpec): ManagedExternalRunnerProcess;
+  readonly supervision: RunnerSupervisionCheckpoint;
+}
+
 interface CommandResult {
   readonly exitCode: number;
   readonly stdout: string;
@@ -215,6 +236,7 @@ export interface CodingWorkerJobContext {
   readonly fencingToken: number;
   readonly leaseExpiresAt: string;
   readonly signal: AbortSignal;
+  readonly acknowledgeJobSettlement?: (receipt: KernelJobSettlementReceipt) => void;
 }
 
 export interface CodingModelSecretReader {
@@ -339,6 +361,10 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
     }
     if (recovered?.generation === state.execution.generation
       && recovered.externalInvocation?.status === "started") {
+      const terminationConfirmed = await sandbox.waitForRunnerStopped(
+        recovered.externalInvocation.supervision,
+        context.signal,
+      );
       const nextStep = "核对外部执行结果，再选择终止、标记完成或创建新调用";
       await runtime.append({
         executionId,
@@ -352,6 +378,8 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
       await persistCodingResult({
         store,
         tenantId: job.tenantId,
+        job,
+        context,
         state,
         controlPlane: recovered.controlPlane,
         baseRevision: recovered.baseRevision,
@@ -369,6 +397,7 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
           controlPlane: recovered.controlPlane,
         },
         material: new Map(),
+        runnerTerminationConfirmed: terminationConfirmed,
         now: now(),
       });
       throw new CodingWorkerOutcomeError(
@@ -433,6 +462,7 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
     });
     let run: StoredCodingRun;
     let preserveForReconciliation = true;
+    let cleanupCompleted = false;
     try {
       const registeredRunners = runnerId === "builtin" ? [builtinRunner] : [builtinRunner, runner];
       const engineResult = await new CodingExecutionEngine({
@@ -459,20 +489,27 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
       const approvalIntent = result.status === "waiting_approval"
         ? acceptanceIntent(state.execution, state.authority, state.repository, result, now())
         : undefined;
+      preserveForReconciliation = result.status === "needs_reconciliation";
+      await runner.cleanup(preserveForReconciliation);
+      cleanupCompleted = true;
       run = await persistCodingResult({
         store,
         tenantId: job.tenantId,
+        job,
+        context,
         state,
         controlPlane,
         baseRevision: snapshot.baseRevision,
         result,
         approvalIntent,
         material: runner.material,
+        runnerTerminationConfirmed: runner instanceof ExternalCodingRunner
+          ? runner.terminationConfirmed
+          : undefined,
         now: now(),
       });
-      preserveForReconciliation = result.status === "needs_reconciliation";
     } finally {
-      await runner.cleanup(preserveForReconciliation);
+      if (!cleanupCompleted) await runner.cleanup(preserveForReconciliation);
     }
     return settlePersistedResult({
       options: effectiveOptions,
@@ -599,6 +636,7 @@ export function createCodingReconciliationVerificationWorkerHandler(
       || !state.run.result || state.run.result.status !== "needs_reconciliation"
       || !state.run.externalInvocation
       || state.run.externalInvocation.status !== "outcome_unknown"
+      || state.run.externalInvocation.terminationStatus !== "confirmed"
       || verification?.status !== "pending" || verification.jobId !== job.id
       || !state.task || state.task.status !== "needs_reconciliation"
       || state.task.workspaceId !== job.workspaceId
@@ -757,6 +795,8 @@ async function settlePersistedResult(input: {
     const cancelled = await persistCodingDecision(
       input.options.store,
       input.job.tenantId,
+      input.job,
+      input.context,
       input.state,
       cancelledCodingResult(result),
       input.now(),
@@ -783,6 +823,8 @@ async function settlePersistedResult(input: {
   const persisted = await persistCodingDecision(
     input.options.store,
     input.job.tenantId,
+    input.job,
+    input.context,
     input.state,
     decided,
     input.now(),
@@ -1040,6 +1082,13 @@ class ExternalCodingRunner implements ManagedCodingRunner {
   #timedOut = false;
   #terminalObserved = false;
   #hasCheckpoint = false;
+  #launchRequested = false;
+  #supervision?: RunnerSupervisionCheckpoint;
+  #terminationConfirmed = false;
+
+  get terminationConfirmed(): boolean {
+    return this.#terminationConfirmed;
+  }
 
   constructor(options: ExternalCodingRunnerOptions) {
     this.#options = options;
@@ -1074,12 +1123,6 @@ class ExternalCodingRunner implements ManagedCodingRunner {
       this.#artifact = await this.#options.sandbox.stageRunnerBinary(
         this.#options.configuration.identity,
       );
-      const launch = await this.#options.sandbox.externalLauncher(this.#sandboxPath);
-      this.#adapter = createExternalRunnerAdapter({
-        runnerId: this.id,
-        identity: this.#artifact.identity,
-        launch,
-      });
     } catch (error) {
       throw knownRunnerFailure(error);
     }
@@ -1093,8 +1136,20 @@ class ExternalCodingRunner implements ManagedCodingRunner {
     } catch (error) {
       throw knownRunnerFailure(error);
     }
+    try {
+      const launch = await this.#options.sandbox.externalLauncher(this.#sandboxPath!);
+      this.#supervision = launch.supervision;
+      this.#adapter = createExternalRunnerAdapter({
+        runnerId: this.id,
+        identity: this.#artifact!.identity,
+        launch,
+      });
+    } catch (error) {
+      throw knownRunnerFailure(error);
+    }
     await this.#checkpointStarted();
-    const session = await this.#adapter.start({
+    this.#launchRequested = true;
+    const session = await this.#adapter!.start({
       executionId: input.executionId,
       repositoryPath: this.#sandboxPath,
       expectedRepositoryRealPath: this.#sandboxPath,
@@ -1147,8 +1202,19 @@ class ExternalCodingRunner implements ManagedCodingRunner {
       }
       if (event.type !== "result" || !event.status) continue;
       this.#terminalObserved = true;
+      this.#terminationConfirmed = await this.#options.sandbox.waitForRunnerStopped(
+        this.#supervision!,
+        new AbortController().signal,
+      );
       const resultStatus = this.#timedOut ? "unknown" as const : event.status;
-      const result = this.#timedOut
+      const result = !this.#terminationConfirmed
+        ? {
+            ...event,
+            status: "unknown" as const,
+            reason: "无法证明外部 Runner 已停止，必须保持人工核对",
+            reconciliationRequired: true,
+          }
+        : this.#timedOut
         ? {
             ...event,
             status: "unknown" as const,
@@ -1157,8 +1223,9 @@ class ExternalCodingRunner implements ManagedCodingRunner {
           }
         : event;
       await this.#recordOutcome(result);
-      if (resultStatus !== "completed") {
-        yield { type: "result", status: resultStatus, ...(result.reason ? { reason: result.reason } : {}) };
+      const effectiveStatus = this.#terminationConfirmed ? resultStatus : "unknown" as const;
+      if (effectiveStatus !== "completed") {
+        yield { type: "result", status: effectiveStatus, ...(result.reason ? { reason: result.reason } : {}) };
         return;
       }
       const diff = await this.#options.sandbox.stageAndDiff(this.#sandboxPath);
@@ -1234,6 +1301,15 @@ class ExternalCodingRunner implements ManagedCodingRunner {
       await this.#adapter.cancel(this.#sessionId);
       this.#terminalObserved = true;
     }
+    if (this.#supervision && this.#launchRequested && !this.#terminationConfirmed) {
+      this.#terminationConfirmed = await this.#options.sandbox.waitForRunnerStopped(
+        this.#supervision,
+        new AbortController().signal,
+      );
+      if (!this.#terminationConfirmed && !preserveForReconciliation) {
+        throw new Error("无法证明外部 Runner 已停止，拒绝清理隔离资源");
+      }
+    }
     if (this.#sandboxPath) {
       if (!(preserveForReconciliation && this.#hasCheckpoint)) {
         await this.#options.sandbox.cleanup(this.#sandboxPath);
@@ -1243,6 +1319,10 @@ class ExternalCodingRunner implements ManagedCodingRunner {
     if (this.#artifact) {
       await this.#options.sandbox.cleanupRunnerArtifact(this.#artifact);
       this.#artifact = undefined;
+    }
+    if (this.#supervision && !preserveForReconciliation) {
+      await this.#options.sandbox.cleanupRunnerSupervision(this.#supervision);
+      this.#supervision = undefined;
     }
   }
 
@@ -1297,6 +1377,7 @@ class ExternalCodingRunner implements ManagedCodingRunner {
       identityDigest: this.#options.configuration.identityDigest,
       sandboxPath: this.#sandboxPath,
       runnerArtifactPath: this.#artifact.identity.realPath,
+      supervision: this.#supervision!,
       occurredAt: this.#options.now(),
     });
     this.#hasCheckpoint = true;
@@ -1373,7 +1454,7 @@ class ExternalCodingRunner implements ManagedCodingRunner {
 function createExternalRunnerAdapter(input: {
   readonly runnerId: ExternalCodingRunnerId;
   readonly identity: RunnerBinaryIdentityV1;
-  readonly launch: (spec: ExternalRunnerSpawnSpec) => ManagedExternalRunnerProcess;
+  readonly launch: ExternalRunnerLaunch;
 }): ExternalRunnerAdapter {
   const options = {
     binaryPath: input.identity.requestedPath,
@@ -1927,8 +2008,13 @@ class MacOsCodingSandbox {
   }
 
   async cleanupReconciliationArtifacts(invocation: ExternalInvocationState): Promise<void> {
+    if (invocation.terminationStatus !== "confirmed"
+      || !await this.confirmRunnerStopped(invocation.supervision)) {
+      throw new Error("无法证明外部 Runner 已停止，拒绝清理或终结人工核对");
+    }
     await this.cleanup(invocation.sandboxPath);
     await this.#cleanupRunnerArtifactPath(invocation.runnerArtifactPath);
+    await this.cleanupRunnerSupervision(invocation.supervision);
   }
 
   async #cleanupRunnerArtifactPath(artifactPath: string): Promise<void> {
@@ -2005,11 +2091,13 @@ class MacOsCodingSandbox {
 
   async externalLauncher(
     repositoryPath: string,
-  ): Promise<(spec: ExternalRunnerSpawnSpec) => ManagedExternalRunnerProcess> {
+  ): Promise<ExternalRunnerLaunch> {
+    const root = await this.#initialize();
     const candidateRoot = await this.#candidateRoot(repositoryPath);
     const actualRepository = await realpath(repositoryPath);
     const profile = this.#profile(candidateRoot, true);
-    return (spec) => {
+    const supervision = await this.#createRunnerSupervision(root);
+    const launch = ((spec: ExternalRunnerSpawnSpec) => {
       if (spec.cwd !== actualRepository || !isAbsolute(spec.executable) || spec.shell !== false) {
         throw new Error("外部 Runner 启动参数未固定到候选仓库");
       }
@@ -2020,8 +2108,67 @@ class MacOsCodingSandbox {
         stdin: spec.stdin,
         shell: false,
         env: { ...spec.env, TMPDIR: join(candidateRoot, "tmp") },
-      });
-    };
+      }, supervision);
+    }) as ExternalRunnerLaunch;
+    Object.defineProperty(launch, "supervision", {
+      enumerable: true,
+      value: Object.freeze({
+        protocol: supervision.protocol,
+        statePath: supervision.statePath,
+        tokenDigest: supervision.tokenDigest,
+      }),
+    });
+    return launch;
+  }
+
+  async waitForRunnerStopped(
+    supervision: RunnerSupervisionCheckpoint,
+    signal: AbortSignal,
+  ): Promise<boolean> {
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      if (signal.aborted) throw new Error("等待外部 Runner 停止时 Job 已失去租约或被取消");
+      if (await this.confirmRunnerStopped(supervision)) return true;
+      await abortableDelay(100, signal);
+    }
+    return false;
+  }
+
+  async confirmRunnerStopped(supervision: RunnerSupervisionCheckpoint): Promise<boolean> {
+    const root = await this.#initialize();
+    this.#assertSupervisionPath(root, supervision.statePath);
+    const serialized = await readFile(supervision.statePath, "utf8").catch(
+      (error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return undefined;
+        throw error;
+      },
+    );
+    if (!serialized) return false;
+    try {
+      const state = JSON.parse(serialized) as {
+        readonly protocol?: unknown;
+        readonly token?: unknown;
+        readonly status?: unknown;
+      };
+      return state.protocol === supervision.protocol
+        && typeof state.token === "string"
+        && sha256(state.token) === supervision.tokenDigest
+        && state.status === "terminated";
+    } catch {
+      return false;
+    }
+  }
+
+  async cleanupRunnerSupervision(supervision: RunnerSupervisionCheckpoint): Promise<void> {
+    const root = await this.#initialize();
+    this.#assertSupervisionPath(root, supervision.statePath);
+    if (!await this.confirmRunnerStopped(supervision)) {
+      throw new Error("无法证明外部 Runner 已停止，拒绝清理监督记录");
+    }
+    const supervisorRoot = resolve(supervision.statePath, "..");
+    await rm(supervisorRoot, { recursive: true, force: true });
+    await rmdir(resolve(supervisorRoot, "..")).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "ENOENT" && error.code !== "ENOTEMPTY") throw error;
+    });
   }
 
   async cleanup(repositoryPath: string): Promise<void> {
@@ -2043,6 +2190,38 @@ class MacOsCodingSandbox {
     const root = await realpath(this.#root);
     this.#realRoot = root;
     return root;
+  }
+
+  async #createRunnerSupervision(root: string): Promise<RunnerSupervisionLease> {
+    const supervisorBase = join(root, "supervisors");
+    await mkdir(supervisorBase, { recursive: true, mode: 0o700 });
+    const supervisorRoot = await mkdtemp(join(supervisorBase, "runner-supervisor-"));
+    assertWithin(root, supervisorRoot, "Runner 监督目录");
+    const statePath = join(supervisorRoot, "state.json");
+    const token = randomBytes(32).toString("hex");
+    await writeFile(statePath, `${JSON.stringify({
+      protocol: "mn-runner-supervisor-v1",
+      token,
+      status: "prepared",
+      updatedAt: new Date().toISOString(),
+    })}\n`, { flag: "wx", mode: 0o600 });
+    return Object.freeze({
+      protocol: "mn-runner-supervisor-v1",
+      statePath,
+      token,
+      tokenDigest: sha256(token),
+    });
+  }
+
+  #assertSupervisionPath(root: string, statePath: string): void {
+    if (!isAbsolute(statePath) || basename(statePath) !== "state.json") {
+      throw new Error("Runner 监督状态路径无效");
+    }
+    const supervisorRoot = resolve(statePath, "..");
+    assertWithin(join(root, "supervisors"), supervisorRoot, "Runner 监督目录");
+    if (!basename(supervisorRoot).startsWith("runner-supervisor-")) {
+      throw new Error("Runner 监督目录结构无效");
+    }
   }
 
   async #candidateRoot(repositoryPath: string): Promise<string> {
@@ -2539,6 +2718,7 @@ async function persistExternalInvocationStarted(input: {
   readonly identityDigest: string;
   readonly sandboxPath: string;
   readonly runnerArtifactPath: string;
+  readonly supervision: RunnerSupervisionCheckpoint;
   readonly occurredAt: string;
 }): Promise<void> {
   await input.store.transact(input.tenantId, (transaction) => {
@@ -2561,6 +2741,8 @@ async function persistExternalInvocationStarted(input: {
         identityDigest: input.identityDigest,
         sandboxPath: input.sandboxPath,
         runnerArtifactPath: input.runnerArtifactPath,
+        supervision: input.supervision,
+        terminationStatus: "unconfirmed",
         status: "started",
         startedAt: input.occurredAt,
         updatedAt: input.occurredAt,
@@ -2593,15 +2775,18 @@ async function persistExternalInvocationStarted(input: {
 async function persistCodingResult(input: {
   readonly store: KernelStore;
   readonly tenantId: string;
+  readonly job: StoredJob;
+  readonly context: CodingWorkerJobContext;
   readonly state: CodingState;
   readonly controlPlane: CodingControlPlaneCommitment;
   readonly baseRevision: string;
   readonly result: CodingExecutionResult;
   readonly approvalIntent?: ToolCallIntent;
   readonly material: ReadonlyMap<string, CandidateMaterial>;
+  readonly runnerTerminationConfirmed?: boolean;
   readonly now: string;
 }): Promise<StoredCodingRun> {
-  return input.store.transact(input.tenantId, (transaction) => {
+  const committed = await input.store.transact(input.tenantId, (transaction) => {
     const liveExecution = transaction.getProjection<Execution>(
       "execution",
       input.state.execution.id,
@@ -2609,11 +2794,14 @@ async function persistCodingResult(input: {
     if (!liveExecution || liveExecution.generation !== input.state.execution.generation) {
       throw new Error("Coding Execution 已变化，拒绝提交过期结果");
     }
-    if (input.result.status === "cancelled") {
+    const result = liveExecution.status === "cancelled"
+      ? cancelledCodingResult(input.result)
+      : input.result;
+    if (result.status === "cancelled") {
       if (liveExecution.status !== "cancelled") {
         throw new Error("只有已取消的 Execution 可持久化 Coding 取消结果");
       }
-    } else if (input.result.status === "failed" && liveExecution.status === "failed") {
+    } else if (result.status === "failed" && liveExecution.status === "failed") {
       // 拒绝审批会先由内核终结 Execution，Coding 投影仍必须原子收敛。
     } else if (liveExecution.status !== "running" && liveExecution.status !== "waiting_approval") {
       throw new Error(`Coding Execution 已进入 ${liveExecution.status}，拒绝提交后续结果`);
@@ -2625,9 +2813,14 @@ async function persistCodingResult(input: {
     if (!current || current.generation !== input.state.execution.generation) {
       throw new Error("Coding 执行开始检查点不存在");
     }
-    if (current.result) return current;
+    if (current.result) {
+      return {
+        run: current,
+        receipt: settleCodingJob(transaction, input.job, input.context, current.result, input.now),
+      };
+    }
     let taskVersion = input.state.task.streamVersion;
-    for (const candidate of input.result.candidates) {
+    for (const candidate of result.candidates) {
       const material = input.material.get(candidate.id);
       if (!material) throw new Error(`候选 ${candidate.id} 缺少持久化 Diff`);
       const stored: StoredCandidate = {
@@ -2660,7 +2853,7 @@ async function persistCodingResult(input: {
         },
       });
     }
-    for (const gate of input.result.gates) {
+    for (const gate of result.gates) {
       transaction.putProjection("coding.gate-result", gate.candidateId, {
         ...gate,
         tenantId: input.tenantId,
@@ -2687,9 +2880,9 @@ async function persistCodingResult(input: {
         },
       });
     }
-    if (input.result.evidence) {
-      transaction.putProjection("coding.code-evidence", input.result.evidence.digest, {
-        ...input.result.evidence,
+    if (result.evidence) {
+      transaction.putProjection("coding.code-evidence", result.evidence.digest, {
+        ...result.evidence,
         tenantId: input.tenantId,
         workspaceId: input.state.execution.workspaceId,
         executionId: input.state.execution.id,
@@ -2707,8 +2900,8 @@ async function persistCodingResult(input: {
         correlationId: `coding:${input.state.execution.id}:${input.state.execution.generation}`,
         publicPayload: {
           workspaceId: input.state.execution.workspaceId,
-          candidateId: input.result.evidence.candidateId,
-          evidenceDigest: input.result.evidence.digest,
+          candidateId: result.evidence.candidateId,
+          evidenceDigest: result.evidence.digest,
         },
       });
     }
@@ -2717,26 +2910,26 @@ async function persistCodingResult(input: {
       aggregateType: "coding.task",
       aggregateId: input.state.task.id,
       expectedStreamVersion: taskVersion++,
-      type: `coding.execution_${input.result.status}`,
+      type: `coding.execution_${result.status}`,
       actorId: input.state.execution.executionPrincipalId,
       executionId: input.state.execution.id,
       generation: input.state.execution.generation,
       correlationId: `coding:${input.state.execution.id}:${input.state.execution.generation}`,
       publicPayload: {
         workspaceId: input.state.execution.workspaceId,
-        status: input.result.status,
-        candidateCount: input.result.candidates.length,
-        gateCount: input.result.gates.length,
+        status: result.status,
+        candidateCount: result.candidates.length,
+        gateCount: result.gates.length,
       },
     });
     transaction.putProjection("coding.task", input.state.task.id, {
       ...input.state.task,
-      stage: input.result.status === "waiting_approval" ? "approve" : "verify",
-      status: input.result.status,
+      stage: result.status === "waiting_approval" ? "approve" : "verify",
+      status: result.status,
       streamVersion: taskVersion,
       updatedAt: input.now,
     });
-    if (input.result.status === "needs_human_decision") {
+    if (result.status === "needs_human_decision") {
       const inbox: InboxItem = {
         id: `coding-review:${input.state.execution.id}`,
         tenantId: input.tenantId,
@@ -2744,7 +2937,7 @@ async function persistCodingResult(input: {
         executionId: input.state.execution.id,
         kind: "failure",
         title: "Coding Gate 已达到修复上限",
-        summary: input.result.nextStep,
+        summary: result.nextStep,
         risk: "gate_failed",
         resourceSummary: input.state.repository.name,
         createdAt: input.now,
@@ -2754,14 +2947,15 @@ async function persistCodingResult(input: {
     }
     const next: StoredCodingRun = {
       ...current,
-      status: input.result.status,
-      result: input.result,
+      status: result.status,
+      result,
       ...(current.externalInvocation ? {
         externalInvocation: {
           ...current.externalInvocation,
-          status: input.result.status === "needs_reconciliation"
+          status: result.status === "needs_reconciliation"
             ? "outcome_unknown" as const
             : "settled" as const,
+          terminationStatus: input.runnerTerminationConfirmed ? "confirmed" : "unconfirmed",
           updatedAt: input.now,
         },
       } : {}),
@@ -2783,29 +2977,77 @@ async function persistCodingResult(input: {
       publicPayload: {
         workspaceId: input.state.execution.workspaceId,
         taskId: input.state.task.id,
-        status: input.result.status,
+        status: result.status,
       },
     });
-    return next;
+    return {
+      run: next,
+      receipt: settleCodingJob(transaction, input.job, input.context, result, input.now),
+    };
+  });
+  if (committed.receipt) input.context.acknowledgeJobSettlement?.(committed.receipt);
+  return committed.run;
+}
+
+function settleCodingJob(
+  transaction: KernelTransaction,
+  job: StoredJob,
+  context: CodingWorkerJobContext,
+  result: CodingExecutionResult,
+  occurredAt: string,
+): KernelJobSettlementReceipt | undefined {
+  if (!context.acknowledgeJobSettlement
+    || result.status === "waiting_approval"
+    || result.status === "needs_reconciliation") {
+    return undefined;
+  }
+  if (!transaction.settleJob) {
+    throw new Error("存储未实现事务内 Job 终结，Coding Worker 已拒绝提交终态");
+  }
+  const completed = result.status === "completed" || result.status === "needs_human_decision";
+  return transaction.settleJob({
+    jobId: job.id,
+    workerId: context.workerId,
+    fencingToken: context.fencingToken,
+    outcome: completed ? "completed" : "failed",
+    value: completed
+      ? { executionId: payloadString(job.payload, "executionId"), status: result.status }
+      : result.status === "cancelled"
+        ? {
+            code: "EXECUTION_CANCELLED",
+            message: "Agent turn 已由用户取消",
+            retryable: false,
+          }
+        : {
+            code: "JOB_EXECUTION_FAILED",
+            message: result.nextStep,
+            retryable: true,
+          },
+    occurredAt,
   });
 }
 
 async function persistCodingDecision(
   store: KernelStore,
   tenantId: string,
+  job: StoredJob,
+  context: CodingWorkerJobContext,
   state: CodingState,
   result: CodingExecutionResult,
   occurredAt: string,
 ): Promise<CodingExecutionResult> {
-  return store.transact(tenantId, (transaction) => {
+  const committed = await store.transact(tenantId, (transaction) => {
     const liveExecution = transaction.getProjection<Execution>("execution", state.execution.id);
     if (!liveExecution || liveExecution.generation !== state.execution.generation) {
       throw new Error("Coding Execution 已变化，拒绝提交过期审批结果");
     }
-    if (result.status === "completed" && liveExecution.status !== "running") {
+    const effectiveResult = liveExecution.status === "cancelled"
+      ? cancelledCodingResult(result)
+      : result;
+    if (effectiveResult.status === "completed" && liveExecution.status !== "running") {
       throw new Error(`Coding Execution 已进入 ${liveExecution.status}，拒绝批准候选`);
     }
-    if (result.status === "cancelled"
+    if (effectiveResult.status === "cancelled"
       && liveExecution.status !== "cancelled"
       && liveExecution.status !== "failed") {
       throw new Error(`Coding Execution 已进入 ${liveExecution.status}，拒绝取消候选`);
@@ -2813,13 +3055,16 @@ async function persistCodingDecision(
     const current = transaction.getProjection<StoredCodingRun>("coding.execution", state.execution.id);
     if (!current?.result) throw new Error("Coding 审批检查点不存在");
     if (current.result.status === "completed" || current.result.status === "cancelled") {
-      return current.result;
+      return {
+        result: current.result,
+        receipt: settleCodingJob(transaction, job, context, current.result, occurredAt),
+      };
     }
     if (current.result.status !== "waiting_approval") throw new Error("Coding 执行没有等待审批");
     const task = transaction.getProjection<CodingTask>("coding.task", state.task.id);
     if (!task) throw new Error("CodingTask 不存在");
     let taskVersion = task.streamVersion;
-    if (result.status === "completed" && result.deliverable) {
+    if (effectiveResult.status === "completed" && effectiveResult.deliverable) {
       const deliverableId = `coding-deliverable:${state.execution.id}`;
       const deliverable: Deliverable = {
         id: deliverableId,
@@ -2828,11 +3073,11 @@ async function persistCodingDecision(
         pluginId: "coding",
         threadId: state.thread.id,
         executionId: state.execution.id,
-        kind: result.deliverable.kind,
-        title: result.deliverable.title,
-        summary: result.deliverable.summary,
+        kind: effectiveResult.deliverable.kind,
+        title: effectiveResult.deliverable.title,
+        summary: effectiveResult.deliverable.summary,
         assetIds: [],
-        nextAction: result.deliverable.nextStep,
+        nextAction: effectiveResult.deliverable.nextStep,
         streamVersion: 1,
         createdAt: occurredAt,
         updatedAt: occurredAt,
@@ -2853,7 +3098,7 @@ async function persistCodingDecision(
           pluginId: "coding",
           taskId: state.task.id,
           kind: deliverable.kind,
-          diffDigest: result.deliverable.diffDigest,
+          diffDigest: effectiveResult.deliverable.diffDigest,
         },
       });
     }
@@ -2862,28 +3107,28 @@ async function persistCodingDecision(
       aggregateType: "coding.task",
       aggregateId: state.task.id,
       expectedStreamVersion: taskVersion++,
-      type: result.status === "completed" ? "coding.candidate_approved" : "coding.candidate_denied",
+      type: effectiveResult.status === "completed" ? "coding.candidate_approved" : "coding.candidate_denied",
       actorId: state.execution.executionPrincipalId,
       executionId: state.execution.id,
       generation: state.execution.generation,
       correlationId: `coding:${state.execution.id}:${state.execution.generation}`,
       publicPayload: {
         workspaceId: state.execution.workspaceId,
-        status: result.status,
-        candidateId: result.evidence!.candidateId,
+        status: effectiveResult.status,
+        candidateId: effectiveResult.evidence!.candidateId,
       },
     });
     transaction.putProjection("coding.task", task.id, {
       ...task,
-      stage: result.status === "completed" ? "learn" : "approve",
-      status: result.status,
+      stage: effectiveResult.status === "completed" ? "learn" : "approve",
+      status: effectiveResult.status,
       streamVersion: taskVersion,
       updatedAt: occurredAt,
     });
     const next: StoredCodingRun = {
       ...current,
-      status: result.status,
-      result,
+      status: effectiveResult.status,
+      result: effectiveResult,
       streamVersion: current.streamVersion + 1,
       updatedAt: occurredAt,
     };
@@ -2893,17 +3138,22 @@ async function persistCodingDecision(
       aggregateType: "coding.execution",
       aggregateId: state.execution.id,
       expectedStreamVersion: current.streamVersion,
-      type: result.status === "completed"
+      type: effectiveResult.status === "completed"
         ? "coding.execution_approved"
         : "coding.execution_denied",
       actorId: state.execution.executionPrincipalId,
       executionId: state.execution.id,
       generation: state.execution.generation,
       correlationId: `coding:${state.execution.id}:${state.execution.generation}`,
-      publicPayload: { workspaceId: state.execution.workspaceId, status: result.status },
+      publicPayload: { workspaceId: state.execution.workspaceId, status: effectiveResult.status },
     });
-    return result;
+    return {
+      result: effectiveResult,
+      receipt: settleCodingJob(transaction, job, context, effectiveResult, occurredAt),
+    };
   });
+  if (committed.receipt) context.acknowledgeJobSettlement?.(committed.receipt);
+  return committed.result;
 }
 
 function acceptanceIntent(
@@ -3140,23 +3390,42 @@ function command(
   });
 }
 
-function launchManagedProcess(spec: ExternalRunnerSpawnSpec): ManagedExternalRunnerProcess {
-  const child = spawn(spec.executable, [...spec.args], {
+function launchManagedProcess(
+  spec: ExternalRunnerSpawnSpec,
+  supervision: RunnerSupervisionLease,
+): ManagedExternalRunnerProcess {
+  const supervisorModule = fileURLToPath(new URL("./runner-supervisor.js", import.meta.url));
+  const runnerEnvironment = Object.fromEntries(Object.entries(spec.env)
+    .filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+  const supervisorConfig = Buffer.from(JSON.stringify({
+    protocol: supervision.protocol,
+    statePath: supervision.statePath,
+    token: supervision.token,
+    executable: spec.executable,
     cwd: spec.cwd,
-    env: { ...spec.env },
+    args: spec.args,
+    env: runnerEnvironment,
+  }), "utf8").toString("base64url");
+  const child = spawn(process.execPath, [supervisorModule], {
+    cwd: spec.cwd,
+    env: {
+      PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+      MN_RUNNER_SUPERVISOR_CONFIG: supervisorConfig,
+    },
     shell: false,
-    stdio: ["pipe", "pipe", "pipe"],
-    detached: process.platform !== "win32",
+    stdio: ["pipe", "pipe", "pipe", "pipe"],
+    detached: false,
     windowsHide: true,
   });
+  const control = child.stdio[3];
+  let terminationRequested = false;
   const killChild = (signal: "SIGTERM" | "SIGKILL") => {
-    if (process.platform !== "win32" && child.pid) {
-      try {
-        process.kill(-child.pid, signal);
-        return;
-      } catch {
-        // The root process may already have exited; fall back to the child handle.
+    if (signal === "SIGTERM" && control && "end" in control) {
+      if (!terminationRequested) {
+        terminationRequested = true;
+        control.end();
       }
+      return;
     }
     child.kill(signal);
   };
@@ -3210,4 +3479,20 @@ async function requireSuccess(result: CommandResult, message: string): Promise<v
 
 function safeMessage(error: unknown): string {
   return error instanceof Error ? error.message : "未知错误";
+}
+
+function abortableDelay(milliseconds: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(new Error("Job 已失去租约或被取消"));
+  return new Promise((resolveDelay, rejectDelay) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolveDelay();
+    }, milliseconds);
+    timer.unref();
+    const onAbort = () => {
+      clearTimeout(timer);
+      rejectDelay(new Error("Job 已失去租约或被取消"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }

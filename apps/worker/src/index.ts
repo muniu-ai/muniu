@@ -15,7 +15,11 @@ import {
   type Awaitable,
   type RuntimeProjectionStore,
 } from "@mn/agent-runtime";
-import { AgentOsKernel, type KernelStore } from "@mn/kernel";
+import {
+  AgentOsKernel,
+  type KernelJobSettlementReceipt,
+  type KernelStore,
+} from "@mn/kernel";
 import {
   JOB_LEASE_MILLISECONDS,
   StaleFencingTokenError,
@@ -158,6 +162,8 @@ export interface WorkerJobContext {
   readonly fencingToken: number;
   readonly leaseExpiresAt: string;
   readonly signal: AbortSignal;
+  /** Records a settlement committed by the handler's business transaction. */
+  readonly acknowledgeJobSettlement?: (receipt: KernelJobSettlementReceipt) => void;
 }
 
 export type WorkerJobHandler = (job: StoredJob, context: WorkerJobContext) => Promise<JsonValue>;
@@ -267,6 +273,20 @@ export class AgentOsWorker {
     if (stopSignal?.aborted) stopCurrentJob();
     let renewalTimer: ReturnType<typeof setInterval> | undefined;
     let rejectLease: ((error: unknown) => void) | undefined;
+    let settlement: KernelJobSettlementReceipt | undefined;
+    const acknowledgeJobSettlement = (receipt: KernelJobSettlementReceipt) => {
+      if (!receipt.settled
+        || receipt.jobId !== job.id
+        || receipt.workerId !== this.#id
+        || receipt.fencingToken !== job.fencingToken) {
+        throw new StaleFencingTokenError(job.id);
+      }
+      if (settlement && (settlement.outcome !== receipt.outcome
+        || JSON.stringify(settlement.value) !== JSON.stringify(receipt.value))) {
+        throw new Error("handler 返回了冲突的 Job 终结回执");
+      }
+      settlement = receipt;
+    };
     const leaseLost = new Promise<never>((_resolve, reject) => { rejectLease = reject; });
     renewalTimer = setInterval(() => {
       void this.#store.renewJobLease(
@@ -278,12 +298,18 @@ export class AgentOsWorker {
     }, this.#leaseRenewIntervalMs);
     try {
       const execution = handler(job, {
-        workerId: this.#id, fencingToken: job.fencingToken, leaseExpiresAt, signal: abort.signal,
+        workerId: this.#id,
+        fencingToken: job.fencingToken,
+        leaseExpiresAt,
+        signal: abort.signal,
+        acknowledgeJobSettlement,
       });
       const result = await Promise.race([execution, leaseLost]);
+      if (settlement) return { status: settledWorkerStatus(settlement), jobId: job.id };
       await this.#store.completeJob(job.id, this.#id, job.fencingToken, result, this.#now().toISOString());
       return { status: "completed", jobId: job.id };
     } catch (error) {
+      if (settlement) return { status: settledWorkerStatus(settlement), jobId: job.id };
       if (stopSignal?.aborted) {
         try {
           await this.#store.interruptJob(
@@ -386,6 +412,19 @@ export class AgentOsWorker {
       throw error;
     }
   }
+}
+
+function settledWorkerStatus(
+  receipt: KernelJobSettlementReceipt,
+): "completed" | "failed" | "cancelled" {
+  if (receipt.outcome === "completed") return "completed";
+  const failure = typeof receipt.value === "object"
+    && receipt.value !== null
+    && !Array.isArray(receipt.value)
+    ? receipt.value as JsonObject
+    : undefined;
+  const failureCode = typeof failure?.code === "string" ? failure.code : undefined;
+  return failureCode === "EXECUTION_CANCELLED" ? "cancelled" : "failed";
 }
 
 export interface WorkerLoopOptions {

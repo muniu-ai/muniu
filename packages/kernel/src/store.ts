@@ -2,6 +2,7 @@ import type {
   EventAppendRequest,
   EventPage,
   JsonObject,
+  JsonValue,
   KernelEventV1,
 } from "@mn/contracts";
 import { computeEventDigest, computeEventHmac } from "@mn/contracts";
@@ -41,6 +42,19 @@ export interface KernelJobLeaseAssertion {
   readonly occurredAt: string;
 }
 
+export interface KernelJobSettlement {
+  readonly jobId: string;
+  readonly workerId: string;
+  readonly fencingToken: number;
+  readonly outcome: "completed" | "failed";
+  readonly value: JsonValue;
+  readonly occurredAt: string;
+}
+
+export interface KernelJobSettlementReceipt extends KernelJobSettlement {
+  readonly settled: true;
+}
+
 export interface KernelTransaction {
   appendEvent(request: EventAppendRequest): KernelEventV1;
   getProjection<T>(namespace: string, id: string): T | undefined;
@@ -57,6 +71,11 @@ export interface KernelTransaction {
    * closed when the capability is unavailable.
    */
   assertJobLease?(input: KernelJobLeaseAssertion): void;
+  /**
+   * Storage-backed implementations settle the physical Job and its lifecycle
+   * projections in the same transaction as product writes.
+   */
+  settleJob?(input: KernelJobSettlement): KernelJobSettlementReceipt;
 }
 
 export interface KernelStore {

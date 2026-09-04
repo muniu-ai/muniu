@@ -100,6 +100,19 @@ export interface NeedsReconciliationInput {
   readonly occurredAt: string;
 }
 
+export interface JobSettlementInput {
+  readonly jobId: string;
+  readonly workerId: string;
+  readonly fencingToken: number;
+  readonly outcome: "completed" | "failed";
+  readonly value: JsonValue;
+  readonly occurredAt: string;
+}
+
+export interface JobSettlementReceipt extends JobSettlementInput {
+  readonly settled: true;
+}
+
 export interface StoragePort {
   initialize(): Promise<void>;
   commit(batch: StorageCommit): Promise<StorageCommitResult>;
@@ -165,6 +178,11 @@ export interface KernelTransactionLike {
     readonly fencingToken: number;
     readonly occurredAt: string;
   }): void;
+  /**
+   * Atomically settles the physical lease, Job projection, lifecycle event and
+   * associated Execution within the caller's business transaction.
+   */
+  settleJob?(input: JobSettlementInput): JobSettlementReceipt;
 }
 
 export interface KernelStoreCompatible {

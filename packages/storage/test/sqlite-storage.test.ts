@@ -549,6 +549,61 @@ test("SQLite generic Job 在无 Execution 时同步投影、事件和 fencing", 
   }
 });
 
+test("SQLite 在业务事务内原子终结 Agent Job、Execution 和 Job 投影", async () => {
+  const storage = new SqliteStorage({
+    databaseFile: temporaryPath("state.sqlite"),
+    hmacKey: randomBytes(32)
+  });
+  try {
+    await seedAgentExecutionJob(storage);
+    const claimed = await storage.claimJob(
+      "worker-a",
+      "2026-09-04T00:00:01.000Z",
+      { kinds: ["agent.execution.run"] }
+    );
+    assert.ok(claimed?.leaseExpiresAt);
+
+    await storage.transact("tenant-a", (transaction) => {
+      transaction.putProjection("coding.execution", "execution-agent", {
+        executionId: "execution-agent",
+        status: "completed",
+        streamVersion: 1
+      });
+      assert.ok(transaction.settleJob);
+      transaction.settleJob({
+        jobId: claimed.id,
+        workerId: "worker-a",
+        fencingToken: claimed.fencingToken,
+        outcome: "completed",
+        value: { executionId: "execution-agent", status: "completed" },
+        occurredAt: "2026-09-04T00:00:02.000Z"
+      });
+    });
+
+    assert.equal((await storage.getJob("job-agent"))?.status, "completed");
+    assert.equal(
+      (await storage.getProjection("tenant-a", "job", "job-agent"))?.status,
+      "completed"
+    );
+    assert.equal(
+      (await storage.getProjection("tenant-a", "execution", "execution-agent"))?.status,
+      "completed"
+    );
+    assert.equal(
+      (await storage.getProjection("tenant-a", "coding.execution", "execution-agent"))?.status,
+      "completed"
+    );
+
+    const events = await storage.readEvents("tenant-a", { afterPosition: 0, limit: 20 });
+    assert.deepEqual(events.events.slice(-2).map((event) => event.type), [
+      "job.completed",
+      "execution.completed"
+    ]);
+  } finally {
+    await storage.close();
+  }
+});
+
 test("SQLite generic Job 投影版本冲突时回滚物理租约和生命周期事件", async () => {
   const storage = new SqliteStorage({
     databaseFile: temporaryPath("state.sqlite"),

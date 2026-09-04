@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import {
   chmod,
   mkdtemp,
@@ -14,6 +14,8 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Writable } from "node:stream";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import type {
@@ -43,6 +45,59 @@ import {
 
 const NOW = "2026-09-04T12:00:00.000Z";
 const SANDBOX_AVAILABLE = process.platform === "darwin";
+
+test("Runner 监督器在 Worker 控制管道硬断开后终止进程组并留下不可复用证明", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "muniu-runner-supervisor-"));
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  const statePath = join(root, "state.json");
+  const token = "ab".repeat(32);
+  await writeFile(statePath, `${JSON.stringify({
+    protocol: "mn-runner-supervisor-v1",
+    token,
+    status: "prepared",
+    updatedAt: NOW,
+  })}\n`, { mode: 0o600 });
+  const config = Buffer.from(JSON.stringify({
+    protocol: "mn-runner-supervisor-v1",
+    statePath,
+    token,
+    executable: "/bin/sleep",
+    cwd: root,
+    args: ["60"],
+    env: { PATH: "/usr/bin:/bin" },
+  }), "utf8").toString("base64url");
+  const supervisor = spawn(process.execPath, [
+    fileURLToPath(new URL("../src/runner-supervisor.js", import.meta.url)),
+  ], {
+    cwd: root,
+    env: { PATH: "/usr/bin:/bin", MN_RUNNER_SUPERVISOR_CONFIG: config },
+    stdio: ["pipe", "ignore", "pipe", "pipe"],
+  });
+  t.after(() => { if (supervisor.exitCode === null) supervisor.kill("SIGKILL"); });
+  supervisor.stdin!.end();
+  const running = await waitForSupervisorState(statePath, "running");
+  assert.equal(typeof running.runnerPid, "number");
+
+  (supervisor.stdio[3] as Writable).end();
+  let exitTimer: NodeJS.Timeout | undefined;
+  const [code] = await Promise.race([
+    new Promise<[number | null]>((resolveExit) => supervisor.once("exit", (value) => resolveExit([value]))),
+    new Promise<never>((_resolve, reject) => {
+      exitTimer = setTimeout(
+        () => reject(new Error("Runner 监督器没有在控制管道断开后退出")),
+        5_000,
+      );
+    }),
+  ]).finally(() => { if (exitTimer) clearTimeout(exitTimer); });
+  assert.equal(code, 0);
+  const terminated = JSON.parse(await readFile(statePath, "utf8"));
+  assert.equal(terminated.status, "terminated");
+  assert.equal(terminated.token, token);
+  assert.throws(
+    () => process.kill(running.runnerPid as number, 0),
+    (error: NodeJS.ErrnoException) => error.code === "ESRCH",
+  );
+});
 
 test("Worker 在可恢复候选仓库中显式执行 Claude CLI，且不调用 BYOK 模型", {
   skip: !SANDBOX_AVAILABLE,
@@ -185,7 +240,8 @@ test("Runner 没有可确认终态时进入人工核对，Job 不自动重放", 
   );
   assert.equal((await fixture.store.getJob("job-1"))?.status, "failed");
   assert.equal(await readFile(join(fixture.repositoryPath, "message.txt"), "utf8"), "old value\n");
-  assert.equal((await readdir(fixture.sandboxRoot)).length, 1);
+  assert.equal((await readdir(fixture.sandboxRoot)).length, 2);
+  assert.equal(state.run.externalInvocation.terminationStatus, "confirmed");
   assert.equal(
     await readFile(join(state.run.externalInvocation.sandboxPath, "message.txt"), "utf8"),
     "new value\n",
@@ -276,7 +332,7 @@ test("保留候选未通过权威 Gate 时仍待人工核对且不能标记完�
   assert.match(state.run.externalInvocation.verification.failureReason, /权威 Gate/u);
   assert.equal(state.gates[0]?.status, "failed");
   assert.equal(state.cleanupJobs.length, 0);
-  assert.equal((await readdir(fixture.sandboxRoot)).length, 1);
+  assert.equal((await readdir(fixture.sandboxRoot)).length, 2);
 });
 
 test("生产 launcher 遇到 stdin EPIPE 时失败关闭，Worker 不崩溃也不误判完成", {
@@ -425,7 +481,7 @@ test("外部 Runner 超过 Execution 时限后终止进程并保留人工核对�
   }));
   assert.equal(state.execution?.status, "needs_reconciliation");
   assert.equal(state.run.externalInvocation.status, "outcome_unknown");
-  assert.equal((await readdir(fixture.sandboxRoot)).length, 1);
+  assert.equal((await readdir(fixture.sandboxRoot)).length, 2);
 });
 
 test("用户取消外部 Runner 后持久化 Coding cancelled 并清理隔离资源", {
@@ -508,7 +564,7 @@ test("人工核对后由持久化受 fencing 保护的 Job 幂等清理 sandbox"
     approval.streamVersion, "approve_once",
   );
   assert.deepEqual(await original, { status: "needs_reconciliation", jobId: "job-1" });
-  assert.equal((await readdir(fixture.sandboxRoot)).length, 1);
+  assert.equal((await readdir(fixture.sandboxRoot)).length, 2);
   await enqueueSandboxCleanup(fixture.store);
 
   assert.deepEqual(await fixture.worker.pollOnce(), { status: "completed", jobId: "cleanup-job-1" });
@@ -800,6 +856,20 @@ async function waitForExternalInvocation(store: SqliteStorage): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 2));
   }
   throw new Error("等待外部 Runner 启动检查点超时");
+}
+
+async function waitForSupervisorState(
+  statePath: string,
+  status: "running" | "terminated",
+): Promise<{ readonly status: string; readonly runnerPid?: number }> {
+  for (let attempt = 0; attempt < 1_000; attempt += 1) {
+    const state = await readFile(statePath, "utf8")
+      .then((value) => JSON.parse(value) as { readonly status?: string; readonly runnerPid?: number })
+      .catch(() => undefined);
+    if (state?.status === status) return { status, ...(state.runnerPid ? { runnerPid: state.runnerPid } : {}) };
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+  throw new Error(`等待 Runner 监督状态 ${status} 超时`);
 }
 
 async function enqueueSandboxCleanup(store: SqliteStorage): Promise<void> {

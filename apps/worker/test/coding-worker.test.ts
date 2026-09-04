@@ -14,7 +14,7 @@ import type {
   ExecutionAuthority,
   Thread,
 } from "@mn/contracts";
-import { AgentOsKernel, type InboxItem } from "@mn/kernel";
+import { AgentOsKernel, type InboxItem, type KernelTransaction } from "@mn/kernel";
 import { createCodingTask, createRepository, type CodingTask } from "@mn/plugin-coding";
 import { SqliteStorage } from "@mn/storage";
 
@@ -77,6 +77,35 @@ test("真实 Worker 通过受控仓库、macOS sandbox 和 Gate 持久化 Coding
     "coding.execution_waiting_approval",
     "coding.candidate_approved",
   ]);
+});
+
+test("Coding 结果与 Job 原子终结，不给普通取消留下矛盾窗口", {
+  skip: !SANDBOX_AVAILABLE,
+}, async (t) => {
+  const fixture = await codingFixture(t, [passingPatch()], { cancelAfterCodingCompletion: true });
+  const polling = fixture.worker.pollOnce();
+  const approval = await waitForApproval(fixture.store);
+  await fixture.kernel.decideApproval(
+    "local",
+    "local-owner",
+    "approve-before-cancel-race",
+    approval.id,
+    approval.streamVersion,
+    "approve_once",
+  );
+
+  assert.deepEqual(await polling, { status: "completed", jobId: "job-1" });
+  assert.equal(fixture.cancelAttempts(), 1);
+  assert.equal(fixture.cancelAccepted(), false);
+  const state = await fixture.store.transact("local", (transaction) => ({
+    execution: transaction.getProjection<Execution>("execution", "execution-1"),
+    task: transaction.getProjection<CodingTask>("coding.task", "task-1"),
+    run: transaction.getProjection<any>("coding.execution", "execution-1"),
+  }));
+  assert.equal(state.execution?.status, "completed");
+  assert.equal(state.task?.status, "completed");
+  assert.equal(state.run?.status, "completed");
+  assert.equal((await fixture.store.getJob("job-1"))?.status, "completed");
 });
 
 test("真实 Worker 在 Gate 连续失败后最多修复三次并进入人工决定终态", {
@@ -155,6 +184,7 @@ test("审批等待期间重复处理同一 Job 从持久检查点恢复且不重
 async function codingFixture(
   t: test.TestContext,
   patches: readonly { readonly patch: string; readonly summary: string }[],
+  options: { readonly cancelAfterCodingCompletion?: boolean } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "muniu-coding-worker-"));
   t.after(async () => rm(root, { recursive: true, force: true }));
@@ -196,8 +226,31 @@ async function codingFixture(
     now: () => NOW,
     id: (kind) => `${kind}-${++idSequence}`,
   });
+  let cancelAttemptCount = 0;
+  let cancellationAccepted = false;
+  const workerStore = options.cancelAfterCodingCompletion
+    ? interceptCodingCompletion(store, async () => {
+        cancelAttemptCount += 1;
+        const execution = await store.transact("local", (transaction) =>
+          transaction.getProjection<Execution>("execution", "execution-1"));
+        assert.ok(execution);
+        try {
+          await kernel.commandExecution(
+            "local",
+            "local-owner",
+            `cancel-after-coding-result-${cancelAttemptCount}`,
+            execution.id,
+            execution.streamVersion,
+            "cancel",
+          );
+          cancellationAccepted = true;
+        } catch {
+          cancellationAccepted = false;
+        }
+      })
+    : store;
   const handler = createKernelAgentTurnHandler({
-    store,
+    store: workerStore,
     secretStore: { async read() { return "fixture-api-key"; } },
     modelInvoker,
     approvalKernel: kernel,
@@ -207,7 +260,7 @@ async function codingFixture(
   });
   const worker = new AgentOsWorker({
     id: "worker-1",
-    store,
+    store: workerStore,
     lock: {
       engineLockDigest: "same",
       expectedEngineLockDigest: "same",
@@ -226,7 +279,38 @@ async function codingFixture(
     worker,
     sandboxRoot: join(root, "sandboxes"),
     modelCalls: () => calls,
+    cancelAttempts: () => cancelAttemptCount,
+    cancelAccepted: () => cancellationAccepted,
   };
+}
+
+function interceptCodingCompletion(
+  store: SqliteStorage,
+  afterCommit: () => Promise<void>,
+): SqliteStorage {
+  const transact: SqliteStorage["transact"] = async (tenantId, work) => {
+    let completed = false;
+    const result = await store.transact(tenantId, (transaction) => work({
+      ...transaction,
+      putProjection<Value>(namespace: string, id: string, value: Value) {
+        transaction.putProjection(namespace, id, value);
+        if (namespace === "coding.execution"
+          && typeof value === "object" && value !== null
+          && (value as { readonly status?: unknown }).status === "completed") {
+          completed = true;
+        }
+      },
+    } satisfies KernelTransaction));
+    if (completed) await afterCommit();
+    return result;
+  };
+  return new Proxy(store, {
+    get(target, property) {
+      if (property === "transact") return transact;
+      const value = Reflect.get(target, property, target) as unknown;
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
 }
 
 async function seed(store: SqliteStorage, repositoryPath: string): Promise<void> {

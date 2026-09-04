@@ -267,6 +267,10 @@ class WorkerFixtureClient {
       this.inbox.set(parameters[1], JSON.parse(parameters[2]));
       return { rows: [], rowCount: 1 };
     }
+    if (normalized.startsWith("insert into mn_v2.projections")) {
+      this.projections.set(`${parameters[1]}:${parameters[2]}`, JSON.parse(parameters[4]));
+      return { rows: [], rowCount: 1 };
+    }
     if (normalized.startsWith("insert into mn_v2.outbox")) {
       this.outbox.push({
         id: parameters[0],
@@ -318,6 +322,43 @@ test("Agent Job 领取与完成原子推进 Job、Execution、HMAC 事件和 out
   }
   assert.equal(client.outbox.length, 4);
   assert.equal(client.queries.filter(({ sql }) => sql === "commit").length, 2);
+});
+
+test("企业 Kernel 业务事务原子终结 Agent Job、Execution 和产品投影", async () => {
+  const client = new WorkerFixtureClient();
+  const workerStore = fixtureStore(client);
+  const claimed = await workerStore.claimJob("worker-a", startedAt);
+  const kernelStore = new PostgresKernelStore({
+    pool: { connect: async () => client, query: client.query.bind(client) },
+    hmacKey,
+    now: () => "2025-01-02T03:04:10.000Z",
+  });
+
+  await kernelStore.transact("tenant-a", (transaction) => {
+    transaction.putProjection("coding.execution", "execution-a", {
+      executionId: "execution-a",
+      status: "completed",
+      streamVersion: 1,
+    });
+    assert.equal(typeof transaction.settleJob, "function");
+    transaction.settleJob({
+      jobId: claimed.id,
+      workerId: "worker-a",
+      fencingToken: claimed.fencingToken,
+      outcome: "completed",
+      value: { executionId: "execution-a", status: "completed" },
+      occurredAt: "2025-01-02T03:04:10.000Z",
+    });
+  });
+
+  assert.equal(client.job.status, "completed");
+  assert.equal(projection(client, "job", "job-a").status, "completed");
+  assert.equal(projection(client, "execution", "execution-a").status, "completed");
+  assert.equal(projection(client, "coding.execution", "execution-a").status, "completed");
+  assert.deepEqual(client.events.slice(-2).map(({ type }) => type), [
+    "job.completed",
+    "execution.completed",
+  ]);
 });
 
 test("Agent Job 重领和续租每次推进 Job，但不重复推进 running Execution", async () => {
