@@ -35,6 +35,14 @@ spec:
               valueFrom: { secretKeyRef: { name: {{ .Values.s3.existingSecret }}, key: {{ .Values.s3.accessKeyIdKey }} } }
             - name: MN_S3_SECRET_ACCESS_KEY
               valueFrom: { secretKeyRef: { name: {{ .Values.s3.existingSecret }}, key: {{ .Values.s3.secretAccessKeyKey }} } }
+            {{- if .Values.s3.sessionTokenKey }}
+            - name: MN_S3_SESSION_TOKEN
+              valueFrom: { secretKeyRef: { name: {{ .Values.s3.existingSecret }}, key: {{ .Values.s3.sessionTokenKey }}, optional: true } }
+            {{- end }}
+            {{- if .Values.vault.existingSecret }}
+            - name: MN_VAULT_TOKEN
+              valueFrom: { secretKeyRef: { name: {{ .Values.vault.existingSecret }}, key: {{ .Values.vault.tokenKey }} } }
+            {{- end }}
             {{- with .Values.extraEnv }}{{ toYaml . | nindent 12 }}{{- end }}
           readinessProbe:
             exec:

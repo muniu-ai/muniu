@@ -9,10 +9,11 @@ import {
   WORKER_LEASE_MILLISECONDS,
   workerHandlerReadiness,
 } from "@mn/worker";
-import { PostgresStorage } from "@mn/storage";
 import pg from "pg";
 
+import { PostgresKernelStore } from "./lib/postgres-kernel-store.mjs";
 import { PostgresWorkerStore } from "./lib/postgres-worker-store.mjs";
+import { createEnterpriseWorkerStore } from "./lib/enterprise-worker-store.mjs";
 import { parseWorkerSupportedKinds } from "./lib/worker-handler-capabilities.mjs";
 
 const { Pool } = pg;
@@ -52,9 +53,10 @@ const pool = new Pool({
   max: Number(process.env.MN_POSTGRES_POOL_SIZE ?? "4"),
 });
 const eventHmacKey = hmacKey();
-const storage = new PostgresStorage({ pool, hmacKey: eventHmacKey });
-await storage.initialize();
-const store = new PostgresWorkerStore({ pool, hmacKey: eventHmacKey });
+const kernelStore = new PostgresKernelStore({ pool, hmacKey: eventHmacKey });
+await kernelStore.initialize();
+const jobStore = new PostgresWorkerStore({ pool, hmacKey: eventHmacKey });
+const store = createEnterpriseWorkerStore({ kernelStore, jobStore });
 
 const localEngineLock = lockDigest("MN_ENGINE_LOCK_DIGEST");
 const localPluginLock = lockDigest("MN_PLUGIN_LOCK_DIGEST");
@@ -80,7 +82,14 @@ const handlerModule = process.env.MN_WORKER_HANDLER_MODULE
 if (!handlerModule.startsWith("/")) throw new Error("MN_WORKER_HANDLER_MODULE 必须是绝对路径");
 const loaded = await import(pathToFileURL(handlerModule).href);
 const handlers = typeof loaded.createHandlers === "function"
-  ? await loaded.createHandlers(Object.freeze({ pool, storage, workerId }))
+  ? await loaded.createHandlers(Object.freeze({
+      pool,
+      store,
+      kernelStore,
+      jobStore,
+      workerId,
+      fixtureMode: process.env.MN_WORKER_FIXTURE_MODE === "true",
+    }))
   : loaded.handlers;
 if (!handlers || typeof handlers !== "object") {
   throw new Error("Worker bootstrap 模块必须导出 handlers 对象或 createHandlers(context)");
@@ -132,4 +141,4 @@ while (!stopped) {
 
 clearInterval(readinessTimer);
 await unlink(readyFile).catch(() => undefined);
-await storage.close();
+await kernelStore.close();

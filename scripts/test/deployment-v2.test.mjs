@@ -84,7 +84,9 @@ test("Helm chart deploys matching Host and Worker replicas with fail-closed read
   assert.match(config, /MN_EXPECTED_PLUGIN_LOCK_DIGEST/);
   assert.match(config, /MN_WORKER_ENABLED/);
   assert.match(config, /MN_WORKER_SUPPORTED_KINDS/);
-  assert.match(values, /supportedKinds:\n\s+- system\.noop/u);
+  assert.match(config, /production worker requires vault\.address/u);
+  assert.match(worker, /MN_VAULT_TOKEN/u);
+  assert.match(values, /supportedKinds:\n\s+- system\.noop\n\s+- agent\.execution\.run/u);
   assert.match(values, /pluginRepository:\n\s+enabled:\s+false/u);
   assert.match(config, /MN_PLUGIN_REPOSITORY_INDEX/u);
   assert.match(config, /MN_PLUGIN_TRUSTED_ROOTS/u);
@@ -188,10 +190,23 @@ test("unknown external effects become a durable event, inbox item, and non-repla
   assert.match(adapter, /status = 'failed'/u);
 });
 
-test("enterprise Worker refuses an unconfigured agent execution bootstrap", () => {
+test("enterprise Worker ships a production Agent execution bootstrap", async () => {
   const worker = read("scripts/enterprise-worker.mjs");
   const builtin = read("scripts/enterprise-worker-handlers.mjs");
   const host = read("scripts/enterprise-host.mjs");
+  const module = await import("../enterprise-worker-handlers.mjs");
+  const store = {
+    async transact() { throw new Error("test does not execute the handler"); },
+    async readEvents() { return { events: [], nextPosition: 0, retentionFloor: 1 }; },
+    async claimJob() { return undefined; },
+  };
+  const handlers = await module.createHandlers({
+    store,
+    secretStore: { async read() { return "fixture-key"; } },
+    modelInvoker: async () => ({ content: "fixture", finishReason: "stop", usage: {} }),
+    opcPublicWebReader: { async read() { return { status: 200 }; } },
+    fixtureMode: false,
+  });
   assert.match(worker, /createHandlers/u);
   assert.match(worker, /AGENT_EXECUTION_BOOTSTRAP_MISSING/u);
   assert.match(worker, /handlers\["agent\.execution\.run"\]/u);
@@ -202,7 +217,11 @@ test("enterprise Worker refuses an unconfigured agent execution bootstrap", () =
   assert.match(host, /trustedWorkerSupportedKinds/u);
   assert.match(host, /MN_WORKER_ENABLED/u);
   assert.match(host, /MN_WORKER_SUPPORTED_KINDS/u);
-  assert.match(builtin, /configured:\s*false/u);
-  assert.match(builtin, /fixtureMode\s*\?\s*\{[\s\S]*"agent\.execution\.run"\s*:/u);
+  assert.equal(typeof handlers["agent.execution.run"], "function");
+  assert.deepEqual(module.supportedKinds, ["system.noop", "agent.execution.run"]);
+  assert.match(builtin, /VaultModelSecretStore/u);
+  assert.match(builtin, /createKernelAgentTurnHandler/u);
+  assert.match(builtin, /configured:\s*true/u);
+  assert.match(builtin, /function fixtureHandlers\(\)[\s\S]*"agent\.execution\.run"\s*:/u);
   assert.match(builtin, /fixture 不提供 LLM/u);
 });

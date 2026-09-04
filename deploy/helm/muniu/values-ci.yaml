@@ -7,6 +7,10 @@ oidc:
   audience: muniu-v2-ci
   jwksUrl: https://oidc.example.test/.well-known/jwks.json
 
+vault:
+  address: https://vault.example.test
+  existingSecret: muniu-vault-v2
+
 sandbox:
   imageDigest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   runtimeClassName: muniu-sandbox

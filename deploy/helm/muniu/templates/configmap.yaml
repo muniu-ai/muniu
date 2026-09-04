@@ -13,6 +13,8 @@
 {{- end }}
 {{- if or (lt (int .Values.retention.businessDays) 1) (lt (int .Values.retention.executionDays) 1) (lt (int .Values.retention.deliverableDays) 1) (lt (int .Values.retention.auditDays) 1) }}{{- fail "all retention policies must be configured" }}{{- end }}
 {{- if and .Values.worker.enabled (ne .Values.sandbox.driver "kubernetes") }}{{- fail "enterprise worker requires sandbox.driver=kubernetes" }}{{- end }}
+{{- if and .Values.worker.enabled (not .Values.worker.fixtureMode) (not .Values.vault.address) }}{{- fail "production worker requires vault.address" }}{{- end }}
+{{- if and .Values.worker.enabled (not .Values.worker.fixtureMode) (not .Values.vault.existingSecret) }}{{- fail "production worker requires vault.existingSecret" }}{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:

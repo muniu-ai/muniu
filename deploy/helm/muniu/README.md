@@ -10,7 +10,7 @@
 
 Worker 的 `worker.handlerModule` 必须指向受信的绝对路径。该模块需要导出 `handlers`，或导出异步 `createHandlers(context)`，并显式导出与实际 handler 完全一致的 `supportedKinds`。`worker.supportedKinds` 是 Host 与 Worker 共用的受信发布配置；它必须与模块声明逐项一致。Worker 在 readiness 通过前校验三者，只领取已经注册的 kind。
 
-生产模块必须提供 `agent.execution.run`，并接入真实的 LLM、Scope、持久 RuntimeStore 与审批端口。内置 `scripts/enterprise-worker-handlers.mjs` 只用于确定性 fixture，生产环境使用它会使 Worker 拒绝启动。
+内置 `scripts/enterprise-worker-handlers.mjs` 在生产 profile 提供 `agent.execution.run`：它使用 PostgreSQL `mn_v2` RuntimeStore、Vault KV v2 BYOK、Cordis Scope 与内核审批端口。fixture profile 仍使用确定性的失败 handler，只验证恢复链路。生产部署必须配置 `vault.address` 与 `vault.existingSecret`；Worker 不接受环境变量中的明文模型密钥。
 
 企业部署默认不提供 `coding.reconciliation.verify`。如需允许用户把结果未知的 Coding 调用标记完成，生产镜像必须自行实现 `coding.reconciliation.verify` 与 `coding.sandbox.cleanup`，并把两者同时加入模块和 Helm 的 `supportedKinds`。验证 handler 必须在真正的 Kubernetes 隔离候选中执行权威 Gate，使用 Job 租约与 fencing token 提交结果；清理 handler 必须只处理 Worker 管理的路径。Chart 中的 sandbox 控制器、共享卷和 fixture 不是这两个业务 handler，也不能作为已实现能力申报。缺少任一能力时，Host 会从详情和决定接口中关闭 `mark_completed`，仍允许终止或在其他条件满足时创建新调用。
 
