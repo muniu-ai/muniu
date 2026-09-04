@@ -4,7 +4,7 @@ import type {
   JsonObject,
   KernelEventV1,
 } from "@mn/contracts";
-import { hmacSha256, sha256 } from "./canonical.js";
+import { computeEventDigest, computeEventHmac } from "@mn/contracts";
 import { StreamVersionConflictError } from "./errors.js";
 
 export interface IdempotencyRecord {
@@ -123,8 +123,8 @@ export class InMemoryKernelStore implements KernelStore {
           protectedPayloadRef: request.protectedPayloadRef,
           previousDigest: previous?.digest,
         };
-        const digest = sha256(body);
-        const event: KernelEventV1 = { ...body, digest, hmac: hmacSha256(this.hmacKey, digest) };
+        const digest = computeEventDigest(body);
+        const event: KernelEventV1 = { ...body, digest, hmac: computeEventHmac(digest, this.hmacKey) };
         staged.events.push(event);
         staged.positions.set(tenantId, position);
         staged.streamVersions.set(streamKey, actual + 1);

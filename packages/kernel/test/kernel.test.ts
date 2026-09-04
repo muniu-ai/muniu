@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
 import test from "node:test";
-import type { Execution, ExecutionAuthority, MemoryRecord, ToolCallIntent } from "@mn/contracts";
+import {
+  type Execution,
+  type ExecutionAuthority,
+  type MemoryRecord,
+  type ToolCallIntent,
+  verifyEventIntegrity,
+} from "@mn/contracts";
 import {
   AgentOsKernel,
   InMemoryKernelStore,
@@ -12,6 +19,25 @@ import {
 } from "../src/index.js";
 
 const now = "2026-09-04T00:00:00.000Z";
+
+test("内存事件使用与持久化存储相同的摘要 HMAC", async () => {
+  const hmacKey = Buffer.alloc(32, 7);
+  const store = new InMemoryKernelStore(hmacKey, () => now);
+  const event = await store.transact("tenant-a", (transaction) => transaction.appendEvent({
+    tenantId: "tenant-a",
+    aggregateType: "workspace",
+    aggregateId: "workspace-1",
+    expectedStreamVersion: 0,
+    type: "workspace.created",
+    actorId: "owner",
+    generation: 1,
+    correlationId: "correlation-1",
+    publicPayload: { name: "新业务" },
+  }));
+
+  assert.equal(event.hmac, createHmac("sha256", hmacKey).update(event.digest).digest("hex"));
+  assert.equal(verifyEventIntegrity(event, hmacKey), true);
+});
 
 function authority(executionId: string): Omit<ExecutionAuthority, "id" | "tenantId" | "executionId" | "streamVersion" | "createdAt" | "updatedAt"> {
   return {
