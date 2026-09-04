@@ -106,7 +106,7 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces }: Wor
     { id: "inbox", kind: "命令", title: "打开收件箱", detail: `${home.approvals.length} 项待处理`, action: () => setPage("inbox") },
     ...opportunities.map((item) => ({ id: `opportunity:${item.id}`, kind: "机会" as const, title: item.title, detail: item.nextAction, action: () => { setSelectedOpportunityId(item.id); setPage("opc"); } })),
     ...codingTasks.map((item) => ({ id: `task:${item.id}`, kind: "Coding 任务" as const, title: item.title, detail: item.status, action: () => { setSelectedCodingTaskId(item.id); setPage("coding"); } })),
-    ...deliverables.map((item) => ({ id: `deliverable:${item.id}`, kind: "成果" as const, title: item.title, detail: item.outcome, action: () => setPage("deliverables") })),
+    ...deliverables.map((item) => ({ id: `deliverable:${item.id}`, kind: "成果" as const, title: item.title, detail: item.outcome, action: () => setPage(item.pluginId) })),
     ...agentCatalog.skills.map((skill) => ({ id: `skill:${skill.id}`, kind: "Skill" as const, title: skill.title, detail: skill.expectedOutcome, action: () => setPage("agents") })),
   ], [agentCatalog.skills, codingTasks, deliverables, home.approvals.length, opportunities]);
 
@@ -171,7 +171,7 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces }: Wor
         {!coreLoading && !coreError && page === "home" && <HomePage summary={home} onNavigate={(target) => setPage(target as PageId)} />}
         {page === "workspaces" && <WorkspacesPage workspaces={workspaces} currentId={workspace.id} members={members} onSelect={selectWorkspace} />}
         {page === "inbox" && <InboxPage summary={home} api={api} onChanged={() => void refreshCore()} />}
-        {page === "deliverables" && <DeliverablesPage items={deliverables} />}
+        {page === "deliverables" && <DeliverablesPage items={deliverables} onOpen={(item) => setPage(item.pluginId)} />}
         {page === "activity" && <ActivityPage items={activity} professional={professional} />}
         {page === "agents" && <AgentsPage catalog={agentCatalog} />}
         {page === "integrations" && <IntegrationsPage />}

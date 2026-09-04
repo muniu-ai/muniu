@@ -28,7 +28,7 @@ export function HomePage({ summary, onNavigate }: { readonly summary: HomeSummar
         </div>
       </section>
     </div>
-    <section className="panel"><PanelHeading title="最近成果" action="查看全部" onAction={() => onNavigate("deliverables")} /><DeliverableList items={summary.recentDeliverables} /></section>
+    <section className="panel"><PanelHeading title="最近成果" action="查看全部" onAction={() => onNavigate("deliverables")} /><DeliverableList items={summary.recentDeliverables} onOpen={(item) => onNavigate(item.pluginId)} /></section>
   </div>;
 }
 
@@ -56,13 +56,13 @@ export function InboxPage({ summary, api, onChanged }: { readonly summary: HomeS
   </div>;
 }
 
-export function DeliverablesPage({ items }: { readonly items: readonly DeliverableSummary[] }) {
-  return <div className="page-stack"><PageTitle eyebrow="可以交付的结果" title="成果" detail="跨插件查看档案、方案、代码证据和决策记录。" /><section className="panel"><DeliverableList items={items} /></section></div>;
+export function DeliverablesPage({ items, onOpen }: { readonly items: readonly DeliverableSummary[]; readonly onOpen: (item: DeliverableSummary) => void }) {
+  return <div className="page-stack"><PageTitle eyebrow="可以交付的结果" title="成果" detail="跨插件查看档案、方案、代码证据和决策记录。" /><section className="panel"><DeliverableList items={items} onOpen={onOpen} /></section></div>;
 }
 
-export function DeliverableList({ items }: { readonly items: readonly DeliverableSummary[] }) {
+export function DeliverableList({ items, onOpen }: { readonly items: readonly DeliverableSummary[]; readonly onOpen: (item: DeliverableSummary) => void }) {
   if (items.length === 0) return <EmptyState title="还没有成果" detail="完成一次机会验证或 Coding 任务后，成果会出现在这里" />;
-  return <div className="deliverable-list">{items.map((item) => <article key={item.id}><span className={`plugin-badge ${item.pluginId}`}>{item.pluginId === "opc" ? "OPC" : "CODE"}</span><div><h4>{item.title}</h4><p>{item.outcome}</p><footer>{item.decision && <span><strong>决定</strong>{item.decision}</span>}{item.nextAction && <span><strong>下一步</strong>{item.nextAction}</span>}</footer></div><button className="icon-button" title="打开成果"><ArrowRight size={17} /></button></article>)}</div>;
+  return <div className="deliverable-list">{items.map((item) => <article key={item.id}><span className={`plugin-badge ${item.pluginId}`}>{item.pluginId === "opc" ? "OPC" : "CODE"}</span><div><h4>{item.title}</h4><p>{item.outcome}</p><footer>{item.decision && <span><strong>决定</strong>{item.decision}</span>}{item.nextAction && <span><strong>下一步</strong>{item.nextAction}</span>}</footer></div><button className="icon-button" aria-label={`打开成果：${item.title}`} title="打开成果" onClick={() => onOpen(item)}><ArrowRight size={17} /></button></article>)}</div>;
 }
 
 export function ActivityPage({ items, professional }: { readonly items: readonly ActivitySummary[]; readonly professional: boolean }) {

@@ -260,6 +260,10 @@ async function verifyOpc(page, requestLog, hostUrl) {
   await expectText(page, "6 项成果已导出");
   const exported = await hostData(hostUrl, `/v2/deliverables?workspaceId=${encodeURIComponent(workspace.id)}`);
   if (exported.length !== 6) throw new Error(`实际导出成果数不是 6：${exported.length}`);
+  await page.getByRole("button", { name: "成果", exact: true }).click();
+  await expectText(page, "可以交付的结果");
+  await page.getByRole("button", { name: "打开成果：机会验证档案", exact: true }).click();
+  await expectText(page, "机会验证");
 
   const commandRequests = requestLog.filter((entry) => entry.method === "POST" && entry.path.endsWith("/commands"));
   const successfulSequence = ["frame", "start_research", "record_signal", "record_signal", "start_interviewing", "record_interview", "annotate_interview", "start_evaluation", "prepare_offer", "propose_commitment", "confirm_commitment", "decide"];
