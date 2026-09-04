@@ -86,6 +86,7 @@ export async function startLocalAgentOsHost(options: StartLocalHostOptions = {})
   const turnHandler = createKernelAgentTurnHandler({
     store,
     secretStore,
+    approvalKernel: host.kernel,
     ...(options.modelInvoker ? { modelInvoker: options.modelInvoker } : {}),
     acceptsSecretReference: (reference) => reference.startsWith("keychain://muniu.v2/"),
     ...(options.now ? { now: options.now } : {}),

@@ -1,17 +1,34 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { JsonObject, JsonValue } from "@mn/contracts";
+import type { Approval, JsonObject, JsonValue, ToolCallIntent } from "@mn/contracts";
 import { StaleFencingTokenError, type StoredJob } from "@mn/storage";
 import {
   AgentOsWorker,
   createByokModelInvoker,
   createAgentTurnHandler,
+  createKernelToolApprovalPort,
   runWorkerLoop,
   UnknownExternalSideEffectError,
   WORKER_LEASE_MILLISECONDS,
   workerReadiness,
   type WorkerJobStore,
 } from "../src/index.js";
+
+const approvalIntent: ToolCallIntent = {
+  id: "call-approval-1",
+  executionId: "execution-1",
+  generation: 1,
+  toolId: "external.publish",
+  toolVersion: "1.0.0",
+  effectClass: "external_side_effect",
+  intent: "发布验证页面",
+  normalizedArguments: { url: "https://example.com" },
+  argumentsDigest: "arguments",
+  resourceRefs: [{ namespace: "web", resourceId: "https://example.com" }],
+  resourcesDigest: "resources",
+  authorityCommitment: "authority",
+  expiresAt: "2026-09-04T00:05:00.000Z",
+};
 
 const modelRequest = {
   executionId: "execution-1",
@@ -209,6 +226,94 @@ test("Worker 重试已完成的 Agent turn 时不重复调用模型", async () =
     leaseExpiresAt: "2026-09-04T00:00:30.000Z", signal: new AbortController().signal,
   }), { executionId: "execution-1", status: "completed" });
   assert.equal(calls, 0);
+});
+
+test("内核审批端口只在同一持久化意图获单次批准后放行", async () => {
+  const approval: Approval = {
+    id: "approval-1", tenantId: "local", workspaceId: "workspace-1",
+    executionId: "execution-1", toolCallId: approvalIntent.id,
+    effectClass: approvalIntent.effectClass, intent: approvalIntent.intent,
+    resourceRefs: approvalIntent.resourceRefs,
+    authorityCommitment: approvalIntent.authorityCommitment,
+    expiresAt: approvalIntent.expiresAt, status: "pending", streamVersion: 1,
+    createdAt: "2026-09-04T00:00:00.000Z", updatedAt: "2026-09-04T00:00:00.000Z",
+  };
+  let currentApproval = approval;
+  const requested: ToolCallIntent[] = [];
+  const projections = {
+    async transact<T>(_tenantId: string, work: (transaction: {
+      getProjection<U>(namespace: string, id: string): U | undefined;
+    }) => T): Promise<T> {
+      return work({
+        getProjection<U>(namespace: string, id: string): U | undefined {
+          if (namespace === "approval" && id === approval.id) return currentApproval as U;
+          if (namespace === "toolIntent" && id === approvalIntent.id) return approvalIntent as U;
+          return undefined;
+        },
+      });
+    },
+  };
+  const port = createKernelToolApprovalPort({
+    tenantId: "local", actorId: "agent:opc", store: projections,
+    pollIntervalMs: 1,
+    now: () => Date.parse("2026-09-04T00:00:02.000Z"),
+    kernel: {
+      async requestToolApproval(_tenantId, _actorId, key, intent) {
+        assert.equal(key, "agent-runtime:execution-1:1:call-approval-1");
+        requested.push(intent);
+        return { mode: "approval" as const, approval };
+      },
+    },
+  });
+  const authorization = port.authorize(approvalIntent, new AbortController().signal);
+  await new Promise((resolve) => setTimeout(resolve, 2));
+  currentApproval = {
+    ...currentApproval,
+    status: "approved_once",
+    streamVersion: 2,
+    decidedBy: "local-owner",
+    decidedAt: "2026-09-04T00:00:01.000Z",
+    updatedAt: "2026-09-04T00:00:01.000Z",
+  };
+  assert.deepEqual(await authorization, { mode: "approve_once", approvedIntent: approvalIntent });
+  assert.deepEqual(requested, [approvalIntent]);
+});
+
+test("内核审批端口保留自动授权并响应取消", async (t) => {
+  const projections = {
+    async transact<T>(_tenantId: string, work: (transaction: {
+      getProjection<U>(namespace: string, id: string): U | undefined;
+    }) => T): Promise<T> {
+      return work({ getProjection: () => undefined });
+    },
+  };
+  await t.test("自动授权", async () => {
+    const autoIntent = { ...approvalIntent, effectClass: "external_read" as const };
+    const port = createKernelToolApprovalPort({
+      tenantId: "local", actorId: "agent:opc", store: projections,
+      kernel: { async requestToolApproval() { return { mode: "auto" as const, intent: autoIntent }; } },
+    });
+    assert.deepEqual(await port.authorize(autoIntent, new AbortController().signal), {
+      mode: "auto", intent: autoIntent,
+    });
+  });
+  await t.test("等待中取消", async () => {
+    const controller = new AbortController();
+    const port = createKernelToolApprovalPort({
+      tenantId: "local", actorId: "agent:opc", store: projections, pollIntervalMs: 1,
+      kernel: { async requestToolApproval() {
+        return {
+          mode: "approval" as const,
+          approval: {
+            ...({} as Approval), id: "missing", expiresAt: approvalIntent.expiresAt,
+          },
+        };
+      } },
+    });
+    const waiting = port.authorize(approvalIntent, controller.signal);
+    controller.abort();
+    await assert.rejects(waiting, /已取消/u);
+  });
 });
 
 test("成功结果必须携带当前 fencing token 提交", async () => {

@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import type {
   Execution,
   ExecutionAuthority,
@@ -13,6 +15,7 @@ import {
   type Awaitable,
   type RuntimeProjectionStore,
 } from "@mn/agent-runtime";
+import { AgentOsKernel, type KernelStore } from "@mn/kernel";
 import {
   JOB_LEASE_MILLISECONDS,
   StaleFencingTokenError,
@@ -26,6 +29,8 @@ import {
   type ByokModelInvoker,
   type ByokProviderId,
 } from "./model-invoker.js";
+import { createKernelToolApprovalPort, type ToolApprovalKernel } from "./approval.js";
+export * from "./approval.js";
 
 export * from "./model-invoker.js";
 
@@ -353,12 +358,14 @@ export interface ModelSecretReader {
   read(secretRef: string): Promise<string>;
 }
 
-export interface AgentExecutionStore extends WorkerJobStore, RuntimeProjectionStore {}
+export interface AgentExecutionStore extends WorkerJobStore, KernelStore {}
 
 export interface KernelAgentTurnHandlerOptions {
   readonly store: AgentExecutionStore;
   readonly secretStore: ModelSecretReader;
   readonly modelInvoker?: ByokModelInvoker;
+  readonly approvalKernel?: ToolApprovalKernel;
+  readonly approvalPollIntervalMs?: number;
   readonly acceptsSecretReference?: (reference: string) => boolean;
   readonly now?: () => string;
 }
@@ -368,6 +375,11 @@ export function createKernelAgentTurnHandler(
 ): WorkerJobHandler {
   const invokeModel = options.modelInvoker ?? createByokModelInvoker();
   const acceptsSecretReference = options.acceptsSecretReference ?? (() => true);
+  const approvalKernel = options.approvalKernel ?? new AgentOsKernel(options.store, {
+    ...(options.now ? { now: options.now } : {}),
+    id: (kind) => `${kind}-${randomUUID()}`,
+    acceptsModelSecretReference: acceptsSecretReference,
+  });
   return createAgentTurnHandler({
     resolveOptions: async (job) => {
       const executionId = requiredPayloadString(job.payload, "executionId");
@@ -446,11 +458,16 @@ export function createKernelAgentTurnHandler(
           effectClasses: state.authority.autoAllowedEffects,
           budget: state.authority.budget,
         },
-        approval: {
-          async authorize() {
-            return { mode: "deny" as const, reason: "当前 Worker 未注册工具" };
-          },
-        },
+        approval: createKernelToolApprovalPort({
+          tenantId: job.tenantId,
+          actorId: state.execution.executionPrincipalId,
+          kernel: approvalKernel,
+          store: options.store,
+          ...(options.approvalPollIntervalMs
+            ? { pollIntervalMs: options.approvalPollIntervalMs }
+            : {}),
+          ...(options.now ? { now: () => Date.parse(options.now!()) } : {}),
+        }),
         ...(options.now ? { now: options.now } : {}),
       };
     },
