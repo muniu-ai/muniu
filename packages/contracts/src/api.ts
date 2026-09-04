@@ -52,6 +52,31 @@ export interface DeleteAssetMutationBodyV2 extends VersionedMutationBody {
   readonly reason: string;
 }
 
+export interface AgentCatalogAgentV2 {
+  readonly pluginId: string;
+  readonly id: string;
+  readonly displayName: string;
+  readonly description: string;
+}
+
+export interface AgentCatalogSkillV2 {
+  readonly pluginId: string;
+  readonly id: string;
+  readonly title: string;
+  readonly expectedOutcome: string;
+  readonly exampleInput?: string;
+  readonly source: string;
+  readonly license: string;
+  readonly version: string;
+  readonly permissionIds: readonly string[];
+  readonly installation: "active";
+}
+
+export interface AgentCatalogV2 {
+  readonly agents: readonly AgentCatalogAgentV2[];
+  readonly skills: readonly AgentCatalogSkillV2[];
+}
+
 export const CORE_API_ROUTES = [
   "/v2/openapi.json",
   "/v2/health",
@@ -61,6 +86,7 @@ export const CORE_API_ROUTES = [
   "/v2/workspaces/{workspaceId}",
   "/v2/workspaces/{workspaceId}/members",
   "/v2/workspaces/{workspaceId}/members/{principalId}",
+  "/v2/workspaces/{workspaceId}/agent-catalog",
   "/v2/workspaces/{workspaceId}/home",
   "/v2/workspaces/{workspaceId}/threads",
   "/v2/workspaces/{workspaceId}/threads/{threadId}/turns",

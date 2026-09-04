@@ -95,6 +95,37 @@ test("Cordis 是唯一组合根，官方插件预装但默认不启用", async (
   await host.close();
 });
 
+test("Agent 目录按工作区展示启用插件的职责与成果导向 Skill", async () => {
+  const host = await createAgentOsHost({ store: new InMemoryKernelStore(), secretStore: secrets });
+  const workspace = (await responseJson(await host.dispatch(jsonRequest("/v2/workspaces", {
+    name: "Agent 目录",
+    viewMode: "business",
+    pluginIds: ["opc", "coding"],
+  }, "agent-catalog-workspace")))).data;
+
+  const response = await host.dispatch(new Request(
+    `http://host.test/v2/workspaces/${workspace.id}/agent-catalog`,
+  ));
+  assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
+  const catalog = (await responseJson(response)).data;
+  assert.deepEqual(catalog.agents.map((agent: any) => agent.pluginId), ["opc", "coding"]);
+  const research = catalog.skills.find((skill: any) => skill.id === "opc.skill.public-research");
+  assert.deepEqual(research, {
+    pluginId: "opc",
+    id: "opc.skill.public-research",
+    title: "公开资料研究",
+    expectedOutcome: "记录带来源和时间的支持、反对与中立信号",
+    exampleInput: "查找独立开发者进行客户访谈时遇到的具体问题",
+    source: "木牛 OPC Agent OS",
+    license: "Apache-2.0",
+    version: "0.2.0",
+    permissionIds: ["opc.public-web.read"],
+    installation: "active",
+  });
+  assert.ok(catalog.skills.some((skill: any) => skill.id === "coding.change"));
+  await host.close();
+});
+
 test("桌面首次向导与首页使用真实 0.2 接口和官方产品插件", async () => {
   const host = await createAgentOsHost({ store: new InMemoryKernelStore(), secretStore: secrets });
 

@@ -14,13 +14,14 @@ import {
 } from "./pages/CorePages";
 import { CodingPage, OpcPage } from "./pages/PluginPages";
 import type {
-  ActivitySummary, CodingTaskSummary, DeliverableSummary, HomeSummary, MemorySummary,
+  ActivitySummary, AgentCatalog, CodingTaskSummary, DeliverableSummary, HomeSummary, MemorySummary,
   OpportunitySummary, PluginHealth, ProductPluginId, WorkspaceMemberSummary, WorkspaceSummary,
 } from "./types";
 
 type PageId = "home" | "workspaces" | "inbox" | "deliverables" | "activity" | "agents" | "integrations" | "settings" | "opc" | "coding";
 
 const emptyHome: HomeSummary = { todayActions: [], blockers: [], approvals: [], recentDeliverables: [] };
+const emptyAgentCatalog: AgentCatalog = { agents: [], skills: [] };
 
 interface WorkspaceShellProps {
   readonly api: AgentOsClient;
@@ -44,6 +45,7 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces }: Wor
   const [activity, setActivity] = useState<readonly ActivitySummary[]>([]);
   const [memories, setMemories] = useState<readonly MemorySummary[]>([]);
   const [members, setMembers] = useState<readonly WorkspaceMemberSummary[]>([]);
+  const [agentCatalog, setAgentCatalog] = useState<AgentCatalog>(emptyAgentCatalog);
   const [opportunities, setOpportunities] = useState<readonly OpportunitySummary[]>([]);
   const [codingTasks, setCodingTasks] = useState<readonly CodingTaskSummary[]>([]);
   const [selectedOpportunityId, setSelectedOpportunityId] = useState<string>();
@@ -60,14 +62,15 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces }: Wor
 
   const refreshCore = useCallback(async () => {
     setCoreLoading(true); setCoreError(undefined);
-    const [homeResult, deliverablesResult, activityResult, memoriesResult, membersResult, healthResult] = await Promise.allSettled([
-      api.home(workspace.id), api.deliverables(workspace.id), api.activity(workspace.id), api.memories(workspace.id), api.workspaceMembers(workspace.id), api.health(workspace.id),
+    const [homeResult, deliverablesResult, activityResult, memoriesResult, membersResult, catalogResult, healthResult] = await Promise.allSettled([
+      api.home(workspace.id), api.deliverables(workspace.id), api.activity(workspace.id), api.memories(workspace.id), api.workspaceMembers(workspace.id), api.agentCatalog(workspace.id), api.health(workspace.id),
     ]);
     if (homeResult.status === "fulfilled") setHome(homeResult.value); else setCoreError(safeMessage(homeResult.reason));
     if (deliverablesResult.status === "fulfilled") setDeliverables(deliverablesResult.value);
     if (activityResult.status === "fulfilled") setActivity(activityResult.value);
     if (memoriesResult.status === "fulfilled") setMemories(memoriesResult.value);
     if (membersResult.status === "fulfilled") setMembers(membersResult.value);
+    if (catalogResult.status === "fulfilled") setAgentCatalog(catalogResult.value);
     if (healthResult.status === "fulfilled") setHealth(healthResult.value.plugins);
     setCoreLoading(false);
   }, [api, workspace.id]);
@@ -104,9 +107,8 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces }: Wor
     ...opportunities.map((item) => ({ id: `opportunity:${item.id}`, kind: "机会" as const, title: item.title, detail: item.nextAction, action: () => { setSelectedOpportunityId(item.id); setPage("opc"); } })),
     ...codingTasks.map((item) => ({ id: `task:${item.id}`, kind: "Coding 任务" as const, title: item.title, detail: item.status, action: () => { setSelectedCodingTaskId(item.id); setPage("coding"); } })),
     ...deliverables.map((item) => ({ id: `deliverable:${item.id}`, kind: "成果" as const, title: item.title, detail: item.outcome, action: () => setPage("deliverables") })),
-    { id: "skill:opc", kind: "Skill", title: "验证创业机会", detail: "输出机会验证档案", action: () => setPage("opc") },
-    { id: "skill:coding", kind: "Skill", title: "实现并验证代码变更", detail: "输出差异与代码证据", action: () => setPage("coding") },
-  ], [codingTasks, deliverables, home.approvals.length, opportunities]);
+    ...agentCatalog.skills.map((skill) => ({ id: `skill:${skill.id}`, kind: "Skill" as const, title: skill.title, detail: skill.expectedOutcome, action: () => setPage("agents") })),
+  ], [agentCatalog.skills, codingTasks, deliverables, home.approvals.length, opportunities]);
 
   async function submitCapture() {
     const value = captureText.trim();
@@ -171,7 +173,7 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces }: Wor
         {page === "inbox" && <InboxPage summary={home} api={api} onChanged={() => void refreshCore()} />}
         {page === "deliverables" && <DeliverablesPage items={deliverables} />}
         {page === "activity" && <ActivityPage items={activity} professional={professional} />}
-        {page === "agents" && <AgentsPage />}
+        {page === "agents" && <AgentsPage catalog={agentCatalog} />}
         {page === "integrations" && <IntegrationsPage />}
         {page === "settings" && <SettingsPage workspace={workspace} memories={memories} api={api} onModeChanged={updateWorkspace} onMemoriesChanged={() => void refreshCore()} />}
         {page === "opc" && <PluginBoundary pluginName="OPC"><OpcPage api={api} workspaceId={workspace.id} items={opportunities} selectedId={selectedOpportunityId} onSelect={setSelectedOpportunityId} loading={opcLoading} error={opcError} viewMode={workspace.viewMode} onRetry={() => void refreshOpc()} onChanged={async () => { await Promise.all([refreshOpc(), refreshCore()]); }} /></PluginBoundary>}

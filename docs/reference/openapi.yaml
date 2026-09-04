@@ -189,6 +189,21 @@ paths:
         default:
           $ref: "#/components/responses/Error"
       x-muniu-versioned: true
+  /v2/workspaces/{workspaceId}/agent-catalog:
+    get:
+      operationId: getWorkspaceAgentCatalog
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        default:
+          $ref: "#/components/responses/Error"
+      x-muniu-versioned: false
   /v2/workspaces/{workspaceId}/home:
     get:
       operationId: getWorkspaceHome

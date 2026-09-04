@@ -1,7 +1,7 @@
-import { Activity, AlertCircle, ArrowRight, Check, Clock3, FileCheck2, Inbox, Lightbulb, MemoryStick, ShieldCheck, Users, X } from "lucide-react";
+import { Activity, AlertCircle, ArrowRight, Bot, Check, Clock3, FileCheck2, KeyRound, Lightbulb, MemoryStick, ShieldCheck, Sparkles, X } from "lucide-react";
 import type { AgentOsClient } from "../api";
 import { EmptyState } from "../components/Status";
-import type { ActivitySummary, DeliverableSummary, HomeSummary, MemorySummary, ViewMode, WorkspaceMemberSummary, WorkspaceSummary } from "../types";
+import type { ActivitySummary, AgentCatalog, DeliverableSummary, HomeSummary, MemorySummary, ViewMode, WorkspaceMemberSummary, WorkspaceSummary } from "../types";
 
 export function HomePage({ summary, onNavigate }: { readonly summary: HomeSummary; readonly onNavigate: (page: string) => void }) {
   return <div className="page-stack">
@@ -98,7 +98,25 @@ export function SettingsPage({ workspace, memories, api, onModeChanged, onMemori
   </div>;
 }
 
-export function AgentsPage() { return <StaticPage eyebrow="默认折叠" title="Agents" detail="查看 Agent 的职责、Skill、工具和预算。Builtin Agent 是 Coding 的默认 Runner。" icon={<Users />} />; }
+export function AgentsPage({ catalog }: { readonly catalog: AgentCatalog }) {
+  return <div className="page-stack">
+    <PageTitle eyebrow="工作能力" title="Agents" detail="先看能交付什么，再按需展开来源、权限和版本。" />
+    <section className="panel"><PanelHeading title="已启用的 Agent" />
+      <div className="agent-catalog-grid">{catalog.agents.map((agent) => <article className="agent-catalog-card" key={agent.id}><span className="agent-catalog-icon"><Bot size={19} /></span><div><header><span className={`plugin-badge ${agent.pluginId}`}>{pluginLabel(agent.pluginId)}</span><span className="pill accepted">已启用</span></header><h3>{agent.displayName}</h3><p>{agent.description}</p></div></article>)}</div>
+      {catalog.agents.length === 0 && <EmptyState title="没有已启用的 Agent" detail="先在工作区启用 OPC 或 Coding 插件" />}
+    </section>
+    <section className="panel"><PanelHeading title="成果导向 Skill" />
+      <div className="skill-catalog-grid">{catalog.skills.map((skill) => <article className="skill-catalog-card" key={skill.id}>
+        <header><span className="skill-catalog-icon"><Sparkles size={17} /></span><span className={`plugin-badge ${skill.pluginId}`}>{pluginLabel(skill.pluginId)}</span><span className="pill accepted">已启用</span></header>
+        <h3>{skill.title}</h3>
+        <dl><div><dt>预期成果</dt><dd>{skill.expectedOutcome}</dd></div>{skill.exampleInput && <div><dt>示例输入</dt><dd>{skill.exampleInput}</dd></div>}</dl>
+        <footer><span>{skill.source}</span><span>{skill.license}</span><span>v{skill.version}</span></footer>
+        <details><summary><KeyRound size={14} />权限</summary><p>{skill.permissionIds.length > 0 ? skill.permissionIds.join(" · ") : "无需额外工具权限"}</p></details>
+      </article>)}</div>
+      {catalog.skills.length === 0 && <EmptyState title="还没有可用 Skill" detail="启用产品插件后会显示预期成果和使用示例" />}
+    </section>
+  </div>;
+}
 export function IntegrationsPage() {
   return <div className="page-stack">
     <PageTitle eyebrow="受控连接" title="集成" detail="模型、外部 Runner 与产品插件分别授权，变更后重新确认。" />
@@ -111,10 +129,6 @@ export function IntegrationsPage() {
       <div className="governance-note"><AlertCircle size={20} /><p>生产插件与 Host 同进程运行，能获得宿主进程可见的能力，不是安全沙箱。Execution Authority 只能约束 Agent 和经内核调用的工具，无法约束恶意插件直接使用进程能力。只安装来源、签名、版本、权限和摘要均已核对的插件。</p></div>
     </section>
   </div>;
-}
-
-function StaticPage({ eyebrow, title, detail, icon }: { readonly eyebrow: string; readonly title: string; readonly detail: string; readonly icon: React.ReactNode }) {
-  return <div className="page-stack"><PageTitle eyebrow={eyebrow} title={title} detail={detail} /><section className="panel static-callout"><span>{icon}</span><h3>保持最小权限</h3><p>只有工作区明确启用的能力才能参与执行。高影响操作始终进入审批。</p></section></div>;
 }
 
 export function PageTitle({ eyebrow, title, detail }: { readonly eyebrow: string; readonly title: string; readonly detail: string }) {

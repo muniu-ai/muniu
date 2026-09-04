@@ -153,6 +153,26 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .capture-icon { display: grid; color: var(--accent); }
 .quick-capture input { min-width: 0; height: 32px; flex: 1; padding: 0 5px; border: 0; outline: 0; color: var(--ink); }
 .quick-capture input::placeholder { color: #929991; }
+
+.agent-catalog-grid, .skill-catalog-grid { display: grid; gap: 12px; }
+.agent-catalog-grid { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+.skill-catalog-grid { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+.agent-catalog-card, .skill-catalog-card { border: 1px solid var(--line); border-radius: 14px; background: var(--surface-soft); }
+.agent-catalog-card { display: flex; gap: 13px; padding: 16px; }
+.agent-catalog-card header, .skill-catalog-card > header { display: flex; align-items: center; gap: 8px; }
+.agent-catalog-card h3, .skill-catalog-card h3 { margin: 10px 0 6px; }
+.agent-catalog-card p, .skill-catalog-card dd { color: var(--muted); line-height: 1.55; }
+.agent-catalog-icon, .skill-catalog-icon { display: inline-flex; align-items: center; justify-content: center; color: var(--accent); }
+.skill-catalog-card { padding: 16px; }
+.skill-catalog-card dl { display: grid; gap: 10px; margin: 14px 0; }
+.skill-catalog-card dl div { display: grid; gap: 3px; }
+.skill-catalog-card dt { color: var(--muted); font-size: 12px; font-weight: 700; }
+.skill-catalog-card dd { margin: 0; }
+.skill-catalog-card footer { display: flex; flex-wrap: wrap; gap: 6px; color: var(--muted); font-size: 12px; }
+.skill-catalog-card footer span { border: 1px solid var(--line); border-radius: 999px; padding: 3px 8px; background: var(--surface); }
+.skill-catalog-card details { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
+.skill-catalog-card summary { display: flex; align-items: center; gap: 6px; cursor: pointer; color: var(--muted); font-size: 13px; }
+.skill-catalog-card details p { margin: 8px 0 0; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; overflow-wrap: anywhere; }
 .quick-capture select { height: 31px; border: 0; border-radius: 7px; color: #566158; background: var(--surface-soft); font-size: 11px; font-weight: 650; }
 .quick-capture .primary-button { min-height: 32px; }
 .toast, .degraded-banner { display: flex; gap: 7px; align-items: center; margin: 9px 24px 0; padding: 8px 12px; border-radius: 8px; font-size: 11px; }

@@ -23,6 +23,7 @@ export const API_OPERATIONS_V2: readonly ApiOperationV2[] = [
   { method: "get", path: "/v2/workspaces/{workspaceId}/members", operationId: "listWorkspaceMembers", mutation: false, versioned: false },
   { method: "put", path: "/v2/workspaces/{workspaceId}/members/{principalId}", operationId: "setWorkspaceMember", mutation: true, versioned: true },
   { method: "delete", path: "/v2/workspaces/{workspaceId}/members/{principalId}", operationId: "removeWorkspaceMember", mutation: true, versioned: true },
+  { method: "get", path: "/v2/workspaces/{workspaceId}/agent-catalog", operationId: "getWorkspaceAgentCatalog", mutation: false, versioned: false },
   { method: "get", path: "/v2/workspaces/{workspaceId}/home", operationId: "getWorkspaceHome", mutation: false, versioned: false },
   { method: "get", path: "/v2/workspaces/{workspaceId}/threads", operationId: "listThreads", mutation: false, versioned: false },
   { method: "post", path: "/v2/workspaces/{workspaceId}/threads", operationId: "createThread", mutation: true, versioned: false },

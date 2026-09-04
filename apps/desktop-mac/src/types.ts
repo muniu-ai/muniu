@@ -16,6 +16,31 @@ export interface WorkspaceMemberSummary {
   readonly streamVersion: number;
 }
 
+export interface AgentCatalog {
+  readonly agents: readonly AgentCatalogAgent[];
+  readonly skills: readonly AgentCatalogSkill[];
+}
+
+export interface AgentCatalogAgent {
+  readonly pluginId: string;
+  readonly id: string;
+  readonly displayName: string;
+  readonly description: string;
+}
+
+export interface AgentCatalogSkill {
+  readonly pluginId: string;
+  readonly id: string;
+  readonly title: string;
+  readonly expectedOutcome: string;
+  readonly exampleInput?: string;
+  readonly source: string;
+  readonly license: string;
+  readonly version: string;
+  readonly permissionIds: readonly string[];
+  readonly installation: "active";
+}
+
 export interface HomeSummary {
   readonly todayActions: readonly SummaryItem[];
   readonly blockers: readonly SummaryItem[];

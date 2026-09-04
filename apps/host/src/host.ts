@@ -922,6 +922,36 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           expectedVersion(body),
         ), 200, traceId);
       }
+      const agentCatalogMatch = url.pathname.match(/^\/v2\/workspaces\/([^/]+)\/agent-catalog$/u);
+      if (agentCatalogMatch && request.method === "GET") {
+        const workspaceId = decodeURIComponent(agentCatalogMatch[1]!);
+        const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId);
+        const agents = [];
+        const skills = [];
+        for (const pluginId of workspace.activePluginIds) {
+          const definition = plugins.definition(pluginId);
+          if (!definition) continue;
+          agents.push(...definition.contributions.agents.map((agent) => ({
+            pluginId,
+            id: agent.id,
+            displayName: agent.displayName,
+            description: agent.description,
+          })));
+          skills.push(...definition.contributions.skills.map((skill) => ({
+            pluginId,
+            id: skill.id,
+            title: skill.title,
+            expectedOutcome: skill.expectedOutcome,
+            ...(skill.exampleInput ? { exampleInput: skill.exampleInput } : {}),
+            source: skill.source,
+            license: skill.license,
+            version: skill.version,
+            permissionIds: skill.permissionIds,
+            installation: "active" as const,
+          })));
+        }
+        return json({ agents, skills }, 200, traceId);
+      }
       const homeMatch = url.pathname.match(/^\/v2\/workspaces\/([^/]+)\/home$/u);
       if (homeMatch && request.method === "GET") {
         const workspaceId = decodeURIComponent(homeMatch[1]!);

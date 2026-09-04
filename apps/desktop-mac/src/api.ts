@@ -1,4 +1,5 @@
 import type {
+  AgentCatalog,
   ActivitySummary,
   ApiFailure,
   CodingTaskSummary,
@@ -95,6 +96,11 @@ export class AgentOsClient {
   workspaceMembers(workspaceId: string) {
     return this.request<readonly WorkspaceMemberSummary[]>(
       `/v2/workspaces/${encodeURIComponent(workspaceId)}/members`,
+    );
+  }
+  agentCatalog(workspaceId: string) {
+    return this.request<AgentCatalog>(
+      `/v2/workspaces/${encodeURIComponent(workspaceId)}/agent-catalog`,
     );
   }
 
