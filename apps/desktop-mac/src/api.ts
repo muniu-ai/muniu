@@ -198,6 +198,20 @@ export class AgentOsClient {
     });
   }
 
+  reviseMemory(memoryId: string, streamVersion: number, summary: string, confidence: number) {
+    return this.request<unknown>(`/v2/memories/${encodeURIComponent(memoryId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ expectedStreamVersion: streamVersion, confidence, value: { summary } }),
+    });
+  }
+
+  deleteMemory(memoryId: string, streamVersion: number, reason: string) {
+    return this.request<unknown>(`/v2/memories/${encodeURIComponent(memoryId)}`, {
+      method: "DELETE",
+      body: JSON.stringify({ expectedStreamVersion: streamVersion, reason }),
+    });
+  }
+
   capture(workspaceId: string, pluginId: ProductPluginId, input: string) {
     const resource = pluginId === "opc" ? "opportunities" : "tasks";
     return this.request<unknown>(`/v2/plugins/${pluginId}/${resource}`, {

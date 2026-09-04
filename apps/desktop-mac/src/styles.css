@@ -295,6 +295,12 @@ pre { overflow: auto; padding: 10px; border-radius: 7px; color: #dce5dc; backgro
 .memory-list p { margin: 4px 0; color: var(--muted); font-size: 11px; }
 .memory-list small { color: #859088; font-size: 10px; }
 .memory-list footer { display: flex; gap: 4px; }
+.memory-editor { display: grid; gap: 8px; margin-top: 9px; }
+.memory-editor label { display: grid; gap: 5px; color: var(--muted); font-size: 11px; }
+.memory-editor input { width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; color: var(--text); background: var(--surface); }
+.memory-editor > div { display: flex; justify-content: flex-end; gap: 6px; }
+.memory-list .governance-note { align-items: center; }
+.memory-list .governance-note p { flex: 1; }
 .static-callout { display: grid; min-height: 260px; place-items: center; align-content: center; text-align: center; }
 .static-callout > span { display: grid; width: 48px; height: 48px; place-items: center; border-radius: 14px; color: var(--green); background: var(--green-soft); }
 .static-callout h3 { margin: 12px 0 0; }

@@ -292,6 +292,15 @@ async function verifyOpc(page, requestLog, hostUrl) {
   await expectText(page, "已有承诺证据");
   await page.getByTitle("技术配置").click();
   await page.getByRole("button", { name: "设置" }).click();
+  await expectText(page, "目标客户重视可预测的获客节奏");
+  await page.getByRole("button", { name: "修改记忆：目标客户重视可预测的获客节奏" }).click();
+  await page.getByLabel("记忆内容").fill("目标客户明确重视可预测的获客节奏");
+  await page.getByRole("button", { name: "保存记忆修改" }).click();
+  await expectText(page, "目标客户明确重视可预测的获客节奏");
+  await page.getByRole("button", { name: "删除记忆：目标客户明确重视可预测的获客节奏" }).click();
+  await page.getByRole("button", { name: "确认删除记忆" }).click();
+  await expectText(page, "不可用");
+  if ((await page.locator("body").innerText()).includes("目标客户明确重视可预测的获客节奏")) throw new Error("删除后的记忆仍暴露原内容");
   await page.getByRole("button", { name: "专业视图" }).click();
   await page.getByRole("button", { name: "OPC" }).click();
   await page.getByRole("button", { name: "查看档案" }).click();
@@ -300,6 +309,8 @@ async function verifyOpc(page, requestLog, hostUrl) {
   await expectText(page, "继续推进");
   const commandCountAfterModeSwitch = requestLog.filter((entry) => entry.method === "POST" && entry.path.endsWith("/commands")).length;
   if (commandCountAfterModeSwitch !== commandCountBeforeModeSwitch) throw new Error("切换视图不应产生新的 OPC 领域命令");
+  if (!requestLog.some((entry) => entry.method === "PATCH" && /^\/v2\/memories\/[^/]+$/.test(entry.path))) throw new Error("记忆修改没有使用统一 v2 接口");
+  if (!requestLog.some((entry) => entry.method === "DELETE" && /^\/v2\/memories\/[^/]+$/.test(entry.path))) throw new Error("记忆删除没有使用统一 v2 接口");
 }
 
 async function hostData(hostUrl, path) {
