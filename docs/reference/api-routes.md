@@ -123,7 +123,7 @@ Coding turn 的 `runnerId` 可选值为 `builtin`、`claude-cli` 或 `codex-cli`
 `POST /v2/plugins/coding/executions/{executionId}/reconciliation-decisions` 同时要求 core `expectedStreamVersion` 和 `expectedCodingStreamVersion`。`decision` 支持：
 
 - `terminate`：终止未知调用并把清理 Job 入队；
-- `mark_completed`：先返回 `202 verification_pending` 并入队 `coding.reconciliation.verify`；Worker 只验证保留候选，不重放 Runner，权威 Gate 通过并持久化 CodeEvidence 后才原子标记完成；
+- `mark_completed`：先返回 `202 verification_pending` 并入队 `coding.reconciliation.verify`；Worker 只验证保留候选，不重放 Runner，权威 Gate 通过并持久化 CodeEvidence 后才原子标记完成。企业环境只有在受信发布配置同时声明验证与清理 handler 时才提供该决定；
 - `create_new_call`：终止旧调用并创建新的 Execution 与 Job，不重放旧 Job。
 
 `terminate` 与 `create_new_call` 会在同一数据库事务中收敛旧状态并写入清理 Job、`job.available` 事件及 outbox。`mark_completed` 的首个事务只固定人工意图和验证 Job；验证 Job 的全部业务写入均受租约与 fencing token 保护。Gate 失败时仍保持 `needs_reconciliation`，随后只允许终止或创建新调用。清理 Job 只携带原 Execution ID；Worker 从已持久化的 `externalInvocation` 读取受控路径。详情接口只展示当前确实可执行的决定，并给出新调用就绪状态；停用 Runner 插件后仍可终止，但不能创建新调用。

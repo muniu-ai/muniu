@@ -88,6 +88,8 @@ import {
 } from "./plugin-installation.js";
 import type { ModelSecretStore } from "./secrets.js";
 import {
+  CODING_RECONCILIATION_WORKER_JOB_KINDS,
+  codingReconciliationVerificationReadiness,
   decideCodingReconciliation,
   getCodingReconciliation,
   type CodingReconciliationDecision,
@@ -174,6 +176,11 @@ export interface AgentOsHostOptions {
   readonly protectedPayloadKeyProvider?: KeyProvider;
   /** Local hosts passively inspect same-node binaries; enterprise hosts require an injected trusted inspector. */
   readonly runnerIdentityInspector?: CodingRunnerIdentityInspector;
+  /**
+   * 企业部署从受信发布配置注入，并与 Worker handler module 的 supportedKinds 逐项核对。
+   * 未配置时人工核对仍可终止或新建调用，但不能把未知结果标记完成。
+   */
+  readonly trustedWorkerSupportedKinds?: readonly string[];
   /** 默认由 profile 决定：本地 Keychain，企业 Vault/KMS。 */
   readonly acceptsModelSecretReference?: (reference: string) => boolean;
   /** 组合根用于先停止共享同一 Store 的 Worker。 */
@@ -739,6 +746,11 @@ interface InFlightAsyncMutation {
 
 export async function createAgentOsHost(options: AgentOsHostOptions): Promise<AgentOsHost> {
   const profile = options.profile ?? "local";
+  const trustedWorkerSupportedKinds = Object.freeze(profile === "local"
+    ? [...CODING_RECONCILIATION_WORKER_JOB_KINDS]
+    : [...(options.trustedWorkerSupportedKinds ?? [])]);
+  const reconciliationVerificationReadiness = () =>
+    codingReconciliationVerificationReadiness(trustedWorkerSupportedKinds);
   const now = options.now ?? (() => new Date().toISOString());
   const nextId = options.id ?? ((kind: string) => `${kind}-${randomUUID()}`);
   const acceptsModelSecretReference = options.acceptsModelSecretReference
@@ -2181,6 +2193,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           TENANT_ID,
           ACTOR_ID,
           executionId,
+          reconciliationVerificationReadiness(),
         ), 200, traceId);
       }
       const codingReconciliationMatch = url.pathname.match(
@@ -2257,6 +2270,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           expectedStreamVersion,
           expectedCodingStreamVersion,
           decision,
+          verificationReadiness: reconciliationVerificationReadiness(),
           now,
           id: nextId,
         });

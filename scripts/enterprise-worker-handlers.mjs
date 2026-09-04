@@ -2,9 +2,24 @@
 
 import { UnknownExternalSideEffectError } from "@mn/worker";
 
+const fixtureMode = process.env.MN_WORKER_FIXTURE_MODE === "true";
+
+export const supportedKinds = Object.freeze([
+  "system.noop",
+  ...(fixtureMode ? [
+    "agent.execution.run",
+    "fixture.echo",
+    "fixture.wait",
+    "fixture.external_unknown",
+  ] : []),
+]);
+
 export const handlers = Object.freeze({
   "system.noop": async (job) => ({ accepted: true, jobId: job.id }),
-  ...(process.env.MN_WORKER_FIXTURE_MODE === "true" ? {
+  ...(fixtureMode ? {
+    "agent.execution.run": async () => {
+      throw new Error("企业 fixture 不提供 LLM，仅验证失败事务与恢复链路");
+    },
     "fixture.echo": async (job) => ({ ...job.payload, handledBy: process.env.MN_WORKER_INSTANCE_ID }),
     "fixture.wait": async (job, context) => {
       const delayMs = job.attempts > 1

@@ -23,6 +23,8 @@ x-runtime-environment: &runtime-environment
   MN_RETENTION_DELIVERABLE_DAYS: "365"
   MN_RETENTION_AUDIT_DAYS: "730"
   MN_JOB_LEASE_MS: "30000"
+  MN_WORKER_ENABLED: "true"
+  MN_WORKER_SUPPORTED_KINDS: '["system.noop","agent.execution.run","fixture.echo","fixture.wait","fixture.external_unknown"]'
   MN_TELEMETRY_ENABLED: "false"
   MN_OIDC_ISSUER: http://jwks:8080
   MN_OIDC_AUDIENCE: mn-v2-enterprise

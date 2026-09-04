@@ -41,7 +41,7 @@ Host 通过 `/v2/plugins/coding/runners` 提供工作区级 Runner 状态，并�
 
 ## 就绪与恢复
 
-Host 仅在权威存储、密钥服务、engine lock 和 plugin lock 一致时就绪。事件、投影、Job、outbox、审批与幂等结果必须在同一数据库事务提交；结果未知的外部副作用进入 `needs_reconciliation`，不会自动重放。Coding 人工核对详情提供任务标题、下一步、双 stream version、当前可用决定、新调用就绪原因和权威证据摘要，但不暴露本地清理路径。标记完成会先入队受控验证；Worker 不重放 Runner，只有保留候选通过权威 Gate 并持久化 CodeEvidence 后才完成并清理。
+Host 仅在权威存储、密钥服务、engine lock 和 plugin lock 一致时就绪。事件、投影、Job、outbox、审批与幂等结果必须在同一数据库事务提交；结果未知的外部副作用进入 `needs_reconciliation`，不会自动重放。Coding 人工核对详情提供任务标题、下一步、双 stream version、当前可用决定、新调用就绪原因和权威证据摘要，但不暴露本地清理路径。本地组合根具备受控验证和清理 handler；企业 Host 只有在受信 Worker capability 同时包含 `coding.reconciliation.verify` 与 `coding.sandbox.cleanup` 时才提供标记完成。该决定先入队受控验证；Worker 不重放 Runner，只有保留候选通过权威 Gate 并持久化 CodeEvidence 后才完成并清理。
 
 企业环境使用蓝绿切换。Host 与 Worker 的 lock 摘要不一致时，Host 拒绝 readiness，Worker 拒绝领取 Job。
 

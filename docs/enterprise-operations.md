@@ -61,6 +61,8 @@ Job 是至少一次投递，默认租约为 30 秒，并携带 fencing token。W
 
 外部副作用的结果未知时，执行进入 `needs_reconciliation`。恢复流程只能等待人工核对，不能自动重放。只读任务和明确可恢复的本地写入仍需遵循原幂等键、generation 和 authority commitment。
 
+企业 `mark_completed` 是显式 Worker capability，不是 Host 的内置保证。发布配置 `MN_WORKER_SUPPORTED_KINDS`、handler 模块导出的 `supportedKinds` 与实际 `handlers` 必须完全一致；Worker 校验通过后才按这些 kind 领取 Job。只有同时声明并实现 `coding.reconciliation.verify` 与 `coding.sandbox.cleanup`，Host 才会提供“标记完成”。生产实现必须在真实 Kubernetes 隔离环境中验证保留候选、执行权威 Gate，并以租约和 fencing token 提交证据及清理结果。仓库内置企业 fixture、Kind 探针和 sandbox 控制器不包含这套生产 handler，不得将它们登记为该 capability。未部署时保持失败关闭，选择终止或创建全新调用。
+
 ## 备份与恢复
 
 备份应覆盖：

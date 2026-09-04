@@ -34,6 +34,32 @@ export type CodingReconciliationDecision =
   | "mark_completed"
   | "create_new_call";
 
+export const CODING_RECONCILIATION_WORKER_JOB_KINDS = Object.freeze([
+  "coding.reconciliation.verify",
+  "coding.sandbox.cleanup",
+] as const);
+
+export interface CodingReconciliationVerificationReadiness {
+  readonly ready: boolean;
+  readonly missingKinds: readonly string[];
+  readonly summary: string;
+}
+
+export function codingReconciliationVerificationReadiness(
+  trustedWorkerSupportedKinds: readonly string[] | undefined,
+): CodingReconciliationVerificationReadiness {
+  const supported = new Set(trustedWorkerSupportedKinds ?? []);
+  const missingKinds = CODING_RECONCILIATION_WORKER_JOB_KINDS
+    .filter((kind) => !supported.has(kind));
+  return {
+    ready: missingKinds.length === 0,
+    missingKinds,
+    summary: missingKinds.length === 0
+      ? "Worker 已声明保留候选验证与清理能力"
+      : "Worker 未同时声明受信的保留候选验证与清理能力，不能标记完成",
+  };
+}
+
 export interface CodingReconciliationDecisionInput {
   readonly tenantId: string;
   readonly actorId: string;
@@ -42,6 +68,7 @@ export interface CodingReconciliationDecisionInput {
   readonly expectedStreamVersion: number;
   readonly expectedCodingStreamVersion: number;
   readonly decision: CodingReconciliationDecision;
+  readonly verificationReadiness: CodingReconciliationVerificationReadiness;
   readonly now: () => string;
   readonly id: (kind: string) => string;
 }
@@ -118,6 +145,7 @@ export async function getCodingReconciliation(
   tenantId: string,
   actorId: string,
   executionId: string,
+  verificationReadiness: CodingReconciliationVerificationReadiness,
 ): Promise<CodingReconciliationView> {
   return store.transact(tenantId, (transaction) => {
     const execution = transaction.getProjection<Execution>("execution", executionId);
@@ -147,7 +175,7 @@ export async function getCodingReconciliation(
     }
     assertCleanupPaths(run.externalInvocation);
     const verification = run.externalInvocation.verification;
-    const markCompletedAllowed = verification === undefined;
+    const markCompletedAllowed = verification === undefined && verificationReadiness.ready;
     const newCall = newCallReadiness(transaction, execution, run, task);
     const availableDecisions: CodingReconciliationDecision[] = verification?.status === "pending"
       ? []
@@ -174,7 +202,9 @@ export async function getCodingReconciliation(
           ? "正在对保留的候选运行权威 Gate；不会重放外部 Runner"
           : verification?.status === "failed"
             ? verification.failureReason ?? "保留候选未通过权威 Gate"
-            : "选择标记完成后，将先对保留候选运行权威 Gate；不会重放外部 Runner",
+            : verificationReadiness.ready
+              ? "选择标记完成后，将先对保留候选运行权威 Gate；不会重放外部 Runner"
+              : verificationReadiness.summary,
       },
       newCall,
       availableDecisions,
@@ -186,6 +216,13 @@ export async function decideCodingReconciliation(
   store: KernelStore,
   input: CodingReconciliationDecisionInput,
 ): Promise<CodingReconciliationDecisionResult> {
+  if (input.decision === "mark_completed" && !input.verificationReadiness.ready) {
+    throw new KernelError(
+      "CODING_RECONCILIATION_VERIFICATION_UNAVAILABLE",
+      input.verificationReadiness.summary,
+      "部署同时实现 coding.reconciliation.verify 与 coding.sandbox.cleanup 的受信 Worker handler",
+    );
+  }
   if (!Number.isSafeInteger(input.expectedStreamVersion) || input.expectedStreamVersion < 1
     || !Number.isSafeInteger(input.expectedCodingStreamVersion)
     || input.expectedCodingStreamVersion < 1) {

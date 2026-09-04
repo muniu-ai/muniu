@@ -20,6 +20,7 @@ import {
 } from "./lib/enterprise-secrets.mjs";
 import { OidcIdentityResolver } from "./lib/oidc-identity.mjs";
 import { SigV4S3Client } from "./lib/s3-client.mjs";
+import { parseWorkerSupportedKinds } from "./lib/worker-handler-capabilities.mjs";
 
 const { Pool } = pg;
 
@@ -33,6 +34,12 @@ function positiveInteger(name) {
   const value = Number(required(name));
   if (!Number.isSafeInteger(value) || value < 1) throw new Error(`${name} 必须是正整数`);
   return value;
+}
+
+function boolean(name) {
+  const value = required(name);
+  if (value !== "true" && value !== "false") throw new Error(`${name} 必须是 true 或 false`);
+  return value === "true";
 }
 
 function lockDigest(name) {
@@ -130,6 +137,12 @@ const retention = {
   deliverableDays: positiveInteger("MN_RETENTION_DELIVERABLE_DAYS"),
   auditDays: positiveInteger("MN_RETENTION_AUDIT_DAYS"),
 };
+const configuredWorkerSupportedKinds = parseWorkerSupportedKinds(
+  process.env.MN_WORKER_SUPPORTED_KINDS,
+);
+const trustedWorkerSupportedKinds = boolean("MN_WORKER_ENABLED")
+  ? configuredWorkerSupportedKinds
+  : [];
 const oidc = new OidcIdentityResolver({
   issuer: required("MN_OIDC_ISSUER"),
   audience: required("MN_OIDC_AUDIENCE"),
@@ -180,6 +193,7 @@ const host = await createAgentOsHost({
     trustedPluginRoots: enterprisePlugins.trustedPluginRoots,
   } : {}),
   readiness,
+  trustedWorkerSupportedKinds,
   identityResolver: (request) => oidc.resolve(request),
 });
 const address = await host.listen({

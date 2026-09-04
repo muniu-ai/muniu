@@ -31,6 +31,7 @@ import { SqliteStorage } from "@mn/storage";
 import {
   createAgentOsHost,
   type AgentOsHost,
+  type AgentOsHostOptions,
   type ModelSecretStore,
 } from "../src/index.js";
 
@@ -74,6 +75,10 @@ async function responseBody(response: Response): Promise<any> {
 async function createFixture<TStore extends KernelStore = InMemoryKernelStore>(
   authoritativeEvidence = false,
   providedStore?: TStore,
+  hostOptions: Pick<
+    AgentOsHostOptions,
+    "profile" | "trustedWorkerSupportedKinds"
+  > = {},
 ): Promise<ReconciliationFixture<TStore>> {
   const store = providedStore
     ?? new InMemoryKernelStore(undefined, () => NOW) as unknown as TStore;
@@ -83,6 +88,14 @@ async function createFixture<TStore extends KernelStore = InMemoryKernelStore>(
     secretStore: secrets,
     now: () => NOW,
     id: (kind) => `${kind}-${++ordinal}`,
+    ...hostOptions,
+    ...(hostOptions.profile === "enterprise" ? {
+      identityResolver: () => ({
+        tenantId: "local",
+        principalId: "local-owner",
+        organizationRoles: ["organization_admin" as const],
+      }),
+    } : {}),
   });
   const workspace = (await responseBody(await host.dispatch(mutation("/v2/workspaces", {
     name: "核对工作区",
@@ -519,6 +532,69 @@ test("mark_completed 只持久化人工意图并入队受 fencing 保护的权�
   assert.match(detail.evidence.summary, /正在.*权威 Gate/u);
   assert.deepEqual(detail.availableDecisions, []);
   await fixture.host.close();
+});
+
+test("企业人工核对仅在显式受信 Worker capability 就绪时提供 mark_completed", async (context) => {
+  await context.test("未声明验证与清理 handler 时 GET 与 POST 一致地失败关闭", async () => {
+    const fixture = await createFixture<InMemoryKernelStore>(
+      false,
+      undefined,
+      { profile: "enterprise" },
+    );
+    const detail = (await responseBody(await fixture.host.dispatch(new Request(
+      `http://host.test/v2/plugins/coding/executions/${fixture.executionId}/reconciliation`,
+    )))).data;
+    assert.equal(detail.evidence.markCompletedAllowed, false);
+    assert.equal(detail.availableDecisions.includes("mark_completed"), false);
+    assert.match(detail.evidence.summary, /Worker.*验证与清理/u);
+
+    const response = await fixture.host.dispatch(mutation(
+      `/v2/plugins/coding/executions/${fixture.executionId}/reconciliation-decisions`,
+      {
+        expectedStreamVersion: 1,
+        expectedCodingStreamVersion: 2,
+        decision: "mark_completed",
+      },
+      "enterprise-mark-without-capability",
+    ));
+    assert.equal(response.status, 422);
+    assert.equal(
+      (await responseBody(response)).code,
+      "CODING_RECONCILIATION_VERIFICATION_UNAVAILABLE",
+    );
+    assert.equal(fixture.store.readJobs("local").length, 0);
+    await fixture.host.close();
+  });
+
+  await context.test("同时声明验证与清理 handler 后开放受控验证", async () => {
+    const fixture = await createFixture<InMemoryKernelStore>(false, undefined, {
+      profile: "enterprise",
+      trustedWorkerSupportedKinds: [
+        "agent.execution.run",
+        "coding.reconciliation.verify",
+        "coding.sandbox.cleanup",
+      ],
+    });
+    const detail = (await responseBody(await fixture.host.dispatch(new Request(
+      `http://host.test/v2/plugins/coding/executions/${fixture.executionId}/reconciliation`,
+    )))).data;
+    assert.equal(detail.evidence.markCompletedAllowed, true);
+    assert.equal(detail.availableDecisions.includes("mark_completed"), true);
+
+    const response = await fixture.host.dispatch(mutation(
+      `/v2/plugins/coding/executions/${fixture.executionId}/reconciliation-decisions`,
+      {
+        expectedStreamVersion: 1,
+        expectedCodingStreamVersion: 2,
+        decision: "mark_completed",
+      },
+      "enterprise-mark-with-capability",
+    ));
+    assert.equal(response.status, 202);
+    assert.equal((await responseBody(response)).data.status, "verification_pending");
+    assert.equal(fixture.store.readJobs("local").length, 1);
+    await fixture.host.close();
+  });
 });
 
 test("mark_completed 不信任预先拼装的证据，仍由 Worker 重新执行权威验证", async () => {

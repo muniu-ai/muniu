@@ -1,6 +1,8 @@
 {{- if ne .Values.postgres.schema "mn_v2" }}{{- fail "postgres.schema must be mn_v2" }}{{- end }}
 {{- if not (regexMatch "^v2/" .Values.s3.prefix) }}{{- fail "s3.prefix must remain under v2/" }}{{- end }}
 {{- if ne (int .Values.worker.leaseMs) 30000 }}{{- fail "worker.leaseMs must be 30000" }}{{- end }}
+{{- if lt (len .Values.worker.supportedKinds) 1 }}{{- fail "worker.supportedKinds must not be empty" }}{{- end }}
+{{- if ne (has "coding.reconciliation.verify" .Values.worker.supportedKinds) (has "coding.sandbox.cleanup" .Values.worker.supportedKinds) }}{{- fail "reconciliation verification and cleanup kinds must be configured together" }}{{- end }}
 {{- if .Values.telemetry.enabled }}{{- fail "telemetry must remain disabled by default" }}{{- end }}
 {{- if not (regexMatch "^[a-f0-9]{64}$" .Values.runtimeLocks.engineDigest) }}{{- fail "runtimeLocks.engineDigest must be a SHA-256 digest" }}{{- end }}
 {{- if not (regexMatch "^[a-f0-9]{64}$" .Values.runtimeLocks.pluginDigest) }}{{- fail "runtimeLocks.pluginDigest must be a SHA-256 digest" }}{{- end }}
@@ -27,8 +29,10 @@ data:
   MN_S3_REGION: {{ .Values.s3.region | quote }}
   MN_S3_PREFIX: {{ .Values.s3.prefix | quote }}
   MN_JOB_LEASE_MS: {{ .Values.worker.leaseMs | quote }}
+  MN_WORKER_ENABLED: {{ .Values.worker.enabled | quote }}
   MN_WORKER_HANDLER_MODULE: {{ .Values.worker.handlerModule | quote }}
   MN_WORKER_FIXTURE_MODE: {{ .Values.worker.fixtureMode | quote }}
+  MN_WORKER_SUPPORTED_KINDS: {{ .Values.worker.supportedKinds | toJson | quote }}
   MN_ENGINE_LOCK_DIGEST: {{ .Values.runtimeLocks.engineDigest | quote }}
   MN_PLUGIN_LOCK_DIGEST: {{ .Values.runtimeLocks.pluginDigest | quote }}
   MN_EXPECTED_ENGINE_LOCK_DIGEST: {{ .Values.runtimeLocks.engineDigest | quote }}

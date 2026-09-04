@@ -32,6 +32,8 @@ for (const required of [
   "MN_S3_PREFIX: \"v2/\"",
   "MN_EXPECTED_ENGINE_LOCK_DIGEST",
   "MN_EXPECTED_PLUGIN_LOCK_DIGEST",
+  "MN_WORKER_ENABLED",
+  "MN_WORKER_SUPPORTED_KINDS",
   "MN_TELEMETRY_ENABLED: \"false\"",
   "app.kubernetes.io/component: host",
   "name: muniu-worker-sandbox-controller",

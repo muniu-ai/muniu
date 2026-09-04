@@ -82,6 +82,9 @@ test("Helm chart deploys matching Host and Worker replicas with fail-closed read
   assert.match(config, /MN_VAULT_TRANSIT_KEY/);
   assert.match(config, /MN_EXPECTED_ENGINE_LOCK_DIGEST/);
   assert.match(config, /MN_EXPECTED_PLUGIN_LOCK_DIGEST/);
+  assert.match(config, /MN_WORKER_ENABLED/);
+  assert.match(config, /MN_WORKER_SUPPORTED_KINDS/);
+  assert.match(values, /supportedKinds:\n\s+- system\.noop/u);
   assert.match(values, /pluginRepository:\n\s+enabled:\s+false/u);
   assert.match(config, /MN_PLUGIN_REPOSITORY_INDEX/u);
   assert.match(config, /MN_PLUGIN_TRUSTED_ROOTS/u);
@@ -188,9 +191,18 @@ test("unknown external effects become a durable event, inbox item, and non-repla
 test("enterprise Worker refuses an unconfigured agent execution bootstrap", () => {
   const worker = read("scripts/enterprise-worker.mjs");
   const builtin = read("scripts/enterprise-worker-handlers.mjs");
+  const host = read("scripts/enterprise-host.mjs");
   assert.match(worker, /createHandlers/u);
   assert.match(worker, /AGENT_EXECUTION_BOOTSTRAP_MISSING/u);
   assert.match(worker, /handlers\["agent\.execution\.run"\]/u);
+  assert.match(worker, /MN_WORKER_SUPPORTED_KINDS/u);
+  assert.match(worker, /workerHandlerReadiness/u);
+  assert.match(worker, /kinds:\s*supportedKinds/u);
+  assert.match(builtin, /export const supportedKinds/u);
+  assert.match(host, /trustedWorkerSupportedKinds/u);
+  assert.match(host, /MN_WORKER_ENABLED/u);
+  assert.match(host, /MN_WORKER_SUPPORTED_KINDS/u);
   assert.match(builtin, /configured:\s*false/u);
-  assert.doesNotMatch(builtin, /"agent\.execution\.run"\s*:/u);
+  assert.match(builtin, /fixtureMode\s*\?\s*\{[\s\S]*"agent\.execution\.run"\s*:/u);
+  assert.match(builtin, /fixture 不提供 LLM/u);
 });

@@ -4,11 +4,16 @@
 import { writeFile, unlink } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
-import { AgentOsWorker, WORKER_LEASE_MILLISECONDS } from "@mn/worker";
+import {
+  AgentOsWorker,
+  WORKER_LEASE_MILLISECONDS,
+  workerHandlerReadiness,
+} from "@mn/worker";
 import { PostgresStorage } from "@mn/storage";
 import pg from "pg";
 
 import { PostgresWorkerStore } from "./lib/postgres-worker-store.mjs";
+import { parseWorkerSupportedKinds } from "./lib/worker-handler-capabilities.mjs";
 
 const { Pool } = pg;
 
@@ -80,6 +85,18 @@ const handlers = typeof loaded.createHandlers === "function"
 if (!handlers || typeof handlers !== "object") {
   throw new Error("Worker bootstrap 模块必须导出 handlers 对象或 createHandlers(context)");
 }
+const configuredKinds = parseWorkerSupportedKinds(process.env.MN_WORKER_SUPPORTED_KINDS);
+const handlerReadiness = workerHandlerReadiness(
+  handlers,
+  loaded.supportedKinds,
+  configuredKinds,
+);
+if (!handlerReadiness.ready) {
+  throw new Error(handlerReadiness.issues
+    .map((issue) => `${issue.code}：${issue.message}`)
+    .join("；"));
+}
+const supportedKinds = handlerReadiness.supportedKinds;
 if (process.env.MN_WORKER_FIXTURE_MODE !== "true"
   && typeof handlers["agent.execution.run"] !== "function") {
   throw new Error(
@@ -87,7 +104,7 @@ if (process.env.MN_WORKER_FIXTURE_MODE !== "true"
   );
 }
 
-const worker = new AgentOsWorker({ id: workerId, store, lock, handlers });
+const worker = new AgentOsWorker({ id: workerId, store, lock, handlers, kinds: supportedKinds });
 const readiness = worker.readiness();
 if (!readiness.ready) throw new Error(readiness.issues.map((issue) => issue.message).join("；"));
 

@@ -27,6 +27,8 @@ worker:
   leaseMs: 30000
   fixtureMode: false
   handlerModule: /opt/muniu/scripts/enterprise-worker-handlers.mjs
+  supportedKinds:
+    - system.noop
   resources:
     requests: { cpu: 250m, memory: 512Mi }
     limits: { cpu: "2", memory: 2Gi }

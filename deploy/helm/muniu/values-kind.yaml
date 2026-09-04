@@ -11,6 +11,12 @@ worker:
   replicas: 2
   leaseMs: 30000
   fixtureMode: true
+  supportedKinds:
+    - system.noop
+    - agent.execution.run
+    - fixture.echo
+    - fixture.wait
+    - fixture.external_unknown
 
 autoscaling:
   host: { enabled: false }

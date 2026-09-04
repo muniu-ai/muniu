@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Approval, JsonObject, JsonValue, ToolCallIntent } from "@mn/contracts";
-import { StaleFencingTokenError, type StoredJob } from "@mn/storage";
+import {
+  StaleFencingTokenError,
+  type JobClaimOptions,
+  type StoredJob,
+} from "@mn/storage";
 import {
   AgentOsWorker,
   AgentExecutionInterruptedError,
@@ -12,6 +16,7 @@ import {
   runWorkerLoop,
   UnknownExternalSideEffectError,
   WORKER_LEASE_MILLISECONDS,
+  workerHandlerReadiness,
   workerReadiness,
   type WorkerJobStore,
 } from "../src/index.js";
@@ -63,7 +68,14 @@ class FakeStore implements WorkerJobStore {
   renewals = 0;
   renewFailure: unknown;
   claims = 0;
-  async claimJob() { this.claims += 1; const value = this.claimed; this.claimed = undefined; return value; }
+  lastClaimOptions: JobClaimOptions | undefined;
+  async claimJob(_workerId: string, _now: string, options?: JobClaimOptions) {
+    this.claims += 1;
+    this.lastClaimOptions = options;
+    const value = this.claimed;
+    this.claimed = undefined;
+    return value;
+  }
   async completeJob(id: string, _worker: string, token: number, result: JsonValue) { this.completed.push([id, token, result]); }
   async failJob(id: string, _worker: string, token: number, failure: JsonObject) { this.failed.push([id, token, failure]); }
   async interruptJob(id: string, _worker: string, token: number, reason: string) {
@@ -90,6 +102,57 @@ test("Worker 使用固定 30 秒租约并在 lock 不一致时拒绝 claim", asy
   });
   assert.equal((await worker.pollOnce()).status, "not_ready");
   assert.equal(store.claims, 0);
+});
+
+test("Worker readiness 校验受信 kind 声明，并且只 claim 已注册 handler", async () => {
+  const handler = async () => ({ ok: true });
+  assert.equal(workerHandlerReadiness(
+    { "coding.reconciliation.verify": handler },
+    ["coding.reconciliation.verify"],
+    ["coding.reconciliation.verify"],
+  ).ready, true);
+  assert.equal(workerHandlerReadiness(
+    { "coding.reconciliation.verify": handler },
+    ["coding.reconciliation.verify", "coding.sandbox.cleanup"],
+  ).issues.some(({ code }) => code === "WORKER_HANDLER_DECLARATION_MISMATCH"), true);
+  assert.equal(workerHandlerReadiness(
+    { "coding.reconciliation.verify": handler },
+    ["coding.reconciliation.verify"],
+    ["coding.reconciliation.verify", "coding.sandbox.cleanup"],
+  ).issues.some(({ code }) => code === "WORKER_DEPLOYMENT_CAPABILITY_MISMATCH"), true);
+
+  const mismatchedStore = new FakeStore();
+  const mismatched = new AgentOsWorker({
+    id: "worker-mismatch",
+    store: mismatchedStore,
+    lock: {
+      engineLockDigest: "same",
+      expectedEngineLockDigest: "same",
+      pluginLockDigest: "same",
+      expectedPluginLockDigest: "same",
+    },
+    handlers: { "coding.reconciliation.verify": handler },
+    kinds: ["coding.reconciliation.verify", "coding.sandbox.cleanup"],
+  });
+  assert.equal(mismatched.readiness().ready, false);
+  assert.equal((await mismatched.pollOnce()).status, "not_ready");
+  assert.equal(mismatchedStore.claims, 0);
+
+  const store = new FakeStore();
+  store.claimed = job({ kind: "coding.reconciliation.verify" });
+  const worker = new AgentOsWorker({
+    id: "worker-capability",
+    store,
+    lock: {
+      engineLockDigest: "same",
+      expectedEngineLockDigest: "same",
+      pluginLockDigest: "same",
+      expectedPluginLockDigest: "same",
+    },
+    handlers: { "coding.reconciliation.verify": handler },
+  });
+  assert.equal((await worker.pollOnce()).status, "completed");
+  assert.deepEqual(store.lastClaimOptions?.kinds, ["coding.reconciliation.verify"]);
 });
 
 test("未知外部副作用不重放并进入人工核对", async () => {

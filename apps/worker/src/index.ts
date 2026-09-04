@@ -49,9 +49,77 @@ export interface WorkerLockState {
 }
 
 export interface WorkerReadinessIssue {
-  readonly code: "ENGINE_LOCK_MISMATCH" | "PLUGIN_LOCK_MISMATCH";
+  readonly code:
+    | "ENGINE_LOCK_MISMATCH"
+    | "PLUGIN_LOCK_MISMATCH"
+    | "WORKER_SUPPORTED_KINDS_INVALID"
+    | "WORKER_HANDLER_DECLARATION_MISMATCH"
+    | "WORKER_DEPLOYMENT_CAPABILITY_MISMATCH";
   readonly message: string;
   readonly action: string;
+}
+
+const JOB_KIND_PATTERN = /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/u;
+
+function normalizedWorkerKinds(value: unknown): readonly string[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  if (value.some((kind) => typeof kind !== "string"
+    || !JOB_KIND_PATTERN.test(kind)
+    || kind.trim() !== kind)) return undefined;
+  const kinds = [...value] as string[];
+  if (new Set(kinds).size !== kinds.length) return undefined;
+  return kinds.sort();
+}
+
+export function workerHandlerReadiness(
+  handlers: Readonly<Record<string, WorkerJobHandler>>,
+  declaredKinds: unknown,
+  configuredKinds?: unknown,
+): {
+  readonly ready: boolean;
+  readonly issues: readonly WorkerReadinessIssue[];
+  readonly supportedKinds: readonly string[];
+} {
+  const issues: WorkerReadinessIssue[] = [];
+  const declared = normalizedWorkerKinds(declaredKinds);
+  const configured = configuredKinds === undefined
+    ? undefined
+    : normalizedWorkerKinds(configuredKinds);
+  if (!declared || (configuredKinds !== undefined && !configured)) {
+    issues.push({
+      code: "WORKER_SUPPORTED_KINDS_INVALID",
+      message: "Worker supportedKinds 必须是非空、无重复的合法 Job kind 数组",
+      action: "修正受信 handler 模块与部署 capability 配置",
+    });
+  }
+  const registered = Object.entries(handlers)
+    .filter(([, handler]) => typeof handler === "function")
+    .map(([kind]) => kind)
+    .sort();
+  const allEntriesAreHandlers = registered.length === Object.keys(handlers).length;
+  if (!declared || !allEntriesAreHandlers
+    || registered.length !== declared.length
+    || registered.some((kind, index) => kind !== declared[index])) {
+    issues.push({
+      code: "WORKER_HANDLER_DECLARATION_MISMATCH",
+      message: "Worker handler 与模块 supportedKinds 声明不一致",
+      action: "逐项核对 handler 实现和 supportedKinds 后重新构建镜像",
+    });
+  }
+  if (configuredKinds !== undefined && (!declared || !configured
+    || declared.length !== configured.length
+    || declared.some((kind, index) => kind !== configured[index]))) {
+    issues.push({
+      code: "WORKER_DEPLOYMENT_CAPABILITY_MISMATCH",
+      message: "Worker 模块 supportedKinds 与部署受信 capability 配置不一致",
+      action: "同步 Host、Worker 与 handler 模块的 Job kind 配置",
+    });
+  }
+  return {
+    ready: issues.length === 0,
+    issues,
+    supportedKinds: declared ?? [],
+  };
 }
 
 export function workerReadiness(lock: WorkerLockState): {
@@ -149,6 +217,7 @@ export class AgentOsWorker {
   readonly #store: WorkerJobStore;
   readonly #lock: WorkerLockState;
   readonly #handlers: Readonly<Record<string, WorkerJobHandler>>;
+  readonly #handlerReadiness: ReturnType<typeof workerHandlerReadiness>;
   readonly #claimOptions: JobClaimOptions;
   readonly #now: () => Date;
   readonly #leaseRenewIntervalMs: number;
@@ -158,10 +227,14 @@ export class AgentOsWorker {
     this.#id = options.id;
     this.#store = options.store;
     this.#lock = options.lock;
-    this.#handlers = options.handlers;
+    this.#handlers = Object.freeze({ ...options.handlers });
+    this.#handlerReadiness = workerHandlerReadiness(
+      this.#handlers,
+      options.kinds ?? Object.keys(this.#handlers),
+    );
     this.#claimOptions = {
       ...(options.tenantId ? { tenantId: options.tenantId } : {}),
-      ...(options.kinds ? { kinds: options.kinds } : {}),
+      kinds: this.#handlerReadiness.supportedKinds,
     };
     this.#now = options.now ?? (() => new Date());
     this.#leaseRenewIntervalMs = options.leaseRenewIntervalMs ?? Math.floor(WORKER_LEASE_MILLISECONDS / 3);
@@ -172,7 +245,9 @@ export class AgentOsWorker {
   }
 
   readiness() {
-    return workerReadiness(this.#lock);
+    const lockReadiness = workerReadiness(this.#lock);
+    const issues = [...lockReadiness.issues, ...this.#handlerReadiness.issues];
+    return { ready: issues.length === 0, issues };
   }
 
   async pollOnce(stopSignal?: AbortSignal): Promise<WorkerPollResult> {
