@@ -341,7 +341,6 @@ test("code runner 提供检查、人工确认与状态查询", async () => {
       return ok({
         requestedPath: "/opt/homebrew/bin/claude",
         realPath: "/opt/homebrew/bin/claude",
-        version: "2.1.0",
         sha256: "a".repeat(64),
       });
     }
@@ -394,7 +393,7 @@ test("code runner 提供检查、人工确认与状态查询", async () => {
   ]);
   assert.deepEqual(output.out, [
     "已列出 Coding Runner",
-    "已检查 claude-cli；确认版本和 SHA-256 后才能启用",
+    "已被动检查 claude-cli；未执行该路径，请人工核实版本后确认 SHA-256",
     "已确认 claude-cli；二进制变化后需要重新确认",
   ]);
 });

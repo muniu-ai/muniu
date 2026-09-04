@@ -94,15 +94,18 @@ export const CODING_RUNNER_CONFIGURATION_NAMESPACE = "coding.runner-configuratio
 export type CodingRunnerId = (typeof CODING_RUNNER_IDS)[number];
 export type ExternalCodingRunnerId = Exclude<CodingRunnerId, "builtin">;
 
-export interface RunnerBinaryIdentityV1 {
+export interface RunnerBinaryInspectionV1 {
   readonly requestedPath: string;
   readonly realPath: string;
-  readonly version: string;
   readonly sha256: string;
   readonly device: string;
   readonly inode: string;
   readonly byteLength: number;
   readonly modifiedAtMs: number;
+}
+
+export interface RunnerBinaryIdentityV1 extends RunnerBinaryInspectionV1 {
+  readonly version: string;
 }
 
 export interface CodingRunnerConfigurationV1 extends VersionedEntity {

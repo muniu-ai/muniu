@@ -103,10 +103,14 @@ Coding turn 的 `runnerId` 可选值为 `builtin`、`claude-cli` 或 `codex-cli`
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
 | `GET` | `/v2/plugins/coding/runners?workspaceId=...` | 查询内置 Runner 与外部 Runner 确认状态 |
-| `POST` | `/v2/plugins/coding/runners/{runnerId}/inspections` | 检查外部 Runner 的绝对路径、版本、SHA-256 和文件身份 |
-| `POST` | `/v2/plugins/coding/runners/{runnerId}/confirmations` | 重新检查并原子保存人工确认结果 |
+| `POST` | `/v2/plugins/coding/runners/{runnerId}/inspections` | 不执行目标路径，仅检查绝对路径、SHA-256 和文件身份 |
+| `POST` | `/v2/plugins/coding/runners/{runnerId}/confirmations` | 再次被动检查并原子保存人工声明的版本和摘要 |
 
-`runnerId` 路径参数只接受 `claude-cli` 或 `codex-cli`。检查请求包含 `workspaceId` 与 `binaryPath`。确认请求还包含 Runner 的 `version`、`sha256` 和当前配置的 `expectedStreamVersion`。这些 mutation 都需要 `Idempotency-Key`。
+`runnerId` 路径参数只接受 `claude-cli` 或 `codex-cli`。检查请求包含 `workspaceId` 与 `binaryPath`，响应不包含版本，因为 Host 不执行未确认的路径。确认请求还包含由用户核实的 `version`、检查返回的 `sha256` 和当前配置的 `expectedStreamVersion`。这些 mutation 都需要 `Idempotency-Key`。
+
+检查、确认和显式创建外部 Runner turn 前，对应的 `runner-claude-cli` 或 `runner-codex-cli` 插件必须在工作区启用且健康。Host 只从已激活插件的贡献中取得 `external_side_effect` 工具，不为未激活的 Runner 手工授予工具权限。
+
+生产 Worker 只接受官方原生安装提供的 macOS Mach-O CLI，不支持 npm 或 shebang wrapper。Host 不执行待确认路径；确认后，Worker 才会把制品复制到其管理的只读目录，并在受限环境中探测版本。
 
 确认接口不会信任客户端转述的身份：Host 会重新检查同一绝对路径，并要求版本和 SHA-256 与请求完全一致。Worker 在副作用承诺前再次检查持久化身份；任何差异都会 fail closed。外部 CLI 已启动但无法获得确定终态时，Execution 进入 `needs_reconciliation`，同一 Job 不会自动重放。
 

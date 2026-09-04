@@ -142,7 +142,16 @@ function openApiDocument(operations) {
           default: { $ref: "#/components/responses/Error" },
         }
       : {
-          [successStatus(operation.operationId)]: { $ref: "#/components/responses/Success" },
+          [successStatus(operation.operationId)]: operation.operationId === "inspectCodingRunner"
+            ? {
+                description: "返回未执行目标路径所得的文件身份摘要",
+                content: {
+                  "application/json": {
+                    schema: { $ref: "#/components/schemas/RunnerBinaryInspectionEnvelope" },
+                  },
+                },
+              }
+            : { $ref: "#/components/responses/Success" },
           ...(operation.mutation ? { "409": { $ref: "#/components/responses/Conflict" } } : {}),
           default: { $ref: "#/components/responses/Error" },
         };
@@ -336,6 +345,31 @@ function openApiDocument(operations) {
           type: "object",
           required: ["data", "traceId"],
           properties: { data: {}, traceId: { type: "string" } },
+        },
+        RunnerBinaryInspectionEnvelope: {
+          type: "object",
+          additionalProperties: false,
+          required: ["data", "traceId"],
+          properties: {
+            data: { $ref: "#/components/schemas/RunnerBinaryInspection" },
+            traceId: { type: "string" },
+          },
+        },
+        RunnerBinaryInspection: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "requestedPath", "realPath", "sha256", "device", "inode", "byteLength", "modifiedAtMs",
+          ],
+          properties: {
+            requestedPath: { type: "string", minLength: 1 },
+            realPath: { type: "string", minLength: 1 },
+            sha256: { type: "string", pattern: "^[0-9a-f]{64}$" },
+            device: { type: "string", minLength: 1 },
+            inode: { type: "string", minLength: 1 },
+            byteLength: { type: "integer", minimum: 1 },
+            modifiedAtMs: { type: "number", minimum: 0 },
+          },
         },
         FieldIssue: {
           type: "object",

@@ -7,16 +7,17 @@ import {
   type CodingRunnerConfigurationV1,
   type ExternalCodingRunnerId,
   type RunnerBinaryIdentityV1,
+  type RunnerBinaryInspectionV1,
 } from "@mn/contracts";
 import { KernelError, sha256, type KernelStore, type KernelTransaction } from "@mn/kernel";
-import { inspectRunnerBinary as inspectClaudeCli } from "@mn/runner-claude-cli";
-import { inspectRunnerBinary as inspectCodexCli } from "@mn/runner-codex-cli";
+import { passivelyInspectRunnerBinary as inspectClaudeCli } from "@mn/runner-claude-cli";
+import { passivelyInspectRunnerBinary as inspectCodexCli } from "@mn/runner-codex-cli";
 
 const SHA256 = /^[0-9a-f]{64}$/u;
 export const EXTERNAL_CODING_RUNNER_IDS = ["claude-cli", "codex-cli"] as const;
 
 export interface CodingRunnerIdentityInspector {
-  inspect(runnerId: ExternalCodingRunnerId, binaryPath: string): Promise<RunnerBinaryIdentityV1>;
+  inspect(runnerId: ExternalCodingRunnerId, binaryPath: string): Promise<RunnerBinaryInspectionV1>;
 }
 
 export const localCodingRunnerIdentityInspector: CodingRunnerIdentityInspector = {
@@ -47,22 +48,34 @@ export function runnerToolId(runnerId: ExternalCodingRunnerId): string {
   return runnerId === "claude-cli" ? "runner.claude.execute" : "runner.codex.execute";
 }
 
+export function runnerPluginId(runnerId: ExternalCodingRunnerId): string {
+  return runnerId === "claude-cli" ? "runner-claude-cli" : "runner-codex-cli";
+}
+
 export async function inspectCodingRunner(
   inspector: CodingRunnerIdentityInspector | undefined,
   runnerId: ExternalCodingRunnerId,
   binaryPath: string,
-): Promise<RunnerBinaryIdentityV1> {
+): Promise<RunnerBinaryInspectionV1> {
   assertAbsoluteBinaryPath(binaryPath);
   if (!inspector) {
     throw new KernelError(
       "RUNNER_INSPECTION_UNAVAILABLE",
       "当前部署没有可用的 Runner 身份检查器",
-      "在执行 Runner 的受信 Worker 环境中配置检查器",
+      "配置受信的被动检查器，并使用官方原生安装提供的 macOS Mach-O CLI",
     );
   }
-  const identity = await inspector.inspect(runnerId, binaryPath);
-  assertRunnerIdentityShape(identity, binaryPath);
-  return Object.freeze({ ...identity });
+  const inspection = await inspector.inspect(runnerId, binaryPath);
+  assertRunnerInspectionShape(inspection, binaryPath);
+  return Object.freeze({
+    requestedPath: inspection.requestedPath,
+    realPath: inspection.realPath,
+    sha256: inspection.sha256,
+    device: inspection.device,
+    inode: inspection.inode,
+    byteLength: inspection.byteLength,
+    modifiedAtMs: inspection.modifiedAtMs,
+  });
 }
 
 export async function listCodingRunners(
@@ -93,25 +106,32 @@ export function confirmCodingRunner(input: {
   readonly expectedStreamVersion: number;
   readonly expectedVersion: string;
   readonly expectedSha256: string;
-  readonly identity: RunnerBinaryIdentityV1;
+  readonly inspection: RunnerBinaryInspectionV1;
   readonly occurredAt: string;
   readonly correlationId: string;
 }): CodingRunnerConfigurationV1 {
-  if (!input.expectedVersion.trim() || !SHA256.test(input.expectedSha256)) {
+  if (!input.expectedVersion.trim()
+    || input.expectedVersion !== input.expectedVersion.trim()
+    || input.expectedVersion.length > 256
+    || /[\r\n]/u.test(input.expectedVersion)
+    || !SHA256.test(input.expectedSha256)) {
     throw new KernelError(
       "INVALID_BODY",
       "Runner 版本或 SHA-256 无效",
-      "使用检查结果中的完整版本和 SHA-256",
+      "填写人工核实的单行版本和被动检查返回的完整 SHA-256",
     );
   }
-  if (input.identity.version !== input.expectedVersion
-    || input.identity.sha256 !== input.expectedSha256) {
+  if (input.inspection.sha256 !== input.expectedSha256) {
     throw new KernelError(
       "RUNNER_RECONFIRMATION_REQUIRED",
-      "Runner 身份与待确认的版本或摘要不一致",
-      "重新检查并确认当前 Runner",
+      "Runner 摘要与待确认的 SHA-256 不一致",
+      "重新被动检查官方原生 macOS Mach-O CLI；不支持 npm 或 shebang wrapper",
     );
   }
+  const identity: RunnerBinaryIdentityV1 = {
+    ...input.inspection,
+    version: input.expectedVersion,
+  };
   const id = runnerConfigurationId(input.workspaceId, input.runnerId);
   const current = input.transaction.getProjection<CodingRunnerConfigurationV1>(
     CODING_RUNNER_CONFIGURATION_NAMESPACE,
@@ -126,14 +146,14 @@ export function confirmCodingRunner(input: {
       true,
     );
   }
-  const identityDigest = sha256(input.identity);
+  const identityDigest = sha256(identity);
   const next: CodingRunnerConfigurationV1 = {
     id,
     tenantId: input.tenantId,
     workspaceId: input.workspaceId,
     runnerId: input.runnerId,
     status: "confirmed",
-    identity: { ...input.identity },
+    identity,
     identityDigest,
     confirmedBy: input.actorId,
     confirmedAt: input.occurredAt,
@@ -154,9 +174,9 @@ export function confirmCodingRunner(input: {
     publicPayload: {
       workspaceId: input.workspaceId,
       runnerId: input.runnerId,
-      version: input.identity.version,
-      sha256: input.identity.sha256,
-      binaryPathDigest: sha256(input.identity.realPath),
+      version: identity.version,
+      sha256: identity.sha256,
+      binaryPathDigest: sha256(identity.realPath),
       identityDigest,
     },
   });
@@ -178,7 +198,7 @@ export async function requireConfirmedCodingRunner(
     throw new KernelError(
       "CODING_RUNNER_CONFIRMATION_REQUIRED",
       `Runner ${runnerId} 尚未确认`,
-      "先检查并确认二进制绝对路径、版本和 SHA-256",
+      "先启用对应插件并确认官方原生 macOS Mach-O CLI；不支持 npm 或 shebang wrapper",
     );
   }
   return configuration;
@@ -194,14 +214,13 @@ function assertAbsoluteBinaryPath(binaryPath: string): void {
   }
 }
 
-function assertRunnerIdentityShape(identity: RunnerBinaryIdentityV1, requestedPath: string): void {
-  if (identity.requestedPath !== requestedPath
-    || !isAbsolute(identity.realPath)
-    || !identity.version.trim()
-    || !SHA256.test(identity.sha256)
-    || !identity.device || !identity.inode
-    || !Number.isSafeInteger(identity.byteLength) || identity.byteLength < 1
-    || !Number.isFinite(identity.modifiedAtMs)) {
+function assertRunnerInspectionShape(inspection: RunnerBinaryInspectionV1, requestedPath: string): void {
+  if (inspection.requestedPath !== requestedPath
+    || !isAbsolute(inspection.realPath)
+    || !SHA256.test(inspection.sha256)
+    || !inspection.device || !inspection.inode
+    || !Number.isSafeInteger(inspection.byteLength) || inspection.byteLength < 1
+    || !Number.isFinite(inspection.modifiedAtMs)) {
     throw new KernelError(
       "RUNNER_BINARY_INVALID",
       "Runner 身份检查结果无效",

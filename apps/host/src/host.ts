@@ -94,6 +94,7 @@ import {
   localCodingRunnerIdentityInspector,
   parseExternalCodingRunnerId,
   requireConfirmedCodingRunner,
+  runnerPluginId,
   runnerToolId,
   type CodingRunnerIdentityInspector,
 } from "./coding-runners.js";
@@ -166,7 +167,7 @@ export interface AgentOsHostOptions {
   readonly protectedPayloadKeys?: ProtectedPayloadKeyDestroyer;
   /** 本地注入 Keychain provider；企业注入 Vault/KMS provider。 */
   readonly protectedPayloadKeyProvider?: KeyProvider;
-  /** Local hosts inspect same-node binaries; enterprise hosts require an injected trusted inspector. */
+  /** Local hosts passively inspect same-node binaries; enterprise hosts require an injected trusted inspector. */
   readonly runnerIdentityInspector?: CodingRunnerIdentityInspector;
   /** 默认由 profile 决定：本地 Keychain，企业 Vault/KMS。 */
   readonly acceptsModelSecretReference?: (reference: string) => boolean;
@@ -670,13 +671,18 @@ async function idempotentAsyncOperation<T>(input: {
   readonly request: unknown;
   readonly work: () => Promise<T>;
   readonly now: () => string;
-  readonly inFlight: Map<string, Promise<unknown>>;
+  readonly inFlight: Map<string, InFlightAsyncMutation>;
 }): Promise<T> {
   const flightKey = `${input.tenantId.length}:${input.tenantId}${input.scope.length}:${input.scope}${input.key}`;
+  const requestDigest = sha256(input.request);
   const active = input.inFlight.get(flightKey);
-  if (active) return active as Promise<T>;
+  if (active) {
+    if (active.requestDigest !== requestDigest) {
+      throw new KernelError("IDEMPOTENCY_KEY_REUSED", "幂等键已用于不同请求", "使用新的 Idempotency-Key");
+    }
+    return active.operation as Promise<T>;
+  }
   const operation = (async () => {
-    const requestDigest = sha256(input.request);
     const previous = await input.store.transact(input.tenantId, (transaction) =>
       transaction.getIdempotency(input.scope, input.key));
     if (previous) {
@@ -701,12 +707,17 @@ async function idempotentAsyncOperation<T>(input: {
       return result;
     });
   })();
-  input.inFlight.set(flightKey, operation);
+  input.inFlight.set(flightKey, { requestDigest, operation });
   try {
     return await operation;
   } finally {
-    input.inFlight.delete(flightKey);
+    if (input.inFlight.get(flightKey)?.operation === operation) input.inFlight.delete(flightKey);
   }
+}
+
+interface InFlightAsyncMutation {
+  readonly requestDigest: string;
+  readonly operation: Promise<unknown>;
 }
 
 export async function createAgentOsHost(options: AgentOsHostOptions): Promise<AgentOsHost> {
@@ -905,7 +916,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
   }));
   let server: Server | undefined;
   let closePromise: Promise<void> | undefined;
-  const inFlightAsyncMutations = new Map<string, Promise<unknown>>();
+  const inFlightAsyncMutations = new Map<string, InFlightAsyncMutation>();
   const allowedOrigins = new Set([...DESKTOP_ORIGINS, ...(options.allowedOrigins ?? [])]);
   const activeEventStreams = new Set<() => void>();
   const ssePollIntervalMs = positiveInterval(options.ssePollIntervalMs, 250);
@@ -978,6 +989,46 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
       await tenantRuntime.plugins.activate(scope, pluginId);
     }
     return scope;
+  };
+
+  const requireRunnerPluginTool = async (
+    tenantId: string,
+    workspace: Workspace,
+    runnerId: Exclude<CodingRunnerId, "builtin">,
+  ): Promise<string> => {
+    const pluginId = runnerPluginId(runnerId);
+    if (!workspace.activePluginIds.includes(pluginId)) {
+      throw new PluginPolicyError(
+        "PLUGIN_NOT_ACTIVE",
+        `工作区未启用插件 ${pluginId}`,
+        "先在工作区启用对应 Runner 插件",
+      );
+    }
+    const scope = await ensurePluginsActive(tenantId, workspace);
+    const health = (await plugins.health(scope)).plugins.find((entry) => entry.pluginId === pluginId);
+    if (!health) {
+      throw new PluginPolicyError(
+        "PLUGIN_NOT_ACTIVE",
+        `工作区未激活插件 ${pluginId}`,
+        "重新启用对应 Runner 插件",
+      );
+    }
+    if (health.status !== "healthy") {
+      throw new PluginBoundaryError(pluginId, "health", new Error(health.message ?? "Runner 插件已降级"));
+    }
+    const expectedToolId = runnerToolId(runnerId);
+    const declaredTool = plugins.definition(pluginId)?.contributions.tools
+      .find((tool) => tool.id === expectedToolId && tool.effectClass === "external_side_effect");
+    const activeTool = plugins.contributions(scope).tools
+      .find((tool) => tool.id === expectedToolId && tool.effectClass === "external_side_effect");
+    if (!declaredTool || !activeTool) {
+      throw new PluginPolicyError(
+        "PLUGIN_CONTRIBUTION_INVALID",
+        `Runner 插件 ${pluginId} 未提供受控工具 ${expectedToolId}`,
+        "修复并重新启用 Runner 插件",
+      );
+    }
+    return activeTool.id;
   };
 
   const dispatch = async (request: Request): Promise<Response> => {
@@ -1297,11 +1348,13 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           );
         }
         let runnerId: CodingRunnerId | undefined;
+        let runnerTool: string | undefined;
         if (thread.pluginId === "coding") {
           runnerId = requestedRunner === undefined || requestedRunner === "builtin"
             ? "builtin"
             : parseExternalCodingRunnerId(requestedRunner);
           if (runnerId !== "builtin") {
+            runnerTool = await requireRunnerPluginTool(TENANT_ID, workspace, runnerId);
             await requireConfirmedCodingRunner(
               options.store,
               TENANT_ID,
@@ -1311,7 +1364,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           }
         }
         const toolIds = definition.contributions.tools.map((tool) => tool.id);
-        if (runnerId && runnerId !== "builtin") toolIds.push(runnerToolId(runnerId));
+        if (runnerTool) toolIds.push(runnerTool);
         const dataNamespaces = new Set([thread.pluginId]);
         if (toolIds.some((toolId) => toolId.includes("web"))) dataNamespaces.add("web");
         if (toolIds.some((toolId) => toolId.includes("repository") || toolId.includes("sandbox"))) {
@@ -2024,6 +2077,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           throw new KernelError("PLUGIN_NOT_ACTIVE", "工作区尚未启用 Coding", "先启用 Coding 插件");
         }
         const runnerId = parseExternalCodingRunnerId(decodeURIComponent(runnerInspectionMatch[1]!));
+        await requireRunnerPluginTool(TENANT_ID, workspace, runnerId);
         const identity = await idempotentAsyncOperation({
           store: options.store,
           tenantId: TENANT_ID,
@@ -2056,6 +2110,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           throw new KernelError("PLUGIN_NOT_ACTIVE", "工作区尚未启用 Coding", "先启用 Coding 插件");
         }
         const runnerId = parseExternalCodingRunnerId(decodeURIComponent(runnerConfirmationMatch[1]!));
+        await requireRunnerPluginTool(TENANT_ID, workspace, runnerId);
         const scope = `coding.runner.confirm:${workspaceId}:${runnerId}`;
         const requestDigest = sha256(body);
         const replay = await options.store.transact(TENANT_ID, (transaction) =>
@@ -2070,7 +2125,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           }
           return json(replay.response, 200, traceId);
         }
-        const identity = await inspectCodingRunner(
+        const inspection = await inspectCodingRunner(
           runnerIdentityInspector,
           runnerId,
           stringField(body, "binaryPath")!,
@@ -2091,7 +2146,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
             expectedStreamVersion: expectedVersion(body),
             expectedVersion: stringField(body, "version")!,
             expectedSha256: stringField(body, "sha256")!,
-            identity,
+            inspection,
             occurredAt: now(),
             correlationId: nextId("correlation"),
           }),

@@ -213,6 +213,10 @@ test("OpenAPI 声明 Coding Runner 检查、确认与显式选择", () => {
 
   const document = createOpenApiDocument();
   const schemas = (document.components as { schemas: Record<string, any> }).schemas;
+  assert.deepEqual(schemas.RunnerBinaryInspection.required, [
+    "requestedPath", "realPath", "sha256", "device", "inode", "byteLength", "modifiedAtMs",
+  ]);
+  assert.equal(schemas.RunnerBinaryInspection.properties.version, undefined);
   assert.deepEqual(schemas.CreateTurnMutation.properties.runnerId.enum, [
     "builtin", "claude-cli", "codex-cli",
   ]);
@@ -223,6 +227,7 @@ test("OpenAPI 声明 Coding Runner 检查、确认与显式选择", () => {
   assert.equal(schemas.ConfirmCodingRunnerMutation.properties.sha256.pattern, "^[0-9a-f]{64}$");
   const paths = document.paths as Record<string, Record<string, {
     parameters?: Array<{ name?: string; in?: string; required?: boolean }>;
+    responses?: Record<string, { content?: Record<string, { schema?: { $ref?: string } }> }>;
   }>>;
   assert.deepEqual(
     paths["/v2/plugins/coding/runners"]?.get?.parameters,
@@ -239,4 +244,9 @@ test("OpenAPI 声明 Coding Runner 检查、确认与显式选择", () => {
     | { schema?: { enum?: string[] } }
     | undefined;
   assert.deepEqual(runnerParameter?.schema?.enum, ["claude-cli", "codex-cli"]);
+  assert.equal(
+    paths["/v2/plugins/coding/runners/{runnerId}/inspections"]?.post
+      ?.responses?.["200"]?.content?.["application/json"]?.schema?.$ref,
+    "#/components/schemas/RunnerBinaryInspectionEnvelope",
+  );
 });

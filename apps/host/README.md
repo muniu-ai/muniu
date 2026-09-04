@@ -33,11 +33,11 @@ GET /v2/openapi.json
 
 ## Coding Runner
 
-Host 通过 `/v2/plugins/coding/runners` 提供工作区级 Runner 状态，并通过 `inspections`、`confirmations` 两个 mutation 完成二进制身份确认。确认值包含绝对真实路径、版本、SHA-256、文件设备与 inode；客户端提交的版本和摘要必须与 Host 的再次检查完全一致。
+Host 通过 `/v2/plugins/coding/runners` 提供工作区级 Runner 状态，并通过 `inspections`、`confirmations` 两个 mutation 完成二进制身份确认。检查只读取绝对真实路径、SHA-256、文件设备与 inode，不执行未确认路径。确认会再次被动检查同一路径，并把用户声明的版本绑定到匹配的摘要。
 
-创建 Coding turn 时省略 `runnerId` 会选择 `builtin`。`claude-cli` 与 `codex-cli` 只能显式选择；未确认、身份检查器不可用或配置已变化时，Host 拒绝创建外部 Runner Execution。Runner ID 和工具权限与 Execution 在同一事务提交。
+创建 Coding turn 时省略 `runnerId` 会选择 `builtin`。`claude-cli` 与 `codex-cli` 只能显式选择；对应 Runner 插件未启用、健康检查失败、工具贡献缺失、身份未确认或配置已变化时，Host 拒绝创建外部 Runner Execution。Host 只从已激活插件贡献中取得 Runner 工具，Runner ID 和工具权限与 Execution 在同一事务提交。
 
-本地 profile 默认使用本机身份检查器。企业 profile 不假定 Host 能读取 Worker 节点上的二进制，因此必须注入受信的同节点检查实现，否则外部 Runner 检查 fail closed。
+本地 profile 默认使用本机被动身份检查器。企业 profile 不假定 Host 能读取 Worker 节点上的二进制，因此必须注入受信的同节点检查实现，否则外部 Runner 检查 fail closed。生产 Worker 只接受官方原生安装提供的 macOS Mach-O CLI，不支持 npm 或 shebang wrapper。确认后，Worker 才会把制品复制到其管理的只读目录，并在受限环境中探测版本。
 
 ## 就绪与恢复
 

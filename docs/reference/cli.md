@@ -30,9 +30,10 @@
   mn backup restore state.mnbackup --destination restored.sqlite3
 
 外部 Coding Runner：
+  生产 Worker 只接受官方原生安装的 macOS Mach-O CLI，不支持 npm/shebang wrapper
   mn code runners --workspace <工作区 ID>
   mn code runner inspect claude-cli --workspace <工作区 ID> --path /绝对路径/claude
-  mn code runner confirm claude-cli --workspace <工作区 ID> --path /绝对路径/claude --binary-version <版本> --sha256 <摘要> --version <配置版本>
+  mn code runner confirm claude-cli --workspace <工作区 ID> --path /绝对路径/claude --binary-version <人工核实版本> --sha256 <摘要> --version <配置版本>
   mn ask <任务> --workspace <工作区 ID> --thread <会话 ID> --runner claude-cli
 ```
 
@@ -112,7 +113,7 @@ mn code task \
 
 ### 外部 Coding Runner
 
-先检查本机二进制，再由工作区 owner 对照检查结果确认版本与 SHA-256：
+先被动检查本机二进制，再由工作区 owner 人工核实版本并确认 SHA-256。对应 Runner 插件必须已在工作区启用且健康。生产 Worker 只接受官方原生安装提供的 macOS Mach-O CLI，不支持 npm 或 shebang wrapper：
 
 ```bash
 mn code runners --workspace WORKSPACE_ID
@@ -125,7 +126,7 @@ mn code runner inspect claude-cli \
 mn code runner confirm claude-cli \
   --workspace WORKSPACE_ID \
   --path /opt/homebrew/bin/claude \
-  --binary-version VERSION_FROM_INSPECTION \
+  --binary-version HUMAN_VERIFIED_VERSION \
   --sha256 SHA256_FROM_INSPECTION \
   --version RUNNER_CONFIGURATION_STREAM_VERSION
 
@@ -136,7 +137,7 @@ mn ask "修复事件游标" \
   --version THREAD_STREAM_VERSION
 ```
 
-`inspect` 不启用 Runner。`confirm` 会在同一次请求中重新读取绝对真实路径、版本、SHA-256 和文件身份；检查结果与提交值不一致时拒绝确认。Worker 在每次启动前再次检查身份。二进制变化后，旧确认不再有效。
+`inspect` 不启用或执行 Runner，只读取绝对真实路径、SHA-256 和文件身份。`confirm` 会再次被动检查同一路径；摘要与提交值不一致时拒绝确认，并把用户声明的版本绑定到该文件身份。确认后，Worker 才会把制品复制到其管理的只读目录，在受限环境中探测版本并复核完整身份。二进制变化后，旧确认不再有效。
 
 Claude 与 Codex CLI 使用各自已有的登录、provider 和 MCP 配置。木牛只调用适配器的 `start/events/cancel/resume`，不会向外部 Runner 注入木牛的 BYOK 密钥、Prompt 注册表、Skill 或历史会话。每次外部启动仍需单次副作用审批；结果无法确认时进入 `needs_reconciliation`，不会自动重放。
 

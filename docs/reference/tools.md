@@ -59,6 +59,6 @@ OPC 不注册 CRM、外联、发布、报价发送或支付工具。
 
 需要 sandbox 的 Coding 执行若无法建立隔离环境，必须 fail closed。外部 Runner 只提供 `start/events/cancel/resume`，首次使用记录可执行文件的绝对真实路径、版本、SHA-256 和文件身份；任何变化都要求重新确认。
 
-外部 Runner 属于 `external_side_effect`，即使只修改隔离候选副本也必须单次批准。Worker 在启动前持久化不可自动重放检查点，并再次校验二进制与源仓库身份。CLI 已启动后若结果未知，Execution 进入 `needs_reconciliation`；重复领取同一 Job 不会再次启动 CLI。
+外部 Runner 属于 `external_side_effect`，即使只修改隔离候选副本也必须单次批准。生产 Worker 只接受官方原生安装提供的 macOS Mach-O CLI，不支持 npm 或 shebang wrapper。确认后，Worker 才会把制品复制到其管理的只读目录，在受限环境中探测版本，并校验二进制与源仓库身份。Worker 在启动前持久化不可自动重放检查点；CLI 已启动后若结果未知，Execution 进入 `needs_reconciliation`，重复领取同一 Job 不会再次启动 CLI。
 
 macOS 的候选副本通过 `/usr/bin/sandbox-exec` 限制写入范围。该限制不把外部 CLI 变成不可信代码沙箱：CLI 仍可读取宿主可见文件，并按自身 provider、代理和 MCP 配置访问网络。当前企业 Kubernetes Worker 不启用外部 CLI Runner。

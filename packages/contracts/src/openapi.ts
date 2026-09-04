@@ -82,6 +82,12 @@ function successStatus(operationId: string): "200" | "201" | "202" {
   return "200";
 }
 
+function successResponseSchema(operationId: string): JsonObject {
+  return operationId === "inspectCodingRunner"
+    ? { $ref: "#/components/schemas/RunnerBinaryInspectionEnvelope" }
+    : { $ref: "#/components/schemas/ApiEnvelope" };
+}
+
 export function createOpenApiDocument(): JsonObject {
   const paths: Record<string, Record<string, JsonObject>> = {};
   for (const operation of API_OPERATIONS_V2) {
@@ -123,7 +129,7 @@ export function createOpenApiDocument(): JsonObject {
       responses: {
         [successStatus(operation.operationId)]: {
           description: "成功",
-          content: { "application/json": { schema: { $ref: "#/components/schemas/ApiEnvelope" } } },
+          content: { "application/json": { schema: successResponseSchema(operation.operationId) } },
         },
         "400": { $ref: "#/components/responses/BadRequest" },
         "401": { $ref: "#/components/responses/Unauthorized" },
@@ -146,6 +152,31 @@ export function createOpenApiDocument(): JsonObject {
           properties: {
             data: {},
             traceId: { type: "string" },
+          },
+        },
+        RunnerBinaryInspectionEnvelope: {
+          type: "object",
+          additionalProperties: false,
+          required: ["data", "traceId"],
+          properties: {
+            data: { $ref: "#/components/schemas/RunnerBinaryInspection" },
+            traceId: { type: "string" },
+          },
+        },
+        RunnerBinaryInspection: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "requestedPath", "realPath", "sha256", "device", "inode", "byteLength", "modifiedAtMs",
+          ],
+          properties: {
+            requestedPath: { type: "string", minLength: 1 },
+            realPath: { type: "string", minLength: 1 },
+            sha256: { type: "string", pattern: "^[0-9a-f]{64}$" },
+            device: { type: "string", minLength: 1 },
+            inode: { type: "string", minLength: 1 },
+            byteLength: { type: "integer", minimum: 1 },
+            modifiedAtMs: { type: "number", minimum: 0 },
           },
         },
         ApiError: {

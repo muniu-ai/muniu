@@ -40,9 +40,10 @@ const HELP = `木牛 Agent OS 0.2
   mn backup restore state.mnbackup --destination restored.sqlite3
 
 外部 Coding Runner：
+  生产 Worker 只接受官方原生安装的 macOS Mach-O CLI，不支持 npm/shebang wrapper
   mn code runners --workspace <工作区 ID>
   mn code runner inspect claude-cli --workspace <工作区 ID> --path /绝对路径/claude
-  mn code runner confirm claude-cli --workspace <工作区 ID> --path /绝对路径/claude --binary-version <版本> --sha256 <摘要> --version <配置版本>
+  mn code runner confirm claude-cli --workspace <工作区 ID> --path /绝对路径/claude --binary-version <人工核实版本> --sha256 <摘要> --version <配置版本>
   mn ask <任务> --workspace <工作区 ID> --thread <会话 ID> --runner claude-cli
 `;
 
@@ -467,7 +468,7 @@ async function code(parsed: ParsedArguments, api: ApiClient): Promise<CliResult>
     return {
       command: "code",
       data,
-      human: `已检查 ${runnerId}；确认版本和 SHA-256 后才能启用`,
+      human: `已被动检查 ${runnerId}；未执行该路径，请人工核实版本后确认 SHA-256`,
     };
   }
   if (action === "confirm") {
