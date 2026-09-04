@@ -6,12 +6,22 @@ import {
   type PluginHealthV1,
   type ProductPluginHostV1,
 } from "./contributions.js";
+import { canonicalJson } from "./canonical.js";
 import { PluginBoundaryError, PluginPolicyError } from "./errors.js";
+import {
+  assertVerifiedPluginArtifact,
+  type VerifiedPluginArtifact,
+} from "./registry.js";
 
 export interface ContributionHostAuditEvent {
   readonly pluginId: string;
   readonly workspaceId?: string;
-  readonly action: "official_registered" | "activated" | "deactivated" | "plugin_fault";
+  readonly action:
+    | "official_registered"
+    | "verified_registered"
+    | "activated"
+    | "deactivated"
+    | "plugin_fault";
   readonly message: string;
   readonly at: string;
 }
@@ -68,18 +78,53 @@ export class PluginContributionHost implements ProductPluginHostV1 {
         "使用签名仓库安装第三方插件",
       );
     }
-    if (this.#definitions.has(definition.id)) {
+    this.#register(definition);
+    this.#recordAudit(definition.id, undefined, "official_registered", `官方插件 ${definition.id} 已预装，默认未启用`);
+  }
+
+  registerVerified(artifact: VerifiedPluginArtifact, definition: PluginDefinitionV1): void {
+    assertVerifiedPluginArtifact(artifact);
+    assertPluginDefinition(definition);
+    if (definition.official) {
       throw new PluginPolicyError(
         "PLUGIN_DEFINITION_INVALID",
-        `插件 ${definition.id} 已注册`,
-        "移除重复注册",
+        `签名仓库插件 ${definition.id} 不得冒充官方预装插件`,
+        "将 official 设为 false",
       );
     }
-    this.#definitions.set(definition.id, {
-      definition,
-      registrationOrder: this.#registrationOrder++,
-    });
-    this.#recordAudit(definition.id, undefined, "official_registered", `官方插件 ${definition.id} 已预装，默认未启用`);
+    if (!definition.manifest
+      || canonicalJson(definition.manifest) !== canonicalJson(artifact.manifest)) {
+      throw new PluginPolicyError(
+        "PLUGIN_DEFINITION_INVALID",
+        `插件 ${definition.id} 的运行定义与已验签清单不一致`,
+        "绑定同一份已验签清单后重新安装",
+      );
+    }
+    this.#register(definition);
+    this.#recordAudit(
+      definition.id,
+      undefined,
+      "verified_registered",
+      `已注册本地验签插件 ${definition.id} ${definition.version}`,
+    );
+  }
+
+  listRegistered(): readonly {
+    readonly pluginId: string;
+    readonly version: string;
+    readonly official: boolean;
+    readonly trustBoundary: "process_equivalent";
+  }[] {
+    return this.#orderedDefinitions().map(({ definition }) => ({
+      pluginId: definition.id,
+      version: definition.version,
+      official: definition.official,
+      trustBoundary: definition.trustBoundary,
+    }));
+  }
+
+  definition(pluginId: string): PluginDefinitionV1 | undefined {
+    return this.#definitions.get(pluginId)?.definition;
   }
 
   listOfficial(): readonly {
@@ -214,6 +259,20 @@ export class PluginContributionHost implements ProductPluginHostV1 {
   #orderedDefinitions(): readonly RegisteredDefinition[] {
     return [...this.#definitions.values()].sort((left, right) => {
       return left.registrationOrder - right.registrationOrder;
+    });
+  }
+
+  #register(definition: PluginDefinitionV1): void {
+    if (this.#definitions.has(definition.id)) {
+      throw new PluginPolicyError(
+        "PLUGIN_DEFINITION_INVALID",
+        `插件 ${definition.id} 已注册`,
+        "移除重复注册",
+      );
+    }
+    this.#definitions.set(definition.id, {
+      definition,
+      registrationOrder: this.#registrationOrder++,
     });
   }
 

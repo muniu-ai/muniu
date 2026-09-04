@@ -2,6 +2,8 @@
 
 官方 OPC 与 Coding 插件随应用提供，首次启动按工作区启用。第三方生产插件只从受信签名仓库安装。
 
+当前 Host 的生产安装入口只读取组合根提供的本地签名制品，不接受调用方传入下载地址或代码。安装请求必须同时给出插件 ID 和精确版本。仓库验签、包摘要校验和生命周期校验通过后，Host 会在同一事务写入 installation、已接受的仓库序号、plugin lock、审计事件与幂等结果，然后才注册运行贡献。
+
 ## 内置目录
 
 下表从 `plugins/*/package.json` 生成。
@@ -40,6 +42,8 @@ mn plugin enable coding --workspace WORKSPACE_ID --version STREAM_VERSION
 - 不允许摘要算法降级或旧 release 回滚。
 
 撤销元数据过旧时，Host 拒绝安装和更新，但已安装插件仍可离线启动。key rotation 必须由现有受信 key 或离线根信任授权，且保留完整审计链。
+
+离线启动只恢复 plugin lock 中版本、发布序号和包摘要完全一致的本地制品。Host 会重新校验仓库签名、制品签名、包摘要、已知撤销项和 lock；不一致的插件进入 `failed` 或 `revoked`，不会阻止核心页面和其他插件启动。
 
 ## 升级
 

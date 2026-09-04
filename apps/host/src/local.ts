@@ -62,6 +62,8 @@ export async function startLocalAgentOsHost(options: StartLocalHostOptions = {})
     ...(options.modelProbe ? { modelProbe: options.modelProbe } : {}),
     ...(options.officialPlugins ? { officialPlugins: options.officialPlugins } : {}),
     ...(options.pluginInstaller ? { pluginInstaller: options.pluginInstaller } : {}),
+    ...(options.pluginRepository ? { pluginRepository: options.pluginRepository } : {}),
+    ...(options.trustedPluginRoots ? { trustedPluginRoots: options.trustedPluginRoots } : {}),
     readiness: async () => {
       const base = await options.readiness?.() ?? { ready: true, issues: [] };
       const issues = workerFailure === undefined

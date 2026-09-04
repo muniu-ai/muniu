@@ -336,8 +336,81 @@ test("生命周期拒绝伪造的已验签制品", () => {
       manifest: fixture.manifest,
       registrySequence: 7,
       verifiedAt: NOW.toISOString(),
+      operation: "install",
     }),
     (error: unknown) => error instanceof PluginPolicyError && error.code === "MANIFEST_SIGNATURE_INVALID",
+  );
+});
+
+test("离线启动只恢复 lock 中完全一致的已安装制品，不能借机安装新插件", () => {
+  const fixture = createFixture();
+  const offlineRegistry = verifyRegistryMetadata(
+    fixture.registry,
+    [{ keyId: "root-1", publicKey: fixture.root.publicKey }],
+    { now: new Date("2026-09-10T12:00:00.000Z"), operation: "offline_start", minimumSequence: 7 },
+  );
+  const artifact = verifyPluginArtifact({
+    manifest: fixture.manifest,
+    packageBytes: fixture.packageBytes,
+    registry: offlineRegistry,
+    now: new Date("2026-09-10T12:00:00.000Z"),
+    operation: "offline_start",
+    installedRelease: {
+      sequence: fixture.manifest.release.sequence,
+      version: fixture.manifest.version,
+      packageSha256: fixture.manifest.packageSha256,
+    },
+  });
+  const definition: PluginDefinitionV1 = {
+    id: fixture.manifest.id,
+    version: fixture.manifest.version,
+    official: false,
+    trustBoundary: "process_equivalent",
+    manifest: fixture.manifest,
+    contributions: {
+      routes: [{ id: "opportunities", path: "/opc/opportunities" }],
+      navigation: [{ id: "opc", label: "OPC", routeId: "opportunities" }],
+      widgets: [{ id: "today", slot: "home", title: "今日行动" }],
+      commands: [{ id: "capture", title: "捕获机会", async run() {} }],
+      agents: [{ id: "opportunity-validator", displayName: "机会验证", description: "验证机会" }],
+      skills: [{
+        id: "validate-opportunity",
+        title: "验证机会",
+        expectedOutcome: "机会验证档案",
+        source: "本地签名包",
+        license: "Apache-2.0",
+        version: "0.2.0",
+        permissionIds: ["public-web"],
+      }],
+      workflows: [{ id: "opportunity", version: "0.2.0" }],
+      tools: [{ id: "web.read", version: "0.2.0", effectClass: "external_read" }],
+      memorySchemas: [{ id: "customer-segment", version: "0.2.0", namespace: "opc" }],
+    },
+    healthCheck() { return { status: "healthy" }; },
+  };
+  const host = new PluginContributionHost({ isAvailable: () => true });
+  host.registerVerified(artifact, definition);
+  assert.equal(host.listRegistered().find((entry) => entry.pluginId === "opc")?.official, false);
+
+  const lifecycle = new PluginLifecycleManager({ store: new InMemoryPluginStateStore() });
+  assert.throws(
+    () => lifecycle.installVerified(artifact),
+    (error: unknown) => error instanceof PluginPolicyError && error.code === "REGISTRY_TIME_INVALID",
+  );
+  assert.throws(
+    () => verifyPluginArtifact({
+      manifest: fixture.manifest,
+      packageBytes: fixture.packageBytes,
+      registry: offlineRegistry,
+      now: new Date("2026-09-10T12:00:00.000Z"),
+      operation: "offline_start",
+      installedRelease: {
+        sequence: fixture.manifest.release.sequence,
+        version: "0.1.0",
+        packageSha256: fixture.manifest.packageSha256,
+      },
+    }),
+    (error: unknown) => error instanceof PluginPolicyError && error.code === "RELEASE_SEQUENCE_REUSED",
   );
 });
 

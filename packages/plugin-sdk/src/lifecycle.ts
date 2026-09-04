@@ -120,6 +120,15 @@ export class InMemoryPluginStateStore implements PluginStateStore {
   readonly #records = new Map<string, InstalledPluginRecord>();
   #transactionTail: Promise<void> = Promise.resolve();
 
+  constructor(records: readonly InstalledPluginRecord[] = []) {
+    for (const record of records) {
+      if (this.#records.has(record.manifest.id)) {
+        throw policy("PLUGIN_DEFINITION_INVALID", `插件 ${record.manifest.id} 状态重复`, "修复插件状态存储");
+      }
+      this.#records.set(record.manifest.id, cloneRecord(record)!);
+    }
+  }
+
   read(pluginId: string): InstalledPluginRecord | undefined {
     return cloneRecord(this.#records.get(pluginId));
   }
@@ -181,6 +190,13 @@ export class PluginLifecycleManager {
     resolvedDependencies: readonly ResolvedPluginDependency[] = [],
   ): InstalledPluginRecord {
     assertVerifiedPluginArtifact(artifact);
+    if (artifact.operation !== "install") {
+      throw policy(
+        "REGISTRY_TIME_INVALID",
+        "当前制品凭据不能授权安装插件",
+        "按安装用途重新验证仓库和制品",
+      );
+    }
     this.#assertEngineApi(artifact.manifest);
     assertResolvedPluginDependencies(artifact.manifest, resolvedDependencies);
     const pluginId = artifact.manifest.id;
@@ -273,6 +289,13 @@ export class PluginLifecycleManager {
     resolvedDependencies: readonly ResolvedPluginDependency[] = [],
   ): Promise<InstalledPluginRecord> {
     assertVerifiedPluginArtifact(artifact);
+    if (artifact.operation !== "update") {
+      throw policy(
+        "REGISTRY_TIME_INVALID",
+        "当前制品凭据不能授权插件更新",
+        "按更新用途重新验证仓库和制品",
+      );
+    }
     this.#assertEngineApi(artifact.manifest);
     assertResolvedPluginDependencies(artifact.manifest, resolvedDependencies);
     const pluginId = artifact.manifest.id;

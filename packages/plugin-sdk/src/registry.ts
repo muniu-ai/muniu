@@ -100,7 +100,7 @@ export interface VerifyPluginArtifactInput {
   readonly packageBytes: Uint8Array;
   readonly registry: VerifiedRegistryMetadata;
   readonly now: Date;
-  readonly operation: "install" | "update";
+  readonly operation: "install" | "update" | "offline_start";
   readonly installedRelease?: InstalledReleaseIdentity;
   readonly packageMetadata?: PluginPackageMetadataV1;
 }
@@ -109,6 +109,7 @@ export interface VerifiedPluginArtifact {
   readonly manifest: PluginManifestV1;
   readonly registrySequence: number;
   readonly verifiedAt: string;
+  readonly operation: "install" | "update" | "offline_start";
 }
 
 const verifiedRegistries = new WeakSet<object>();
@@ -200,18 +201,23 @@ export function verifyPluginArtifact(input: VerifyPluginArtifactInput): Verified
   }
   assertManifest(input.manifest);
   assertPackageMetadata(input.packageMetadata);
-  if (input.registry.operation === "offline_start") {
-    throw policy("REGISTRY_TIME_INVALID", "离线启动凭据不能授权安装或更新", "刷新仓库元数据");
+  if ((input.registry.operation === "offline_start" || input.operation === "offline_start")
+    && input.registry.operation !== input.operation) {
+    throw policy("REGISTRY_TIME_INVALID", "仓库验签用途与制品操作不一致", "按当前操作重新验证仓库元数据");
   }
   const actualDigest = sha256Hex(input.packageBytes);
   if (actualDigest !== input.manifest.packageSha256) {
     throw policy("PACKAGE_DIGEST_MISMATCH", "插件包摘要与清单不一致", "删除插件包并重新下载");
   }
   enforceReleaseOrder(input.manifest, input.installedRelease);
+  if (input.operation === "offline_start") {
+    assertOfflineReleaseIdentity(input.manifest, input.installedRelease);
+  }
   const now = input.now.getTime();
   const publishedAt = parseDate(input.manifest.release.publishedAt, "插件发布时间");
   const releaseExpiresAt = parseDate(input.manifest.release.expiresAt, "插件发布过期时间");
-  if (publishedAt > now || releaseExpiresAt <= now) {
+  if (releaseExpiresAt <= publishedAt
+    || (input.operation !== "offline_start" && (publishedAt > now || releaseExpiresAt <= now))) {
     throw policy("RELEASE_EXPIRED", "插件发布已过期或尚未生效", "获取当前有效版本");
   }
 
@@ -222,7 +228,8 @@ export function verifyPluginArtifact(input: VerifyPluginArtifactInput): Verified
   }
   const keyNotBefore = parseDate(releaseKey.notBefore, "发布密钥生效时间");
   const keyNotAfter = parseDate(releaseKey.notAfter, "发布密钥失效时间");
-  if (publishedAt < keyNotBefore || publishedAt >= keyNotAfter || now >= keyNotAfter) {
+  if (publishedAt < keyNotBefore || publishedAt >= keyNotAfter
+    || (input.operation !== "offline_start" && now >= keyNotAfter)) {
     throw policy("RELEASE_KEY_UNTRUSTED", "插件发布密钥不在有效期内", "使用当前发布密钥签名的版本");
   }
   const keyRevocation = metadata.revokedKeys.find((item) => item.keyId === releaseKey.keyId);
@@ -260,9 +267,32 @@ export function verifyPluginArtifact(input: VerifyPluginArtifactInput): Verified
     manifest: cloneJson(input.manifest),
     registrySequence: metadata.sequence,
     verifiedAt: input.now.toISOString(),
+    operation: input.operation,
   });
   verifiedArtifacts.add(artifact);
   return artifact;
+}
+
+function assertOfflineReleaseIdentity(
+  manifest: PluginManifestV1,
+  installed: InstalledReleaseIdentity | undefined,
+): void {
+  if (!installed) {
+    throw policy(
+      "REGISTRY_TIME_INVALID",
+      "离线启动凭据只能恢复已经锁定的插件",
+      "刷新仓库元数据后安装插件",
+    );
+  }
+  if (manifest.release.sequence !== installed.sequence
+    || manifest.version !== installed.version
+    || manifest.packageSha256 !== installed.packageSha256) {
+    throw policy(
+      "RELEASE_SEQUENCE_REUSED",
+      "离线制品与已安装 lock 不一致",
+      "恢复 lock 中完全一致的制品",
+    );
+  }
 }
 
 export function assertVerifiedPluginArtifact(
