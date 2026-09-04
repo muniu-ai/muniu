@@ -620,12 +620,88 @@ paths:
         default:
           $ref: "#/components/responses/Error"
       x-muniu-versioned: true
+    delete:
+      operationId: purgePlugin
+      parameters:
+        - in: path
+          name: pluginId
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VersionedMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        default:
+          $ref: "#/components/responses/Error"
+      x-muniu-versioned: true
+  /v2/plugins/installations/{pluginId}/disable:
+    post:
+      operationId: disablePlugin
+      parameters:
+        - in: path
+          name: pluginId
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VersionedMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        default:
+          $ref: "#/components/responses/Error"
+      x-muniu-versioned: true
   /v2/workspaces/{workspaceId}/plugin-activations:
     post:
       operationId: activatePlugin
       parameters:
         - in: path
           name: workspaceId
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VersionedMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        default:
+          $ref: "#/components/responses/Error"
+      x-muniu-versioned: true
+  /v2/workspaces/{workspaceId}/plugin-activations/{pluginId}:
+    delete:
+      operationId: deactivatePlugin
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: pluginId
           required: true
           schema:
             type: string

@@ -20,6 +20,7 @@ export interface ContributionHostAuditEvent {
     | "official_registered"
     | "verified_registered"
     | "verified_replaced"
+    | "verified_unregistered"
     | "activated"
     | "deactivated"
     | "plugin_fault";
@@ -123,6 +124,41 @@ export class PluginContributionHost implements ProductPluginHostV1 {
       undefined,
       "verified_replaced",
       `已切换本地验签插件 ${definition.id} ${definition.version}`,
+    );
+  }
+
+  activeWorkspaceIds(pluginId: string): readonly string[] {
+    return [...this.#workspacePlugins]
+      .filter(([, active]) => active.has(pluginId))
+      .map(([workspaceId]) => workspaceId)
+      .sort();
+  }
+
+  unregisterVerified(pluginId: string): void {
+    const registered = this.#definitions.get(pluginId);
+    if (!registered) return;
+    if (registered.definition.official) {
+      throw new PluginPolicyError(
+        "PLUGIN_PURGE_INVALID",
+        `官方预装插件 ${pluginId} 不能清除`,
+        "仅清除从签名仓库安装的插件",
+      );
+    }
+    const activeWorkspaceIds = this.activeWorkspaceIds(pluginId);
+    if (activeWorkspaceIds.length > 0) {
+      throw new PluginPolicyError(
+        "PLUGIN_PURGE_INVALID",
+        `插件 ${pluginId} 仍在 ${activeWorkspaceIds.length} 个工作区中启用`,
+        "先停用插件后再清除",
+      );
+    }
+    this.#definitions.delete(pluginId);
+    this.#faults.delete(pluginId);
+    this.#recordAudit(
+      pluginId,
+      undefined,
+      "verified_unregistered",
+      `已移除本地验签插件 ${pluginId} 的进程内贡献`,
     );
   }
 

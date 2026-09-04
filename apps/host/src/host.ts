@@ -912,11 +912,20 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         if (!thread || thread.workspaceId !== workspaceId) {
           throw new KernelError("THREAD_NOT_FOUND", "会话不存在", "刷新工作区会话");
         }
+        if (!workspace.activePluginIds.includes(thread.pluginId)) {
+          throw new PluginPolicyError(
+            "PLUGIN_NOT_ACTIVE",
+            `工作区未启用插件 ${thread.pluginId}`,
+            "先在工作区启用插件",
+          );
+        }
         const definition = plugins.definition(thread.pluginId);
         if (!definition) {
           throw new PluginPolicyError("PLUGIN_NOT_INSTALLED", `插件 ${thread.pluginId} 不可用`, "安装插件后重试");
         }
-        pluginInstaller?.assertCanStartExecution?.(thread.pluginId);
+        if (!officialPluginIds.has(thread.pluginId)) {
+          pluginInstaller?.assertCanStartExecution?.(thread.pluginId);
+        }
         const requestedAgent = stringField(body, "agentDefinitionId", false);
         const agentDefinition = requestedAgent
           ? definition.contributions.agents.find((agent) => agent.id === requestedAgent)
@@ -1400,6 +1409,53 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         });
         return json(result, 200, traceId);
       }
+      const pluginDisableMatch = url.pathname.match(/^\/v2\/plugins\/installations\/([^/]+)\/disable$/u);
+      if (pluginDisableMatch && request.method === "POST") {
+        requireOrganizationRole(profile, ORGANIZATION_ROLES, ["organization_admin", "governance_admin"]);
+        if (!pluginInstaller?.disable) {
+          throw new KernelError("PLUGIN_REGISTRY_UNAVAILABLE", "插件停用暂不可用", "检查签名仓库连接");
+        }
+        const pluginId = decodeURIComponent(pluginDisableMatch[1]!);
+        const body = await readBody(request);
+        const scope = `http.plugin.disable:${pluginId}`;
+        const result = await idempotentAsyncOperation({
+          store: options.store,
+          tenantId: TENANT_ID,
+          key: mutationKey as string,
+          scope,
+          request: body,
+          now,
+          inFlight: inFlightAsyncMutations,
+          work: () => pluginInstaller!.disable!(pluginId, body, {
+            idempotencyKey: mutationKey as string,
+            idempotencyScope: scope,
+          }),
+        });
+        return json(result, 200, traceId);
+      }
+      if (pluginInstallationMatch && request.method === "DELETE") {
+        requireOrganizationRole(profile, ORGANIZATION_ROLES, ["organization_admin", "governance_admin"]);
+        if (!pluginInstaller?.purge) {
+          throw new KernelError("PLUGIN_REGISTRY_UNAVAILABLE", "插件清除暂不可用", "检查签名仓库连接");
+        }
+        const pluginId = decodeURIComponent(pluginInstallationMatch[1]!);
+        const body = await readBody(request);
+        const scope = `http.plugin.purge:${pluginId}`;
+        const result = await idempotentAsyncOperation({
+          store: options.store,
+          tenantId: TENANT_ID,
+          key: mutationKey as string,
+          scope,
+          request: body,
+          now,
+          inFlight: inFlightAsyncMutations,
+          work: () => pluginInstaller!.purge!(pluginId, body, {
+            idempotencyKey: mutationKey as string,
+            idempotencyScope: scope,
+          }),
+        });
+        return json(result, 200, traceId);
+      }
       const activationMatch = url.pathname.match(/^\/v2\/workspaces\/([^/]+)\/plugin-activations$/u);
       if (activationMatch && request.method === "POST") {
         const body = await readBody(request);
@@ -1433,6 +1489,74 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
               });
             } catch (error) {
               await plugins.deactivate(pluginWorkspaceKey(workspaceId), pluginId);
+              throw error;
+            }
+          },
+        });
+        return json(workspace, 200, traceId);
+      }
+      const deactivationMatch = url.pathname.match(
+        /^\/v2\/workspaces\/([^/]+)\/plugin-activations\/([^/]+)$/u,
+      );
+      if (deactivationMatch && request.method === "DELETE") {
+        const body = await readBody(request);
+        const workspaceId = decodeURIComponent(deactivationMatch[1]!);
+        const pluginId = decodeURIComponent(deactivationMatch[2]!);
+        await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId, "owner");
+        const expected = expectedVersion(body);
+        const scope = pluginWorkspaceKey(workspaceId);
+        const workspace = await idempotentAsyncOperation<Workspace>({
+          store: options.store,
+          tenantId: TENANT_ID,
+          key: mutationKey as string,
+          scope: `http.plugin.deactivate:${workspaceId}:${pluginId}`,
+          request: body,
+          now,
+          inFlight: inFlightAsyncMutations,
+          work: async () => {
+            const current = await projectionGet<Workspace>(options.store, TENANT_ID, "workspace", workspaceId);
+            if (!current) throw new KernelError("WORKSPACE_NOT_FOUND", "工作区不存在", "刷新工作区列表");
+            if (current.streamVersion !== expected) {
+              throw new KernelStreamVersionConflictError(expected, current.streamVersion);
+            }
+            if (!current.activePluginIds.includes(pluginId)) {
+              throw new PluginPolicyError(
+                "PLUGIN_NOT_ACTIVE",
+                `工作区未启用插件 ${pluginId}`,
+                "刷新工作区插件列表",
+              );
+            }
+            const hookWasActive = plugins.activeWorkspaceIds(pluginId).includes(scope);
+            await plugins.deactivate(scope, pluginId).catch(() => undefined);
+            try {
+              return await options.store.transact(TENANT_ID, (transaction) => {
+                const value = transaction.getProjection<Workspace>("workspace", workspaceId);
+                if (!value) throw new KernelError("WORKSPACE_NOT_FOUND", "工作区不存在", "刷新工作区列表");
+                if (value.streamVersion !== expected) {
+                  throw new KernelStreamVersionConflictError(expected, value.streamVersion);
+                }
+                const next: Workspace = {
+                  ...value,
+                  activePluginIds: value.activePluginIds.filter((id) => id !== pluginId),
+                  streamVersion: value.streamVersion + 1,
+                  updatedAt: now(),
+                };
+                transaction.putProjection("workspace", workspaceId, next);
+                transaction.appendEvent({
+                  tenantId: TENANT_ID,
+                  aggregateType: "workspace",
+                  aggregateId: workspaceId,
+                  expectedStreamVersion: expected,
+                  type: "workspace.plugin_deactivated",
+                  actorId: ACTOR_ID,
+                  generation: 0,
+                  correlationId: nextId("correlation"),
+                  publicPayload: { pluginId, reason: "workspace_request" },
+                });
+                return next;
+              });
+            } catch (error) {
+              if (hookWasActive) await plugins.activate(scope, pluginId).catch(() => undefined);
               throw error;
             }
           },
@@ -1569,7 +1693,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         await ensurePluginsActive(TENANT_ID, workspace);
         const pluginId = decodeURIComponent(pluginMatch[1]!);
         const commandId = decodeURIComponent(pluginMatch[2]!);
-        pluginInstaller?.assertCanStartExecution?.(pluginId);
+        if (!officialPluginIds.has(pluginId)) pluginInstaller?.assertCanStartExecution?.(pluginId);
         const commandInput = Object.fromEntries(Object.entries(body)
           .filter(([key]) => key !== "workspaceId")) as JsonObject;
         const result = await idempotentAsyncOperation({

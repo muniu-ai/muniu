@@ -24,6 +24,9 @@ import {
   type OpportunityAggregate,
   type StoredOpcEvent,
 } from "@mn/plugin-opc";
+import { encodePluginWorkspace } from "./plugin-workspace.js";
+
+export { encodePluginWorkspace } from "./plugin-workspace.js";
 
 const OPC_PROJECTION = "opc.opportunity";
 const OPC_EVENTS_PROJECTION = "opc.events";
@@ -62,10 +65,6 @@ interface OpcExportOptions extends Omit<ProductMutationOptions, "input"> {
 interface StoredOpcDeliverable extends Deliverable {
   readonly validationStatus: string;
   readonly content: JsonObject;
-}
-
-export function encodePluginWorkspace(tenantId: string, workspaceId: string): string {
-  return Buffer.from(JSON.stringify([tenantId, workspaceId]), "utf8").toString("base64url");
 }
 
 function decodePluginWorkspace(value: string): ScopedWorkspace {

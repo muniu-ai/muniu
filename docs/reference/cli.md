@@ -15,7 +15,7 @@
   inbox             查看审批、问题、失败和人工核对
   resume            恢复暂停或中断的执行
   doctor --fix      检查连接与可安全修复项
-  plugin            查看或启用插件
+  plugin            查看、启用、停用或清除插件
   opc               管理机会验证工作
   code              管理 Coding 任务
   backup            创建、校验或恢复本地加密备份
@@ -73,9 +73,18 @@ mn plugin list
 mn plugin enable opc \
   --workspace WORKSPACE_ID \
   --version STREAM_VERSION
+
+mn plugin deactivate opc \
+  --workspace WORKSPACE_ID \
+  --version WORKSPACE_STREAM_VERSION
+
+mn plugin disable research --version INSTALLATION_STREAM_VERSION
+mn plugin purge research --version INSTALLATION_STREAM_VERSION
 ```
 
-安装第三方插件前应在 Desktop 中审阅签名、摘要、来源、权限与进程等价信任边界。
+`deactivate` 只修改指定工作区。`disable` 全局停止插件接收新任务，排空执行并从所有工作区停用。`purge` 还会移除安装态与可重建投影，因此只能用于没有活动工作区和未终结 Execution 的非活动插件。事实事件不会被删除。
+
+安装第三方插件前应在 Desktop 中审阅签名、摘要、来源、权限与进程等价信任边界。生产插件与 Host 同进程运行，不是沙箱。
 
 ## OPC 与 Coding
 

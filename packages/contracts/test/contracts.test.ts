@@ -145,3 +145,31 @@ test("OpenAPI 目录只有 v2，所有写操作要求幂等键", () => {
     assert.equal(paths[operation.path]?.[operation.method]?.parameters?.[0]?.name, "Idempotency-Key");
   }
 });
+
+test("OpenAPI 声明插件局部停用、全局停用与清除操作", () => {
+  assert.deepEqual(
+    API_OPERATIONS_V2
+      .filter((operation) => ["deactivatePlugin", "disablePlugin", "purgePlugin"].includes(operation.operationId))
+      .map(({ method, path, operationId, versioned }) => ({ method, path, operationId, versioned })),
+    [
+      {
+        method: "post",
+        path: "/v2/plugins/installations/{pluginId}/disable",
+        operationId: "disablePlugin",
+        versioned: true,
+      },
+      {
+        method: "delete",
+        path: "/v2/plugins/installations/{pluginId}",
+        operationId: "purgePlugin",
+        versioned: true,
+      },
+      {
+        method: "delete",
+        path: "/v2/workspaces/{workspaceId}/plugin-activations/{pluginId}",
+        operationId: "deactivatePlugin",
+        versioned: true,
+      },
+    ],
+  );
+});

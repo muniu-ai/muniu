@@ -191,6 +191,48 @@ test("setup 在模型凭据不完整时不产生部分写入", async () => {
   assert.match(output.err[0] ?? "", /必须同时提供 --provider 和 --key/);
 });
 
+test("plugin 命令映射工作区停用、全局停用与清除接口", async () => {
+  const output = io();
+  const requests: CapturedRequest[] = [];
+  const fetch: typeof globalThis.fetch = async (input, init) => {
+    requests.push(await captureRequest(input, init));
+    return ok({ pluginId: "research" });
+  };
+  const nextKey = (() => { let id = 0; return () => `plugin-key-${++id}`; })();
+
+  assert.equal(await runCli([
+    "plugin", "deactivate", "research", "--workspace", "workspace-1", "--version", "2",
+  ], { io: output, fetch, idempotencyKey: nextKey }), 0);
+  assert.equal(await runCli([
+    "plugin", "disable", "research", "--version", "3",
+  ], { io: output, fetch, idempotencyKey: nextKey }), 0);
+  assert.equal(await runCli([
+    "plugin", "purge", "research", "--version", "4",
+  ], { io: output, fetch, idempotencyKey: nextKey }), 0);
+
+  assert.deepEqual(requests, [
+    {
+      method: "DELETE",
+      path: "/v2/workspaces/workspace-1/plugin-activations/research",
+      body: { expectedStreamVersion: 2 },
+      idempotencyKey: "plugin-key-1",
+    },
+    {
+      method: "POST",
+      path: "/v2/plugins/installations/research/disable",
+      body: { expectedStreamVersion: 3 },
+      idempotencyKey: "plugin-key-2",
+    },
+    {
+      method: "DELETE",
+      path: "/v2/plugins/installations/research",
+      body: { expectedStreamVersion: 4 },
+      idempotencyKey: "plugin-key-3",
+    },
+  ]);
+  assert.deepEqual(output.out, ["已从工作区停用 research", "已全局停用 research", "已清除 research"]);
+});
+
 test("OPC 与 Coding 命令只映射已实现的插件资源", async () => {
   const cases = [
     {

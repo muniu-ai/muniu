@@ -19,15 +19,22 @@
 
 <!-- generated:plugin-catalog:end -->
 
-## 查看与启用
+## 查看、启用、停用与清除
 
 ```bash
 mn plugin list
 mn plugin enable opc --workspace WORKSPACE_ID --version STREAM_VERSION
 mn plugin enable coding --workspace WORKSPACE_ID --version STREAM_VERSION
+mn plugin deactivate research --workspace WORKSPACE_ID --version WORKSPACE_STREAM_VERSION
+mn plugin disable research --version INSTALLATION_STREAM_VERSION
+mn plugin purge research --version INSTALLATION_STREAM_VERSION
 ```
 
 安装状态包括 `installed`、`active`、`draining`、`disabled`、`revoked` 和 `failed`。工作区激活会产生领域事件，因此必须携带当前 `expectedStreamVersion`。
+
+`deactivate` 只停用一个工作区，并调用该工作区已经激活的插件 `deactivate` hook。`disable` 先阻止新任务并排空未终结 Execution，再调用所有已激活工作区的 hook；工作区、installation、生命周期、plugin lock、审计事件与幂等结果在同一事务更新。hook 属于同进程可信代码；hook 失败会记录插件故障，但不能阻止安全停用。
+
+`purge` 只接受没有活动工作区和未终结 Execution 的非活动安装。操作保留既有事实事件与事件流版本，只删除安装态、可重建投影、进程内贡献和本地制品引用。插件声明投影时，Host 必须配置同一事务内运行的投影清除器。重新安装会沿用保留的事件流版本，不会覆盖旧事件。
 
 ## 仓库校验
 

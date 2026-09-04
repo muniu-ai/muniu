@@ -25,7 +25,7 @@ const HELP = `木牛 Agent OS 0.2
   inbox             查看审批、问题、失败和人工核对
   resume            恢复暂停或中断的执行
   doctor --fix      检查连接与可安全修复项
-  plugin            查看或启用插件
+  plugin            查看、启用、停用或清除插件
   opc               管理机会验证工作
   code              管理 Coding 任务
   backup            创建、校验或恢复本地加密备份
@@ -105,9 +105,9 @@ class ApiClient {
     return this.request("/v2/readiness", { method: "GET" }, new Set([503]));
   }
 
-  async mutate(path: string, body: unknown): Promise<unknown> {
+  async mutate(path: string, body: unknown, method: "POST" | "PATCH" | "DELETE" = "POST"): Promise<unknown> {
     return this.request(path, {
-      method: "POST",
+      method,
       headers: {
         "content-type": "application/json",
         "Idempotency-Key": this.nextIdempotencyKey(),
@@ -333,14 +333,44 @@ async function plugin(parsed: ParsedArguments, api: ApiClient): Promise<CliResul
   if (operation === "list") {
     return { command: "plugin", data: await api.get("/v2/plugins/installations"), human: "已列出可用插件" };
   }
-  if (operation !== "enable") throw new CliUsageError("plugin 仅支持 list 或 enable");
+  if (!["enable", "deactivate", "disable", "purge"].includes(operation)) {
+    throw new CliUsageError("plugin 仅支持 list、enable、deactivate、disable 或 purge");
+  }
   const pluginId = parsed.positional[1];
   if (!pluginId) throw new CliUsageError("请提供插件 ID");
-  const workspaceId = flag(parsed, "workspace", true)!;
-  const data = await api.mutate(`/v2/workspaces/${encodeURIComponent(workspaceId)}/plugin-activations`, {
-    expectedStreamVersion: integerFlag(parsed, "version", 1), pluginId,
-  });
-  return { command: "plugin", data, human: `已启用 ${pluginId}` };
+  const expectedStreamVersion = integerFlag(parsed, "version", 1);
+  if (operation === "enable") {
+    const workspaceId = flag(parsed, "workspace", true)!;
+    const data = await api.mutate(`/v2/workspaces/${encodeURIComponent(workspaceId)}/plugin-activations`, {
+      expectedStreamVersion, pluginId,
+    });
+    return { command: "plugin", data, human: `已启用 ${pluginId}` };
+  }
+  if (operation === "deactivate") {
+    const workspaceId = flag(parsed, "workspace", true)!;
+    const data = await api.mutate(
+      `/v2/workspaces/${encodeURIComponent(workspaceId)}/plugin-activations/${encodeURIComponent(pluginId)}`,
+      { expectedStreamVersion },
+      "DELETE",
+    );
+    return { command: "plugin", data, human: `已从工作区停用 ${pluginId}` };
+  }
+  if (parsed.flags.has("workspace")) {
+    throw new CliUsageError(`plugin ${operation} 不接受 --workspace`);
+  }
+  if (operation === "disable") {
+    const data = await api.mutate(
+      `/v2/plugins/installations/${encodeURIComponent(pluginId)}/disable`,
+      { expectedStreamVersion },
+    );
+    return { command: "plugin", data, human: `已全局停用 ${pluginId}` };
+  }
+  const data = await api.mutate(
+    `/v2/plugins/installations/${encodeURIComponent(pluginId)}`,
+    { expectedStreamVersion },
+    "DELETE",
+  );
+  return { command: "plugin", data, human: `已清除 ${pluginId}` };
 }
 
 async function productCommand(

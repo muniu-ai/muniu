@@ -251,3 +251,10 @@ export interface PluginInstallation extends VersionedEntity {
   readonly projectionNamespace: string;
   readonly developmentMode: boolean;
 }
+
+export interface PluginPurgeResult {
+  readonly pluginId: PluginId;
+  readonly purged: true;
+  readonly streamVersion: number;
+  readonly purgedAt: IsoDateTime;
+}
