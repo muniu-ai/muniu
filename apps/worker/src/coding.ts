@@ -8,6 +8,7 @@ import {
   mkdtemp,
   readFile,
   realpath,
+  rm,
   writeFile,
 } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -79,7 +80,6 @@ interface StoredCandidate extends Candidate {
   readonly workspaceId: string;
   readonly executionId: string;
   readonly diff: string;
-  readonly sandboxPath: string;
   readonly createdAt: string;
 }
 
@@ -223,31 +223,36 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
       signal: context.signal,
       now,
     });
-    const result = await new CodingExecutionEngine({ runners: [runner], now: () => Date.parse(now()) })
-      .execute({
-        task: state.task,
+    let run: StoredCodingRun;
+    try {
+      const result = await new CodingExecutionEngine({ runners: [runner], now: () => Date.parse(now()) })
+        .execute({
+          task: state.task,
+          controlPlane,
+          gateVerifier: runner.gateVerifier,
+          executionId,
+          repositoryPath: snapshot.realPath,
+          expectedRepositoryRealPath: state.repository.rootRealPath,
+          limits: { maxDurationMs: state.authority.budget.maxDurationMs },
+        });
+      if (context.signal.aborted) throw new Error("Coding 执行已中断");
+      const approvalIntent = result.status === "waiting_approval"
+        ? acceptanceIntent(state.execution, state.authority, state.repository, result, now())
+        : undefined;
+      run = await persistCodingResult({
+        store: options.store,
+        tenantId: job.tenantId,
+        state,
         controlPlane,
-        gateVerifier: runner.gateVerifier,
-        executionId,
-        repositoryPath: snapshot.realPath,
-        expectedRepositoryRealPath: state.repository.rootRealPath,
-        limits: { maxDurationMs: state.authority.budget.maxDurationMs },
+        baseRevision: snapshot.baseRevision,
+        result,
+        approvalIntent,
+        material: runner.material,
+        now: now(),
       });
-    if (context.signal.aborted) throw new Error("Coding 执行已中断");
-    const approvalIntent = result.status === "waiting_approval"
-      ? acceptanceIntent(state.execution, state.authority, state.repository, result, now())
-      : undefined;
-    const run = await persistCodingResult({
-      store: options.store,
-      tenantId: job.tenantId,
-      state,
-      controlPlane,
-      baseRevision: snapshot.baseRevision,
-      result,
-      approvalIntent,
-      material: runner.material,
-      now: now(),
-    });
+    } finally {
+      await runner.cleanup();
+    }
     return settlePersistedResult({
       options,
       job,
@@ -507,6 +512,11 @@ class BuiltinCodingRunner implements CodingRunnerAdapter {
 
   async cancel(): Promise<void> {
     // 每个候选都在隔离目录内完成；取消后不再启动新的模型或 Gate 边界。
+  }
+
+  async cleanup(): Promise<void> {
+    const paths = new Set([...this.material.values()].map((item) => item.sandboxPath));
+    await Promise.all([...paths].map((path) => this.#options.sandbox.cleanup(path)));
   }
 
   async resume(_sessionId: string, input: { readonly preparedInput: string }): Promise<void> {
@@ -811,6 +821,14 @@ class MacOsCodingSandbox {
     ]);
   }
 
+  async cleanup(repositoryPath: string): Promise<void> {
+    const root = await this.#initialize();
+    const candidateRoot = resolve(repositoryPath, "..");
+    assertWithin(root, candidateRoot, "候选目录");
+    if (basename(repositoryPath) !== "repository") throw new Error("候选仓库目录结构无效");
+    await rm(candidateRoot, { recursive: true, force: true });
+  }
+
   async #initialize(): Promise<string> {
     if (process.platform !== "darwin") {
       throw new Error("当前平台没有已审核的 Coding sandbox，已拒绝无沙箱执行");
@@ -943,7 +961,6 @@ async function persistCodingResult(input: {
         workspaceId: input.state.execution.workspaceId,
         executionId: input.state.execution.id,
         diff: material.diff,
-        sandboxPath: material.sandboxPath,
         createdAt: input.now,
       };
       transaction.putProjection("coding.candidate", candidate.id, stored);

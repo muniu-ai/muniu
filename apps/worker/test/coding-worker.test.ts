@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -58,6 +58,7 @@ test("真实 Worker 通过受控仓库、macOS sandbox 和 Gate 持久化 Coding
   assert.equal(state.task?.stage, "learn");
   assert.equal(state.candidates.length, 1);
   assert.match(state.candidates[0].diff, /\+new value/u);
+  assert.equal("sandboxPath" in state.candidates[0], false);
   assert.equal(state.candidates[0].sandbox.enforced, true);
   assert.equal(state.gates[0].status, "passed");
   assert.equal(state.gates[0].authoritative, true);
@@ -66,6 +67,7 @@ test("真实 Worker 通过受控仓库、macOS sandbox 和 Gate 持久化 Coding
   assert.equal(state.deliverables[0]?.executionId, "execution-1");
   assert.equal((await fixture.store.getJob("job-1"))?.status, "completed");
   assert.equal(fixture.modelCalls(), 1);
+  assert.deepEqual(await readdir(fixture.sandboxRoot), []);
   const codingEvents = (await fixture.store.readEvents("local", { afterPosition: 0, limit: 200 }))
     .events.filter((event) => event.aggregateType === "coding.task");
   assert.deepEqual(codingEvents.map((event) => event.type), [
@@ -217,7 +219,14 @@ async function codingFixture(
     kinds: ["agent.execution.run"],
     now: () => new Date(NOW),
   });
-  return { store, kernel, handler, worker, modelCalls: () => calls };
+  return {
+    store,
+    kernel,
+    handler,
+    worker,
+    sandboxRoot: join(root, "sandboxes"),
+    modelCalls: () => calls,
+  };
 }
 
 async function seed(store: SqliteStorage, repositoryPath: string): Promise<void> {
