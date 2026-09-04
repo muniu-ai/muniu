@@ -1,13 +1,5 @@
-# @mn/cli
+# `mn`
 
-Machine-readable `mn` CLI and enterprise worker entry point.
+木牛 Agent OS 0.2 命令行宿主。命令面固定为 `setup`、`ask`、`inbox`、`resume`、`doctor`、`plugin`、`opc`、`code` 和 `backup`。
 
-## Commands
-
-```bash
-npm run build -w @mn/cli
-npm run typecheck -w @mn/cli
-npm run test -w @mn/cli
-```
-
-This package is private and versioned with the Muniu monorepo.
+默认输出面向用户；`--json` 输出固定机器格式。CLI 只连接 `/v2`，不会读取或迁移 0.1 状态。
