@@ -107,6 +107,12 @@ async function verifyOnboarding(page, requestLog) {
   await page.getByRole("button", { name: /进入工作台/ }).click();
   await expectText(page, "设计师增长");
   await expectText(page, "今天");
+  await page.getByRole("button", { name: "工作区" }).click();
+  await expectText(page, "成员");
+  await expectText(page, "本地所有者");
+  if ((await page.locator("body").innerText()).includes("local-owner")) {
+    throw new Error("经营视图不应暴露内部 principal ID");
+  }
   const modelRequest = requestLog.find((entry) => entry.path === "/v2/model-connections");
   if (!modelRequest || modelRequest.body.presetId !== "deepseek" || !modelRequest.body.apiKey) {
     throw new Error("BYOK 向导没有提交厂商预设和密钥");

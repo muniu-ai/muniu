@@ -23,7 +23,7 @@ function addFile(path, content) {
 }
 
 function parseOperations(source) {
-  const pattern = /\{ method: "(get|post|patch|delete)", path: "([^"]+)", operationId: "([^"]+)", mutation: (true|false), versioned: (true|false) \}/gu;
+  const pattern = /\{ method: "(get|post|put|patch|delete)", path: "([^"]+)", operationId: "([^"]+)", mutation: (true|false), versioned: (true|false) \}/gu;
   const operations = [...source.matchAll(pattern)].map((match) => ({
     method: match[1],
     path: match[2],

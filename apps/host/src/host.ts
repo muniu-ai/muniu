@@ -581,7 +581,7 @@ async function authorizedWorkspace(
       : access === "operate" ? ["owner", "operator"]
         : access === "review" ? ["owner", "operator", "reviewer"]
           : ["owner"];
-    if (!membership || !allowedRoles.includes(membership.workspaceRole)) {
+    if (!membership || membership.removedAt || !allowedRoles.includes(membership.workspaceRole)) {
       throw new KernelError("WORKSPACE_ACCESS_DENIED", "无权访问此工作区", "联系工作区所有者授予权限");
     }
     return workspace;
@@ -782,7 +782,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
       const pluginWorkspaceKey = (workspaceId: string) => encodePluginWorkspace(TENANT_ID, workspaceId);
       const accessibleWorkspaceIds = async () => new Set(
         (await projectionList<WorkspaceMembership>(options.store, TENANT_ID, "membership"))
-          .filter((membership) => membership.principalId === ACTOR_ID)
+          .filter((membership) => membership.principalId === ACTOR_ID && !membership.removedAt)
           .map((membership) => membership.workspaceId),
       );
       if (request.method === "POST" && url.pathname === "/v2/setup") {
@@ -809,7 +809,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         const workspaces = await kernel.listWorkspaces(TENANT_ID);
         const memberships = await projectionList<WorkspaceMembership>(options.store, TENANT_ID, "membership");
         const allowed = new Set(memberships
-          .filter((membership) => membership.principalId === ACTOR_ID)
+          .filter((membership) => membership.principalId === ACTOR_ID && !membership.removedAt)
           .map((membership) => membership.workspaceId));
         return json(workspaces.filter((workspace) => allowed.has(workspace.id)), 200, traceId);
       }
@@ -874,6 +874,53 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           },
         });
         return json(workspace, 200, traceId);
+      }
+      const workspaceMembersMatch = url.pathname.match(/^\/v2\/workspaces\/([^/]+)\/members$/u);
+      if (workspaceMembersMatch && request.method === "GET") {
+        const workspaceId = decodeURIComponent(workspaceMembersMatch[1]!);
+        await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId);
+        return json(await kernel.listWorkspaceMemberships(TENANT_ID, workspaceId), 200, traceId);
+      }
+      const workspaceMemberMatch = url.pathname.match(
+        /^\/v2\/workspaces\/([^/]+)\/members\/([^/]+)$/u,
+      );
+      if (workspaceMemberMatch && request.method === "PUT") {
+        const workspaceId = decodeURIComponent(workspaceMemberMatch[1]!);
+        const principalId = decodeURIComponent(workspaceMemberMatch[2]!);
+        await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId, "owner");
+        const body = await readBody(request);
+        const workspaceRole = stringField(body, "workspaceRole");
+        if (workspaceRole !== "owner" && workspaceRole !== "operator"
+          && workspaceRole !== "reviewer" && workspaceRole !== "viewer") {
+          throw new KernelError(
+            "WORKSPACE_ROLE_INVALID",
+            "工作区角色无效",
+            "选择 owner、operator、reviewer 或 viewer",
+          );
+        }
+        return json(await kernel.setWorkspaceMembership(
+          TENANT_ID,
+          ACTOR_ID,
+          mutationKey as string,
+          workspaceId,
+          principalId,
+          expectedVersion(body),
+          workspaceRole,
+        ), 200, traceId);
+      }
+      if (workspaceMemberMatch && request.method === "DELETE") {
+        const workspaceId = decodeURIComponent(workspaceMemberMatch[1]!);
+        const principalId = decodeURIComponent(workspaceMemberMatch[2]!);
+        await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId, "owner");
+        const body = await readBody(request);
+        return json(await kernel.removeWorkspaceMembership(
+          TENANT_ID,
+          ACTOR_ID,
+          mutationKey as string,
+          workspaceId,
+          principalId,
+          expectedVersion(body),
+        ), 200, traceId);
       }
       const homeMatch = url.pathname.match(/^\/v2\/workspaces\/([^/]+)\/home$/u);
       if (homeMatch && request.method === "GET") {

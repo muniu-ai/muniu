@@ -12,6 +12,7 @@ import type {
   PluginHealth,
   ProductPluginId,
   ViewMode,
+  WorkspaceMemberSummary,
   WorkspaceSummary,
 } from "./types";
 
@@ -91,6 +92,11 @@ export class AgentOsClient {
   }
 
   listWorkspaces() { return this.request<readonly WorkspaceSummary[]>("/v2/workspaces"); }
+  workspaceMembers(workspaceId: string) {
+    return this.request<readonly WorkspaceMemberSummary[]>(
+      `/v2/workspaces/${encodeURIComponent(workspaceId)}/members`,
+    );
+  }
 
   updateViewMode(workspace: WorkspaceSummary, viewMode: ViewMode) {
     return this.request<WorkspaceSummary>(`/v2/workspaces/${workspace.id}`, {

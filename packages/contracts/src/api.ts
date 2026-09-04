@@ -59,6 +59,8 @@ export const CORE_API_ROUTES = [
   "/v2/setup",
   "/v2/workspaces",
   "/v2/workspaces/{workspaceId}",
+  "/v2/workspaces/{workspaceId}/members",
+  "/v2/workspaces/{workspaceId}/members/{principalId}",
   "/v2/workspaces/{workspaceId}/home",
   "/v2/workspaces/{workspaceId}/threads",
   "/v2/workspaces/{workspaceId}/threads/{threadId}/turns",

@@ -1,7 +1,7 @@
 import { Activity, AlertCircle, ArrowRight, Check, Clock3, FileCheck2, Inbox, Lightbulb, MemoryStick, ShieldCheck, Users, X } from "lucide-react";
 import type { AgentOsClient } from "../api";
 import { EmptyState } from "../components/Status";
-import type { ActivitySummary, DeliverableSummary, HomeSummary, MemorySummary, ViewMode, WorkspaceSummary } from "../types";
+import type { ActivitySummary, DeliverableSummary, HomeSummary, MemorySummary, ViewMode, WorkspaceMemberSummary, WorkspaceSummary } from "../types";
 
 export function HomePage({ summary, onNavigate }: { readonly summary: HomeSummary; readonly onNavigate: (page: string) => void }) {
   return <div className="page-stack">
@@ -71,8 +71,21 @@ export function ActivityPage({ items, professional }: { readonly items: readonly
   </div>;
 }
 
-export function WorkspacesPage({ workspaces, currentId, onSelect }: { readonly workspaces: readonly WorkspaceSummary[]; readonly currentId: string; readonly onSelect: (workspace: WorkspaceSummary) => void }) {
-  return <div className="page-stack"><PageTitle eyebrow="业务上下文" title="工作区" detail="成员、记忆、插件和会话都以工作区为边界。" /><div className="workspace-grid">{workspaces.map((workspace) => <button key={workspace.id} className={workspace.id === currentId ? "selected" : ""} onClick={() => onSelect(workspace)}><span className="workspace-avatar">{workspace.name.slice(0, 1)}</span><strong>{workspace.name}</strong><small>{workspace.activePluginIds.map((id) => id === "opc" ? "OPC" : "Coding").join(" · ")}</small><span className="pill">{workspace.viewMode === "business" ? "经营视图" : "专业视图"}</span></button>)}</div></div>;
+export function WorkspacesPage({ workspaces, currentId, members, onSelect }: { readonly workspaces: readonly WorkspaceSummary[]; readonly currentId: string; readonly members: readonly WorkspaceMemberSummary[]; readonly onSelect: (workspace: WorkspaceSummary) => void }) {
+  const current = workspaces.find((workspace) => workspace.id === currentId);
+  return <div className="page-stack"><PageTitle eyebrow="业务上下文" title="工作区" detail="成员、记忆、插件和会话都以工作区为边界。" /><div className="workspace-grid">{workspaces.map((workspace) => <button key={workspace.id} className={workspace.id === currentId ? "selected" : ""} onClick={() => onSelect(workspace)}><span className="workspace-avatar">{workspace.name.slice(0, 1)}</span><strong>{workspace.name}</strong><small>{workspace.activePluginIds.map(pluginLabel).join(" · ") || "尚未启用产品插件"}</small><span className="pill">{workspace.viewMode === "business" ? "经营视图" : "专业视图"}</span></button>)}</div>{current && <div className="workspace-context-grid"><section className="panel"><PanelHeading title="成员" /><div className="workspace-members">{members.map((member) => <article key={member.id}><span className="workspace-avatar">{memberLabel(member.principalId).slice(0, 1)}</span><div><strong>{memberLabel(member.principalId)}</strong><small>{roleLabel(member.workspaceRole)}</small></div></article>)}</div></section><section className="panel"><PanelHeading title="已启用插件" /><div className="workspace-plugin-list">{current.activePluginIds.map((pluginId) => <span className={`plugin-badge ${pluginId}`} key={pluginId}>{pluginLabel(pluginId)}</span>)}{current.activePluginIds.length === 0 && <p>这个工作区还没有启用产品插件。</p>}</div></section></div>}</div>;
+}
+
+function memberLabel(principalId: string): string {
+  return principalId === "local-owner" ? "本地所有者" : principalId;
+}
+
+function roleLabel(role: WorkspaceMemberSummary["workspaceRole"]): string {
+  return { owner: "所有者", operator: "操作员", reviewer: "审核员", viewer: "查看者" }[role];
+}
+
+function pluginLabel(pluginId: string): string {
+  return pluginId === "opc" ? "OPC" : pluginId === "coding" ? "Coding" : pluginId;
 }
 
 export function SettingsPage({ workspace, memories, api, onModeChanged, onMemoriesChanged }: { readonly workspace: WorkspaceSummary; readonly memories: readonly MemorySummary[]; readonly api: AgentOsClient; readonly onModeChanged: (workspace: WorkspaceSummary) => void; readonly onMemoriesChanged: () => void }) {

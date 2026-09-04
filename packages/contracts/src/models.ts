@@ -40,6 +40,7 @@ export interface WorkspaceMembership extends VersionedEntity {
   readonly principalId: PrincipalId;
   readonly organizationRoles: readonly OrganizationRole[];
   readonly workspaceRole: WorkspaceRole;
+  readonly removedAt?: IsoDateTime;
 }
 
 export interface Workspace extends VersionedEntity {

@@ -11,6 +11,8 @@ import type {
   Thread,
   ToolCallIntent,
   Workspace,
+  WorkspaceMembership,
+  WorkspaceRole,
 } from "@mn/contracts";
 import { acceptMemory, deleteMemory, rejectMemory } from "./memory.js";
 import { authorityAllowsIntent } from "./authority.js";
@@ -165,6 +167,153 @@ export class AgentOsKernel {
     return this.store.transact(tenantId, (transaction) =>
       [...transaction.listProjections<Workspace>("workspace")].sort((left, right) => left.createdAt.localeCompare(right.createdAt)),
     );
+  }
+
+  async listWorkspaceMemberships(
+    tenantId: string,
+    workspaceId: string,
+  ): Promise<readonly WorkspaceMembership[]> {
+    return this.store.transact(tenantId, (transaction) => {
+      if (!transaction.getProjection<Workspace>("workspace", workspaceId)) {
+        throw new KernelError("WORKSPACE_NOT_FOUND", "工作区不存在", "刷新工作区列表");
+      }
+      return transaction.listProjections<WorkspaceMembership>("membership")
+        .filter((membership) => membership.workspaceId === workspaceId && !membership.removedAt)
+        .sort((left, right) => left.createdAt.localeCompare(right.createdAt)
+          || left.principalId.localeCompare(right.principalId));
+    });
+  }
+
+  async setWorkspaceMembership(
+    tenantId: string,
+    actorId: string,
+    idempotencyKey: string,
+    workspaceId: string,
+    principalId: string,
+    expectedStreamVersion: number,
+    workspaceRole: WorkspaceRole,
+  ): Promise<WorkspaceMembership> {
+    const memberId = `${workspaceId}:${principalId}`;
+    return this.mutation(
+      tenantId,
+      `workspace.membership.set:${memberId}`,
+      idempotencyKey,
+      { workspaceId, principalId, expectedStreamVersion, workspaceRole },
+      (transaction) => {
+        if (!transaction.getProjection<Workspace>("workspace", workspaceId)) {
+          throw new KernelError("WORKSPACE_NOT_FOUND", "工作区不存在", "刷新工作区列表");
+        }
+        if (!principalId.trim()) {
+          throw new KernelError("MEMBERSHIP_PRINCIPAL_INVALID", "成员身份不能为空", "选择有效成员");
+        }
+        const current = transaction.getProjection<WorkspaceMembership>("membership", memberId);
+        const actualVersion = current?.streamVersion ?? 0;
+        if (actualVersion !== expectedStreamVersion) {
+          throw new StreamVersionConflictError(expectedStreamVersion, actualVersion);
+        }
+        if (current && !current.removedAt && current.workspaceRole === workspaceRole) return current;
+        if (current && !current.removedAt && current.workspaceRole === "owner" && workspaceRole !== "owner") {
+          this.assertAnotherWorkspaceOwner(transaction, workspaceId, principalId);
+        }
+        const timestamp = this.now();
+        const next: WorkspaceMembership = {
+          id: memberId,
+          tenantId,
+          workspaceId,
+          principalId,
+          organizationRoles: [...(current?.organizationRoles ?? [])],
+          workspaceRole,
+          streamVersion: actualVersion + 1,
+          createdAt: current?.createdAt ?? timestamp,
+          updatedAt: timestamp,
+        };
+        transaction.putProjection("membership", memberId, next);
+        this.append(transaction, {
+          tenantId,
+          aggregateType: "workspaceMembership",
+          aggregateId: memberId,
+          expectedStreamVersion: actualVersion,
+          type: current?.removedAt
+            ? "workspace_membership.restored"
+            : current
+              ? "workspace_membership.role_changed"
+              : "workspace_membership.created",
+          actorId,
+          publicPayload: { workspaceId, principalId, workspaceRole },
+        });
+        return next;
+      },
+    );
+  }
+
+  async removeWorkspaceMembership(
+    tenantId: string,
+    actorId: string,
+    idempotencyKey: string,
+    workspaceId: string,
+    principalId: string,
+    expectedStreamVersion: number,
+  ): Promise<WorkspaceMembership> {
+    const memberId = `${workspaceId}:${principalId}`;
+    return this.mutation(
+      tenantId,
+      `workspace.membership.remove:${memberId}`,
+      idempotencyKey,
+      { workspaceId, principalId, expectedStreamVersion },
+      (transaction) => {
+        if (!transaction.getProjection<Workspace>("workspace", workspaceId)) {
+          throw new KernelError("WORKSPACE_NOT_FOUND", "工作区不存在", "刷新工作区列表");
+        }
+        const current = transaction.getProjection<WorkspaceMembership>("membership", memberId);
+        if (!current || current.workspaceId !== workspaceId) {
+          throw new KernelError("MEMBERSHIP_NOT_FOUND", "工作区成员不存在", "刷新成员列表");
+        }
+        if (current.streamVersion !== expectedStreamVersion) {
+          throw new StreamVersionConflictError(expectedStreamVersion, current.streamVersion);
+        }
+        if (current.removedAt) return current;
+        if (current.workspaceRole === "owner") {
+          this.assertAnotherWorkspaceOwner(transaction, workspaceId, principalId);
+        }
+        const timestamp = this.now();
+        const next: WorkspaceMembership = {
+          ...current,
+          removedAt: timestamp,
+          streamVersion: current.streamVersion + 1,
+          updatedAt: timestamp,
+        };
+        transaction.putProjection("membership", memberId, next);
+        this.append(transaction, {
+          tenantId,
+          aggregateType: "workspaceMembership",
+          aggregateId: memberId,
+          expectedStreamVersion: current.streamVersion,
+          type: "workspace_membership.removed",
+          actorId,
+          publicPayload: { workspaceId, principalId, previousRole: current.workspaceRole },
+        });
+        return next;
+      },
+    );
+  }
+
+  private assertAnotherWorkspaceOwner(
+    transaction: KernelTransaction,
+    workspaceId: string,
+    principalId: string,
+  ): void {
+    const hasAnotherOwner = transaction.listProjections<WorkspaceMembership>("membership")
+      .some((membership) => membership.workspaceId === workspaceId
+        && membership.principalId !== principalId
+        && membership.workspaceRole === "owner"
+        && !membership.removedAt);
+    if (!hasAnotherOwner) {
+      throw new KernelError(
+        "LAST_WORKSPACE_OWNER",
+        "不能移除或降级工作区的最后一名所有者",
+        "先将另一名成员设为所有者",
+      );
+    }
   }
 
   async listThreads(tenantId: string, workspaceId: string): Promise<readonly Thread[]> {

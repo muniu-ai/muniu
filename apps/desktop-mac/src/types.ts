@@ -9,6 +9,13 @@ export interface WorkspaceSummary {
   readonly streamVersion: number;
 }
 
+export interface WorkspaceMemberSummary {
+  readonly id: string;
+  readonly principalId: string;
+  readonly workspaceRole: "owner" | "operator" | "reviewer" | "viewer";
+  readonly streamVersion: number;
+}
+
 export interface HomeSummary {
   readonly todayActions: readonly SummaryItem[];
   readonly blockers: readonly SummaryItem[];

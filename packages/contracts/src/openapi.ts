@@ -1,7 +1,7 @@
 import { CORE_API_ROUTES } from "./api.js";
 import type { JsonObject } from "./json.js";
 
-type HttpMethod = "get" | "post" | "patch" | "delete";
+type HttpMethod = "get" | "post" | "put" | "patch" | "delete";
 
 export interface ApiOperationV2 {
   readonly method: HttpMethod;
@@ -18,7 +18,11 @@ export const API_OPERATIONS_V2: readonly ApiOperationV2[] = [
   { method: "post", path: "/v2/setup", operationId: "setup", mutation: true, versioned: false },
   { method: "get", path: "/v2/workspaces", operationId: "listWorkspaces", mutation: false, versioned: false },
   { method: "post", path: "/v2/workspaces", operationId: "createWorkspace", mutation: true, versioned: false },
+  { method: "get", path: "/v2/workspaces/{workspaceId}", operationId: "getWorkspace", mutation: false, versioned: false },
   { method: "patch", path: "/v2/workspaces/{workspaceId}", operationId: "updateWorkspace", mutation: true, versioned: true },
+  { method: "get", path: "/v2/workspaces/{workspaceId}/members", operationId: "listWorkspaceMembers", mutation: false, versioned: false },
+  { method: "put", path: "/v2/workspaces/{workspaceId}/members/{principalId}", operationId: "setWorkspaceMember", mutation: true, versioned: true },
+  { method: "delete", path: "/v2/workspaces/{workspaceId}/members/{principalId}", operationId: "removeWorkspaceMember", mutation: true, versioned: true },
   { method: "get", path: "/v2/workspaces/{workspaceId}/home", operationId: "getWorkspaceHome", mutation: false, versioned: false },
   { method: "get", path: "/v2/workspaces/{workspaceId}/threads", operationId: "listThreads", mutation: false, versioned: false },
   { method: "post", path: "/v2/workspaces/{workspaceId}/threads", operationId: "createThread", mutation: true, versioned: false },

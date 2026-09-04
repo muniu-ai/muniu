@@ -15,7 +15,7 @@ import {
 import { CodingPage, OpcPage } from "./pages/PluginPages";
 import type {
   ActivitySummary, CodingTaskSummary, DeliverableSummary, HomeSummary, MemorySummary,
-  OpportunitySummary, PluginHealth, ProductPluginId, WorkspaceSummary,
+  OpportunitySummary, PluginHealth, ProductPluginId, WorkspaceMemberSummary, WorkspaceSummary,
 } from "./types";
 
 type PageId = "home" | "workspaces" | "inbox" | "deliverables" | "activity" | "agents" | "integrations" | "settings" | "opc" | "coding";
@@ -43,6 +43,7 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces }: Wor
   const [deliverables, setDeliverables] = useState<readonly DeliverableSummary[]>([]);
   const [activity, setActivity] = useState<readonly ActivitySummary[]>([]);
   const [memories, setMemories] = useState<readonly MemorySummary[]>([]);
+  const [members, setMembers] = useState<readonly WorkspaceMemberSummary[]>([]);
   const [opportunities, setOpportunities] = useState<readonly OpportunitySummary[]>([]);
   const [codingTasks, setCodingTasks] = useState<readonly CodingTaskSummary[]>([]);
   const [selectedOpportunityId, setSelectedOpportunityId] = useState<string>();
@@ -59,13 +60,14 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces }: Wor
 
   const refreshCore = useCallback(async () => {
     setCoreLoading(true); setCoreError(undefined);
-    const [homeResult, deliverablesResult, activityResult, memoriesResult, healthResult] = await Promise.allSettled([
-      api.home(workspace.id), api.deliverables(workspace.id), api.activity(workspace.id), api.memories(workspace.id), api.health(workspace.id),
+    const [homeResult, deliverablesResult, activityResult, memoriesResult, membersResult, healthResult] = await Promise.allSettled([
+      api.home(workspace.id), api.deliverables(workspace.id), api.activity(workspace.id), api.memories(workspace.id), api.workspaceMembers(workspace.id), api.health(workspace.id),
     ]);
     if (homeResult.status === "fulfilled") setHome(homeResult.value); else setCoreError(safeMessage(homeResult.reason));
     if (deliverablesResult.status === "fulfilled") setDeliverables(deliverablesResult.value);
     if (activityResult.status === "fulfilled") setActivity(activityResult.value);
     if (memoriesResult.status === "fulfilled") setMemories(memoriesResult.value);
+    if (membersResult.status === "fulfilled") setMembers(membersResult.value);
     if (healthResult.status === "fulfilled") setHealth(healthResult.value.plugins);
     setCoreLoading(false);
   }, [api, workspace.id]);
@@ -165,7 +167,7 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces }: Wor
         {coreLoading && page === "home" && <Loading />}
         {coreError && page === "home" && <ErrorState detail={coreError} action="检查 Host 后重试" onRetry={() => void refreshCore()} />}
         {!coreLoading && !coreError && page === "home" && <HomePage summary={home} onNavigate={(target) => setPage(target as PageId)} />}
-        {page === "workspaces" && <WorkspacesPage workspaces={workspaces} currentId={workspace.id} onSelect={selectWorkspace} />}
+        {page === "workspaces" && <WorkspacesPage workspaces={workspaces} currentId={workspace.id} members={members} onSelect={selectWorkspace} />}
         {page === "inbox" && <InboxPage summary={home} api={api} onChanged={() => void refreshCore()} />}
         {page === "deliverables" && <DeliverablesPage items={deliverables} />}
         {page === "activity" && <ActivityPage items={activity} professional={professional} />}

@@ -646,3 +646,53 @@ test("事务失败时事件和投影都不提交", async () => {
   );
   assert.equal((await store.readEvents("local", 0, 10)).events.length, 0);
 });
+
+test("工作区成员角色可审计修改，且不能移除最后一名所有者", async () => {
+  const store = new InMemoryKernelStore(undefined, () => now);
+  const kernel = new AgentOsKernel(store, { now: () => now });
+  await kernel.bootstrapLocal("membership-setup");
+  const workspace = await kernel.createWorkspace("local", "local-owner", "membership-workspace", {
+    name: "成员治理", viewMode: "professional", pluginIds: [],
+  });
+
+  const added = await kernel.setWorkspaceMembership(
+    "local", "local-owner", "membership-add", workspace.id, "operator-a", 0, "operator",
+  );
+  assert.equal(added.workspaceRole, "operator");
+  assert.equal(added.streamVersion, 1);
+  const changed = await kernel.setWorkspaceMembership(
+    "local", "local-owner", "membership-change", workspace.id, "operator-a", 1, "reviewer",
+  );
+  assert.equal(changed.workspaceRole, "reviewer");
+  assert.equal(changed.streamVersion, 2);
+  assert.deepEqual((await kernel.listWorkspaceMemberships("local", workspace.id))
+    .map((membership) => [membership.principalId, membership.workspaceRole]), [
+    ["local-owner", "owner"],
+    ["operator-a", "reviewer"],
+  ]);
+
+  const removed = await kernel.removeWorkspaceMembership(
+    "local", "local-owner", "membership-remove", workspace.id, "operator-a", 2,
+  );
+  assert.equal(typeof removed.removedAt, "string");
+  assert.equal(removed.streamVersion, 3);
+  assert.deepEqual((await kernel.listWorkspaceMemberships("local", workspace.id))
+    .map((membership) => membership.principalId), ["local-owner"]);
+  await assert.rejects(kernel.removeWorkspaceMembership(
+    "local", "local-owner", "membership-remove-owner", workspace.id, "local-owner", 1,
+  ), /最后一名所有者/);
+
+  const restored = await kernel.setWorkspaceMembership(
+    "local", "local-owner", "membership-restore", workspace.id, "operator-a", 3, "viewer",
+  );
+  assert.equal(restored.removedAt, undefined);
+  assert.equal(restored.streamVersion, 4);
+  const events = (await store.readEvents("local", 0, 50)).events
+    .filter((event) => event.aggregateType === "workspaceMembership");
+  assert.deepEqual(events.map((event) => event.type), [
+    "workspace_membership.created",
+    "workspace_membership.role_changed",
+    "workspace_membership.removed",
+    "workspace_membership.restored",
+  ]);
+});

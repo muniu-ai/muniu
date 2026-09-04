@@ -1117,6 +1117,79 @@ test("企业插件供应链变更只允许组织管理员或治理管理员", as
   await host.close();
 });
 
+test("工作区所有者通过 v2 管理成员角色，移除后立即失去访问权", async () => {
+  const host = await createAgentOsHost({
+    profile: "enterprise",
+    store: new InMemoryKernelStore(),
+    secretStore: secrets,
+    identityResolver(request) {
+      const principalId = request.headers.get("authorization")?.replace(/^Bearer\s+/u, "") ?? "";
+      return principalId
+        ? {
+            tenantId: "tenant-a",
+            principalId,
+            organizationRoles: principalId === "owner" ? ["organization_admin"] as const : [],
+          }
+        : { tenantId: "", principalId: "", organizationRoles: [] as const };
+    },
+  });
+  const mutation = (principalId: string, path: string, key: string, method: string, body: unknown) =>
+    host.dispatch(new Request(`http://host.test${path}`, {
+      method,
+      headers: {
+        authorization: `Bearer ${principalId}`,
+        "content-type": "application/json",
+        "Idempotency-Key": key,
+      },
+      body: JSON.stringify(body),
+    }));
+  const created = (await responseJson(await mutation("owner", "/v2/workspaces", "members-workspace", "POST", {
+    name: "成员工作区", viewMode: "professional", pluginIds: [],
+  }))).data;
+  const memberPath = `/v2/workspaces/${created.id}/members/reviewer-a`;
+  const addedResponse = await mutation("owner", memberPath, "member-add", "PUT", {
+    expectedStreamVersion: 0,
+    workspaceRole: "reviewer",
+  });
+  assert.equal(addedResponse.status, 200);
+  const added = (await responseJson(addedResponse)).data;
+  assert.equal(added.workspaceRole, "reviewer");
+
+  const membersResponse = await host.dispatch(new Request(
+    `http://host.test/v2/workspaces/${created.id}/members`,
+    { headers: { authorization: "Bearer reviewer-a" } },
+  ));
+  assert.equal(membersResponse.status, 200);
+  assert.deepEqual((await responseJson(membersResponse)).data.map((item: any) => item.principalId), [
+    "owner",
+    "reviewer-a",
+  ]);
+  const denied = await mutation("reviewer-a", memberPath, "member-self-promote", "PUT", {
+    expectedStreamVersion: added.streamVersion,
+    workspaceRole: "owner",
+  });
+  assert.equal(denied.status, 403);
+
+  const removedResponse = await mutation("owner", memberPath, "member-remove", "DELETE", {
+    expectedStreamVersion: added.streamVersion,
+  });
+  assert.equal(removedResponse.status, 200);
+  const revokedAccess = await host.dispatch(new Request(`http://host.test/v2/workspaces/${created.id}`, {
+    headers: { authorization: "Bearer reviewer-a" },
+  }));
+  assert.equal(revokedAccess.status, 403);
+  const removeLastOwner = await mutation(
+    "owner",
+    `/v2/workspaces/${created.id}/members/owner`,
+    "member-remove-last-owner",
+    "DELETE",
+    { expectedStreamVersion: 1 },
+  );
+  assert.equal(removeLastOwner.status, 422);
+  assert.equal((await responseJson(removeLastOwner)).code, "LAST_WORKSPACE_OWNER");
+  await host.close();
+});
+
 test("同一 tenant 内仍按工作区成员隔离", async () => {
   const store = new InMemoryKernelStore();
   const host = await createAgentOsHost({
