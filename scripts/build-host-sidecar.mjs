@@ -64,6 +64,8 @@ try {
   execFileSync("lipo", ["-create", arm64Path, x64Path, "-output", universalPath]);
   execFileSync("chmod", ["755", universalPath]);
   execFileSync("codesign", ["--force", "--sign", "-", universalPath]);
+  relocatePkgPayloads(universalPath, { arm64: arm64Path, x64: x64Path });
+  execFileSync("codesign", ["--force", "--sign", "-", universalPath]);
   execFileSync("lipo", [universalPath, "-verify_arch", "arm64", "x86_64"]);
   execFileSync("codesign", ["--verify", "--strict", universalPath]);
   const manifest = {
@@ -86,6 +88,41 @@ try {
 
 function sha256(file) {
   return createHash("sha256").update(readFileSync(file)).digest("hex");
+}
+
+function relocatePkgPayloads(universal, thinBinaries) {
+  const detail = execFileSync("lipo", ["-detailed_info", universal], { encoding: "utf8" });
+  const output = readFileSync(universal);
+  const labels = { arm64: "arm64", x64: "x86_64" };
+  for (const arch of ["arm64", "x64"]) {
+    const section = detail.slice(detail.indexOf(`architecture ${labels[arch]}`));
+    const offsetMatch = section.match(/\n\s*offset (\d+)/u);
+    if (!offsetMatch) throw new Error(`无法读取 universal ${labels[arch]} slice 偏移`);
+    const sliceOffset = Number(offsetMatch[1]);
+    const thin = readFileSync(thinBinaries[arch]);
+    for (const placeholderOffset of pkgPositionFields(thin)) {
+      const fieldLength = "// PRELUDE_POSITION //".length;
+      const field = thin.subarray(placeholderOffset, placeholderOffset + fieldLength).toString("ascii");
+      const originalPosition = Number.parseInt(field, 10);
+      if (!Number.isSafeInteger(originalPosition) || !/^\d+\s+$/u.test(field)) {
+        throw new Error(`pkg ${labels[arch]} payload 偏移无效`);
+      }
+      const relocated = String(originalPosition + sliceOffset).padEnd(fieldLength, " ");
+      if (relocated.length !== fieldLength) throw new Error(`pkg ${labels[arch]} 偏移超出预留空间`);
+      Buffer.from(relocated, "ascii").copy(output, sliceOffset + placeholderOffset);
+    }
+  }
+  writeFileSync(universal, output, { mode: 0o755 });
+}
+
+function pkgPositionFields(binary) {
+  const fieldLength = "// PRELUDE_POSITION //".length;
+  const matches = [...binary.toString("latin1").matchAll(/\d{7,20} +/gu)]
+    .filter((match) => match[0].length === fieldLength)
+    .map((match) => match.index);
+  const pairs = matches.filter((offset) => matches.includes(offset + 72));
+  if (pairs.length !== 1) throw new Error("pkg runtime payload/prelude 偏移字段不存在或不唯一");
+  return [pairs[0], pairs[0] + 72];
 }
 
 async function smokeCurrentArchitecture(binary) {

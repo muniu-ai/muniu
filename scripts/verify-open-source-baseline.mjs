@@ -48,6 +48,7 @@ const requiredFiles = [
   "scripts/lib/cargo-lock-license.mjs",
   "scripts/build-host-sidecar.mjs",
   "scripts/test/deployment-v2.test.mjs",
+  "scripts/test/postgres-worker-store.test.mjs",
   "scripts/test/open-source-policy.test.mjs",
   "scripts/test/fixtures/allowed-fake-secrets.txt",
   "scripts/verify-third-party-licenses.mjs",
@@ -274,7 +275,7 @@ for (const relativePath of tracked) {
 
 for (const sourceLicenseFailure of validateWorkspaceSourceLicenses({
   manifests: workspaceManifestRecords,
-  provenance: readFileSync(provenancePath, "utf8"),
+  provenance,
   sourceFiles
 })) {
   fail(sourceLicenseFailure);

@@ -3,6 +3,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { computeEventHmac } from "@mn/storage";
+
 import { PostgresKernelStore } from "../lib/postgres-kernel-store.mjs";
 
 class FixtureClient {
@@ -75,6 +77,7 @@ test("PostgreSQL Kernel transaction stages event, projection, Job, outbox, and i
   assert.equal(event.streamVersion, 1);
   assert.match(event.digest, /^[a-f0-9]{64}$/u);
   assert.match(event.hmac, /^[a-f0-9]{64}$/u);
+  assert.equal(event.hmac, computeEventHmac(event.digest, Buffer.alloc(32, 7)));
 
   const statements = client.queries.map((query) => query.sql);
   for (const table of ["events", "projections", "jobs", "outbox", "idempotency"]) {

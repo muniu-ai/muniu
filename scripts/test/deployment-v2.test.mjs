@@ -49,6 +49,9 @@ test("container and sidecar entrypoints are v2-only", () => {
   assert.match(sidecar, /apps\/host\/src\/main\.ts/);
   assert.match(sidecar, /mn-host-aarch64-apple-darwin/);
   assert.match(sidecar, /mn-host-x86_64-apple-darwin/);
+  assert.match(sidecar, /relocatePkgPayloads/u);
+  assert.match(read(".github/workflows/ci.yml"), /build:host-sidecar -- --smoke/u);
+  assert.match(read(".github/workflows/release.yml"), /build:host-sidecar -- --smoke/u);
   assert.doesNotMatch(`${dockerfile}\n${sidecar}`, /apps\/api|mn-api|descriptor-lock|["'`]\/v1(?:\/|["'`])/u);
   assert.equal(existsSync(join(root, "scripts/build-descriptor-lock-helper.mjs")), false);
 });
@@ -88,15 +91,28 @@ test("PostgreSQL Host transaction commits Job and outbox with the event", () => 
   assert.match(adapter, /commit/u);
 });
 
+test("PostgreSQL Worker fences Agent Execution lifecycle transitions in the Job transaction", () => {
+  const adapter = read("scripts/lib/postgres-worker-store.mjs");
+  assert.match(adapter, /agent\.execution\.run/u);
+  assert.match(adapter, /job\.lease_renewed/u);
+  assert.match(adapter, /type: `job\.\$\{status\}`/u);
+  assert.match(adapter, /type: `execution\.\$\{status\}`/u);
+  assert.match(adapter, /status = 'leased'.*lease_owner.*fencing_token/su);
+  assert.match(adapter, /insert into mn_v2\.events/u);
+  assert.match(adapter, /insert into mn_v2\.outbox/u);
+  assert.match(adapter, /update mn_v2\.projections set stream_version/u);
+  assert.match(adapter, /await client\.query\("commit"\)/u);
+});
+
 test("unknown external effects become a durable event, inbox item, and non-replayable Job", () => {
-  const worker = read("scripts/enterprise-worker.mjs");
-  assert.match(worker, /execution\.needs_reconciliation/u);
-  assert.match(worker, /UNKNOWN_EXTERNAL_SIDE_EFFECT/u);
-  assert.match(worker, /insert into mn_v2\.events/u);
-  assert.match(worker, /insert into mn_v2\.reconciliations/u);
-  assert.match(worker, /insert into mn_v2\.outbox/u);
-  assert.match(worker, /'inbox'/u);
-  assert.match(worker, /status = 'failed'/u);
+  const adapter = read("scripts/lib/postgres-worker-store.mjs");
+  assert.match(adapter, /execution\.needs_reconciliation/u);
+  assert.match(adapter, /UNKNOWN_EXTERNAL_SIDE_EFFECT/u);
+  assert.match(adapter, /insert into mn_v2\.events/u);
+  assert.match(adapter, /insert into mn_v2\.reconciliations/u);
+  assert.match(adapter, /insert into mn_v2\.outbox/u);
+  assert.match(adapter, /'inbox'/u);
+  assert.match(adapter, /status = 'failed'/u);
 });
 
 test("enterprise Worker refuses an unconfigured agent execution bootstrap", () => {

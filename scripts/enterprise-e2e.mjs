@@ -8,6 +8,8 @@ import { readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { computeEventHmac } from "@mn/storage";
+
 import { seedHostFlow, verifyCommittedEvent } from "./enterprise-host-flow.mjs";
 import { SigV4S3Client } from "./lib/s3-client.mjs";
 
@@ -162,13 +164,36 @@ async function verifyS3Cas() {
 }
 
 async function enqueue(pool, { id, kind, payload, workspaceId }) {
+  const createdAt = new Date().toISOString();
   await pool.query(`
     insert into mn_v2.jobs (
       job_id, tenant_id, workspace_id, kind, payload_json, status, attempts,
       available_at, fencing_token, idempotency_key, created_at, updated_at
     ) values ($1, 'tenant-enterprise-e2e', $2, $3, $4::jsonb, 'available', 0,
-      now(), 0, $5, now(), now())
-  `, [id, workspaceId ?? null, kind, JSON.stringify(payload), `fixture:${id}`]);
+      $6::timestamptz, 0, $5, $6::timestamptz, $6::timestamptz)
+  `, [id, workspaceId ?? null, kind, JSON.stringify(payload), `fixture:${id}`, createdAt]);
+  if (kind === "agent.execution.run") {
+    const projectedJob = {
+      id,
+      tenantId: "tenant-enterprise-e2e",
+      ...(workspaceId ? { workspaceId } : {}),
+      kind,
+      payload,
+      status: "available",
+      attempts: 0,
+      availableAt: createdAt,
+      fencingToken: 0,
+      idempotencyKey: `fixture:${id}`,
+      streamVersion: 0,
+      createdAt,
+      updatedAt: createdAt,
+    };
+    await pool.query(`
+      insert into mn_v2.projections (
+        tenant_id, namespace, projection_key, stream_version, value_json, updated_at
+      ) values ('tenant-enterprise-e2e', 'job', $1, 0, $2::jsonb, $3::timestamptz)
+    `, [id, JSON.stringify(projectedJob), createdAt]);
+  }
 }
 
 async function job(pool, id) {
@@ -182,6 +207,65 @@ async function verifyWorkers(pool, workspaceId) {
     return row?.status === "completed" ? row : undefined;
   }, "双 Worker 正常 claim");
   assert.equal(echoed.result_json.value, "ok");
+
+  await pool.query(`
+    insert into mn_v2.projections (
+      tenant_id, namespace, projection_key, stream_version, value_json, updated_at
+    ) values (
+      'tenant-enterprise-e2e', 'execution', 'execution-lifecycle', 0,
+      $1::jsonb, now()
+    )
+  `, [JSON.stringify({
+    id: "execution-lifecycle",
+    tenantId: "tenant-enterprise-e2e",
+    workspaceId,
+    status: "queued",
+    generation: 1,
+    streamVersion: 0,
+  })]);
+  await enqueue(pool, {
+    id: "job-execution-lifecycle",
+    kind: "agent.execution.run",
+    payload: { executionId: "execution-lifecycle", message: "fixture 不提供假 LLM" },
+    workspaceId,
+  });
+  await waitFor(async () => {
+    const row = await job(pool, "job-execution-lifecycle");
+    return row?.status === "failed" ? row : undefined;
+  }, "Agent Execution 生命周期事务");
+  const lifecycle = await pool.query(`
+    select event_type, digest, hmac from mn_v2.events
+    where tenant_id = 'tenant-enterprise-e2e'
+      and aggregate_type = 'execution' and aggregate_id = 'execution-lifecycle'
+    order by stream_version
+  `);
+  assert.deepEqual(lifecycle.rows.map((row) => row.event_type), ["execution.running", "execution.failed"]);
+  const eventHmacKey = Buffer.from("ZW50ZXJwcmlzZS1lMmUtaG1hYy1maXh0dXJlLWtleS0wMg==", "base64");
+  for (const row of lifecycle.rows) {
+    assert.equal(row.hmac, computeEventHmac(row.digest, eventHmacKey));
+  }
+  const lifecycleProjection = await pool.query(`
+    select stream_version, value_json from mn_v2.projections
+    where tenant_id = 'tenant-enterprise-e2e'
+      and namespace = 'execution' and projection_key = 'execution-lifecycle'
+  `);
+  assert.equal(lifecycleProjection.rows[0]?.value_json.status, "failed");
+  assert.equal(Number(lifecycleProjection.rows[0]?.stream_version), 2);
+  assert.equal(lifecycleProjection.rows[0]?.value_json.failureCode, "JOB_HANDLER_NOT_FOUND");
+  const lifecycleJobProjection = await pool.query(`
+    select stream_version, value_json from mn_v2.projections
+    where tenant_id = 'tenant-enterprise-e2e'
+      and namespace = 'job' and projection_key = 'job-execution-lifecycle'
+  `);
+  assert.equal(lifecycleJobProjection.rows[0]?.value_json.status, "failed");
+  assert.equal(Number(lifecycleJobProjection.rows[0]?.stream_version), 2);
+  const lifecycleOutbox = await pool.query(`
+    select topic from mn_v2.outbox
+    where tenant_id = 'tenant-enterprise-e2e'
+      and message_id like 'execution:execution-lifecycle:%'
+    order by available_at, message_id
+  `);
+  assert.deepEqual(lifecycleOutbox.rows.map((row) => row.topic).sort(), ["execution.failed", "execution.running"]);
 
   await pool.query(`
     insert into mn_v2.projections (

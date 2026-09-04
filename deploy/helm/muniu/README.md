@@ -18,6 +18,7 @@ Chart 在下列条件不成立时拒绝渲染：
 - 已显式声明运行时网络出口。
 
 Host readiness 还会检查 PostgreSQL、S3 和数据库中的 engine/plugin lock。Worker lock 不一致时不会 claim Job。
+Worker 对 `agent.execution.run` 的认领、成功和失败会在同一 PostgreSQL 事务内更新 Job 与 Execution，并写入带 HMAC 的事件和 outbox；陈旧 fencing token 无法提交结果。
 
 ## 升级
 

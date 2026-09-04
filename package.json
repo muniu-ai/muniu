@@ -76,5 +76,8 @@
   },
   "optionalDependencies": {
     "ds-store": "^0.1.6"
+  },
+  "dependencies": {
+    "pg": "8.23.0"
   }
 }

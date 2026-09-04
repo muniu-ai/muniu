@@ -8,9 +8,9 @@ export interface ModelSecretStore {
   read(secretRef: string): Promise<string>;
 }
 
-export type KeychainCommand = (arguments_: readonly string[], stdin?: string) => Promise<string>;
+export type KeychainCommand = (arguments_: readonly string[]) => Promise<string>;
 
-function runSecurity(arguments_: readonly string[], stdin?: string): Promise<string> {
+function runSecurity(arguments_: readonly string[]): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn("/usr/bin/security", arguments_, { stdio: ["pipe", "pipe", "pipe"] });
     const stdout: Buffer[] = [];
@@ -22,7 +22,7 @@ function runSecurity(arguments_: readonly string[], stdin?: string): Promise<str
       if (code === 0) resolve(Buffer.concat(stdout).toString("utf8").trim());
       else reject(new Error(Buffer.concat(stderr).toString("utf8").trim() || `security exited ${code}`));
     });
-    child.stdin.end(stdin);
+    child.stdin.end();
   });
 }
 
@@ -46,8 +46,8 @@ export class MacOsKeychainSecretStore implements ModelSecretStore {
     if (!connectionId.trim() || !apiKey.trim()) throw new TypeError("连接名称和密钥不能为空");
     const account = `model-${connectionId}`;
     await this.command([
-      "add-generic-password", "-U", "-s", this.service, "-a", account, "-w",
-    ], `${apiKey}\n`);
+      "add-generic-password", "-U", "-s", this.service, "-a", account, "-w", apiKey,
+    ]);
     return `keychain://muniu.v2/${account}`;
   }
 
@@ -69,8 +69,9 @@ export class MacOsKeychainSecretStore implements ModelSecretStore {
       if (!/not found|could not be found|-25300|errSecItemNotFound/iu.test(String(error))) throw error;
       const value = randomBytes(byteLength);
       await this.command([
-        "add-generic-password", "-s", this.service, "-a", account, "-w",
-      ], `${value.toString("base64")}\n`);
+        "add-generic-password", "-s", this.service, "-a", account,
+        "-w", value.toString("base64"),
+      ]);
       return value;
     }
   }

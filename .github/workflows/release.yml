@@ -43,7 +43,7 @@ jobs:
       - run: npm run typecheck:desktop
       - run: npm run build:desktop
       - name: Build ignored mn-host sidecar
-        run: npm run build:host-sidecar
+        run: npm run build:host-sidecar -- --smoke
       - run: cargo check --locked
         working-directory: apps/desktop-mac/src-tauri
       - run: cargo test --locked
@@ -94,7 +94,11 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: node --test scripts/test/deployment-v2.test.mjs
-      - run: node --test scripts/test/enterprise-runtime.test.mjs scripts/test/postgres-kernel-store.test.mjs
+      - run: >-
+          node --test
+          scripts/test/enterprise-runtime.test.mjs
+          scripts/test/postgres-kernel-store.test.mjs
+          scripts/test/postgres-worker-store.test.mjs
       - run: docker compose -f docker-compose.enterprise.yml config --quiet
       - run: npm run docs:check
       - run: npm run docs:links

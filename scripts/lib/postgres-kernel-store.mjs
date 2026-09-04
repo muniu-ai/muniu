@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import { createHash, createHmac, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 
-import { POSTGRES_SCHEMA_SQL } from "@mn/storage";
+import { computeEventDigest, computeEventHmac, POSTGRES_SCHEMA_SQL } from "@mn/storage";
 
 const ENTERPRISE_SCHEMA_SQL = `
 ${POSTGRES_SCHEMA_SQL}
@@ -23,30 +23,6 @@ create table if not exists mn_v2.reconciliations (
   resolved_at timestamptz
 );
 `;
-
-function normalize(value) {
-  if (Array.isArray(value)) return value.map(normalize);
-  if (value && typeof value === "object") {
-    const result = {};
-    for (const key of Object.keys(value).sort()) {
-      if (value[key] !== undefined) result[key] = normalize(value[key]);
-    }
-    return result;
-  }
-  return value;
-}
-
-function canonicalJson(value) {
-  return JSON.stringify(normalize(value));
-}
-
-function digest(value) {
-  return createHash("sha256").update(canonicalJson(value)).digest("hex");
-}
-
-function eventHmac(key, eventDigest) {
-  return createHmac("sha256", key).update(canonicalJson(eventDigest)).digest("hex");
-}
 
 function safeInteger(value, label) {
   const parsed = Number(value);
@@ -236,8 +212,8 @@ export class PostgresKernelStore {
             ...(request.protectedPayloadRef ? { protectedPayloadRef: request.protectedPayloadRef } : {}),
             ...(previousDigest ? { previousDigest } : {}),
           };
-          const eventDigest = digest(body);
-          const event = { ...body, digest: eventDigest, hmac: eventHmac(this.#hmacKey, eventDigest) };
+          const eventDigest = computeEventDigest(body);
+          const event = { ...body, digest: eventDigest, hmac: computeEventHmac(eventDigest, this.#hmacKey) };
           previousDigest = eventDigest;
           streams.set(streamKey, actual + 1);
           events.push(event);
