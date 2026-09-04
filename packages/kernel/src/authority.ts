@@ -1,12 +1,42 @@
 import type {
   Approval,
+  CodingRunnerId,
   ExecutionAuthority,
   ResourceRef,
   ToolCallIntent,
   ToolEffectClass,
 } from "@mn/contracts";
 import { approvalStillMatches, isPotentiallyAutoApprovable } from "@mn/contracts";
+import { sha256 } from "./canonical.js";
 import { KernelError } from "./errors.js";
+
+export type ExecutionAuthorityCommitmentInput = Pick<
+  ExecutionAuthority,
+  | "executionId"
+  | "workspaceId"
+  | "principalId"
+  | "toolIds"
+  | "dataScopes"
+  | "autoAllowedEffects"
+  | "budget"
+  | "parentAuthorityId"
+> & { readonly runnerId?: CodingRunnerId };
+
+export function computeExecutionAuthorityCommitment(
+  input: ExecutionAuthorityCommitmentInput,
+): string {
+  return sha256({
+    executionId: input.executionId,
+    workspaceId: input.workspaceId,
+    principalId: input.principalId,
+    toolIds: input.toolIds,
+    dataScopes: input.dataScopes,
+    autoAllowedEffects: input.autoAllowedEffects,
+    budget: input.budget,
+    parentAuthorityId: input.parentAuthorityId,
+    runnerId: input.runnerId,
+  });
+}
 
 function scopeIncludes(allowed: ResourceRef, requested: ResourceRef): boolean {
   return allowed.namespace === requested.namespace

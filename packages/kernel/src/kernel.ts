@@ -16,7 +16,7 @@ import type {
   CodingRunnerId,
 } from "@mn/contracts";
 import { acceptMemory, deleteMemory, rejectMemory } from "./memory.js";
-import { authorityAllowsIntent } from "./authority.js";
+import { authorityAllowsIntent, computeExecutionAuthorityCommitment } from "./authority.js";
 import { sha256 } from "./canonical.js";
 import { KernelError, StreamVersionConflictError } from "./errors.js";
 import { transitionExecution, type ExecutionCommand } from "./execution.js";
@@ -373,7 +373,7 @@ export class AgentOsKernel {
       readonly modelBindingId: string;
       readonly executionPrincipalId: string;
       readonly runnerId?: CodingRunnerId;
-      readonly authority: Omit<ExecutionAuthority, "id" | "tenantId" | "executionId" | "streamVersion" | "createdAt" | "updatedAt">;
+      readonly authority: Omit<ExecutionAuthority, "id" | "tenantId" | "executionId" | "commitment" | "streamVersion" | "createdAt" | "updatedAt">;
     },
   ): Promise<Execution> {
     return this.mutation(tenantId, "execution.create", idempotencyKey, input, (transaction) => {
@@ -388,8 +388,18 @@ export class AgentOsKernel {
         ...(input.runnerId ? { runnerId: input.runnerId } : {}),
       };
       const authority: ExecutionAuthority = {
-        ...input.authority, id: authorityId, tenantId, executionId: id, streamVersion: 1,
-        createdAt: now, updatedAt: now,
+        ...input.authority,
+        id: authorityId,
+        tenantId,
+        executionId: id,
+        commitment: computeExecutionAuthorityCommitment({
+          ...input.authority,
+          executionId: id,
+          ...(input.runnerId ? { runnerId: input.runnerId } : {}),
+        }),
+        streamVersion: 1,
+        createdAt: now,
+        updatedAt: now,
       };
       transaction.putProjection("execution", id, execution);
       transaction.putProjection("authority", authorityId, authority);
@@ -434,7 +444,7 @@ export class AgentOsKernel {
       const authorityId = this.nextId("authority");
       const turnId = this.nextId("turn");
       const jobId = this.nextId("job");
-      const commitment = sha256({
+      const commitment = computeExecutionAuthorityCommitment({
         executionId,
         workspaceId: input.workspaceId,
         principalId: input.authority.principalId,

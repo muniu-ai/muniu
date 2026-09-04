@@ -15,6 +15,7 @@ import {
   assertAuthorityAttenuation,
   authorityAllowsIntent,
   canReadMemory,
+  computeExecutionAuthorityCommitment,
   transitionExecution,
   unknownEffectStatus,
 } from "../src/index.js";
@@ -41,7 +42,7 @@ test("内存事件使用与持久化存储相同的摘要 HMAC", async () => {
   assert.deepEqual(await store.listTenantIds(), ["tenant-a"]);
 });
 
-function authority(executionId: string): Omit<ExecutionAuthority, "id" | "tenantId" | "executionId" | "streamVersion" | "createdAt" | "updatedAt"> {
+function authority(_executionId: string): Omit<ExecutionAuthority, "id" | "tenantId" | "executionId" | "commitment" | "streamVersion" | "createdAt" | "updatedAt"> {
   return {
     workspaceId: "workspace-1",
     principalId: "agent-1",
@@ -52,7 +53,6 @@ function authority(executionId: string): Omit<ExecutionAuthority, "id" | "tenant
       maxSubagentDepth: 3, maxSubagents: 4, maxTokens: 10_000,
       maxCostMinorUnits: "1000", currency: "CNY", maxDurationMs: 60_000,
     },
-    commitment: `authority:${executionId}`,
   };
 }
 
@@ -72,6 +72,13 @@ test("本地身份、工作区、线程和执行共用同一事件流", async ()
     agentDefinitionId: "opc-validator", modelBindingId: "model-1", executionPrincipalId: "agent-1",
     authority: { ...authority("new"), workspaceId: workspace.id },
   });
+  const savedAuthority = await store.transact("local", (transaction) =>
+    transaction.getProjection<ExecutionAuthority>("authority", execution.authorityId));
+  assert.equal(savedAuthority?.commitment, computeExecutionAuthorityCommitment({
+    ...authority("new"),
+    workspaceId: workspace.id,
+    executionId: execution.id,
+  }));
   const events = await store.readEvents("local", 0, 20);
   assert.deepEqual(events.events.map((event) => event.position), [1, 2, 3, 4]);
   assert.equal(events.events.at(-1)?.aggregateId, execution.id);
@@ -260,13 +267,16 @@ test("恢复会原子失效旧 generation 的待审批项", async () => {
   const running = await kernel.commandExecution(
     "local", "local-owner", "resume-approval-start", execution.id, execution.streamVersion, "start",
   );
+  const savedAuthority = await store.transact("local", (transaction) =>
+    transaction.getProjection<ExecutionAuthority>("authority", execution.authorityId));
+  assert.ok(savedAuthority);
   const request = await kernel.requestToolApproval("local", "agent-1", "resume-old-intent", {
     id: "old-generation-call", executionId: execution.id, generation: 1,
     toolId: "web.read", toolVersion: "1.0.0", effectClass: "external_side_effect",
     intent: "发布旧代次结果", normalizedArguments: { url: "https://example.com" },
     argumentsDigest: "args", resourcesDigest: "resources",
     resourceRefs: [{ namespace: "web", resourceId: "https://example.com" }],
-    authorityCommitment: "authority:resume-approval", expiresAt: "2026-09-05T00:00:00.000Z",
+    authorityCommitment: savedAuthority.commitment, expiresAt: "2026-09-05T00:00:00.000Z",
   });
   assert.equal(request.mode, "approval");
   if (request.mode !== "approval") return;
@@ -298,6 +308,7 @@ test("恢复会原子失效旧 generation 的待审批项", async () => {
 test("子 Agent 的工具、数据和预算必须是父权限的严格子集", () => {
   const parent: ExecutionAuthority = {
     ...authority("parent"), id: "parent", tenantId: "local", executionId: "parent",
+    commitment: "commitment-parent",
     streamVersion: 1, createdAt: now, updatedAt: now,
   };
   const child: ExecutionAuthority = {
@@ -375,11 +386,14 @@ test("只读工具可自动执行，高影响操作进入审批收件箱", async
     workspaceId: workspace.id, threadId: thread.id, pluginId: "opc", agentDefinitionId: "a",
     modelBindingId: "m", executionPrincipalId: "agent", authority: { ...authority("exec"), workspaceId: workspace.id },
   });
+  const savedAuthority = await store.transact("local", (transaction) =>
+    transaction.getProjection<ExecutionAuthority>("authority", execution.authorityId));
+  assert.ok(savedAuthority);
   const base: ToolCallIntent = {
     id: "call", executionId: execution.id, generation: 1, toolId: "web.read", toolVersion: "1.0.0",
     effectClass: "external_read", intent: "读取公开网页", normalizedArguments: { url: "https://example.com" },
     argumentsDigest: "args", resourceRefs: [{ namespace: "web", resourceId: "https://example.com" }],
-    resourcesDigest: "resources", authorityCommitment: "authority:exec", expiresAt: "2026-09-05T00:00:00Z",
+    resourcesDigest: "resources", authorityCommitment: savedAuthority.commitment, expiresAt: "2026-09-05T00:00:00Z",
   };
   assert.equal((await kernel.requestToolApproval("local", "agent", "read", base)).mode, "auto");
   const manual = await kernel.requestToolApproval("local", "agent", "write", {
