@@ -706,30 +706,36 @@ export class SqliteStorage implements StoragePort {
       conditions.push(`kind in (${kinds.map(() => "?").join(", ")})`);
       parameters.push(...kinds);
     }
-    this.#database.exec("begin immediate");
-    try {
-      const row = this.#database.prepare(`
-        select * from jobs where ${conditions.join(" and ")}
-        order by available_at, created_at, job_id limit 1
-      `).get(...parameters) as RecordRow | undefined;
-      if (!row) {
+    while (true) {
+      this.#database.exec("begin immediate");
+      try {
+        const row = this.#database.prepare(`
+          select * from jobs where ${conditions.join(" and ")}
+          order by available_at, created_at, job_id limit 1
+        `).get(...parameters) as RecordRow | undefined;
+        if (!row) {
+          this.#database.exec("commit");
+          return undefined;
+        }
+        if (this.#settleTerminalAgentJobBeforeClaim(row, workerId, now)) {
+          this.#database.exec("commit");
+          continue;
+        }
+        const leaseExpiresAt = new Date(Date.parse(now) + JOB_LEASE_MILLISECONDS).toISOString();
+        const fencingToken = Number(row.fencing_token) + 1;
+        this.#database.prepare(`
+          update jobs set status = 'leased', attempts = attempts + 1, lease_owner = ?,
+            lease_expires_at = ?, fencing_token = ?, updated_at = ? where job_id = ?
+        `).run(workerId, leaseExpiresAt, fencingToken, now, String(row.job_id));
+        this.#recordAgentJobClaim(row, workerId, leaseExpiresAt, fencingToken, now);
+        const claimed = this.#database.prepare("select * from jobs where job_id = ?")
+          .get(String(row.job_id)) as RecordRow;
         this.#database.exec("commit");
-        return undefined;
+        return rowToJob(claimed);
+      } catch (error) {
+        this.#database.exec("rollback");
+        throw error;
       }
-      const leaseExpiresAt = new Date(Date.parse(now) + JOB_LEASE_MILLISECONDS).toISOString();
-      const fencingToken = Number(row.fencing_token) + 1;
-      this.#database.prepare(`
-        update jobs set status = 'leased', attempts = attempts + 1, lease_owner = ?,
-          lease_expires_at = ?, fencing_token = ?, updated_at = ? where job_id = ?
-      `).run(workerId, leaseExpiresAt, fencingToken, now, String(row.job_id));
-      this.#recordAgentJobClaim(row, workerId, leaseExpiresAt, fencingToken, now);
-      const claimed = this.#database.prepare("select * from jobs where job_id = ?")
-        .get(String(row.job_id)) as RecordRow;
-      this.#database.exec("commit");
-      return rowToJob(claimed);
-    } catch (error) {
-      this.#database.exec("rollback");
-      throw error;
     }
   }
 
@@ -922,6 +928,89 @@ export class SqliteStorage implements StoragePort {
         value_json = excluded.value_json,
         updated_at = excluded.updated_at
     `).run(tenantId, namespace, key, streamVersion, JSON.stringify(value), updatedAt);
+  }
+
+  #settleTerminalAgentJobBeforeClaim(
+    job: RecordRow,
+    workerId: string,
+    now: string
+  ): boolean {
+    const context = this.#agentJobContext(job);
+    if (!context) return false;
+    const executionStatus = String(context.execution.status);
+    const failure = terminalExecutionClaimFailure(executionStatus);
+    if (!failure) return false;
+    const jobStreamVersion = requiredSafeInteger(
+      context.jobProjection.streamVersion,
+      "Job streamVersion"
+    );
+    const projectedAttempts = requiredSafeInteger(context.jobProjection.attempts, "Job attempts");
+    const projectedFencingToken = requiredSafeInteger(
+      context.jobProjection.fencingToken,
+      "Job fencingToken"
+    );
+    if (context.jobProjection.status !== String(job.status)
+      || projectedAttempts !== Number(job.attempts)
+      || projectedFencingToken !== Number(job.fencing_token)
+      || (job.status === "leased"
+        && (context.jobProjection.leaseOwner !== job.lease_owner
+          || context.jobProjection.leaseExpiresAt !== String(job.lease_expires_at)))) {
+      throw new Error("Agent Job 物理状态与查询投影不一致");
+    }
+    const changed = this.#database.prepare(`
+      update jobs set status = 'failed', result_json = null, failure_json = ?,
+        lease_owner = null, lease_expires_at = null, updated_at = ?
+      where job_id = ? and status = ? and fencing_token = ?
+    `).run(
+      JSON.stringify(failure),
+      now,
+      String(job.job_id),
+      String(job.status),
+      Number(job.fencing_token)
+    );
+    if (Number(changed.changes) !== 1) throw new StaleFencingTokenError(String(job.job_id));
+    const {
+      leaseOwner: _leaseOwner,
+      leaseExpiresAt: _leaseExpiresAt,
+      result: _priorResult,
+      failure: _priorFailure,
+      ...jobWithoutLease
+    } = context.jobProjection;
+    const updatedJob: JsonObject = {
+      ...jobWithoutLease,
+      status: "failed",
+      failure,
+      streamVersion: jobStreamVersion + 1,
+      updatedAt: now
+    };
+    this.#appendEvent({
+      tenantId: context.tenantId,
+      aggregateType: "job",
+      aggregateId: String(job.job_id),
+      expectedStreamVersion: jobStreamVersion,
+      type: "job.failed",
+      actorId: `worker:${workerId}`,
+      executionId: context.executionId,
+      generation: context.generation,
+      correlationId: `job:${String(job.job_id)}:terminal-before-claim`,
+      publicPayload: {
+        workspaceId: context.workspaceId,
+        executionId: context.executionId,
+        status: "failed",
+        failureCode: String(failure.code),
+        executionStatus,
+        fencingToken: Number(job.fencing_token)
+      }
+    }, now);
+    this.#putProjectionValue(
+      context.tenantId,
+      "job",
+      String(job.job_id),
+      jobStreamVersion + 1,
+      updatedJob,
+      now
+    );
+    return true;
   }
 
   #recordAgentJobClaim(
@@ -1138,6 +1227,21 @@ export class SqliteStorage implements StoragePort {
       now
     );
 
+    const failureObject = outcome === "failed"
+      && typeof value === "object"
+      && value !== null
+      && !Array.isArray(value)
+      ? value as JsonObject
+      : undefined;
+    const failureCode = typeof failureObject?.code === "string" && failureObject.code
+      ? failureObject.code
+      : "WORKER_FAILED";
+    const executionStatus = String(context.execution.status);
+    if (outcome === "failed" && (executionStatus === "failed"
+      || executionStatus === "completed"
+      || (executionStatus === "cancelled" && failureCode === "EXECUTION_CANCELLED"))) {
+      return;
+    }
     const acceptedStatuses = outcome === "completed"
       ? ["running"]
       : ["running", "waiting_approval"];
@@ -1148,15 +1252,6 @@ export class SqliteStorage implements StoragePort {
       context.execution.streamVersion,
       "Execution streamVersion"
     );
-    const failureObject = outcome === "failed"
-      && typeof value === "object"
-      && value !== null
-      && !Array.isArray(value)
-      ? value as JsonObject
-      : undefined;
-    const failureCode = typeof failureObject?.code === "string" && failureObject.code
-      ? failureObject.code
-      : "WORKER_FAILED";
     const updatedExecution: JsonObject = {
       ...context.execution,
       status: outcome,
@@ -1514,4 +1609,23 @@ function requiredSafeInteger(value: JsonValue | undefined, label: string): numbe
 function requiredString(value: JsonValue | undefined, label: string): string {
   if (typeof value !== "string" || !value) throw new TypeError(`${label} 无效`);
   return value;
+}
+
+function terminalExecutionClaimFailure(status: string): JsonObject | undefined {
+  if (status === "cancelled") {
+    return {
+      code: "EXECUTION_CANCELLED",
+      message: "Execution 已在领取 Job 前取消",
+      retryable: false
+    };
+  }
+  if (status === "completed" || status === "failed") {
+    return {
+      code: "EXECUTION_ALREADY_TERMINAL",
+      message: "Execution 已在领取 Job 前终结",
+      retryable: false,
+      executionStatus: status
+    };
+  }
+  return undefined;
 }

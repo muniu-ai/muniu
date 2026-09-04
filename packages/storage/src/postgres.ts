@@ -778,6 +778,78 @@ export class PostgresStorage implements StoragePort {
     return event;
   }
 
+  async #settleTerminalAgentJobBeforeClaim(
+    client: PostgresClientLike,
+    context: AgentJobContext | undefined,
+    row: Row,
+    workerId: string,
+    occurredAt: string
+  ): Promise<boolean> {
+    if (!context?.job || context.jobStreamVersion === undefined) return false;
+    const executionStatus = String(context.execution.status);
+    const failure = terminalExecutionClaimFailure(executionStatus);
+    if (!failure) return false;
+    this.#assertJobProjectionMatchesPhysical(context, row, "claim", workerId, 0);
+    const jobId = String(row.job_id);
+    const previousFencingToken = safeInteger(row.fencing_token, "Fencing token");
+    const changed = await client.query(`
+      update mn_v2.jobs set status = 'failed', result_json = null,
+        failure_json = $1::jsonb, lease_owner = null, lease_expires_at = null,
+        updated_at = $2::timestamptz
+      where job_id = $3 and status = $4 and fencing_token = $5
+    `, [
+      JSON.stringify(failure),
+      occurredAt,
+      jobId,
+      String(row.status),
+      previousFencingToken
+    ]);
+    if (changed.rowCount !== 1) throw new StaleFencingTokenError(jobId);
+    const {
+      leaseOwner: _leaseOwner,
+      leaseExpiresAt: _leaseExpiresAt,
+      result: _priorResult,
+      failure: _priorFailure,
+      ...jobWithoutLease
+    } = context.job;
+    const updatedJob: JsonObject = {
+      ...jobWithoutLease,
+      status: "failed",
+      failure,
+      streamVersion: context.jobStreamVersion + 1,
+      updatedAt: occurredAt
+    };
+    await this.#appendLifecycleEvent(client, {
+      tenantId: context.tenantId,
+      aggregateType: "job",
+      aggregateId: jobId,
+      expectedStreamVersion: context.jobStreamVersion,
+      type: "job.failed",
+      actorId: `worker:${workerId}`,
+      executionId: context.executionId,
+      generation: context.generation,
+      correlationId: `job:${jobId}:terminal-before-claim`,
+      publicPayload: {
+        workspaceId: context.workspaceId,
+        executionId: context.executionId,
+        status: "failed",
+        failureCode: String(failure.code),
+        executionStatus,
+        fencingToken: previousFencingToken
+      }
+    }, occurredAt);
+    await this.#updateProjection(
+      client,
+      context,
+      "job",
+      jobId,
+      context.jobStreamVersion,
+      updatedJob,
+      occurredAt
+    );
+    return true;
+  }
+
   async #recordAgentJobClaim(
     client: PostgresClientLike,
     context: AgentJobContext | undefined,
@@ -973,12 +1045,6 @@ export class PostgresStorage implements StoragePort {
       occurredAt
     );
 
-    const acceptedStatuses = outcome === "completed"
-      ? ["running"]
-      : ["running", "waiting_approval"];
-    if (!acceptedStatuses.includes(String(context.execution.status))) {
-      throw new Error(`状态为 ${String(context.execution.status)} 的 Execution 不能标记为 ${outcome}`);
-    }
     const failureObject = outcome === "failed"
       && typeof value === "object"
       && value !== null
@@ -988,6 +1054,18 @@ export class PostgresStorage implements StoragePort {
     const failureCode = typeof failureObject?.code === "string" && failureObject.code
       ? failureObject.code
       : "WORKER_FAILED";
+    const executionStatus = String(context.execution.status);
+    if (outcome === "failed" && (executionStatus === "failed"
+      || executionStatus === "completed"
+      || (executionStatus === "cancelled" && failureCode === "EXECUTION_CANCELLED"))) {
+      return;
+    }
+    const acceptedStatuses = outcome === "completed"
+      ? ["running"]
+      : ["running", "waiting_approval"];
+    if (!acceptedStatuses.includes(String(context.execution.status))) {
+      throw new Error(`状态为 ${String(context.execution.status)} 的 Execution 不能标记为 ${outcome}`);
+    }
     const updatedExecution: JsonObject = {
       ...context.execution,
       status: outcome,
@@ -1182,69 +1260,83 @@ export class PostgresStorage implements StoragePort {
   async claimJob(workerId: string, now: string, options: JobClaimOptions = {}): Promise<StoredJob | undefined> {
     const occurredAt = new Date(validTimestamp(now)).toISOString();
     const client = await this.#pool.connect();
+    const parameters: unknown[] = [occurredAt];
+    const conditions = [
+      "available_at <= $1::timestamptz",
+      "(status = 'available' or (status = 'leased' and lease_expires_at <= $1::timestamptz))"
+    ];
+    if (options.tenantId) {
+      parameters.push(options.tenantId);
+      conditions.push(`tenant_id = $${parameters.length}`);
+    }
+    if ((options.kinds?.length ?? 0) > 0) {
+      parameters.push(options.kinds);
+      conditions.push(`kind = any($${parameters.length}::text[])`);
+    }
     try {
-      await client.query("begin");
-      const parameters: unknown[] = [occurredAt];
-      const conditions = [
-        "available_at <= $1::timestamptz",
-        "(status = 'available' or (status = 'leased' and lease_expires_at <= $1::timestamptz))"
-      ];
-      if (options.tenantId) {
-        parameters.push(options.tenantId);
-        conditions.push(`tenant_id = $${parameters.length}`);
+      while (true) {
+        await client.query("begin");
+        try {
+          const selected = await client.query(`
+            select * from mn_v2.jobs where ${conditions.join(" and ")}
+            order by available_at, created_at, job_id
+            for update skip locked limit 1
+          `, parameters);
+          const row = selected.rows[0];
+          if (!row) {
+            await client.query("commit");
+            return undefined;
+          }
+          const context = await this.#loadAgentJobContext(client, row);
+          if (await this.#settleTerminalAgentJobBeforeClaim(
+            client,
+            context,
+            row,
+            workerId,
+            occurredAt
+          )) {
+            await client.query("commit");
+            continue;
+          }
+          const leaseExpiresAt = new Date(
+            Date.parse(occurredAt) + JOB_LEASE_MILLISECONDS
+          ).toISOString();
+          const previousFencingToken = safeInteger(row.fencing_token, "Fencing token");
+          const fencingToken = previousFencingToken + 1;
+          const updated = await client.query(`
+            update mn_v2.jobs set status = 'leased', attempts = attempts + 1,
+              lease_owner = $1, lease_expires_at = $2::timestamptz,
+              fencing_token = $3, updated_at = $4::timestamptz
+            where job_id = $5 and status = $6 and fencing_token = $7
+            returning *
+          `, [
+            workerId,
+            leaseExpiresAt,
+            fencingToken,
+            occurredAt,
+            String(row.job_id),
+            String(row.status),
+            previousFencingToken
+          ]);
+          const claimed = updated.rows[0];
+          if (!claimed) throw new StaleFencingTokenError(String(row.job_id));
+          await this.#recordAgentJobClaim(
+            client,
+            context,
+            row,
+            workerId,
+            leaseExpiresAt,
+            fencingToken,
+            occurredAt
+          );
+          const storedJob = rowToJob(claimed);
+          await client.query("commit");
+          return storedJob;
+        } catch (error) {
+          await client.query("rollback");
+          throw error;
+        }
       }
-      if ((options.kinds?.length ?? 0) > 0) {
-        parameters.push(options.kinds);
-        conditions.push(`kind = any($${parameters.length}::text[])`);
-      }
-      const selected = await client.query(`
-        select * from mn_v2.jobs where ${conditions.join(" and ")}
-        order by available_at, created_at, job_id
-        for update skip locked limit 1
-      `, parameters);
-      const row = selected.rows[0];
-      if (!row) {
-        await client.query("commit");
-        return undefined;
-      }
-      const context = await this.#loadAgentJobContext(client, row);
-      const leaseExpiresAt = new Date(
-        Date.parse(occurredAt) + JOB_LEASE_MILLISECONDS
-      ).toISOString();
-      const previousFencingToken = safeInteger(row.fencing_token, "Fencing token");
-      const fencingToken = previousFencingToken + 1;
-      const updated = await client.query(`
-        update mn_v2.jobs set status = 'leased', attempts = attempts + 1,
-          lease_owner = $1, lease_expires_at = $2::timestamptz,
-          fencing_token = $3, updated_at = $4::timestamptz
-        where job_id = $5 and status = $6 and fencing_token = $7
-        returning *
-      `, [
-        workerId,
-        leaseExpiresAt,
-        fencingToken,
-        occurredAt,
-        String(row.job_id),
-        String(row.status),
-        previousFencingToken
-      ]);
-      const claimed = updated.rows[0];
-      if (!claimed) throw new StaleFencingTokenError(String(row.job_id));
-      await this.#recordAgentJobClaim(
-        client,
-        context,
-        row,
-        workerId,
-        leaseExpiresAt,
-        fencingToken,
-        occurredAt
-      );
-      const storedJob = rowToJob(claimed);
-      await client.query("commit");
-      return storedJob;
-    } catch (error) {
-      await client.query("rollback");
-      throw error;
     } finally {
       client.release();
     }
@@ -1579,4 +1671,23 @@ function requiredSafeInteger(value: JsonValue | undefined, label: string): numbe
 function requiredString(value: JsonValue | undefined, label: string): string {
   if (typeof value !== "string" || !value) throw new TypeError(`${label} 无效`);
   return value;
+}
+
+function terminalExecutionClaimFailure(status: string): JsonObject | undefined {
+  if (status === "cancelled") {
+    return {
+      code: "EXECUTION_CANCELLED",
+      message: "Execution 已在领取 Job 前取消",
+      retryable: false
+    };
+  }
+  if (status === "completed" || status === "failed") {
+    return {
+      code: "EXECUTION_ALREADY_TERMINAL",
+      message: "Execution 已在领取 Job 前终结",
+      retryable: false,
+      executionStatus: status
+    };
+  }
+  return undefined;
 }

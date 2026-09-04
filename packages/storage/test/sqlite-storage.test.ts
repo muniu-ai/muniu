@@ -505,6 +505,262 @@ test("Agent Job 转移租约可恢复执行，陈旧 Worker 不能提交失败�
   }
 });
 
+test("已取消的 Execution 接收 Worker 取消失败时只终结 Agent Job", async () => {
+  const storage = new SqliteStorage({
+    databaseFile: temporaryPath("state.sqlite"),
+    hmacKey: randomBytes(32)
+  });
+  const cancelledAt = "2026-09-04T00:00:02.000Z";
+  try {
+    await seedAgentExecutionJob(storage, {
+      executionId: "execution-cancelled",
+      jobId: "job-cancelled"
+    });
+    await storage.claimJob("worker-a", "2026-09-04T00:00:01.000Z");
+    await storage.transact("tenant-a", (transaction) => {
+      const execution = transaction.getProjection<Record<string, unknown>>(
+        "execution",
+        "execution-cancelled"
+      );
+      if (!execution || typeof execution.streamVersion !== "number") {
+        throw new Error("Execution 投影无效");
+      }
+      transaction.putProjection("execution", "execution-cancelled", {
+        ...execution,
+        status: "cancelled",
+        streamVersion: execution.streamVersion + 1,
+        finishedAt: cancelledAt,
+        updatedAt: cancelledAt
+      });
+      transaction.appendEvent({
+        tenantId: "tenant-a",
+        aggregateType: "execution",
+        aggregateId: "execution-cancelled",
+        expectedStreamVersion: execution.streamVersion,
+        type: "execution.cancelled",
+        actorId: "local-owner",
+        executionId: "execution-cancelled",
+        generation: Number(execution.generation),
+        correlationId: "execution-cancelled:cancel",
+        publicPayload: { previousStatus: "running", status: "cancelled" }
+      });
+    });
+
+    await assert.rejects(
+      storage.failJob(
+        "job-cancelled",
+        "worker-a",
+        1,
+        { code: "MODEL_FAILED", message: "模型请求失败" },
+        "2026-09-04T00:00:02.500Z"
+      ),
+      /状态为 cancelled 的 Execution 不能标记为 failed/
+    );
+    assert.equal((await storage.getJob("job-cancelled"))?.status, "leased");
+
+    await storage.failJob(
+      "job-cancelled",
+      "worker-a",
+      1,
+      { code: "EXECUTION_CANCELLED", message: "执行已取消", retryable: false },
+      "2026-09-04T00:00:03.000Z"
+    );
+
+    assert.equal((await storage.getJob("job-cancelled"))?.status, "failed");
+    const job = await storage.getProjection("tenant-a", "job", "job-cancelled");
+    assert.equal(job?.status, "failed");
+    assert.equal((job?.failure as { code?: string } | undefined)?.code, "EXECUTION_CANCELLED");
+    const execution = await storage.getProjection(
+      "tenant-a",
+      "execution",
+      "execution-cancelled"
+    );
+    assert.equal(execution?.status, "cancelled");
+    assert.equal(execution?.streamVersion, 3);
+    assert.equal(execution?.finishedAt, cancelledAt);
+    const events = await storage.readEvents("tenant-a", { afterPosition: 0, limit: 20 });
+    assert.deepEqual(events.events.slice(-2).map((event) => event.type), [
+      "execution.cancelled",
+      "job.failed"
+    ]);
+    assert.equal(
+      await storage.claimJob("worker-b", "2026-09-04T00:00:31.000Z"),
+      undefined
+    );
+  } finally {
+    await storage.close();
+  }
+});
+
+test("已失败的 Execution 接收 Worker 失败时只终结 Agent Job", async () => {
+  const storage = new SqliteStorage({
+    databaseFile: temporaryPath("state.sqlite"),
+    hmacKey: randomBytes(32)
+  });
+  const deniedAt = "2026-09-04T00:00:02.000Z";
+  try {
+    await seedAgentExecutionJob(storage, {
+      executionId: "execution-denied",
+      jobId: "job-denied"
+    });
+    await storage.claimJob("worker-a", "2026-09-04T00:00:01.000Z");
+    await storage.transact("tenant-a", (transaction) => {
+      const execution = transaction.getProjection<Record<string, unknown>>(
+        "execution",
+        "execution-denied"
+      );
+      if (!execution || typeof execution.streamVersion !== "number") {
+        throw new Error("Execution 投影无效");
+      }
+      transaction.putProjection("execution", "execution-denied", {
+        ...execution,
+        status: "failed",
+        failureCode: "TOOL_APPROVAL_DENIED",
+        streamVersion: execution.streamVersion + 1,
+        finishedAt: deniedAt,
+        updatedAt: deniedAt
+      });
+      transaction.appendEvent({
+        tenantId: "tenant-a",
+        aggregateType: "execution",
+        aggregateId: "execution-denied",
+        expectedStreamVersion: execution.streamVersion,
+        type: "execution.approval_denied",
+        actorId: "local-owner",
+        executionId: "execution-denied",
+        generation: Number(execution.generation),
+        correlationId: "execution-denied:approval",
+        publicPayload: { status: "failed", failureCode: "TOOL_APPROVAL_DENIED" }
+      });
+    });
+
+    const failedExecution = await storage.getProjection(
+      "tenant-a",
+      "execution",
+      "execution-denied"
+    );
+    await storage.failJob(
+      "job-denied",
+      "worker-a",
+      1,
+      { code: "TOOL_APPROVAL_DENIED", message: "用户拒绝工具调用", retryable: false },
+      "2026-09-04T00:00:03.000Z"
+    );
+
+    assert.equal((await storage.getJob("job-denied"))?.status, "failed");
+    assert.equal((await storage.getProjection("tenant-a", "job", "job-denied"))?.status, "failed");
+    assert.deepEqual(
+      await storage.getProjection("tenant-a", "execution", "execution-denied"),
+      failedExecution
+    );
+    const events = await storage.readEvents("tenant-a", { afterPosition: 0, limit: 20 });
+    assert.deepEqual(events.events.slice(-2).map((event) => event.type), [
+      "execution.approval_denied",
+      "job.failed"
+    ]);
+  } finally {
+    await storage.close();
+  }
+});
+
+test("claim 跳过终态 Execution 并继续领取下一 Agent Job", async () => {
+  const storage = new SqliteStorage({
+    databaseFile: temporaryPath("state.sqlite"),
+    hmacKey: randomBytes(32)
+  });
+  const terminalAt = "2026-09-04T00:00:01.000Z";
+  const terminalCases = [
+    { suffix: "a-cancelled", status: "cancelled", eventType: "execution.cancelled" },
+    { suffix: "b-failed", status: "failed", eventType: "execution.failed" },
+    { suffix: "c-completed", status: "completed", eventType: "execution.completed" }
+  ] as const;
+  try {
+    for (const terminal of terminalCases) {
+      await seedAgentExecutionJob(storage, {
+        executionId: `execution-${terminal.suffix}`,
+        jobId: `job-${terminal.suffix}`
+      });
+    }
+    await seedAgentExecutionJob(storage, {
+      executionId: "execution-z-active",
+      jobId: "job-z-active"
+    });
+    await storage.transact("tenant-a", (transaction) => {
+      for (const terminal of terminalCases) {
+        const executionId = `execution-${terminal.suffix}`;
+        const execution = transaction.getProjection<Record<string, unknown>>(
+          "execution",
+          executionId
+        );
+        if (!execution || typeof execution.streamVersion !== "number") {
+          throw new Error("Execution 投影无效");
+        }
+        transaction.putProjection("execution", executionId, {
+          ...execution,
+          status: terminal.status,
+          ...(terminal.status === "failed" ? { failureCode: "TOOL_APPROVAL_DENIED" } : {}),
+          streamVersion: execution.streamVersion + 1,
+          finishedAt: terminalAt,
+          updatedAt: terminalAt
+        });
+        transaction.appendEvent({
+          tenantId: "tenant-a",
+          aggregateType: "execution",
+          aggregateId: executionId,
+          expectedStreamVersion: execution.streamVersion,
+          type: terminal.eventType,
+          actorId: "local-owner",
+          executionId,
+          generation: Number(execution.generation),
+          correlationId: `${executionId}:terminal`,
+          publicPayload: { previousStatus: "queued", status: terminal.status }
+        });
+      }
+    });
+
+    const claimed = await storage.claimJob("worker-a", "2026-09-04T00:00:02.000Z");
+    assert.equal(claimed?.id, "job-z-active");
+    const events = await storage.readEvents("tenant-a", { afterPosition: 0, limit: 30 });
+    for (const terminal of terminalCases) {
+      const jobId = `job-${terminal.suffix}`;
+      const executionId = `execution-${terminal.suffix}`;
+      const physicalJob = await storage.getJob(jobId);
+      assert.equal(physicalJob?.status, "failed");
+      assert.equal(physicalJob?.attempts, 0);
+      assert.equal(physicalJob?.fencingToken, 0);
+      assert.equal(physicalJob?.leaseOwner, undefined);
+      assert.equal(physicalJob?.leaseExpiresAt, undefined);
+      const job = await storage.getProjection("tenant-a", "job", jobId);
+      assert.equal(job?.status, "failed");
+      assert.equal(job?.attempts, 0);
+      assert.equal(job?.fencingToken, 0);
+      assert.equal(
+        (job?.failure as { code?: string } | undefined)?.code,
+        terminal.status === "cancelled"
+          ? "EXECUTION_CANCELLED"
+          : "EXECUTION_ALREADY_TERMINAL"
+      );
+      const execution = await storage.getProjection("tenant-a", "execution", executionId);
+      assert.equal(execution?.status, terminal.status);
+      assert.equal(execution?.streamVersion, 2);
+      assert.deepEqual(
+        events.events
+          .filter((event) => event.aggregateId === executionId)
+          .map((event) => event.type),
+        ["execution.queued", terminal.eventType]
+      );
+      assert.deepEqual(
+        events.events
+          .filter((event) => event.aggregateId === jobId)
+          .map((event) => event.type),
+        ["job.available", "job.failed"]
+      );
+    }
+  } finally {
+    await storage.close();
+  }
+});
+
 test("Agent Job 生命周期遇到 Execution 版本冲突时回滚租约和事件", async () => {
   const storage = new SqliteStorage({
     databaseFile: temporaryPath("state.sqlite"),

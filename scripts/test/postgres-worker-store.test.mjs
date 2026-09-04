@@ -300,6 +300,128 @@ test("Agent Job 重领和续租每次推进 Job，但不重复推进 running Exe
   assert.equal(client.events.at(-1).type, "job.lease_renewed");
 });
 
+test("已取消 Execution 接收 Worker 取消失败时只终结 Agent Job", async () => {
+  const client = new WorkerFixtureClient();
+  const store = fixtureStore(client);
+  await store.claimJob("worker-a", startedAt);
+  const cancelledExecution = {
+    ...projection(client, "execution", "execution-a"),
+    status: "cancelled",
+    streamVersion: 3,
+    finishedAt: "2025-01-02T03:04:06.000Z",
+    updatedAt: "2025-01-02T03:04:06.000Z",
+  };
+  client.projections.set("execution:execution-a", cancelledExecution);
+  client.streams.set("execution:execution-a", 3);
+  const eventCount = client.events.length;
+  const outboxCount = client.outbox.length;
+
+  await assert.rejects(
+    store.failJob(
+      "job-a",
+      "worker-a",
+      1,
+      { code: "MODEL_FAILED", message: "模型请求失败" },
+      "2025-01-02T03:04:06.500Z",
+    ),
+    /状态为 cancelled 的 Execution 不能标记为 failed/,
+  );
+  assert.equal(client.job.status, "leased");
+
+  await store.failJob(
+    "job-a",
+    "worker-a",
+    1,
+    { code: "EXECUTION_CANCELLED", message: "执行已取消", retryable: false },
+    "2025-01-02T03:04:07.000Z",
+  );
+
+  assert.equal(client.job.status, "failed");
+  assert.equal(projection(client, "job", "job-a").status, "failed");
+  assert.equal(projection(client, "job", "job-a").failure.code, "EXECUTION_CANCELLED");
+  assert.deepEqual(projection(client, "execution", "execution-a"), cancelledExecution);
+  assert.equal(client.events.length, eventCount + 1);
+  assert.equal(client.events.at(-1).type, "job.failed");
+  assert.equal(client.outbox.length, outboxCount + 1);
+  assert.equal(client.outbox.at(-1).topic, "job.failed");
+  assert.equal(await store.claimJob("worker-b", "2025-01-02T03:04:35.000Z"), undefined);
+});
+
+test("已失败 Execution 接收 Worker 失败时只终结 Agent Job", async () => {
+  const client = new WorkerFixtureClient();
+  const store = fixtureStore(client);
+  await store.claimJob("worker-a", startedAt);
+  const failedExecution = {
+    ...projection(client, "execution", "execution-a"),
+    status: "failed",
+    failureCode: "TOOL_APPROVAL_DENIED",
+    streamVersion: 3,
+    finishedAt: "2025-01-02T03:04:06.000Z",
+    updatedAt: "2025-01-02T03:04:06.000Z",
+  };
+  client.projections.set("execution:execution-a", failedExecution);
+  client.streams.set("execution:execution-a", 3);
+  const eventCount = client.events.length;
+  const outboxCount = client.outbox.length;
+
+  await store.failJob(
+    "job-a",
+    "worker-a",
+    1,
+    { code: "TOOL_APPROVAL_DENIED", message: "用户拒绝工具调用", retryable: false },
+    "2025-01-02T03:04:07.000Z",
+  );
+
+  assert.equal(client.job.status, "failed");
+  assert.equal(projection(client, "job", "job-a").status, "failed");
+  assert.deepEqual(projection(client, "execution", "execution-a"), failedExecution);
+  assert.equal(client.events.length, eventCount + 1);
+  assert.equal(client.events.at(-1).type, "job.failed");
+  assert.equal(client.outbox.length, outboxCount + 1);
+  assert.equal(client.outbox.at(-1).topic, "job.failed");
+});
+
+test("claim 原子终结终态 Execution 的 Agent Job 且不再重领", async () => {
+  for (const status of ["cancelled", "failed", "completed"]) {
+    const client = new WorkerFixtureClient();
+    const store = fixtureStore(client);
+    const terminalExecution = {
+      ...projection(client, "execution", "execution-a"),
+      status,
+      ...(status === "failed" ? { failureCode: "TOOL_APPROVAL_DENIED" } : {}),
+      streamVersion: 2,
+      finishedAt: "2025-01-02T03:04:04.000Z",
+      updatedAt: "2025-01-02T03:04:04.000Z",
+    };
+    client.projections.set("execution:execution-a", terminalExecution);
+    client.streams.set("execution:execution-a", 2);
+
+    assert.equal(await store.claimJob("worker-a", startedAt), undefined);
+    assert.equal(client.job.status, "failed");
+    assert.equal(client.job.attempts, 0);
+    assert.equal(client.job.fencing_token, 0);
+    assert.deepEqual(client.job.failure_json, status === "cancelled" ? {
+      code: "EXECUTION_CANCELLED",
+      message: "Execution 已在领取 Job 前取消",
+      retryable: false,
+    } : {
+      code: "EXECUTION_ALREADY_TERMINAL",
+      message: "Execution 已在领取 Job 前终结",
+      retryable: false,
+      executionStatus: status,
+    });
+    assert.equal(projection(client, "job", "job-a").status, "failed");
+    assert.equal(projection(client, "job", "job-a").attempts, 0);
+    assert.equal(projection(client, "job", "job-a").fencingToken, 0);
+    assert.deepEqual(projection(client, "execution", "execution-a"), terminalExecution);
+    assert.deepEqual(client.events.map(({ type }) => type), ["job.failed"]);
+    assert.deepEqual(client.outbox.map(({ topic }) => topic), ["job.failed"]);
+
+    assert.equal(await store.claimJob("worker-b", "2025-01-02T03:05:00.000Z"), undefined);
+    assert.deepEqual(client.events.map(({ type }) => type), ["job.failed"]);
+  }
+});
+
 test("Agent Job 失败受 fencing 保护并同步 Job 与 Execution", async () => {
   const client = new WorkerFixtureClient();
   const store = fixtureStore(client);
