@@ -27,7 +27,7 @@ plugin/
 └── cli.mjs
 ```
 
-入口是包内相对路径，只允许 `.js`、`.mjs`、`.css`、`.json` 或 `.sql`；Host、Worker 和 CLI 入口必须是 JavaScript 模块。归档拒绝重复路径、非规范 Base64、摘要不一致、缺失入口、绝对路径、路径逃逸、安装 hook 和远程 JavaScript。UI、CLI 与 Worker 组合根从同一个已验签归档读取各自入口，不直接 `import` 仓库路径。
+入口是包内相对路径，只允许 `.js`、`.mjs`、`.css`、`.json` 或 `.sql`；贡献工厂入口必须是自包含 JavaScript 模块。归档拒绝重复路径、非规范 Base64、摘要不一致、缺失入口、绝对路径、路径逃逸、安装 hook 和远程 JavaScript。Host 与 Worker 从同一个已验签归档执行入口字节，不直接 `import` 仓库路径。
 
 ## `PluginManifestV1`
 
@@ -81,6 +81,31 @@ export const plugin: PluginDefinitionV1 = {
 插件只能贡献二级路由和首页/工作区组件，不得覆盖首页、工作区、收件箱、成果、活动、Agents、集成或设置。全局审批、安全与设置页面由 Shell 管理。
 
 Skill 应显示预期成果、示例输入、来源、许可证、版本、权限和安装结果。Tool 必须声明稳定标识、版本和 effect class。Workflow 只声明类型化状态与转移，不能携带任意脚本求值逻辑。
+
+### UI、CLI 与 Worker 入口
+
+入口默认导出工厂函数，接收已经校验的 manifest。UI 工厂返回 `PluginUiV1`，CLI 工厂返回 `PluginCliV1`；两者在 Host 执行，Desktop 与 CLI 只接收声明式数据。文本卡片、表单字段和命令 ID 必须通过 SDK 校验，不能携带 HTML、脚本或未声明路由。
+
+```js
+// ui.mjs — manifest 需要声明 example.items 和 example.create。
+export default function () {
+  return {
+    pages: [{
+      routeId: "example.items",
+      title: "示例条目",
+      cards: [{
+        title: "创建条目", body: "输入名称后提交。", commandId: "example.create",
+        fields: [{ name: "name", label: "名称", type: "string", required: true }],
+      }],
+    }],
+    widgets: [],
+  };
+}
+```
+
+CLI 工厂返回 `{ commands: [{ name, commandId, description, fields }] }`。用户通过 `mn plugin commands <插件 ID> --workspace <工作区 ID>` 查看字段，再用 `mn plugin run <插件 ID> <命令名> --workspace <工作区 ID> --version <流版本>` 及声明的字段选项执行。两种 Shell 调用同一个 `/v2/plugins/{pluginId}/{commandId}` 接口，均携带幂等键和流版本。
+
+Worker 工厂返回 `PluginWorkerV1`，包含 `agents` 和 `tools`。Agent 声明 `id`、`instructions` 与 `toolIds`；工具声明 `id`、`version`、`effectClass`、`prepare` 与 `execute`。Worker 按租户 installation、plugin lock 和 Execution 固定包摘要加载工厂。工具必须先提交规范化参数及资源摘要，再经内核权限与审批路径执行；声明不会授予插件额外权限。
 
 ## 数据与记忆
 

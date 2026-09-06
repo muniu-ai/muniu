@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+import { appendKernelEvent } from "@mn/kernel";
 
 import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
@@ -20,6 +21,10 @@ import { fileURLToPath } from "node:url";
 
 import {
   KernelProjectionRuntimeStore,
+  PersistentSessionLog,
+  PersistentInbox,
+  DefaultSessionSurface,
+  type ModelMessage,
   type ModelRequest,
   type RuntimeStore,
   type ToolApprovalPort,
@@ -72,6 +77,10 @@ import { createClaudeCliRunner } from "@mn/runner-claude-cli";
 import { createCodexCliRunner } from "@mn/runner-codex-cli";
 
 import { createKernelToolApprovalPort, type ToolApprovalKernel } from "./approval.js";
+import { buildAgentMemoryPrompt, type AgentMemoryReader } from "./memory.js";
+import { createProtectedRuntimeStore, readExecutionInput, type RuntimeProtection } from "./runtime-store.js";
+import { readThreadHistory } from "./thread-context.js";
+import type { CodingCommandExecutor } from "./kubernetes-sandbox.js";
 import {
   ModelTransportError,
   type ByokModelInvoker,
@@ -262,6 +271,9 @@ export interface CodingModelSecretReader {
 }
 
 export interface CodingExecutionWorkerOptions {
+  readonly commandExecutor?: CodingCommandExecutor;
+  readonly memoryReader?: AgentMemoryReader;
+  readonly runtimeProtection?: RuntimeProtection;
   readonly store: KernelStore;
   readonly secretStore: CodingModelSecretReader;
   readonly modelInvoker: ByokModelInvoker;
@@ -274,6 +286,8 @@ export interface CodingExecutionWorkerOptions {
 }
 
 export interface CodingSandboxCleanupWorkerOptions {
+  readonly commandExecutor?: CodingCommandExecutor;
+  readonly runtimeProtection?: RuntimeProtection;
   readonly store: KernelStore;
   readonly sandboxRoot: string;
   readonly sandboxExecutable?: string;
@@ -291,7 +305,7 @@ export class CodingWorkerOutcomeError extends Error {
   }
 }
 
-function fencedCodingStore(
+export function fencedCodingStore(
   store: KernelStore,
   job: StoredJob,
   context: CodingWorkerJobContext,
@@ -327,7 +341,8 @@ function fencedCodingStore(
 
 export function createCodingExecutionWorkerHandler(options: CodingExecutionWorkerOptions) {
   const now = options.now ?? (() => new Date().toISOString());
-  const sandbox = new MacOsCodingSandbox({
+  const sandbox = new ControlledCodingSandbox({
+    executor: options.commandExecutor,
     root: options.sandboxRoot,
     executable: options.sandboxExecutable ?? DEFAULT_SANDBOX_EXECUTABLE,
   });
@@ -347,7 +362,10 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
       && !options.acceptsSecretReference(state.model.secretRef)) {
       throw new Error("模型密钥引用不属于当前运行环境");
     }
-    const runtime = new KernelProjectionRuntimeStore({
+    const runtime = options.runtimeProtection ? createProtectedRuntimeStore({
+      ...options.runtimeProtection, tenantId: job.tenantId,
+      workspaceId: state.execution.workspaceId, store, now,
+    }) : new KernelProjectionRuntimeStore({
       tenantId: job.tenantId,
       store,
       now,
@@ -446,6 +464,26 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
     );
 
     const builtinRunner = new BuiltinCodingRunner({
+      sessionMessages: async () => {
+        const session = new PersistentSessionLog(runtime, executionId);
+        if (!(await session.entries()).length) {
+          const message = await readExecutionInput({ store, execution: state.execution, payload: job.payload,
+            ...(options.runtimeProtection ? { protection: options.runtimeProtection } : {}) });
+          await session.append({ role: "user", content: message, turn: 1 });
+        }
+        const inbox = new PersistentInbox(runtime, executionId);
+        for (const steer of await inbox.takeSteersAtModelBoundary()) {
+          await session.append({ role: "user", content: steer.text, turn: 1 });
+        }
+        return [...await readThreadHistory(store, runtime, state.execution),
+          ...await session.modelView(new DefaultSessionSurface())];
+      },
+      ...(options.memoryReader ? { memoryPrompt: () => buildAgentMemoryPrompt({
+        tenantId: job.tenantId, workspaceId: state.execution.workspaceId, thread: state.thread,
+        authority: state.authority, requestingNamespace: "coding",
+        executionPrincipalId: state.execution.executionPrincipalId, store,
+        reader: options.memoryReader!, now,
+      }) } : {}),
       execution: state.execution,
       authority: state.authority,
       task: state.task,
@@ -552,7 +590,8 @@ export function createCodingSandboxCleanupWorkerHandler(
   options: CodingSandboxCleanupWorkerOptions,
 ) {
   const now = options.now ?? (() => new Date().toISOString());
-  const sandbox = new MacOsCodingSandbox({
+  const sandbox = new ControlledCodingSandbox({
+    executor: options.commandExecutor,
     root: options.sandboxRoot,
     executable: options.sandboxExecutable ?? DEFAULT_SANDBOX_EXECUTABLE,
   });
@@ -595,7 +634,7 @@ export function createCodingSandboxCleanupWorkerHandler(
         updatedAt: occurredAt,
       };
       transaction.putProjection("coding.execution", executionId, next);
-      transaction.appendEvent({
+      appendKernelEvent(transaction, {
         tenantId: job.tenantId,
         aggregateType: "coding.execution",
         aggregateId: executionId,
@@ -620,7 +659,8 @@ export function createCodingReconciliationVerificationWorkerHandler(
   options: CodingSandboxCleanupWorkerOptions,
 ) {
   const now = options.now ?? (() => new Date().toISOString());
-  const sandbox = new MacOsCodingSandbox({
+  const sandbox = new ControlledCodingSandbox({
+    executor: options.commandExecutor,
     root: options.sandboxRoot,
     executable: options.sandboxExecutable ?? DEFAULT_SANDBOX_EXECUTABLE,
   });
@@ -725,7 +765,10 @@ export function createCodingReconciliationVerificationWorkerHandler(
         now: now(),
       });
     }
-    const runtime = new KernelProjectionRuntimeStore({
+    const runtime = options.runtimeProtection ? createProtectedRuntimeStore({
+      ...options.runtimeProtection, tenantId: job.tenantId,
+      workspaceId: state.execution.workspaceId, store, now,
+    }) : new KernelProjectionRuntimeStore({
       tenantId: job.tenantId,
       store,
       now,
@@ -1325,7 +1368,7 @@ interface ExternalCodingRunnerOptions {
   readonly controlPlane: CodingControlPlaneCommitment;
   readonly runtime: RuntimeStore;
   readonly approval: ToolApprovalPort;
-  readonly sandbox: MacOsCodingSandbox;
+  readonly sandbox: ControlledCodingSandbox;
   readonly store: KernelStore;
   readonly tenantId: string;
   readonly signal: AbortSignal;
@@ -1814,7 +1857,7 @@ async function verifySandboxCandidate(input: {
   readonly repository: Repository;
   readonly runtime: RuntimeStore;
   readonly approval: ToolApprovalPort;
-  readonly sandbox: MacOsCodingSandbox;
+  readonly sandbox: ControlledCodingSandbox;
   readonly signal: AbortSignal;
   readonly now: () => string;
 }) {
@@ -1934,6 +1977,7 @@ class BuiltinCodingRunner implements ManagedCodingRunner {
             "patch 必须是基于固定 HEAD 的 unified diff；禁止声称已经通过 Gate。",
           ].join("\n"),
         },
+        ...await this.#options.sessionMessages(),
         {
           role: "user",
           content: [
@@ -1946,10 +1990,14 @@ class BuiltinCodingRunner implements ManagedCodingRunner {
       ],
       availableToolIds: ["coding.sandbox.write"],
     };
+    const memoryPrompt = await this.#options.memoryPrompt?.();
+    const effectiveRequest: ModelRequest = memoryPrompt
+      ? { ...request, messages: [{ role: "system", content: memoryPrompt }, ...request.messages] }
+      : request;
     await this.#options.runtime.append({
       executionId: this.#options.execution.id,
       type: "model/request",
-      payload: request as unknown as JsonObject,
+      payload: effectiveRequest as unknown as JsonObject,
     });
     let apiKey: string;
     try {
@@ -1961,7 +2009,7 @@ class BuiltinCodingRunner implements ManagedCodingRunner {
       presetId: providerId(this.#options.model.presetId),
       model: this.#options.model.defaultModel,
       apiKey,
-      request,
+      request: effectiveRequest,
       signal: this.#options.signal,
     });
     await this.#options.runtime.append({
@@ -1969,6 +2017,8 @@ class BuiltinCodingRunner implements ManagedCodingRunner {
       type: "model/response",
       payload: response as unknown as JsonObject,
     });
+    if (response.text) await new PersistentSessionLog(this.#options.runtime, this.#options.execution.id)
+      .append({ role: "assistant", content: response.text, turn: 1 });
     if (response.toolCalls.length !== 1 || response.toolCalls[0]?.toolId !== "coding.sandbox.write") {
       throw new Error("模型必须且只能提交一次 coding.sandbox.write 工具调用");
     }
@@ -2114,6 +2164,8 @@ class BuiltinCodingRunner implements ManagedCodingRunner {
 }
 
 interface BuiltinRunnerOptions {
+  readonly sessionMessages: () => Promise<readonly ModelMessage[]>;
+  readonly memoryPrompt?: () => Promise<string>;
   readonly execution: Execution;
   readonly authority: ExecutionAuthority;
   readonly task: CodingTask;
@@ -2122,24 +2174,26 @@ interface BuiltinRunnerOptions {
   readonly controlPlane: CodingControlPlaneCommitment;
   readonly runtime: RuntimeStore;
   readonly approval: ToolApprovalPort;
-  readonly sandbox: MacOsCodingSandbox;
+  readonly sandbox: ControlledCodingSandbox;
   readonly secretStore: CodingModelSecretReader;
   readonly modelInvoker: ByokModelInvoker;
   readonly signal: AbortSignal;
   readonly now: () => string;
 }
 
-class MacOsCodingSandbox {
+class ControlledCodingSandbox {
   readonly #root: string;
   readonly #executable: string;
+  readonly #executor?: CodingCommandExecutor;
   #realRoot?: string;
   readonly #candidateBaseRevisions = new Map<string, string>();
 
-  constructor(options: { readonly root: string; readonly executable: string }) {
+  constructor(options: { readonly root: string; readonly executable: string; readonly executor?: CodingCommandExecutor }) {
     if (!isAbsolute(options.root)) throw new Error("Coding sandbox 根目录必须是绝对路径");
     if (!isAbsolute(options.executable)) throw new Error("sandbox-exec 必须是绝对路径");
     this.#root = resolve(options.root);
     this.#executable = resolve(options.executable);
+    this.#executor = options.executor;
   }
 
   async controlPlane(
@@ -2156,7 +2210,7 @@ class MacOsCodingSandbox {
         rules: ["preserve-user-work", "central-tool-policy", "no-unsandboxed-fallback"],
       }),
       harnessDigest: sha256({ version: "coding-harness-v2", gates: ["git.diff-check"], maxRepairs: 3 }),
-      sandboxDigest: sha256({
+      sandboxDigest: sha256(this.#executor?.commitment ?? {
         version: "macos-sandbox-exec-v2",
         executable: this.#executable,
         root,
@@ -2572,11 +2626,13 @@ class MacOsCodingSandbox {
   }
 
   async #initialize(): Promise<string> {
-    if (process.platform !== "darwin") {
+    if (!this.#executor && process.platform !== "darwin") {
       throw new Error("当前平台没有已审核的 Coding sandbox，已拒绝无沙箱执行");
     }
-    const executable = await realpath(this.#executable).catch(() => "");
-    if (executable !== this.#executable) throw new Error("sandbox-exec 不存在或真实路径已变化");
+    if (!this.#executor) {
+      const executable = await realpath(this.#executable).catch(() => "");
+      if (executable !== this.#executable) throw new Error("sandbox-exec 不存在或真实路径已变化");
+    }
     await mkdir(this.#root, { recursive: true, mode: 0o700 });
     const root = await realpath(this.#root);
     this.#realRoot = root;
@@ -2712,6 +2768,8 @@ class MacOsCodingSandbox {
       if (error.code !== "EEXIST") throw error;
     });
     const profile = this.#profile(snapshotRoot, false);
+    if (this.#executor) return this.#executor.run({ writableRoot: snapshotRoot, cwd: snapshotRoot,
+      arguments: gitArguments, signal, timeoutMs: Math.max(30_000, timeoutMs) });
     return command(
       this.#executable,
       ["-p", profile, GIT, ...gitArguments],
@@ -2758,6 +2816,9 @@ class MacOsCodingSandbox {
     if (!root) throw new Error("Coding sandbox 尚未初始化");
     assertWithin(root, candidateRoot, "候选目录");
     const profile = this.#profile(candidateRoot, false);
+    if (this.#executor) return this.#executor.run({ writableRoot: candidateRoot, cwd: cwd ?? candidateRoot,
+      ...(gitArguments.includes("clone") ? { readOnlyPaths: [gitArguments.at(-2)!] } : {}),
+      arguments: gitArguments, signal, timeoutMs: Math.max(30_000, CONTROLLED_GIT_TIMEOUT_MS) });
     return command(this.#executable, ["-p", profile, GIT, ...gitArguments], cwd, {
       TMPDIR: join(candidateRoot, "tmp"),
       GIT_CONFIG_GLOBAL: join(candidateRoot, "empty.gitconfig"),
@@ -2887,7 +2948,7 @@ async function persistReconciliationVerification(input: {
         createdAt: input.now,
       };
       transaction.putProjection("coding.candidate", input.candidate.id, storedCandidate);
-      transaction.appendEvent({
+      appendKernelEvent(transaction, {
         tenantId: input.tenantId,
         aggregateType: "coding.task",
         aggregateId: task.id,
@@ -2914,7 +2975,7 @@ async function persistReconciliationVerification(input: {
         executionId: execution.id,
         createdAt: input.now,
       });
-      transaction.appendEvent({
+      appendKernelEvent(transaction, {
         tenantId: input.tenantId,
         aggregateType: "coding.task",
         aggregateId: task.id,
@@ -2942,7 +3003,7 @@ async function persistReconciliationVerification(input: {
         executionId: execution.id,
         createdAt: input.now,
       });
-      transaction.appendEvent({
+      appendKernelEvent(transaction, {
         tenantId: input.tenantId,
         aggregateType: "coding.task",
         aggregateId: task.id,
@@ -2960,7 +3021,7 @@ async function persistReconciliationVerification(input: {
         },
       });
     }
-    transaction.appendEvent({
+    appendKernelEvent(transaction, {
       tenantId: input.tenantId,
       aggregateType: "coding.task",
       aggregateId: task.id,
@@ -3000,7 +3061,7 @@ async function persistReconciliationVerification(input: {
       updatedAt: input.now,
     };
     transaction.putProjection("execution", execution.id, nextExecution);
-    transaction.appendEvent({
+    appendKernelEvent(transaction, {
       tenantId: input.tenantId,
       aggregateType: "execution",
       aggregateId: execution.id,
@@ -3068,7 +3129,7 @@ async function persistReconciliationVerification(input: {
       updatedAt: input.now,
     };
     transaction.putProjection("coding.execution", execution.id, nextRun);
-    transaction.appendEvent({
+    appendKernelEvent(transaction, {
       tenantId: input.tenantId,
       aggregateType: "coding.execution",
       aggregateId: execution.id,
@@ -3107,7 +3168,7 @@ async function persistReconciliationVerification(input: {
         updatedAt: input.now,
       };
       transaction.putProjection("deliverable", deliverable.id, deliverable);
-      transaction.appendEvent({
+      appendKernelEvent(transaction, {
         tenantId: input.tenantId,
         aggregateType: "deliverable",
         aggregateId: deliverable.id,
@@ -3139,7 +3200,7 @@ async function persistReconciliationVerification(input: {
     }
     if (cleanupJob) {
       transaction.putProjection("job", cleanupJob.id, cleanupJob);
-      transaction.appendEvent({
+      appendKernelEvent(transaction, {
         tenantId: input.tenantId,
         aggregateType: "job",
         aggregateId: cleanupJob.id,
@@ -3219,7 +3280,7 @@ function enqueueCodingCleanupJob(
   occurredAt: string,
 ): void {
   transaction.putProjection("job", cleanupJob.id, cleanupJob);
-  transaction.appendEvent({
+  appendKernelEvent(transaction, {
     tenantId: cleanupJob.tenantId,
     aggregateType: "job",
     aggregateId: cleanupJob.id,
@@ -3299,7 +3360,7 @@ async function persistRunning(
       baseRevision,
       createdAt: occurredAt,
     });
-    transaction.appendEvent({
+    appendKernelEvent(transaction, {
       tenantId,
       aggregateType: "coding.execution",
       aggregateId: state.execution.id,
@@ -3363,7 +3424,7 @@ async function persistExternalInvocationStarted(input: {
       updatedAt: input.occurredAt,
     };
     transaction.putProjection("coding.execution", input.state.execution.id, next);
-    transaction.appendEvent({
+    appendKernelEvent(transaction, {
       tenantId: input.tenantId,
       aggregateType: "coding.execution",
       aggregateId: input.state.execution.id,
@@ -3453,7 +3514,7 @@ async function persistCodingResult(input: {
         createdAt: input.now,
       };
       transaction.putProjection("coding.candidate", candidate.id, stored);
-      transaction.appendEvent({
+      appendKernelEvent(transaction, {
         tenantId: input.tenantId,
         aggregateType: "coding.task",
         aggregateId: input.state.task.id,
@@ -3482,7 +3543,7 @@ async function persistCodingResult(input: {
         executionId: input.state.execution.id,
         createdAt: input.now,
       });
-      transaction.appendEvent({
+      appendKernelEvent(transaction, {
         tenantId: input.tenantId,
         aggregateType: "coding.task",
         aggregateId: input.state.task.id,
@@ -3509,7 +3570,7 @@ async function persistCodingResult(input: {
         executionId: input.state.execution.id,
         createdAt: input.now,
       });
-      transaction.appendEvent({
+      appendKernelEvent(transaction, {
         tenantId: input.tenantId,
         aggregateType: "coding.task",
         aggregateId: input.state.task.id,
@@ -3526,7 +3587,7 @@ async function persistCodingResult(input: {
         },
       });
     }
-    transaction.appendEvent({
+    appendKernelEvent(transaction, {
       tenantId: input.tenantId,
       aggregateType: "coding.task",
       aggregateId: input.state.task.id,
@@ -3589,7 +3650,7 @@ async function persistCodingResult(input: {
       updatedAt: input.now,
     };
     transaction.putProjection("coding.execution", input.state.execution.id, next);
-    transaction.appendEvent({
+    appendKernelEvent(transaction, {
       tenantId: input.tenantId,
       aggregateType: "coding.execution",
       aggregateId: input.state.execution.id,
@@ -3717,7 +3778,7 @@ async function persistCodingDecision(
         updatedAt: occurredAt,
       };
       transaction.putProjection("deliverable", deliverable.id, deliverable);
-      transaction.appendEvent({
+      appendKernelEvent(transaction, {
         tenantId,
         aggregateType: "deliverable",
         aggregateId: deliverable.id,
@@ -3736,7 +3797,7 @@ async function persistCodingDecision(
         },
       });
     }
-    transaction.appendEvent({
+    appendKernelEvent(transaction, {
       tenantId,
       aggregateType: "coding.task",
       aggregateId: state.task.id,
@@ -3767,7 +3828,7 @@ async function persistCodingDecision(
       updatedAt: occurredAt,
     };
     transaction.putProjection("coding.execution", state.execution.id, next);
-    transaction.appendEvent({
+    appendKernelEvent(transaction, {
       tenantId,
       aggregateType: "coding.execution",
       aggregateId: state.execution.id,

@@ -9,9 +9,10 @@ COPY packages ./packages
 COPY plugins ./plugins
 COPY vendor ./vendor
 COPY scripts ./scripts
-RUN npm ci --ignore-scripts \
+RUN --mount=type=cache,id=muniu-v2-npm,target=/root/.npm,sharing=locked \
+  npm ci --prefer-offline --ignore-scripts --no-audit --no-fund \
   && node scripts/build-v2-runtime.mjs \
-  && npm prune --omit=dev --ignore-scripts
+  && npm prune --omit=dev --ignore-scripts --no-audit --no-fund
 
 FROM node:22.19.0-bookworm-slim AS runtime
 ENV NODE_ENV=production \
@@ -23,7 +24,8 @@ ENV NODE_ENV=production \
     MN_JOB_LEASE_MS=30000 \
     MN_TELEMETRY_ENABLED=false
 WORKDIR /opt/muniu
-RUN groupadd --gid 10001 muniu \
+RUN apt-get update && apt-get install --yes --no-install-recommends git ca-certificates \
+  && groupadd --gid 10001 muniu \
   && useradd --uid 10001 --gid muniu --no-create-home --shell /usr/sbin/nologin muniu
 COPY --from=build --chown=10001:10001 /opt/muniu /opt/muniu
 USER 10001:10001

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+import { appendKernelEvent } from "@mn/kernel";
 
 import { basename, isAbsolute, normalize } from "node:path";
 
@@ -378,7 +379,7 @@ export async function decideCodingReconciliation(
     const nextRun = settleCodingRun(run, nextTask, input.decision, cleanupJob.id, occurredAt);
 
     transaction.putProjection("execution", execution.id, nextExecution);
-    transaction.appendEvent({
+    appendKernelEvent(transaction, {
       tenantId: input.tenantId,
       aggregateType: "execution",
       aggregateId: execution.id,
@@ -397,7 +398,7 @@ export async function decideCodingReconciliation(
     });
 
     transaction.putProjection("coding.task", task.id, nextTask);
-    transaction.appendEvent({
+    appendKernelEvent(transaction, {
       tenantId: input.tenantId,
       aggregateType: "coding.task",
       aggregateId: task.id,
@@ -415,7 +416,7 @@ export async function decideCodingReconciliation(
     });
 
     transaction.putProjection("coding.execution", execution.id, nextRun);
-    transaction.appendEvent({
+    appendKernelEvent(transaction, {
       tenantId: input.tenantId,
       aggregateType: "coding.execution",
       aggregateId: execution.id,
@@ -522,7 +523,7 @@ function requestReconciliationVerification(
     updatedAt: occurredAt,
   };
   transaction.putProjection("execution", execution.id, nextExecution);
-  transaction.appendEvent({
+  appendKernelEvent(transaction, {
     tenantId: input.tenantId,
     aggregateType: "execution",
     aggregateId: execution.id,
@@ -539,7 +540,7 @@ function requestReconciliationVerification(
     },
   });
   transaction.putProjection("coding.task", task.id, nextTask);
-  transaction.appendEvent({
+  appendKernelEvent(transaction, {
     tenantId: input.tenantId,
     aggregateType: "coding.task",
     aggregateId: task.id,
@@ -556,7 +557,7 @@ function requestReconciliationVerification(
     },
   });
   transaction.putProjection("coding.execution", execution.id, nextRun);
-  transaction.appendEvent({
+  appendKernelEvent(transaction, {
     tenantId: input.tenantId,
     aggregateType: "coding.execution",
     aggregateId: execution.id,
@@ -906,7 +907,7 @@ function invalidateVerificationJob(
     streamVersion: job.streamVersion + 1,
     updatedAt: occurredAt,
   });
-  transaction.appendEvent({
+  appendKernelEvent(transaction, {
     tenantId: input.tenantId,
     aggregateType: "job",
     aggregateId: job.id,
@@ -1009,7 +1010,7 @@ function putAvailableJob(
   actorId: string,
 ): void {
   transaction.putProjection("job", job.id, job);
-  transaction.appendEvent({
+  appendKernelEvent(transaction, {
     tenantId: job.tenantId,
     aggregateType: "job",
     aggregateId: job.id,
@@ -1164,6 +1165,7 @@ function createNewCall(
     workspaceId: previousExecution.workspaceId,
     threadId: thread.id,
     executionId,
+    threadStreamVersion: thread.streamVersion + 1,
     role: "user",
     message: task.request,
     generation: 1,
@@ -1172,7 +1174,7 @@ function createNewCall(
   });
   transaction.putProjection("authority", authorityId, authority);
   transaction.putProjection("execution", executionId, execution);
-  transaction.appendEvent({
+  appendKernelEvent(transaction, {
     tenantId: input.tenantId,
     aggregateType: "thread",
     aggregateId: thread.id,
@@ -1188,9 +1190,10 @@ function createNewCall(
       pluginId: "coding",
       runnerId: run.runnerId,
       source: "reconciliation.create_new_call",
+      turnId,
     },
   });
-  transaction.appendEvent({
+  appendKernelEvent(transaction, {
     tenantId: input.tenantId,
     aggregateType: "execution",
     aggregateId: executionId,

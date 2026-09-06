@@ -5,6 +5,7 @@ import { createAgentOsHost } from "../../host/dist/index.js";
 import { KernelProjectionRuntimeStore } from "../../../packages/agent-runtime/dist/index.js";
 import { InMemoryKernelStore } from "../../../packages/kernel/dist/index.js";
 import { InMemoryKeyProvider } from "../../../packages/storage/dist/index.js";
+import { signedUiPluginFixture } from "./signed-plugin-fixture.mjs";
 
 const port = Number(process.env.MN_FIXTURE_API_PORT);
 const appOrigin = process.env.MN_FIXTURE_APP_ORIGIN;
@@ -32,6 +33,7 @@ const cas = {
   async gcOrphans() { return []; },
 };
 const host = await createAgentOsHost({
+  ...signedUiPluginFixture(),
   store,
   cas,
   protectedPayloadKeyProvider: new InMemoryKeyProvider(randomBytes(32)),
@@ -96,7 +98,7 @@ async function seedWorkspace(seedMode) {
     input: "统一 Agent OS API",
   }, "seed-coding-task");
 
-  await host.kernel.proposeMemory("local", "local-owner", "seed-memory", {
+  await mutate("/v2/memories", {
     workspaceId: workspace.id,
     scopeType: "resource",
     namespace: "opc",
@@ -104,7 +106,7 @@ async function seedWorkspace(seedMode) {
     sourceEventId: "fixture-interview",
     confidence: 0.82,
     value: { summary: "目标客户重视可预测的获客节奏" },
-  });
+  }, "seed-memory");
   await seedApproval(workspace.id);
   if (seedMode === "coding") {
     await seedFailure(workspace.id);

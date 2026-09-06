@@ -22,6 +22,15 @@ import {
 
 const now = "2026-09-04T00:00:00.000Z";
 
+function preparedMemory(memoryId: string, protectedPayloadRef: string, plaintextDigest: string) {
+  return {
+    memoryId,
+    protectedPayloadRef,
+    plaintextDigest,
+    keyRecord: { id: protectedPayloadRef, ownerId: memoryId },
+  };
+}
+
 test("内存事件使用与持久化存储相同的摘要 HMAC", async () => {
   const hmacKey = Buffer.alloc(32, 7);
   const store = new InMemoryKernelStore(hmacKey, () => now);
@@ -396,6 +405,12 @@ test("只读工具可自动执行，高影响操作进入审批收件箱", async
     resourcesDigest: "resources", authorityCommitment: savedAuthority.commitment, expiresAt: "2026-09-05T00:00:00Z",
   };
   assert.equal((await kernel.requestToolApproval("local", "agent", "read", base)).mode, "auto");
+  const committed = await store.transact("local", (transaction) => ({
+    intent: transaction.getProjection<any>("toolIntent", base.id),
+    idempotency: transaction.getIdempotency(`tool.intent:${base.executionId}`, "read"),
+  }));
+  assert.equal("normalizedArguments" in committed.intent, false, "参数正文只能保存在加密 RuntimeRecord 中");
+  assert.equal(JSON.stringify(committed.idempotency).includes("normalizedArguments"), false);
   const manual = await kernel.requestToolApproval("local", "agent", "write", {
     ...base, id: "call-2", effectClass: "external_side_effect", intent: "发布内容",
   });
@@ -445,7 +460,7 @@ test("跨 namespace 记忆必须有未撤销授权", () => {
   const memory: MemoryRecord = {
     id: "memory", tenantId: "local", workspaceId: "workspace", scopeType: "resource",
     namespace: "opc", resourceId: "opportunity", sourceEventId: "event", status: "accepted",
-    confidence: 0.8, value: { note: "客户重视交付周期" }, confirmedAt: now, shareGrantIds: ["grant"],
+    confidence: 0.8, confirmedAt: now, shareGrantIds: ["grant"],
     streamVersion: 2, createdAt: now, updatedAt: now,
   };
   const grant = {
@@ -473,7 +488,6 @@ test("撤销共享授权会在同一事务使派生记忆失效", async () => {
     resourceId: "opportunity-1",
     sourceEventId: "event-source",
     confidence: 0.9,
-    value: { summary: "客户重视恢复能力" },
   });
   const accepted = await kernel.decideMemory(
     "local", "local-owner", "memory-source-accept", source.id, source.streamVersion, "accept",
@@ -488,7 +502,6 @@ test("撤销共享授权会在同一事务使派生记忆失效", async () => {
     resourceId: "repository-1",
     sourceEventId: "event-derived",
     confidence: 0.7,
-    value: { summary: "恢复检查应进入 Gate" },
     derivedFromMemoryId: source.id,
     derivedViaShareGrantId: grant.id,
   });
@@ -500,7 +513,7 @@ test("撤销共享授权会在同一事务使派生记忆失效", async () => {
   assert.equal(invalidated?.streamVersion, derived.streamVersion + 1);
 });
 
-test("撤销上游共享授权会递归使多层派生记忆失效", async () => {
+for (const operation of ["revoke", "delete"] as const) test(`${operation} 上游记忆会递归使多层派生记忆失效`, async () => {
   const store = new InMemoryKernelStore(undefined, () => now);
   const kernel = new AgentOsKernel(store, { now: () => now });
   await kernel.bootstrapLocal("memory-transitive-setup");
@@ -514,7 +527,6 @@ test("撤销上游共享授权会递归使多层派生记忆失效", async () =>
     resourceId: "opportunity-1",
     sourceEventId: "event-source",
     confidence: 0.9,
-    value: { summary: "客户要求审计证据" },
   });
   const acceptedSource = await kernel.decideMemory(
     "local", "local-owner", "memory-transitive-source-accept", source.id, source.streamVersion, "accept",
@@ -530,7 +542,6 @@ test("撤销上游共享授权会递归使多层派生记忆失效", async () =>
     resourceId: "repository-1",
     sourceEventId: "event-first-derived",
     confidence: 0.8,
-    value: { summary: "Gate 应保留审计证据" },
     derivedFromMemoryId: source.id,
     derivedViaShareGrantId: firstGrant.id,
   });
@@ -549,23 +560,27 @@ test("撤销上游共享授权会递归使多层派生记忆失效", async () =>
     resourceId: workspace.id,
     sourceEventId: "event-second-derived",
     confidence: 0.7,
-    value: { summary: "后续机会也应保留审计证据" },
     derivedFromMemoryId: firstDerived.id,
     derivedViaShareGrantId: secondGrant.id,
   });
 
-  await kernel.revokeShareGrant(
-    "local", "local-owner", "memory-transitive-revoke", firstGrant.id, firstGrant.streamVersion,
-  );
+  if (operation === "revoke") {
+    await kernel.revokeShareGrant(
+      "local", "local-owner", "memory-transitive-revoke", firstGrant.id, firstGrant.streamVersion,
+    );
+  } else {
+    const current = await store.transact("local", (transaction) => transaction.getProjection<MemoryRecord>("memory", source.id)!);
+    await kernel.deleteMemory("local", "local-owner", "memory-transitive-delete", source.id, current.streamVersion, "删除来源");
+  }
   const [invalidatedFirst, invalidatedSecond] = await store.transact("local", (transaction) => [
     transaction.getProjection<MemoryRecord>("memory", firstDerived.id),
     transaction.getProjection<MemoryRecord>("memory", secondDerived.id),
   ]);
   assert.equal(invalidatedFirst?.status, "invalidated");
   assert.equal(invalidatedSecond?.status, "invalidated");
-  const revokeEvent = (await store.readEvents("local", 0, 100)).events
-    .find((event) => event.type === "share_grant.revoked" && event.aggregateId === firstGrant.id);
-  assert.equal(revokeEvent?.publicPayload.invalidatedMemoryCount, 2);
+  const events = (await store.readEvents("local", 0, 100)).events;
+  if (operation === "revoke") assert.equal(events.find((event) => event.type === "share_grant.revoked" && event.aggregateId === firstGrant.id)?.publicPayload.invalidatedMemoryCount, 2);
+  else assert.equal(events.filter((event) => event.type === "memory.invalidated").length, 2);
 });
 
 test("用户可在接受前修改记忆提案，已确认记忆不可被静默改写", async () => {
@@ -582,24 +597,37 @@ test("用户可在接受前修改记忆提案，已确认记忆不可被静默�
     resourceId: workspace.id,
     sourceEventId: "event-memory-revise",
     confidence: 0.55,
-    value: { summary: "客户可能重视速度" },
+    preparedPayload: preparedMemory("memory-proposal", "key://memory-old", "old-digest"),
   });
   const revised = await kernel.reviseMemoryProposal(
     "local", "local-owner", "memory-revise", proposal.id, proposal.streamVersion,
-    { confidence: 0.9, value: { summary: "客户明确重视恢复速度" } },
+    {
+      confidence: 0.9,
+      preparedPayload: preparedMemory(proposal.id, "key://memory-new", "new-digest"),
+    },
   );
   assert.equal(revised.confidence, 0.9);
-  assert.equal(revised.value?.summary, "客户明确重视恢复速度");
+  assert.equal(revised.protectedPayloadRef, "key://memory-new");
+  assert.equal(await store.transact("local", (transaction) =>
+    transaction.getProjection("protectedPayloadKey", "key://memory-old")), undefined);
+  assert.deepEqual(await store.transact("local", (transaction) =>
+    transaction.getProjection("protectedPayloadKey", "key://memory-new")), {
+    id: "key://memory-new",
+    ownerId: proposal.id,
+  });
   const accepted = await kernel.decideMemory(
     "local", "local-owner", "memory-revise-accept", revised.id, revised.streamVersion, "accept",
   );
   await assert.rejects(kernel.reviseMemoryProposal(
     "local", "local-owner", "memory-revise-after-accept", accepted.id, accepted.streamVersion,
-    { confidence: 0.1, value: { summary: "静默改写" } },
+    {
+      confidence: 0.1,
+      preparedPayload: preparedMemory(accepted.id, "key://memory-forged", "forged-digest"),
+    },
   ), /只有待确认记忆/);
 });
 
-test("删除敏感记忆先锁定版本，再销毁密钥并写入 tombstone", async () => {
+test("删除敏感记忆校验版本并在同一事务销毁 DEK 记录和写入 tombstone", async () => {
   const store = new InMemoryKernelStore(undefined, () => now);
   const kernel = new AgentOsKernel(store, { now: () => now });
   await kernel.bootstrapLocal("memory-delete-setup");
@@ -613,43 +641,36 @@ test("删除敏感记忆先锁定版本，再销毁密钥并写入 tombstone", a
     resourceId: "opportunity-secret",
     sourceEventId: "event-secret",
     confidence: 0.8,
-    protectedPayloadRef: "key://memory-secret",
+    preparedPayload: preparedMemory("memory-secret", "key://memory-secret", "secret-digest"),
   });
-  let destroyCalls = 0;
-  const keys = { async destroy() { destroyCalls += 1; } };
   await assert.rejects(kernel.deleteMemory(
-    "local", "local-owner", "memory-delete-stale", memory.id, 0, "用户要求删除", keys,
+    "local", "local-owner", "memory-delete-stale", memory.id, 0, "用户要求删除",
   ), /版本/);
-  assert.equal(destroyCalls, 0);
-
-  let first = true;
-  const flakyKeys = {
-    async destroy() {
-      destroyCalls += 1;
-      if (first) { first = false; throw new Error("Keychain 暂时不可用"); }
-    },
-  };
-  await assert.rejects(kernel.deleteMemory(
-    "local", "local-owner", "memory-delete", memory.id, memory.streamVersion, "用户要求删除", flakyKeys,
-  ), /Keychain/);
-  const pending = await store.transact("local", (transaction) =>
-    transaction.getProjection<MemoryRecord>("memory", memory.id));
-  assert.equal(pending?.status, "deletion_pending");
-  assert.equal(pending?.value, undefined);
 
   const deleted = await kernel.deleteMemory(
-    "local", "local-owner", "memory-delete", memory.id, memory.streamVersion, "用户要求删除", flakyKeys,
+    "local", "local-owner", "memory-delete", memory.id, memory.streamVersion, "用户要求删除",
   );
   assert.equal(deleted.status, "deleted");
-  assert.equal(deleted.protectedPayloadRef, undefined);
-  assert.equal(deleted.streamVersion, memory.streamVersion + 2);
-  assert.equal(destroyCalls, 2);
+  assert.equal(deleted.streamVersion, memory.streamVersion + 1);
+  assert.equal(await store.transact("local", (transaction) =>
+    transaction.getProjection("protectedPayloadKey", "key://memory-secret")), undefined);
+  assert.equal(await store.transact("local", (transaction) =>
+    transaction.getProjection("memory", memory.id)), undefined);
+  assert.deepEqual(await store.transact("local", (transaction) =>
+    transaction.getProjection("memoryTombstone", memory.id)), deleted);
   const events = (await store.readEvents("local", 0, 50)).events
     .filter((event) => event.aggregateType === "memory" && event.aggregateId === memory.id);
-  assert.deepEqual(events.slice(-2).map((event) => event.type), [
-    "memory.deletion_requested",
-    "memory.deleted",
-  ]);
+  assert.equal(events.at(-1)?.type, "memory.deleted");
+});
+
+test("共享存储的两个内核实例生成不同实体 ID，重启不会复用计数器", async () => {
+  const store = new InMemoryKernelStore();
+  const first = new AgentOsKernel(store);
+  const second = new AgentOsKernel(store);
+  const a = await first.createWorkspace("tenant", "owner", "create-a", { name: "A", pluginIds: [], viewMode: "business" });
+  const b = await second.createWorkspace("tenant", "owner", "create-b", { name: "B", pluginIds: [], viewMode: "business" });
+  assert.notEqual(a.id, b.id);
+  assert.equal((await store.transact("tenant", (transaction) => transaction.listProjections("workspace"))).length, 2);
 });
 
 test("事务失败时事件和投影都不提交", async () => {

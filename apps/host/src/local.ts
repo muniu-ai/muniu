@@ -6,6 +6,7 @@ import {
   AgentOsWorker,
   createCodingReconciliationVerificationWorkerHandler,
   createCodingSandboxCleanupWorkerHandler,
+  createEncryptedMemoryReader,
   createKernelAgentTurnHandler,
   runWorkerLoop,
   type ByokModelInvoker,
@@ -21,6 +22,9 @@ import {
 } from "./config.js";
 import { createAgentOsHost, type AgentOsHost, type AgentOsHostOptions } from "./host.js";
 import { MacOsKeychainSecretStore } from "./secrets.js";
+import { createSignedWorkerResolver } from "./plugin-worker.js";
+import { createOpcModelContextReader } from "./opc-model-context.js";
+import { createEnterpriseFilePluginRepository } from "./enterprise-plugin-repository.js";
 import type { ModelSecretStore } from "./secrets.js";
 
 const LOCAL_WORKER_LOCK = "agent-os-0.2-local-bundle";
@@ -47,6 +51,13 @@ export interface StartLocalHostOptions extends Omit<
 
 export async function startLocalAgentOsHost(options: StartLocalHostOptions = {}): Promise<AgentOsHost> {
   await assertNoLegacyDaemon(options.legacyDaemonProbe);
+  const indexFile = process.env.MN_PLUGIN_REPOSITORY_INDEX?.trim();
+  const trustedRootsFile = process.env.MN_PLUGIN_TRUSTED_ROOTS?.trim();
+  if (Boolean(indexFile) !== Boolean(trustedRootsFile)) throw new Error("插件仓库索引和受信根必须同时配置");
+  const configuredPlugins = !options.pluginRepository && indexFile && trustedRootsFile
+    ? await createEnterpriseFilePluginRepository({ indexFile, trustedRootsFile }) : undefined;
+  const pluginRepository = options.pluginRepository ?? configuredPlugins?.pluginRepository;
+  const trustedPluginRoots = options.trustedPluginRoots ?? configuredPlugins?.trustedPluginRoots;
   const configuredRoot = options.stateRoot ?? process.env[STATE_ROOT_ENV];
   const paths = configuredRoot
     ? localStatePaths(configuredRoot)
@@ -54,21 +65,23 @@ export async function startLocalAgentOsHost(options: StartLocalHostOptions = {})
   const secretStore = options.secretStore ?? new MacOsKeychainSecretStore();
   const hmacKey = await secretStore.getOrCreateBytes("event-hmac", 32);
   const store = new SqliteStorage({ databaseFile: paths.database, hmacKey });
+  const cas = new FileCas({ rootDir: paths.cas });
+  const protectedPayloadKeyProvider = options.protectedPayloadKeyProvider
+    ?? new MacOsKeychainKeyProvider({ account: "protected-payload-wrapping-key" });
   const stopWorker = new AbortController();
   let workerFailure: unknown;
   let workerLoop = Promise.resolve();
   const host = await createAgentOsHost({
     store,
     profile: "local",
-    cas: new FileCas({ rootDir: paths.cas }),
-    protectedPayloadKeyProvider: options.protectedPayloadKeyProvider
-      ?? new MacOsKeychainKeyProvider({ account: "protected-payload-wrapping-key" }),
+    cas,
+    protectedPayloadKeyProvider,
     secretStore,
     ...(options.modelProbe ? { modelProbe: options.modelProbe } : {}),
     ...(options.officialPlugins ? { officialPlugins: options.officialPlugins } : {}),
     ...(options.pluginInstaller ? { pluginInstaller: options.pluginInstaller } : {}),
-    ...(options.pluginRepository ? { pluginRepository: options.pluginRepository } : {}),
-    ...(options.trustedPluginRoots ? { trustedPluginRoots: options.trustedPluginRoots } : {}),
+    ...(pluginRepository ? { pluginRepository } : {}),
+    ...(trustedPluginRoots ? { trustedPluginRoots } : {}),
     ...(options.pluginExecutionControl ? { pluginExecutionControl: options.pluginExecutionControl } : {}),
     ...(options.pluginProjections ? { pluginProjections: options.pluginProjections } : {}),
     ...(options.runnerIdentityInspector ? { runnerIdentityInspector: options.runnerIdentityInspector } : {}),
@@ -97,9 +110,17 @@ export async function startLocalAgentOsHost(options: StartLocalHostOptions = {})
     throw error;
   }
   const turnHandler = createKernelAgentTurnHandler({
+    resolveThreadContext: createOpcModelContextReader({ store, cas, protectedPayloadKeyProvider }),
+    ...(pluginRepository ? { resolvePluginWorker: createSignedWorkerResolver({ store, repository: pluginRepository }) } : {}),
     store,
     secretStore,
     approvalKernel: host.kernel,
+    runtimeProtection: { cas, keyProvider: protectedPayloadKeyProvider },
+    memoryReader: createEncryptedMemoryReader({
+      store,
+      cas,
+      keyProvider: protectedPayloadKeyProvider,
+    }),
     opcPublicWebReader: options.opcPublicWebReader ?? createNodePublicWebReader(),
     codingSandboxRoot: join(paths.root, "sandboxes", "coding"),
     ...(options.modelInvoker ? { modelInvoker: options.modelInvoker } : {}),
@@ -112,6 +133,7 @@ export async function startLocalAgentOsHost(options: StartLocalHostOptions = {})
     ...(options.now ? { now: options.now } : {}),
   });
   const reconciliationVerificationHandler = createCodingReconciliationVerificationWorkerHandler({
+    runtimeProtection: { cas, keyProvider: protectedPayloadKeyProvider },
     store,
     sandboxRoot: join(paths.root, "sandboxes", "coding"),
     ...(options.now ? { now: options.now } : {}),

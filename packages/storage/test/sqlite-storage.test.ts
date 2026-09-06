@@ -544,6 +544,9 @@ test("SQLite generic Job 在无 Execution 时同步投影、事件和 fencing", 
       "job.leased",
       "job.failed"
     ]);
+    for (const event of events.events.slice(2)) {
+      assert.ok(event.publicPayload.projectionFacts, `${event.type} must record reconstructable state`);
+    }
   } finally {
     await storage.close();
   }

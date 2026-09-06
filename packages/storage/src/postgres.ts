@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { EventAppendRequest, JsonObject, JsonValue, KernelEventV1 } from "@mn/contracts";
+import { createProjectionFacts } from "@mn/contracts";
 
 import { computeEventDigest, computeEventHmac } from "./integrity.js";
 import {
@@ -925,6 +926,8 @@ export class PostgresStorage implements StoragePort {
       generation: context.generation,
       correlationId: `job:${context.jobId}:fence:${fencingToken}`,
       publicPayload: {
+        projectionFacts: createProjectionFacts([{ namespace: "job", id: String(updatedJob.id), value: updatedJob }]),
+
         ...(context.workspaceId ? { workspaceId: context.workspaceId } : {}),
         ...(context.executionId ? { executionId: context.executionId } : {}),
         jobId: context.jobId,
@@ -979,6 +982,8 @@ export class PostgresStorage implements StoragePort {
       generation: context.generation,
       correlationId: `job:${context.jobId}:fence:${fencingToken}`,
       publicPayload: {
+        projectionFacts: createProjectionFacts([{ namespace: "job", id: String(updatedJob.id), value: updatedJob }]),
+
         ...(context.workspaceId ? { workspaceId: context.workspaceId } : {}),
         ...(context.executionId ? { executionId: context.executionId } : {}),
         jobId: context.jobId,
@@ -1042,6 +1047,8 @@ export class PostgresStorage implements StoragePort {
       generation: context.generation,
       correlationId: `job:${context.jobId}:fence:${fencingToken}`,
       publicPayload: {
+        projectionFacts: createProjectionFacts([{ namespace: "job", id: String(updatedJob.id), value: updatedJob }]),
+
         ...(context.workspaceId ? { workspaceId: context.workspaceId } : {}),
         ...(context.executionId ? { executionId: context.executionId } : {}),
         jobId: context.jobId,
@@ -1113,6 +1120,8 @@ export class PostgresStorage implements StoragePort {
       generation: context.generation,
       correlationId: `job:${jobId}:terminal-before-claim`,
       publicPayload: {
+        projectionFacts: createProjectionFacts([{ namespace: "job", id: String(updatedJob.id), value: updatedJob }]),
+
         workspaceId: context.workspaceId,
         executionId: context.executionId,
         status: "failed",
@@ -1167,6 +1176,8 @@ export class PostgresStorage implements StoragePort {
       generation: context.generation,
       correlationId,
       publicPayload: {
+        projectionFacts: createProjectionFacts([{ namespace: "job", id: String(updatedJob.id), value: updatedJob }]),
+
         workspaceId: context.workspaceId,
         executionId: context.executionId,
         workerId,
@@ -1208,6 +1219,8 @@ export class PostgresStorage implements StoragePort {
       generation: context.generation,
       correlationId,
       publicPayload: {
+        projectionFacts: createProjectionFacts([{ namespace: "execution", id: String(updatedExecution.id), value: updatedExecution }]),
+
         workspaceId: context.workspaceId,
         jobId,
         status: "running",
@@ -1255,6 +1268,8 @@ export class PostgresStorage implements StoragePort {
       generation: context.generation,
       correlationId: `job:${jobId}:fence:${fencingToken}`,
       publicPayload: {
+        projectionFacts: createProjectionFacts([{ namespace: "job", id: String(updatedJob.id), value: updatedJob }]),
+
         workspaceId: context.workspaceId,
         executionId: context.executionId,
         workerId,
@@ -1312,6 +1327,8 @@ export class PostgresStorage implements StoragePort {
       generation: context.generation,
       correlationId,
       publicPayload: {
+        projectionFacts: createProjectionFacts([{ namespace: "job", id: String(updatedJob.id), value: updatedJob }]),
+
         workspaceId: context.workspaceId,
         executionId: context.executionId,
         status: outcome,
@@ -1368,6 +1385,8 @@ export class PostgresStorage implements StoragePort {
       generation: context.generation,
       correlationId,
       publicPayload: {
+        projectionFacts: createProjectionFacts([{ namespace: "execution", id: String(updatedExecution.id), value: updatedExecution }]),
+
         workspaceId: context.workspaceId,
         jobId,
         status: outcome,
@@ -1423,6 +1442,8 @@ export class PostgresStorage implements StoragePort {
       generation: context.generation,
       correlationId,
       publicPayload: {
+        projectionFacts: createProjectionFacts([{ namespace: "job", id: String(updatedJob.id), value: updatedJob }]),
+
         workspaceId: context.workspaceId,
         executionId: context.executionId,
         status: "failed",
@@ -1466,6 +1487,8 @@ export class PostgresStorage implements StoragePort {
       generation: context.generation,
       correlationId,
       publicPayload: {
+        projectionFacts: createProjectionFacts([{ namespace: "execution", id: String(updatedExecution.id), value: updatedExecution }]),
+
         workspaceId: context.workspaceId,
         jobId,
         status: "interrupted",
@@ -1521,6 +1544,8 @@ export class PostgresStorage implements StoragePort {
       generation: context.generation,
       correlationId: `reconciliation:${jobId}:${fencingToken}`,
       publicPayload: {
+        projectionFacts: createProjectionFacts([{ namespace: "job", id: String(updatedJob.id), value: updatedJob }]),
+
         workspaceId: context.workspaceId,
         executionId: context.executionId,
         status: "failed",
@@ -1896,6 +1921,20 @@ export class PostgresStorage implements StoragePort {
         streamVersion: context.executionStreamVersion + 1,
         updatedAt: occurredAt
       };
+      const inboxId = `reconciliation:${executionId}:${input.jobId}`;
+      const inbox: JsonObject = {
+        id: inboxId,
+        tenantId: context.tenantId,
+        workspaceId: context.workspaceId,
+        executionId,
+        kind: "reconciliation",
+        title: "外部操作结果需要人工核对",
+        summary: UNKNOWN_SIDE_EFFECT_FAILURE.message,
+        risk: "unknown",
+        resourceSummary: input.jobId,
+        createdAt: occurredAt,
+        status: "open"
+      };
       await this.#appendLifecycleEvent(client, {
         tenantId: context.tenantId,
         aggregateType: "execution",
@@ -1907,6 +1946,11 @@ export class PostgresStorage implements StoragePort {
         generation: context.generation,
         correlationId: `reconciliation:${input.jobId}:${input.fencingToken}`,
         publicPayload: {
+          projectionFacts: createProjectionFacts([
+            { namespace: "execution", id: String(updatedExecution.id), value: updatedExecution },
+            { namespace: "inbox", id: inboxId, value: inbox },
+          ]),
+
           workspaceId: context.workspaceId,
           jobId: input.jobId,
           status: "needs_reconciliation",
@@ -1923,20 +1967,6 @@ export class PostgresStorage implements StoragePort {
         occurredAt
       );
 
-      const inboxId = `reconciliation:${executionId}:${input.jobId}`;
-      const inbox: JsonObject = {
-        id: inboxId,
-        tenantId: context.tenantId,
-        workspaceId: context.workspaceId,
-        executionId,
-        kind: "reconciliation",
-        title: "外部操作结果需要人工核对",
-        summary: UNKNOWN_SIDE_EFFECT_FAILURE.message,
-        risk: "unknown",
-        resourceSummary: input.jobId,
-        createdAt: occurredAt,
-        status: "open"
-      };
       await this.#upsertProjection(
         client,
         context.tenantId,

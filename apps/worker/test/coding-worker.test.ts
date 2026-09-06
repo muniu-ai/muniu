@@ -30,7 +30,7 @@ const SANDBOX_AVAILABLE = process.platform === "darwin";
 test("真实 Worker 通过受控仓库、macOS sandbox 和 Gate 持久化 Coding 成果", {
   skip: !SANDBOX_AVAILABLE,
 }, async (t) => {
-  const fixture = await codingFixture(t, [passingPatch()]);
+  const fixture = await codingFixture(t, [passingPatch()], { inputMessage: "只修改文案，不要新增文件" });
   const polling = fixture.worker.pollOnce();
   const approval = await waitForApproval(fixture.store);
   assert.equal(approval.effectClass, "privileged");
@@ -184,7 +184,7 @@ test("审批等待期间重复处理同一 Job 从持久检查点恢复且不重
 async function codingFixture(
   t: test.TestContext,
   patches: readonly { readonly patch: string; readonly summary: string }[],
-  options: { readonly cancelAfterCodingCompletion?: boolean } = {},
+  options: { readonly cancelAfterCodingCompletion?: boolean; readonly inputMessage?: string } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "muniu-coding-worker-"));
   t.after(async () => rm(root, { recursive: true, force: true }));
@@ -205,13 +205,15 @@ async function codingFixture(
   });
   await store.initialize();
   t.after(async () => store.close());
-  await seed(store, fixedRepositoryPath);
+  await seed(store, fixedRepositoryPath, options.inputMessage);
 
   let calls = 0;
   const modelInvoker: ByokModelInvoker = async (input) => {
     const item = patches[calls++];
     assert.ok(item, "模型调用次数超过测试候选数");
     assert.deepEqual(input.request.availableToolIds, ["coding.sandbox.write"]);
+    if (options.inputMessage) assert.ok(input.request.messages.some(message =>
+      message.role === "user" && message.content === options.inputMessage), "Coding 模型必须收到本轮输入");
     return {
       text: item.summary,
       toolCalls: [{
@@ -313,7 +315,7 @@ function interceptCodingCompletion(
   });
 }
 
-async function seed(store: SqliteStorage, repositoryPath: string): Promise<void> {
+async function seed(store: SqliteStorage, repositoryPath: string, inputMessage?: string): Promise<void> {
   const task = createCodingTask({
     id: "task-1",
     workspaceId: "workspace-1",
@@ -390,7 +392,7 @@ async function seed(store: SqliteStorage, repositoryPath: string): Promise<void>
     tenantId: "local",
     workspaceId: "workspace-1",
     kind: "agent.execution.run",
-    payload: { executionId: execution.id, message: task.request },
+    payload: { executionId: execution.id, message: inputMessage ?? task.request },
     status: "available",
     attempts: 0,
     availableAt: NOW,

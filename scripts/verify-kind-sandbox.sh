@@ -7,8 +7,12 @@ namespace="muniu-kind"
 image="muniu-kind:ci"
 calico_version="v3.31.6"
 cluster_created=false
+calico_manifest=""
 
 cleanup() {
+  if [[ -n "${calico_manifest}" ]]; then
+    rm -f -- "${calico_manifest}"
+  fi
   if [[ "${MN_KIND_KEEP:-0}" != "1" && "${cluster_created}" == "true" ]]; then
     kind delete cluster --name "${cluster_name}" >/dev/null 2>&1 || true
   fi
@@ -23,7 +27,7 @@ diagnose() {
   kubectl --namespace "${namespace}" logs job/muniu-sandbox-probe --all-containers=true || true
 }
 
-for command in docker kind kubectl helm; do
+for command in docker kind kubectl helm curl; do
   command -v "${command}" >/dev/null || { echo "缺少命令：${command}" >&2; exit 127; }
 done
 if kind get clusters | grep -Fxq "${cluster_name}"; then
@@ -32,8 +36,10 @@ if kind get clusters | grep -Fxq "${cluster_name}"; then
 fi
 
 docker build --tag "${image}" .
-kind create cluster --name "${cluster_name}" --config deploy/kind/config.yaml
+node_image="$(node scripts/lib/kind-node-image.mjs)"
+kind create cluster --name "${cluster_name}" --config deploy/kind/config.yaml --image "${node_image}"
 cluster_created=true
+node scripts/lib/kind-runtime.mjs "${cluster_name}"
 
 configured_pids_limit="$(docker exec "${cluster_name}-control-plane" awk '$1 == "podPidsLimit:" { print $2 }' /var/lib/kubelet/config.yaml)"
 if [[ "${configured_pids_limit}" != "256" ]]; then
@@ -51,9 +57,18 @@ dependency_images=(
   "minio/minio:RELEASE.2025-04-22T22-12-26Z"
   "minio/mc:RELEASE.2025-04-16T18-13-26Z"
 )
-for dependency in "${calico_images[@]}" "${dependency_images[@]}"; do docker pull "${dependency}"; done
+for dependency in "${calico_images[@]}" "${dependency_images[@]}"; do
+  docker image inspect "${dependency}" >/dev/null 2>&1 || docker pull "${dependency}"
+done
 kind load docker-image "${image}" "${calico_images[@]}" "${dependency_images[@]}" --name "${cluster_name}"
-kubectl apply -f "https://raw.githubusercontent.com/projectcalico/calico/${calico_version}/manifests/calico.yaml"
+sandbox_image_digest="$(node scripts/lib/kind-sandbox-image.mjs "${cluster_name}")"
+calico_manifest="$(mktemp -t muniu-calico.XXXXXXXX)"
+curl --fail --location --retry 3 --retry-all-errors \
+  --ipv4 --silent --show-error \
+  --connect-timeout 10 --max-time 120 \
+  --output "${calico_manifest}" \
+  "https://raw.githubusercontent.com/projectcalico/calico/${calico_version}/manifests/calico.yaml"
+kubectl apply -f "${calico_manifest}"
 kubectl --namespace kube-system rollout status daemonset/calico-node --timeout=300s
 kubectl --namespace kube-system rollout status deployment/calico-kube-controllers --timeout=300s
 kubectl wait --for=condition=Ready node --all --timeout=300s
@@ -90,7 +105,8 @@ fi
 helm upgrade --install muniu deploy/helm/muniu \
   --namespace "${namespace}" \
   --values deploy/helm/muniu/values-kind.yaml \
-  --set-string "sandbox.imageDigest=${image_digest}" \
+  --set-string "sandbox.image=muniu-kind" \
+  --set-string "sandbox.imageDigest=${sandbox_image_digest}" \
   --set-string "networkPolicy.kubernetesApiEgress[1].ipBlock.cidr=${control_plane_ip}/32" \
   --wait \
   --timeout 5m || { diagnose; exit 1; }
@@ -113,4 +129,5 @@ grep -F '"kindAuthoritativeGate":"passed"' <<<"${gate_output}" >/dev/null
 grep -F '"issuer":"coding-control-plane"' <<<"${gate_output}" >/dev/null
 
 node scripts/kind-enterprise-failover.mjs || { diagnose; exit 1; }
+node scripts/kind-coding-proof.mjs || { diagnose; exit 1; }
 printf '%s\n' "Kind v2 验证通过"

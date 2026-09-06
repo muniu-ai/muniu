@@ -59,6 +59,26 @@ async function responseJson(response: Response): Promise<any> {
   return response.json();
 }
 
+function inMemoryCas(): ContentAddressedStorage {
+  const objects = new Map<string, Buffer>();
+  return {
+    async put(bytes) {
+      const copy = Buffer.from(bytes);
+      const digest = createHash("sha256").update(copy).digest("hex");
+      const created = !objects.has(digest);
+      objects.set(digest, copy);
+      return { digest, byteLength: copy.byteLength, created };
+    },
+    async get(digest) {
+      const value = objects.get(digest);
+      if (!value) throw new Error("CAS object missing");
+      return Buffer.from(value);
+    },
+    async has(digest) { return objects.has(digest); },
+    async gcOrphans() { return []; },
+  };
+}
+
 async function readSseUntil(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   predicate: (body: string) => boolean,
@@ -690,7 +710,12 @@ test("Coding 任务原子绑定 Thread，并通过通用 turns 提交 builtin Ex
 });
 
 test("记忆可审阅修正，撤销共享会使派生记忆失效，删除写入 tombstone", async () => {
-  const host = await createAgentOsHost({ store: new InMemoryKernelStore(), secretStore: secrets });
+  const host = await createAgentOsHost({
+    store: new InMemoryKernelStore(),
+    cas: inMemoryCas(),
+    protectedPayloadKeyProvider: new InMemoryKeyProvider(randomBytes(32)),
+    secretStore: secrets,
+  });
   const workspace = (await responseJson(await host.dispatch(jsonRequest("/v2/workspaces", {
     name: "记忆工作区", viewMode: "business", pluginIds: ["opc", "coding"],
   }, "memory-workspace")))).data;

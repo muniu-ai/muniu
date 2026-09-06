@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
+import { apiPath, operationInputFields } from "@mn/contracts/client";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { ApiErrorV2, Thread } from "@mn/contracts";
+import type { ApiErrorV2, Thread, WorkspacePluginSurfaceV1 } from "@mn/contracts";
 import {
   LocalBackupError,
   LocalSqliteBackup,
@@ -25,7 +26,7 @@ const HELP = `木牛 Agent OS 0.2
   inbox             查看审批、问题、失败和人工核对
   resume            恢复暂停或中断的执行
   doctor --fix      检查连接与可安全修复项
-  plugin            查看、启用、停用或清除插件
+  plugin            查看、安装、更新、启用、停用或运行插件命令
   opc               管理机会验证工作
   code              管理 Coding 任务
   backup            创建、校验或恢复本地加密备份
@@ -38,6 +39,14 @@ const HELP = `木牛 Agent OS 0.2
   mn backup create state.mnbackup --verify
   mn backup check state.mnbackup
   mn backup restore state.mnbackup --destination restored.sqlite3
+
+签名插件：
+  mn plugin catalog
+  mn plugin install <插件 ID> --release <精确版本> --trust-process
+  mn plugin update <插件 ID> --release <精确版本> --version <当前版本号> --trust-process
+  mn plugin commands <插件 ID> --workspace <工作区 ID>
+  mn plugin run <插件 ID> <命令> --workspace <工作区 ID> --version <对象版本号>
+  --trust-process 确认插件拥有宿主进程权限；插件不是沙箱
 
 外部 Coding Runner：
   生产 Worker 只接受官方原生安装的 macOS Mach-O CLI，不支持 npm/shebang wrapper
@@ -117,7 +126,7 @@ class ApiClient {
   }
 
   async readiness(): Promise<unknown> {
-    return this.request("/v2/readiness", { method: "GET" }, new Set([503]));
+    return this.request(apiPath("getReadiness", { }), { method: "GET" }, new Set([503]));
   }
 
   async mutate(path: string, body: unknown, method: "POST" | "PATCH" | "DELETE" = "POST"): Promise<unknown> {
@@ -170,7 +179,7 @@ function hasData(value: unknown): value is { readonly data: unknown } {
 function parseArguments(arguments_: readonly string[]): ParsedArguments {
   const positional: string[] = [];
   const flags = new Map<string, string | true>();
-  const booleanFlags = new Set(["json", "help", "fix", "verify"]);
+  const booleanFlags = new Set(["json", "help", "fix", "verify", "trust-process"]);
   for (let index = 0; index < arguments_.length; index += 1) {
     const value = arguments_[index]!;
     if (!value.startsWith("--")) {
@@ -259,30 +268,29 @@ async function setup(parsed: ParsedArguments, api: ApiClient): Promise<CliResult
     throw new CliUsageError("连接模型时必须同时提供 --provider 和 --key");
   }
   const first = flag(parsed, "first")?.trim();
-  const setupResult = await api.mutate("/v2/setup", {});
+  const setupResult = await api.mutate(apiPath("setup", { }), {});
   let modelConnection: unknown;
   if (provider && apiKey) {
-    const connection = await api.mutate("/v2/model-connections", {
+    const connection = await api.mutate(apiPath("createModelConnection", { }), {
       presetId: provider, apiKey, displayName: provider,
     }) as { id?: string; streamVersion?: number };
     if (!connection.id) throw new CliUsageError("Host 未返回模型连接 ID");
-    modelConnection = await api.mutate(`/v2/model-connections/${encodeURIComponent(connection.id)}/probe`, {
+    modelConnection = await api.mutate(apiPath("probeModelConnection", { connectionId: connection.id }), {
       expectedStreamVersion: connection.streamVersion ?? 1,
     });
   }
-  const workspace = await api.mutate("/v2/workspaces", { name: workspaceName, viewMode: view, pluginIds }) as { id?: string };
+  const workspace = await api.mutate(apiPath("createWorkspace", { }), { name: workspaceName, viewMode: view, pluginIds }) as { id?: string };
   let firstObject: unknown;
   let sample: unknown;
   if (first) {
     if (!workspace.id) throw new CliUsageError("Host 未返回工作区 ID");
     const primaryPlugin = pluginIds[0]!;
-    const resource = primaryPlugin === "opc" ? "opportunities" : "repositories";
-    firstObject = await api.mutate(`/v2/plugins/${primaryPlugin}/${resource}`, {
+    firstObject = await api.mutate(apiPath(primaryPlugin === "opc" ? "createOpcOpportunity" : "createCodingRepository", {}), {
       workspaceId: workspace.id,
       expectedStreamVersion: 0,
       input: first,
     });
-    sample = await api.mutate(`/v2/plugins/${primaryPlugin}/samples/read-only`, {
+    sample = await api.mutate(apiPath(primaryPlugin === "opc" ? "runOpcReadOnlySample" : "runCodingReadOnlySample", {}), {
       workspaceId: workspace.id,
       expectedStreamVersion: 0,
     });
@@ -322,7 +330,7 @@ async function ask(parsed: ParsedArguments, api: ApiClient): Promise<CliResult> 
     ? { id: explicitThreadId, streamVersion: integerFlag(parsed, "version", 1) }
     : await resolveAskThread(api, workspaceId, opportunity, runnerId ? "coding" : undefined);
   const data = await api.mutate(
-    `/v2/workspaces/${encodeURIComponent(workspaceId)}/threads/${encodeURIComponent(selected.id)}/turns`,
+    apiPath("createTurn", { workspaceId: workspaceId, threadId: selected.id }),
     {
       expectedStreamVersion: flag(parsed, "version") === undefined
         ? selected.streamVersion
@@ -347,7 +355,7 @@ async function resolveAskThread(
   pluginId: "coding" | undefined,
 ): Promise<CliThread> {
   const threads = parseThreads(await api.get(
-    `/v2/workspaces/${encodeURIComponent(workspaceId)}/threads`,
+    apiPath("listThreads", { workspaceId: workspaceId }),
   )).filter((thread) => thread.archivedAt === undefined);
   let candidates: readonly CliThread[];
   if (opportunity) {
@@ -422,7 +430,7 @@ function parseThreads(value: unknown): readonly CliThread[] {
 async function inbox(parsed: ParsedArguments, api: ApiClient): Promise<CliResult> {
   assertAllowedFlags(parsed, ["workspace"]);
   const workspaceId = flag(parsed, "workspace");
-  const data = await api.get(`/v2/inbox${workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : ""}`);
+  const data = await api.get(apiPath("listInbox", {}, { workspaceId }));
   const count = Array.isArray(data) ? data.length : 0;
   return { command: "inbox", data, human: count ? `收件箱有 ${count} 项待处理` : "收件箱暂无待处理事项" };
 }
@@ -431,7 +439,7 @@ async function resume(parsed: ParsedArguments, api: ApiClient): Promise<CliResul
   assertAllowedFlags(parsed, ["version"]);
   const executionId = parsed.positional[0];
   if (!executionId) throw new CliUsageError("请提供执行 ID");
-  const data = await api.mutate(`/v2/executions/${encodeURIComponent(executionId)}/commands`, {
+  const data = await api.mutate(apiPath("commandExecution", { executionId: executionId }), {
     expectedStreamVersion: integerFlag(parsed, "version", 1), command: "resume",
   });
   return { command: "resume", data, human: "执行已恢复" };
@@ -439,25 +447,43 @@ async function resume(parsed: ParsedArguments, api: ApiClient): Promise<CliResul
 
 async function doctor(parsed: ParsedArguments, api: ApiClient): Promise<CliResult> {
   assertAllowedFlags(parsed, ["fix"]);
-  const [health, readiness] = await Promise.all([api.get("/v2/health"), api.readiness()]);
+  const [health, readiness] = await Promise.all([api.get(apiPath("getHealth", { })), api.readiness()]);
   const requested = parsed.flags.has("fix");
   const ready = typeof readiness === "object" && readiness !== null
     && "ready" in readiness && readiness.ready === true;
   const issues = readinessIssues(readiness);
+  const actions: { readonly connectionId: string; readonly action: "probe"; readonly status: "repaired" | "manual_action_required" }[] = [];
+  const remainingIssues = [...issues];
+  if (requested) {
+    const connections = await api.get(apiPath("listModelConnections", { }));
+    if (!Array.isArray(connections)) throw new CliUsageError("模型连接列表格式无效，无法安全修复");
+    for (const connection of connections) {
+      if (connection.status === "ready") continue;
+      if (typeof connection.id !== "string" || !Number.isSafeInteger(connection.streamVersion)) throw new CliUsageError("模型连接版本无效，无法安全修复");
+      try {
+        await api.mutate(apiPath("probeModelConnection", { connectionId: connection.id }), { expectedStreamVersion: connection.streamVersion });
+        actions.push({ connectionId: connection.id, action: "probe", status: "repaired" });
+      } catch (error) {
+        actions.push({ connectionId: connection.id, action: "probe", status: "manual_action_required" });
+        remainingIssues.push(error instanceof CliReportedError ? error.detail : { code: "MODEL_PROBE_FAILED", message: "模型连接探测未完成", action: "检查凭据后重试" });
+      }
+    }
+  }
   const fix = !requested
     ? { requested: false as const, status: "not_requested" as const, actions: [] as const }
-    : ready && issues.length === 0
-      ? { requested: true as const, status: "not_needed" as const, actions: [] as const }
+    : ready && remainingIssues.length === 0
+      ? { requested: true as const, status: actions.length ? "repaired" as const : "not_needed" as const, actions }
       : {
           requested: true as const,
           status: "manual_action_required" as const,
-          actions: [] as const,
-          remainingIssues: issues,
+          actions,
+          remainingIssues,
         };
   const human = requested
-    ? fix.status === "not_needed"
+    ? fix.status === "repaired" ? `检查完成：已恢复 ${actions.length} 个模型连接`
+    : fix.status === "not_needed"
       ? "检查完成：未发现需要修复的项目"
-      : `检查完成：发现 ${issues.length || "未识别"} 项问题；当前没有可安全自动修复的项目`
+      : `检查完成：${remainingIssues.length || "未识别"} 项问题需要人工处理`
     : ready && issues.length === 0
       ? "Host 已就绪"
       : `Host 尚未就绪：${issues.length || "未识别"} 项问题`;
@@ -470,10 +496,45 @@ function readinessIssues(value: unknown): readonly unknown[] {
 }
 
 async function plugin(parsed: ParsedArguments, api: ApiClient): Promise<CliResult> {
-  assertAllowedFlags(parsed, ["workspace", "version"]);
   const operation = parsed.positional[0] ?? "list";
+  if (operation === "run" || operation === "commands") {
+    const pluginId = parsed.positional[1];
+    const workspaceId = flag(parsed, "workspace", true)!;
+    const surfaces = await api.get(apiPath("getPluginSurfaces", { workspaceId: workspaceId })) as readonly WorkspacePluginSurfaceV1[];
+    const commands = surfaces.find((entry) => entry.pluginId === pluginId)?.cli?.commands ?? [];
+    if (operation === "commands") {
+      assertAllowedFlags(parsed, ["workspace"]);
+      return { command: "plugin", data: commands, human: commands.map((entry) => `${entry.name}  ${entry.description}\n${entry.fields.map((field) => `  --${field.name} <${field.type}>${field.required ? " 必需" : ""}`).join("\n")}`).join("\n") || "插件没有 CLI 命令" };
+    }
+    const command = commands.find((entry) => entry.name === parsed.positional[2]);
+    if (!command) throw new CliUsageError("插件未启用或没有该命令，使用 mn plugin commands 查看");
+    assertAllowedFlags(parsed, ["workspace", "version", ...command.fields.map((field) => field.name)]);
+    const input: Record<string, unknown> = { workspaceId, expectedStreamVersion: integerFlag(parsed, "version", 0) };
+    for (const field of command.fields) {
+      const raw = flag(parsed, field.name, field.required);
+      if (raw === undefined) continue;
+      if (field.type === "number" && !Number.isFinite(Number(raw))) throw new CliUsageError(`--${field.name} 必须是数字`);
+      if (field.type === "boolean" && !["true", "false"].includes(raw)) throw new CliUsageError(`--${field.name} 必须是 true 或 false`);
+      input[field.name] = field.type === "number" ? Number(raw) : field.type === "boolean" ? raw === "true" : raw;
+    }
+    const data = await api.mutate(apiPath("runPluginCommand", { pluginId: pluginId!, commandId: command.commandId }), input);
+    return { command: "plugin", data, human: JSON.stringify(data, null, 2) };
+  }
+  assertAllowedFlags(parsed, ["workspace", "version", "release", "trust-process"]);
+  if (operation === "catalog") return { command: "plugin", data: await api.get(apiPath("listPluginCatalog", { })), human: "已列出受信仓库中的插件版本" };
+  if (operation === "install" || operation === "update") {
+    const pluginId = parsed.positional[1];
+    if (!pluginId) throw new CliUsageError("请提供插件 ID");
+    if (!parsed.flags.has("trust-process")) throw new CliUsageError("插件拥有宿主进程权限，不是沙箱；确认信任后使用 --trust-process");
+    const version = flag(parsed, "release", true)!;
+    if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u.test(version)) throw new CliUsageError("--release 必须是精确版本");
+    const data = operation === "install"
+      ? await api.mutate(apiPath("installPlugin", { }), { pluginId, version })
+      : await api.mutate(apiPath("updatePlugin", { pluginId: pluginId }), { version, expectedStreamVersion: integerFlag(parsed, "version", 1) }, "PATCH");
+    return { command: "plugin", data, human: `${pluginId} ${version} 已${operation === "install" ? "安装" : "更新"}` };
+  }
   if (operation === "list") {
-    return { command: "plugin", data: await api.get("/v2/plugins/installations"), human: "已列出可用插件" };
+    return { command: "plugin", data: await api.get(apiPath("listPluginInstallations", { })), human: "已列出可用插件" };
   }
   if (!["enable", "deactivate", "disable", "purge"].includes(operation)) {
     throw new CliUsageError("plugin 仅支持 list、enable、deactivate、disable 或 purge");
@@ -483,7 +544,7 @@ async function plugin(parsed: ParsedArguments, api: ApiClient): Promise<CliResul
   const expectedStreamVersion = integerFlag(parsed, "version", 1);
   if (operation === "enable") {
     const workspaceId = flag(parsed, "workspace", true)!;
-    const data = await api.mutate(`/v2/workspaces/${encodeURIComponent(workspaceId)}/plugin-activations`, {
+    const data = await api.mutate(apiPath("activatePlugin", { workspaceId: workspaceId }), {
       expectedStreamVersion, pluginId,
     });
     return { command: "plugin", data, human: `已启用 ${pluginId}` };
@@ -491,7 +552,7 @@ async function plugin(parsed: ParsedArguments, api: ApiClient): Promise<CliResul
   if (operation === "deactivate") {
     const workspaceId = flag(parsed, "workspace", true)!;
     const data = await api.mutate(
-      `/v2/workspaces/${encodeURIComponent(workspaceId)}/plugin-activations/${encodeURIComponent(pluginId)}`,
+      apiPath("deactivatePlugin", { workspaceId: workspaceId, pluginId: pluginId }),
       { expectedStreamVersion },
       "DELETE",
     );
@@ -502,13 +563,13 @@ async function plugin(parsed: ParsedArguments, api: ApiClient): Promise<CliResul
   }
   if (operation === "disable") {
     const data = await api.mutate(
-      `/v2/plugins/installations/${encodeURIComponent(pluginId)}/disable`,
+      apiPath("disablePlugin", { pluginId: pluginId }),
       { expectedStreamVersion },
     );
     return { command: "plugin", data, human: `已全局停用 ${pluginId}` };
   }
   const data = await api.mutate(
-    `/v2/plugins/installations/${encodeURIComponent(pluginId)}`,
+    apiPath("purgePlugin", { pluginId: pluginId }),
     { expectedStreamVersion },
     "DELETE",
   );
@@ -544,7 +605,9 @@ async function productCommand(
   }
   if (resource !== "samples/read-only" && !input) throw new CliUsageError("请通过 --input 提供要捕获的内容");
   if (resource === "samples/read-only" && input) throw new CliUsageError("sample 不接受 --input 或额外文本");
-  const data = await api.mutate(`/v2/plugins/${product}/${resource}`, {
+  const operationId = product === "opc" ? resource === "samples/read-only" ? "runOpcReadOnlySample" : "createOpcOpportunity"
+    : resource === "samples/read-only" ? "runCodingReadOnlySample" : resource === "repositories" ? "createCodingRepository" : "createCodingTask";
+  const data = await api.mutate(apiPath(operationId, {}), {
     workspaceId,
     expectedStreamVersion: integerFlag(parsed, "version", 0),
     ...(input ? { input } : {}),
@@ -582,7 +645,7 @@ async function code(parsed: ParsedArguments, api: ApiClient): Promise<CliResult>
       );
     }
     const reconciliationPath =
-      `/v2/plugins/coding/executions/${encodeURIComponent(executionId)}/reconciliation`;
+      apiPath("getCodingReconciliation", { executionId: executionId });
     const versions = reconciliationVersions(await api.get(reconciliationPath), executionId);
     const data = await api.mutate(
       `${reconciliationPath}-decisions`,
@@ -606,7 +669,7 @@ async function code(parsed: ParsedArguments, api: ApiClient): Promise<CliResult>
     if (parsed.positional.length !== 1) throw new CliUsageError("code runners 不接受额外参数");
     const workspaceId = flag(parsed, "workspace", true)!;
     const data = await api.get(
-      `/v2/plugins/coding/runners?workspaceId=${encodeURIComponent(workspaceId)}`,
+      apiPath("listCodingRunners", {}, { workspaceId }),
     );
     return { command: "code", data, human: "已列出 Coding Runner" };
   }
@@ -615,11 +678,11 @@ async function code(parsed: ParsedArguments, api: ApiClient): Promise<CliResult>
   const runnerId = externalCodingRunnerId(parsed.positional[2]);
   const workspaceId = flag(parsed, "workspace", true)!;
   if (action === "inspect") {
-    assertAllowedFlags(parsed, ["workspace", "path"]);
+    assertAllowedFlags(parsed, operationInputFields("inspectCodingRunner").filter((field) => field.location === "body").map((field) => ({ workspaceId: "workspace", binaryPath: "path" })[field.name] ?? field.name));
     if (parsed.positional.length !== 3) throw new CliUsageError("code runner inspect 不接受额外参数");
     const binaryPath = absoluteRunnerPath(parsed);
     const data = await api.mutate(
-      `/v2/plugins/coding/runners/${encodeURIComponent(runnerId)}/inspections`,
+      apiPath("inspectCodingRunner", { runnerId: runnerId }),
       { workspaceId, binaryPath },
     );
     return {
@@ -629,14 +692,14 @@ async function code(parsed: ParsedArguments, api: ApiClient): Promise<CliResult>
     };
   }
   if (action === "confirm") {
-    assertAllowedFlags(parsed, ["workspace", "path", "binary-version", "sha256", "version"]);
+    assertAllowedFlags(parsed, operationInputFields("confirmCodingRunner").filter((field) => field.location === "body").map((field) => ({ workspaceId: "workspace", binaryPath: "path", expectedStreamVersion: "version", version: "binary-version" })[field.name] ?? field.name));
     if (parsed.positional.length !== 3) throw new CliUsageError("code runner confirm 不接受额外参数");
     const binaryPath = absoluteRunnerPath(parsed);
     const version = flag(parsed, "binary-version", true)!;
     const sha256 = flag(parsed, "sha256", true)!;
     if (!/^[0-9a-f]{64}$/u.test(sha256)) throw new CliUsageError("--sha256 必须是 64 位小写十六进制摘要");
     const data = await api.mutate(
-      `/v2/plugins/coding/runners/${encodeURIComponent(runnerId)}/confirmations`,
+      apiPath("confirmCodingRunner", { runnerId: runnerId }),
       {
         workspaceId,
         expectedStreamVersion: integerFlag(parsed, "version", 0),
@@ -677,7 +740,7 @@ async function opc(parsed: ParsedArguments, api: ApiClient): Promise<CliResult> 
   const operation = parsed.positional[0] ?? "list";
   const workspaceId = flag(parsed, "workspace", true)!;
   if (operation === "list") {
-    const data = await api.get(`/v2/plugins/opc/opportunities?workspaceId=${encodeURIComponent(workspaceId)}`);
+    const data = await api.get(apiPath("listOpcOpportunities", {}, { workspaceId }));
     return { command: "opc", data, human: "已列出机会与下一步" };
   }
   if (operation === "capture" || operation === "sample") {
@@ -688,18 +751,16 @@ async function opc(parsed: ParsedArguments, api: ApiClient): Promise<CliResult> 
   }
   const opportunityId = parsed.positional[1];
   if (!opportunityId) throw new CliUsageError(`opc ${operation} 需要机会 ID`);
-  const encodedId = encodeURIComponent(opportunityId);
-  const workspaceQuery = `workspaceId=${encodeURIComponent(workspaceId)}`;
   if (operation === "show") {
-    const data = await api.get(`/v2/plugins/opc/opportunities/${encodedId}?${workspaceQuery}`);
+    const data = await api.get(apiPath("getOpcOpportunity", { opportunityId }, { workspaceId }));
     return { command: "opc", data, human: "已读取机会档案" };
   }
   if (operation === "deliverables") {
-    const data = await api.get(`/v2/plugins/opc/opportunities/${encodedId}/deliverables?${workspaceQuery}`);
+    const data = await api.get(apiPath("previewOpcDeliverables", { opportunityId }, { workspaceId }));
     return { command: "opc", data, human: "已生成成果预览，结论会标明证据等级" };
   }
   if (operation === "export") {
-    const data = await api.mutate(`/v2/plugins/opc/opportunities/${encodedId}/exports`, {
+    const data = await api.mutate(apiPath("exportOpcDeliverables", { opportunityId }), {
       workspaceId,
       expectedStreamVersion: integerFlag(parsed, "version", 1),
     });
@@ -716,7 +777,7 @@ async function opc(parsed: ParsedArguments, api: ApiClient): Promise<CliResult> 
       throw new CliUsageError("OPC 领域命令的 --input 必须是 JSON 对象");
     }
   }
-  const data = await api.mutate(`/v2/plugins/opc/opportunities/${encodedId}/commands`, {
+  const data = await api.mutate(apiPath("commandOpcOpportunity", { opportunityId }), {
     workspaceId,
     expectedStreamVersion: integerFlag(parsed, "version", 1),
     command: operation,

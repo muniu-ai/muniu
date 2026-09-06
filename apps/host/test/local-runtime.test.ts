@@ -7,8 +7,9 @@ import { join } from "node:path";
 import test from "node:test";
 
 import type { ModelRequest } from "@mn/agent-runtime";
-import { SqliteStorage } from "@mn/storage";
-import type { ByokModelInvoker } from "@mn/worker";
+import { replayCoreProjections } from "@mn/kernel";
+import { FileCas, InMemoryKeyProvider, SqliteStorage } from "@mn/storage";
+import { createProtectedRuntimeStore, type ByokModelInvoker } from "@mn/worker";
 
 import {
   startLocalAgentOsHost,
@@ -67,6 +68,7 @@ async function waitForCompletedTurn(host: AgentOsHost, path: string): Promise<an
 test("本地组合根执行 BYOK Agent turn，结果在 SQLite 重启后仍可读取", async () => {
   const directory = await mkdtemp(join(tmpdir(), "muniu-local-runtime-"));
   const secrets = new FixtureSecrets();
+  const protection = new InMemoryKeyProvider(Buffer.alloc(32, 33));
   const requests: ModelRequest[] = [];
   const invoke: ByokModelInvoker = async (input) => {
     assert.equal(input.presetId, "deepseek");
@@ -74,7 +76,12 @@ test("本地组合根执行 BYOK Agent turn，结果在 SQLite 重启后仍可�
     assert.equal(input.apiKey, "fixture-byok-key");
     assert.deepEqual(input.request.availableToolIds, ["opc.public-web.read"]);
     assert.match(input.request.messages[0]?.content ?? "", /反证/u);
-    assert.equal(input.request.messages.at(-1)?.content, "整理当前证据缺口");
+    if (requests.length === 0) assert.equal(input.request.messages.at(-1)?.content, "整理当前证据缺口");
+    else {
+      assert.equal(input.request.messages.at(-1)?.content, "根据上一轮继续整理");
+      assert.ok(input.request.messages.some((message) => message.role === "user" && message.content === "整理当前证据缺口"));
+      assert.ok(input.request.messages.some((message) => message.role === "assistant" && message.content.includes("反证待补充")));
+    }
     requests.push(input.request);
     return { text: "支持证据不足；反证待补充。下一步由人工安排访谈。", toolCalls: [] };
   };
@@ -85,6 +92,7 @@ test("本地组合根执行 BYOK Agent turn，结果在 SQLite 重启后仍可�
       stateRoot: directory,
       port: 0,
       secretStore: secrets,
+      protectedPayloadKeyProvider: protection,
       modelInvoker: invoke,
       workerIdleDelayMs: 1,
       modelProbe: async ({ preset }) => ({
@@ -129,11 +137,26 @@ test("本地组合根执行 BYOK Agent turn，结果在 SQLite 重启后仍可�
     await first.close();
     first = undefined;
     assert.doesNotMatch((await readFile(join(directory, "state.sqlite3"))).toString("utf8"), /fixture-byok-key/u);
+    assert.equal(/整理当前证据缺口|支持证据不足/u.test((await readFile(join(directory, "state.sqlite3"))).toString("utf8")), false);
+
+    const recoveryStore = new SqliteStorage({ databaseFile: join(directory, "state.sqlite3"), hmacKey: Buffer.alloc(32, 17) });
+    try {
+      const events = (await recoveryStore.readEvents("local", 0, 1000)).events;
+      const snapshot = replayCoreProjections(events, "local", Buffer.alloc(32, 17));
+      await recoveryStore.transact("local", transaction => {
+        for (const record of snapshot.records) {
+          assert.deepEqual(record.value, transaction.getProjection(record.namespace, record.id), record.namespace);
+          transaction.deleteProjection(record.namespace, record.id);
+        }
+        for (const record of snapshot.records) transaction.putProjection(record.namespace, record.id, record.value);
+      });
+    } finally { await recoveryStore.close(); }
 
     second = await startLocalAgentOsHost({
       stateRoot: directory,
       port: 0,
       secretStore: secrets,
+      protectedPayloadKeyProvider: protection,
       modelInvoker: invoke,
       workerIdleDelayMs: 1,
     });
@@ -141,6 +164,12 @@ test("本地组合根执行 BYOK Agent turn，结果在 SQLite 重启后仍可�
     assert.equal(restored.turns[0].execution.status, "completed");
     assert.deepEqual(restored.turns[0].entries.map((entry: any) => entry.role), ["user", "assistant"]);
     assert.equal(requests.length, 1);
+    const continuation = await second.dispatch(jsonRequest(path, {
+      expectedStreamVersion: thread.streamVersion + 1, message: "根据上一轮继续整理",
+    }, "runtime-continuation"));
+    assert.equal(continuation.status, 202);
+    for (let index = 0; index < 200 && requests.length < 2; index++) await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(requests.length, 2, "新 Execution 必须恢复同一 Thread 的模型可见历史");
   } finally {
     await first?.close();
     await second?.close();
@@ -151,6 +180,7 @@ test("本地组合根执行 BYOK Agent turn，结果在 SQLite 重启后仍可�
 test("OPC Agent 通过统一 Runtime 和内核权限读取公开网页", async () => {
   const directory = await mkdtemp(join(tmpdir(), "muniu-local-runtime-web-"));
   const secrets = new FixtureSecrets();
+  const protection = new InMemoryKeyProvider(Buffer.alloc(32, 33));
   const requests: ModelRequest[] = [];
   const reads: string[] = [];
   const invoke: ByokModelInvoker = async ({ request }) => {
@@ -179,6 +209,7 @@ test("OPC Agent 通过统一 Runtime 和内核权限读取公开网页", async (
       stateRoot: directory,
       port: 0,
       secretStore: secrets,
+      protectedPayloadKeyProvider: protection,
       modelInvoker: invoke,
       workerIdleDelayMs: 1,
       opcPublicWebReader: {
@@ -240,6 +271,7 @@ test("OPC Agent 通过统一 Runtime 和内核权限读取公开网页", async (
 test("follow_up 按 FIFO 进入下一 turn，steer 只在下一模型边界注入", async () => {
   const directory = await mkdtemp(join(tmpdir(), "muniu-local-runtime-inbox-"));
   const secrets = new FixtureSecrets();
+  const protection = new InMemoryKeyProvider(Buffer.alloc(32, 33));
   const requests: ModelRequest[] = [];
   let firstModelStarted!: () => void;
   let releaseFirstModel!: () => void;
@@ -260,6 +292,7 @@ test("follow_up 按 FIFO 进入下一 turn，steer 只在下一模型边界注�
       stateRoot: directory,
       port: 0,
       secretStore: secrets,
+      protectedPayloadKeyProvider: protection,
       modelInvoker: invoke,
       workerIdleDelayMs: 1,
       modelProbe: async ({ preset }) => ({
@@ -340,6 +373,7 @@ test("follow_up 按 FIFO 进入下一 turn，steer 只在下一模型边界注�
 test("关闭本地 Host 会中断在途模型后再关闭 SQLite", async () => {
   const directory = await mkdtemp(join(tmpdir(), "muniu-local-runtime-stop-"));
   const secrets = new FixtureSecrets();
+  const protection = new InMemoryKeyProvider(Buffer.alloc(32, 33));
   let modelStarted!: () => void;
   const started = new Promise<void>((resolve) => { modelStarted = resolve; });
   const invoke: ByokModelInvoker = async ({ signal }) => {
@@ -356,6 +390,7 @@ test("关闭本地 Host 会中断在途模型后再关闭 SQLite", async () => {
       stateRoot: directory,
       port: 0,
       secretStore: secrets,
+      protectedPayloadKeyProvider: protection,
       modelInvoker: invoke,
       workerIdleDelayMs: 1,
       modelProbe: async ({ preset }) => ({
@@ -413,7 +448,10 @@ test("关闭本地 Host 会中断在途模型后再关闭 SQLite", async () => {
       job: transaction.listProjections<any>("job")
         .find((candidate) => candidate.payload.executionId === executionId),
     }));
-    assert.equal(state.runtime.records.at(-1).payload.status, "interrupted");
+    const runtime = createProtectedRuntimeStore({ store: inspected, tenantId: "local",
+      workspaceId: state.execution.workspaceId, cas: new FileCas({ rootDir: join(directory, "cas") }),
+      keyProvider: protection });
+    assert.equal((await runtime.readExecution(executionId)).at(-1)?.payload.status, "interrupted");
     assert.equal(state.execution.status, "interrupted");
     assert.equal(state.execution.finishedAt, undefined);
     assert.equal(state.job.status, "failed");
@@ -428,6 +466,7 @@ test("关闭本地 Host 会中断在途模型后再关闭 SQLite", async () => {
 test("取消在途 Execution 会中止模型并终结 Job，重启后不再认领", async () => {
   const directory = await mkdtemp(join(tmpdir(), "muniu-local-runtime-cancel-"));
   const secrets = new FixtureSecrets();
+  const protection = new InMemoryKeyProvider(Buffer.alloc(32, 33));
   let modelStarted!: () => void;
   let modelAborted!: () => void;
   const started = new Promise<void>((resolve) => { modelStarted = resolve; });
@@ -450,6 +489,7 @@ test("取消在途 Execution 会中止模型并终结 Job，重启后不再认�
   try {
     first = await startLocalAgentOsHost({
       stateRoot: directory, port: 0, secretStore: secrets, modelInvoker: invoke,
+      protectedPayloadKeyProvider: protection,
       workerIdleDelayMs: 1,
       modelProbe: async ({ preset }) => ({
         models: preset.suggestedModels, defaultModel: preset.suggestedModels[0]!,
@@ -518,6 +558,7 @@ test("取消在途 Execution 会中止模型并终结 Job，重启后不再认�
 
     second = await startLocalAgentOsHost({
       stateRoot: directory, port: 0, secretStore: secrets, modelInvoker: invoke,
+      protectedPayloadKeyProvider: protection,
       workerIdleDelayMs: 1,
     });
     await new Promise<void>((resolve) => setTimeout(resolve, 25));
@@ -535,6 +576,7 @@ test("取消在途 Execution 会中止模型并终结 Job，重启后不再认�
 test("中断后的 Execution 通过公开 resume 命令以新 generation 继续", async () => {
   const directory = await mkdtemp(join(tmpdir(), "muniu-local-runtime-resume-"));
   const secrets = new FixtureSecrets();
+  const protection = new InMemoryKeyProvider(Buffer.alloc(32, 33));
   const requests: ModelRequest[] = [];
   let firstModelStarted!: () => void;
   const started = new Promise<void>((resolve) => { firstModelStarted = resolve; });
@@ -554,6 +596,7 @@ test("中断后的 Execution 通过公开 resume 命令以新 generation 继续"
   try {
     first = await startLocalAgentOsHost({
       stateRoot: directory, port: 0, secretStore: secrets, modelInvoker: invoke,
+      protectedPayloadKeyProvider: protection,
       workerIdleDelayMs: 1,
       modelProbe: async ({ preset }) => ({
         models: preset.suggestedModels, defaultModel: preset.suggestedModels[0]!,
@@ -591,6 +634,7 @@ test("中断后的 Execution 通过公开 resume 命令以新 generation 继续"
 
     second = await startLocalAgentOsHost({
       stateRoot: directory, port: 0, secretStore: secrets, modelInvoker: invoke,
+      protectedPayloadKeyProvider: protection,
       workerIdleDelayMs: 1,
     });
     const turnsPath = `/v2/workspaces/${workspace.id}/threads/${thread.id}/turns`;

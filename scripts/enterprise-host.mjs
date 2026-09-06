@@ -9,7 +9,7 @@ import {
   enterpriseReadiness,
 } from "@mn/host";
 import { S3Cas } from "@mn/storage";
-import pg from "pg";
+import { createPostgresPool } from "./lib/postgres-pool.mjs";
 
 import { PostgresKernelStore, probePostgres } from "./lib/postgres-kernel-store.mjs";
 import {
@@ -21,8 +21,6 @@ import {
 import { OidcIdentityResolver } from "./lib/oidc-identity.mjs";
 import { SigV4S3Client } from "./lib/s3-client.mjs";
 import { parseWorkerSupportedKinds } from "./lib/worker-handler-capabilities.mjs";
-
-const { Pool } = pg;
 
 function required(name) {
   const value = process.env[name]?.trim();
@@ -69,7 +67,7 @@ function assertV2Configuration() {
 
 assertV2Configuration();
 
-const pool = new Pool({
+const pool = createPostgresPool({
   connectionString: required("MN_POSTGRES_URL"),
   application_name: process.env.MN_HOST_INSTANCE_ID ?? "mn-host",
   max: Number(process.env.MN_POSTGRES_POOL_SIZE ?? "10"),

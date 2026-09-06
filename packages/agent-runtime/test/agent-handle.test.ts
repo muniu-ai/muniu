@@ -61,6 +61,30 @@ class ObservedStore extends InMemoryRuntimeStore {
   }
 }
 
+test("动态权限上下文在每个模型边界刷新，贡献 generation 保持固定", async () => {
+  const scope = executionScope();
+  let visible = true;
+  let calls = 0;
+  scope.register("prompt", { id: "memory", refreshAtBoundary: true,
+    render: () => visible ? "已授权记忆" : "没有可读记忆" });
+  scope.register("tool", { id: "file.read", version: "1.0.0", effectClass: "local_read",
+    prepare: () => ({ normalizedArguments: {}, resourceRefs: [{ namespace: "workspace", resourceId: "repository" }] }),
+    execute: async () => { visible = false; return {}; } });
+  scope.register("llm", { id: "main", complete: async (request) => {
+    calls += 1;
+    assert.equal(request.generation, 1);
+    assert.equal(request.messages[0]?.content, calls === 1 ? "已授权记忆" : "没有可读记忆");
+    return { text: "", toolCalls: calls === 1 ? [{ id: "read", toolId: "file.read", arguments: {} }] : [] };
+  } });
+  const handle = await AgentHandle.open({ executionId: "execution-a", scope,
+    store: new InMemoryRuntimeStore(), definition: { id: "agent", llmId: "main", promptIds: ["memory"] },
+    authority, approval: approveAuthorizedTools });
+  await handle.followUp("检查");
+  await handle.whenIdle();
+  assert.equal(handle.status, "completed");
+  assert.equal(calls, 2);
+});
+
 test("模型上下文和工具承诺均先持久化再产生外部调用", async () => {
   const observed: string[] = [];
   const store = new ObservedStore(observed);

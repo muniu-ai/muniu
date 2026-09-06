@@ -71,6 +71,7 @@ export type ExecutionStatus =
   | "cancelled";
 
 export interface Execution extends VersionedEntity {
+  readonly pluginPackageSha256?: string;
   readonly workspaceId: WorkspaceId;
   readonly threadId: ThreadId;
   readonly pluginId: PluginId;
@@ -245,13 +246,20 @@ export interface MemoryRecord extends VersionedEntity {
   readonly sourceEventId: string;
   readonly status: "proposed" | "accepted" | "rejected" | "deletion_pending" | "deleted" | "invalidated";
   readonly confidence: number;
-  readonly value?: JsonObject;
   readonly protectedPayloadRef?: string;
   readonly confirmedAt?: IsoDateTime;
   readonly expiresAt?: IsoDateTime;
   readonly shareGrantIds: readonly string[];
   readonly derivedFromMemoryId?: string;
   readonly derivedViaShareGrantId?: string;
+}
+
+export interface MemoryTombstone extends VersionedEntity {
+  readonly workspaceId: WorkspaceId;
+  readonly status: "deleted";
+  readonly objectDigest: string;
+  readonly reason: string;
+  readonly deletedAt: IsoDateTime;
 }
 
 export interface ShareGrant extends VersionedEntity {

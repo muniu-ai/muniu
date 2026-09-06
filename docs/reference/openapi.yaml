@@ -2,82 +2,286 @@ openapi: 3.1.0
 info:
   title: Muniu Agent OS API
   version: 0.2.0
-  description: Agent OS 0.2 的公共 Host 契约
-servers:
-  - url: http://127.0.0.1:7318
 paths:
+  /v2/plugins/{pluginId}/{commandId}:
+    post:
+      operationId: runPluginCommand
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: pluginId
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: commandId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - workspaceId
+                - expectedStreamVersion
+              properties:
+                workspaceId:
+                  type: string
+                  minLength: 1
+                expectedStreamVersion:
+                  type: integer
+                  minimum: 0
+              additionalProperties: true
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+      x-muniu-versioned: true
+  /v2/workspaces/{workspaceId}/plugin-surfaces:
+    get:
+      operationId: getPluginSurfaces
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+      x-muniu-versioned: false
+  /v2/plugins/catalog:
+    get:
+      operationId: listPluginCatalog
+      parameters: []
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+      x-muniu-versioned: false
   /v2/openapi.json:
     get:
       operationId: getOpenApi
+      parameters: []
       responses:
         "200":
-          $ref: "#/components/responses/Success"
-        default:
-          $ref: "#/components/responses/Error"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: false
   /v2/health:
     get:
       operationId: getHealth
+      parameters:
+        - in: query
+          name: workspaceId
+          required: false
+          schema:
+            type: string
       responses:
         "200":
-          $ref: "#/components/responses/Success"
-        default:
-          $ref: "#/components/responses/Error"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: false
   /v2/readiness:
     get:
       operationId: getReadiness
+      parameters: []
       responses:
         "200":
-          $ref: "#/components/responses/Success"
-        default:
-          $ref: "#/components/responses/Error"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: false
   /v2/setup:
     post:
       operationId: setup
       parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/Mutation"
+              type: object
+              required: []
+              properties: {}
+              additionalProperties: false
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
-        default:
-          $ref: "#/components/responses/Error"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: false
   /v2/workspaces:
     get:
       operationId: listWorkspaces
+      parameters: []
       responses:
         "200":
-          $ref: "#/components/responses/Success"
-        default:
-          $ref: "#/components/responses/Error"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: false
     post:
       operationId: createWorkspace
       parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/Mutation"
+              type: object
+              required:
+                - name
+                - viewMode
+                - pluginIds
+              properties:
+                name: &a1
+                  type: string
+                  minLength: 1
+                viewMode:
+                  enum:
+                    - business
+                    - professional
+                pluginIds:
+                  type: array
+                  items: *a1
+              additionalProperties: false
       responses:
         "201":
-          $ref: "#/components/responses/Success"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
-        default:
-          $ref: "#/components/responses/Error"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: false
   /v2/workspaces/{workspaceId}:
     get:
@@ -90,32 +294,72 @@ paths:
             type: string
       responses:
         "200":
-          $ref: "#/components/responses/Success"
-        default:
-          $ref: "#/components/responses/Error"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: false
     patch:
       operationId: updateWorkspace
       parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
         - in: path
           name: workspaceId
           required: true
           schema:
             type: string
-        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/VersionedMutation"
+              type: object
+              required:
+                - expectedStreamVersion
+              properties:
+                expectedStreamVersion:
+                  type: integer
+                  minimum: 0
+                name:
+                  type: string
+                  minLength: 1
+                viewMode:
+                  enum:
+                    - business
+                    - professional
+              additionalProperties: false
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
-        default:
-          $ref: "#/components/responses/Error"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: true
   /v2/workspaces/{workspaceId}/members:
     get:
@@ -128,14 +372,31 @@ paths:
             type: string
       responses:
         "200":
-          $ref: "#/components/responses/Success"
-        default:
-          $ref: "#/components/responses/Error"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: false
   /v2/workspaces/{workspaceId}/members/{principalId}:
     put:
       operationId: setWorkspaceMember
       parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
         - in: path
           name: workspaceId
           required: true
@@ -146,24 +407,52 @@ paths:
           required: true
           schema:
             type: string
-        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/VersionedMutation"
+              type: object
+              required:
+                - expectedStreamVersion
+                - workspaceRole
+              properties:
+                expectedStreamVersion:
+                  type: integer
+                  minimum: 0
+                workspaceRole:
+                  enum:
+                    - owner
+                    - operator
+                    - reviewer
+                    - viewer
+              additionalProperties: false
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
-        default:
-          $ref: "#/components/responses/Error"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: true
     delete:
       operationId: removeWorkspaceMember
       parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
         - in: path
           name: workspaceId
           required: true
@@ -174,20 +463,36 @@ paths:
           required: true
           schema:
             type: string
-        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/VersionedMutation"
+              type: object
+              required:
+                - expectedStreamVersion
+              properties:
+                expectedStreamVersion:
+                  type: integer
+                  minimum: 0
+              additionalProperties: false
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
-        default:
-          $ref: "#/components/responses/Error"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: true
   /v2/workspaces/{workspaceId}/agent-catalog:
     get:
@@ -200,9 +505,21 @@ paths:
             type: string
       responses:
         "200":
-          $ref: "#/components/responses/Success"
-        default:
-          $ref: "#/components/responses/Error"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: false
   /v2/workspaces/{workspaceId}/home:
     get:
@@ -215,9 +532,21 @@ paths:
             type: string
       responses:
         "200":
-          $ref: "#/components/responses/Success"
-        default:
-          $ref: "#/components/responses/Error"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: false
   /v2/workspaces/{workspaceId}/threads:
     get:
@@ -230,32 +559,76 @@ paths:
             type: string
       responses:
         "200":
-          $ref: "#/components/responses/Success"
-        default:
-          $ref: "#/components/responses/Error"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: false
     post:
       operationId: createThread
       parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
         - in: path
           name: workspaceId
           required: true
           schema:
             type: string
-        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/Mutation"
+              type: object
+              required:
+                - subject
+                - pluginId
+              properties:
+                subject: &a2
+                  type: string
+                  minLength: 1
+                pluginId: *a2
+                resourceRef:
+                  type: object
+                  required:
+                    - namespace
+                    - resourceId
+                  properties:
+                    namespace: *a2
+                    resourceId: *a2
+                  additionalProperties: false
+              additionalProperties: false
       responses:
         "201":
-          $ref: "#/components/responses/Success"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
-        default:
-          $ref: "#/components/responses/Error"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: false
   /v2/workspaces/{workspaceId}/threads/{threadId}/turns:
     get:
@@ -273,13 +646,30 @@ paths:
             type: string
       responses:
         "200":
-          $ref: "#/components/responses/Success"
-        default:
-          $ref: "#/components/responses/Error"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: false
     post:
       operationId: createTurn
       parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
         - in: path
           name: workspaceId
           required: true
@@ -290,7 +680,6 @@ paths:
           required: true
           schema:
             type: string
-        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -299,11 +688,21 @@ paths:
               $ref: "#/components/schemas/CreateTurnMutation"
       responses:
         "202":
-          $ref: "#/components/responses/Success"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
-        default:
-          $ref: "#/components/responses/Error"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: true
   /v2/workspaces/{workspaceId}/events:
     get:
@@ -314,111 +713,226 @@ paths:
           required: true
           schema:
             type: string
-        - $ref: "#/components/parameters/LastEventId"
-        - name: after
-          in: query
+        - in: header
+          name: Last-Event-ID
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+        - in: query
+          name: after
           required: false
           schema:
             type: integer
             minimum: 0
       responses:
         "200":
-          description: 使用 tenant position 作为 id 的事件流
+          description: 成功
           content:
             text/event-stream:
               schema:
                 type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "410":
           $ref: "#/components/responses/CursorExpired"
-        default:
-          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: false
   /v2/executions/{executionId}/commands:
     post:
       operationId: commandExecution
       parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
         - in: path
           name: executionId
           required: true
           schema:
             type: string
-        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/VersionedMutation"
+              type: object
+              required:
+                - expectedStreamVersion
+                - command
+              properties:
+                expectedStreamVersion:
+                  type: integer
+                  minimum: 0
+                command:
+                  enum:
+                    - follow_up
+                    - steer
+                    - cancel
+                    - resume
+                message:
+                  type: string
+                  minLength: 1
+              additionalProperties: false
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
-        default:
-          $ref: "#/components/responses/Error"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: true
   /v2/inbox:
     get:
       operationId: listInbox
       parameters:
-        - name: workspaceId
-          in: query
+        - in: query
+          name: workspaceId
           required: false
           schema:
             type: string
       responses:
         "200":
-          $ref: "#/components/responses/Success"
-        default:
-          $ref: "#/components/responses/Error"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: false
   /v2/activity:
     get:
       operationId: listActivity
+      parameters: []
       responses:
         "200":
-          $ref: "#/components/responses/Success"
-        default:
-          $ref: "#/components/responses/Error"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: false
   /v2/approvals/{approvalId}/decisions:
     post:
       operationId: decideApproval
       parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
         - in: path
           name: approvalId
           required: true
           schema:
             type: string
-        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/VersionedMutation"
+              type: object
+              required:
+                - expectedStreamVersion
+                - decision
+              properties:
+                expectedStreamVersion:
+                  type: integer
+                  minimum: 0
+                decision:
+                  enum:
+                    - approve_once
+                    - deny
+              additionalProperties: false
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
-        default:
-          $ref: "#/components/responses/Error"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: true
   /v2/deliverables:
     get:
       operationId: listDeliverables
+      parameters:
+        - in: query
+          name: workspaceId
+          required: false
+          schema:
+            type: string
       responses:
         "200":
-          $ref: "#/components/responses/Success"
-        default:
-          $ref: "#/components/responses/Error"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: false
   /v2/assets:
     post:
       operationId: createAssets
       parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
       requestBody:
         required: true
         content:
@@ -427,11 +941,21 @@ paths:
               $ref: "#/components/schemas/CreateAssetsMutation"
       responses:
         "201":
-          $ref: "#/components/responses/Success"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
-        default:
-          $ref: "#/components/responses/Error"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: true
   /v2/assets/{assetId}:
     get:
@@ -442,8 +966,8 @@ paths:
           required: true
           schema:
             type: string
-        - name: content
-          in: query
+        - in: query
+          name: content
           required: false
           schema:
             type: integer
@@ -451,19 +975,35 @@ paths:
               - 1
       responses:
         "200":
-          $ref: "#/components/responses/Success"
-        default:
-          $ref: "#/components/responses/Error"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: false
     delete:
       operationId: deleteAsset
       parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
         - in: path
           name: assetId
           required: true
           schema:
             type: string
-        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -472,353 +1012,774 @@ paths:
               $ref: "#/components/schemas/DeleteAssetMutation"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
-        default:
-          $ref: "#/components/responses/Error"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: true
   /v2/memories:
     get:
       operationId: listMemories
       parameters:
-        - name: namespace
-          in: query
+        - in: query
+          name: workspaceId
+          required: false
+          schema:
+            type: string
+        - in: query
+          name: namespace
           required: false
           schema:
             type: string
       responses:
         "200":
-          $ref: "#/components/responses/Success"
-        default:
-          $ref: "#/components/responses/Error"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: false
     post:
       operationId: proposeMemory
       parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/Mutation"
+              type: object
+              required:
+                - workspaceId
+                - namespace
+                - resourceId
+                - sourceEventId
+                - value
+              properties:
+                workspaceId: &a3
+                  type: string
+                  minLength: 1
+                namespace: *a3
+                resourceId: *a3
+                sourceEventId: *a3
+                scopeType:
+                  enum:
+                    - workspace
+                    - thread
+                    - resource
+                    - principal
+                confidence:
+                  type: number
+                  minimum: 0
+                  maximum: 1
+                value:
+                  type: object
+                  additionalProperties: true
+                expiresAt: *a3
+                derivedFromMemoryId: *a3
+                derivedViaShareGrantId: *a3
+              additionalProperties: false
       responses:
         "201":
-          $ref: "#/components/responses/Success"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
-        default:
-          $ref: "#/components/responses/Error"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: false
   /v2/memories/{memoryId}:
     patch:
       operationId: reviseMemoryProposal
       parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
         - in: path
           name: memoryId
           required: true
           schema:
             type: string
-        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/VersionedMutation"
+              type: object
+              required:
+                - expectedStreamVersion
+                - confidence
+                - value
+              properties:
+                expectedStreamVersion:
+                  type: integer
+                  minimum: 0
+                confidence:
+                  type: number
+                  minimum: 0
+                  maximum: 1
+                value:
+                  type: object
+                  additionalProperties: true
+              additionalProperties: false
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
-        default:
-          $ref: "#/components/responses/Error"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: true
     delete:
       operationId: deleteMemory
       parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
         - in: path
           name: memoryId
           required: true
           schema:
             type: string
-        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/VersionedMutation"
+              type: object
+              required:
+                - expectedStreamVersion
+                - reason
+              properties:
+                expectedStreamVersion:
+                  type: integer
+                  minimum: 0
+                reason:
+                  type: string
+                  minLength: 1
+              additionalProperties: false
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
-        default:
-          $ref: "#/components/responses/Error"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: true
   /v2/memories/{memoryId}/decisions:
     post:
       operationId: decideMemory
       parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
         - in: path
           name: memoryId
           required: true
           schema:
             type: string
-        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/VersionedMutation"
+              type: object
+              required:
+                - expectedStreamVersion
+                - decision
+              properties:
+                expectedStreamVersion:
+                  type: integer
+                  minimum: 0
+                decision:
+                  enum:
+                    - accept
+                    - reject
+              additionalProperties: false
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
-        default:
-          $ref: "#/components/responses/Error"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: true
   /v2/share-grants:
     get:
       operationId: listShareGrants
+      parameters: []
       responses:
         "200":
-          $ref: "#/components/responses/Success"
-        default:
-          $ref: "#/components/responses/Error"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: false
     post:
       operationId: createShareGrant
       parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/VersionedMutation"
+              type: object
+              required:
+                - memoryId
+                - toNamespace
+                - expectedStreamVersion
+              properties:
+                memoryId: &a4
+                  type: string
+                  minLength: 1
+                toNamespace: *a4
+                expectedStreamVersion:
+                  type: integer
+                  minimum: 0
+              additionalProperties: false
       responses:
         "201":
-          $ref: "#/components/responses/Success"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
-        default:
-          $ref: "#/components/responses/Error"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: true
   /v2/share-grants/{grantId}:
     delete:
       operationId: revokeShareGrant
       parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
         - in: path
           name: grantId
           required: true
           schema:
             type: string
-        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/VersionedMutation"
+              type: object
+              required:
+                - expectedStreamVersion
+              properties:
+                expectedStreamVersion:
+                  type: integer
+                  minimum: 0
+              additionalProperties: false
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
-        default:
-          $ref: "#/components/responses/Error"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: true
   /v2/model-connections/presets:
     get:
       operationId: listModelPresets
+      parameters: []
       responses:
         "200":
-          $ref: "#/components/responses/Success"
-        default:
-          $ref: "#/components/responses/Error"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: false
   /v2/model-connections:
     get:
       operationId: listModelConnections
+      parameters: []
       responses:
         "200":
-          $ref: "#/components/responses/Success"
-        default:
-          $ref: "#/components/responses/Error"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: false
     post:
       operationId: createModelConnection
       parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/Mutation"
+              type: object
+              required:
+                - presetId
+                - apiKey
+              properties:
+                presetId:
+                  enum:
+                    - openai
+                    - deepseek
+                    - anthropic
+                apiKey: &a5
+                  type: string
+                  minLength: 1
+                displayName: *a5
+              additionalProperties: false
       responses:
         "201":
-          $ref: "#/components/responses/Success"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
-        default:
-          $ref: "#/components/responses/Error"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: false
   /v2/model-connections/{connectionId}/probe:
     post:
       operationId: probeModelConnection
       parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
         - in: path
           name: connectionId
           required: true
           schema:
             type: string
-        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/VersionedMutation"
+              type: object
+              required:
+                - expectedStreamVersion
+              properties:
+                expectedStreamVersion:
+                  type: integer
+                  minimum: 0
+              additionalProperties: false
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
-        default:
-          $ref: "#/components/responses/Error"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: true
   /v2/plugins/installations:
     post:
       operationId: installPlugin
       parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/Mutation"
+              type: object
+              required:
+                - pluginId
+                - version
+              properties:
+                pluginId: &a6
+                  type: string
+                  minLength: 1
+                version: *a6
+              additionalProperties: false
       responses:
         "201":
-          $ref: "#/components/responses/Success"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
-        default:
-          $ref: "#/components/responses/Error"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: false
     get:
       operationId: listPluginInstallations
+      parameters: []
       responses:
         "200":
-          $ref: "#/components/responses/Success"
-        default:
-          $ref: "#/components/responses/Error"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: false
   /v2/plugins/installations/{pluginId}:
     patch:
       operationId: updatePlugin
       parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
         - in: path
           name: pluginId
           required: true
           schema:
             type: string
-        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/VersionedMutation"
+              type: object
+              required:
+                - expectedStreamVersion
+                - version
+              properties:
+                expectedStreamVersion:
+                  type: integer
+                  minimum: 0
+                version:
+                  type: string
+                  minLength: 1
+              additionalProperties: false
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
-        default:
-          $ref: "#/components/responses/Error"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: true
     delete:
       operationId: purgePlugin
       parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
         - in: path
           name: pluginId
           required: true
           schema:
             type: string
-        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/VersionedMutation"
+              type: object
+              required:
+                - expectedStreamVersion
+              properties:
+                expectedStreamVersion:
+                  type: integer
+                  minimum: 0
+              additionalProperties: false
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
-        default:
-          $ref: "#/components/responses/Error"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: true
   /v2/plugins/installations/{pluginId}/disable:
     post:
       operationId: disablePlugin
       parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
         - in: path
           name: pluginId
           required: true
           schema:
             type: string
-        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/VersionedMutation"
+              type: object
+              required:
+                - expectedStreamVersion
+              properties:
+                expectedStreamVersion:
+                  type: integer
+                  minimum: 0
+              additionalProperties: false
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
-        default:
-          $ref: "#/components/responses/Error"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: true
   /v2/workspaces/{workspaceId}/plugin-activations:
     post:
       operationId: activatePlugin
       parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
         - in: path
           name: workspaceId
           required: true
           schema:
             type: string
-        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/VersionedMutation"
+              type: object
+              required:
+                - expectedStreamVersion
+                - pluginId
+              properties:
+                expectedStreamVersion:
+                  type: integer
+                  minimum: 0
+                pluginId:
+                  type: string
+                  minLength: 1
+              additionalProperties: false
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
-        default:
-          $ref: "#/components/responses/Error"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: true
   /v2/workspaces/{workspaceId}/plugin-activations/{pluginId}:
     delete:
       operationId: deactivatePlugin
       parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
         - in: path
           name: workspaceId
           required: true
@@ -829,47 +1790,95 @@ paths:
           required: true
           schema:
             type: string
-        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/VersionedMutation"
+              type: object
+              required:
+                - expectedStreamVersion
+              properties:
+                expectedStreamVersion:
+                  type: integer
+                  minimum: 0
+              additionalProperties: false
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
-        default:
-          $ref: "#/components/responses/Error"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: true
   /v2/plugins/opc/opportunities:
     get:
       operationId: listOpcOpportunities
+      parameters:
+        - in: query
+          name: workspaceId
+          required: true
+          schema:
+            type: string
       responses:
         "200":
-          $ref: "#/components/responses/Success"
-        default:
-          $ref: "#/components/responses/Error"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: false
     post:
       operationId: createOpcOpportunity
       parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/VersionedMutation"
+              $ref: "#/components/schemas/CreateProductObjectMutation"
       responses:
-        "200":
-          $ref: "#/components/responses/Success"
+        "201":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
-        default:
-          $ref: "#/components/responses/Error"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: true
   /v2/plugins/opc/opportunities/{opportunityId}:
     get:
@@ -880,22 +1889,43 @@ paths:
           required: true
           schema:
             type: string
+        - in: query
+          name: workspaceId
+          required: true
+          schema:
+            type: string
       responses:
         "200":
-          $ref: "#/components/responses/Success"
-        default:
-          $ref: "#/components/responses/Error"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: false
   /v2/plugins/opc/opportunities/{opportunityId}/commands:
     post:
       operationId: commandOpcOpportunity
       parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
         - in: path
           name: opportunityId
           required: true
           schema:
             type: string
-        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -904,11 +1934,21 @@ paths:
               $ref: "#/components/schemas/OpcOpportunityCommandMutation"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
-        default:
-          $ref: "#/components/responses/Error"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: true
   /v2/plugins/opc/opportunities/{opportunityId}/deliverables:
     get:
@@ -919,22 +1959,43 @@ paths:
           required: true
           schema:
             type: string
+        - in: query
+          name: workspaceId
+          required: true
+          schema:
+            type: string
       responses:
         "200":
-          $ref: "#/components/responses/Success"
-        default:
-          $ref: "#/components/responses/Error"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: false
   /v2/plugins/opc/opportunities/{opportunityId}/exports:
     post:
       operationId: exportOpcDeliverables
       parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
         - in: path
           name: opportunityId
           required: true
           schema:
             type: string
-        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -942,116 +2003,217 @@ paths:
             schema:
               $ref: "#/components/schemas/VersionedMutation"
       responses:
-        "200":
-          $ref: "#/components/responses/Success"
+        "201":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
-        default:
-          $ref: "#/components/responses/Error"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: true
   /v2/plugins/opc/samples/read-only:
     post:
       operationId: runOpcReadOnlySample
       parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/VersionedMutation"
+              $ref: "#/components/schemas/RunReadOnlySampleMutation"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
-        default:
-          $ref: "#/components/responses/Error"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: true
   /v2/plugins/coding/repositories:
     post:
       operationId: createCodingRepository
       parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/VersionedMutation"
+              $ref: "#/components/schemas/CreateProductObjectMutation"
       responses:
-        "200":
-          $ref: "#/components/responses/Success"
+        "201":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
-        default:
-          $ref: "#/components/responses/Error"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: true
   /v2/plugins/coding/tasks:
     get:
       operationId: listCodingTasks
-      responses:
-        "200":
-          $ref: "#/components/responses/Success"
-        default:
-          $ref: "#/components/responses/Error"
-      x-muniu-versioned: false
-    post:
-      operationId: createCodingTask
       parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/VersionedMutation"
-      responses:
-        "200":
-          $ref: "#/components/responses/Success"
-        "409":
-          $ref: "#/components/responses/Conflict"
-        default:
-          $ref: "#/components/responses/Error"
-      x-muniu-versioned: true
-  /v2/plugins/coding/samples/read-only:
-    post:
-      operationId: runCodingReadOnlySample
-      parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/VersionedMutation"
-      responses:
-        "200":
-          $ref: "#/components/responses/Success"
-        "409":
-          $ref: "#/components/responses/Conflict"
-        default:
-          $ref: "#/components/responses/Error"
-      x-muniu-versioned: true
-  /v2/plugins/coding/runners:
-    get:
-      operationId: listCodingRunners
-      parameters:
-        - name: workspaceId
-          in: query
+        - in: query
+          name: workspaceId
           required: true
           schema:
             type: string
       responses:
         "200":
-          $ref: "#/components/responses/Success"
-        default:
-          $ref: "#/components/responses/Error"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+      x-muniu-versioned: false
+    post:
+      operationId: createCodingTask
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProductObjectMutation"
+      responses:
+        "201":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+      x-muniu-versioned: true
+  /v2/plugins/coding/samples/read-only:
+    post:
+      operationId: runCodingReadOnlySample
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RunReadOnlySampleMutation"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+      x-muniu-versioned: true
+  /v2/plugins/coding/runners:
+    get:
+      operationId: listCodingRunners
+      parameters:
+        - in: query
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: false
   /v2/plugins/coding/runners/{runnerId}/inspections:
     post:
       operationId: inspectCodingRunner
       parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
         - in: path
           name: runnerId
           required: true
@@ -1060,7 +2222,6 @@ paths:
             enum:
               - claude-cli
               - codex-cli
-        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -1069,20 +2230,31 @@ paths:
               $ref: "#/components/schemas/InspectCodingRunnerMutation"
       responses:
         "200":
-          description: 返回未执行目标路径所得的文件身份摘要
+          description: 成功
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/RunnerBinaryInspectionEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
-        default:
-          $ref: "#/components/responses/Error"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: false
   /v2/plugins/coding/runners/{runnerId}/confirmations:
     post:
       operationId: confirmCodingRunner
       parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
         - in: path
           name: runnerId
           required: true
@@ -1091,7 +2263,6 @@ paths:
             enum:
               - claude-cli
               - codex-cli
-        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -1100,11 +2271,21 @@ paths:
               $ref: "#/components/schemas/ConfirmCodingRunnerMutation"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
-        default:
-          $ref: "#/components/responses/Error"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: true
   /v2/plugins/coding/executions/{executionId}/reconciliation:
     get:
@@ -1117,24 +2298,36 @@ paths:
             type: string
       responses:
         "200":
-          description: 返回人工核对所需版本、可用决定和权威证据摘要
+          description: 成功
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/CodingReconciliationEnvelope"
-        default:
-          $ref: "#/components/responses/Error"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: false
   /v2/plugins/coding/executions/{executionId}/reconciliation-decisions:
     post:
       operationId: decideCodingReconciliation
       parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
         - in: path
           name: executionId
           required: true
           schema:
             type: string
-        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -1143,63 +2336,214 @@ paths:
               $ref: "#/components/schemas/DecideCodingReconciliationMutation"
       responses:
         "200":
-          $ref: "#/components/responses/Success"
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiEnvelope"
         "202":
           description: 已接受标记完成意图，等待受控 Worker 执行权威 Gate
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Envelope"
+                $ref: "#/components/schemas/ApiEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
-        default:
-          $ref: "#/components/responses/Error"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: true
 components:
-  parameters:
-    IdempotencyKey:
-      name: Idempotency-Key
-      in: header
-      required: true
-      schema:
-        type: string
-        minLength: 1
-    LastEventId:
-      name: Last-Event-ID
-      in: header
-      required: false
-      schema:
-        type: integer
-        minimum: 0
-  responses:
-    Success:
-      description: 成功
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/Envelope"
-    Conflict:
-      description: stream version 或幂等键冲突
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/ApiError"
-    CursorExpired:
-      description: 事件游标已超出保留期
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/ApiError"
-    Error:
-      description: 统一错误
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/ApiError"
   schemas:
-    Mutation:
+    ApiEnvelope:
       type: object
-      additionalProperties: true
+      required:
+        - data
+        - traceId
+      properties:
+        data: {}
+        traceId:
+          type: string
+    RunnerBinaryInspectionEnvelope:
+      type: object
+      additionalProperties: false
+      required:
+        - data
+        - traceId
+      properties:
+        data:
+          $ref: "#/components/schemas/RunnerBinaryInspection"
+        traceId:
+          type: string
+    RunnerBinaryInspection:
+      type: object
+      additionalProperties: false
+      required:
+        - requestedPath
+        - realPath
+        - sha256
+        - device
+        - inode
+        - byteLength
+        - modifiedAtMs
+      properties:
+        requestedPath:
+          type: string
+          minLength: 1
+        realPath:
+          type: string
+          minLength: 1
+        sha256:
+          type: string
+          pattern: ^[0-9a-f]{64}$
+        device:
+          type: string
+          minLength: 1
+        inode:
+          type: string
+          minLength: 1
+        byteLength:
+          type: integer
+          minimum: 1
+        modifiedAtMs:
+          type: number
+          minimum: 0
+    CodingReconciliationEnvelope:
+      type: object
+      additionalProperties: false
+      required:
+        - data
+        - traceId
+      properties:
+        data:
+          $ref: "#/components/schemas/CodingReconciliation"
+        traceId:
+          type: string
+    CodingReconciliation:
+      type: object
+      additionalProperties: false
+      required:
+        - executionId
+        - workspaceId
+        - taskTitle
+        - nextStep
+        - runnerId
+        - status
+        - expectedStreamVersion
+        - expectedCodingStreamVersion
+        - evidence
+        - newCall
+        - availableDecisions
+      properties:
+        executionId:
+          type: string
+          minLength: 1
+        workspaceId:
+          type: string
+          minLength: 1
+        taskTitle:
+          type: string
+          minLength: 1
+        nextStep:
+          type: string
+          minLength: 1
+        runnerId:
+          type: string
+          enum:
+            - claude-cli
+            - codex-cli
+        status:
+          type: string
+          const: needs_reconciliation
+        expectedStreamVersion:
+          type: integer
+          minimum: 1
+        expectedCodingStreamVersion:
+          type: integer
+          minimum: 1
+        evidence:
+          type: object
+          additionalProperties: false
+          required:
+            - candidateCount
+            - gateCount
+            - markCompletedAllowed
+            - summary
+          properties:
+            candidateCount:
+              type: integer
+              minimum: 0
+            gateCount:
+              type: integer
+              minimum: 0
+            markCompletedAllowed:
+              type: boolean
+            codeEvidenceDigest:
+              type: string
+              pattern: ^[0-9a-f]{64}$
+            summary:
+              type: string
+              minLength: 1
+        newCall:
+          type: object
+          additionalProperties: false
+          required:
+            - allowed
+            - summary
+          properties:
+            allowed:
+              type: boolean
+            summary:
+              type: string
+              minLength: 1
+        availableDecisions:
+          type: array
+          minItems: 0
+          uniqueItems: true
+          items:
+            type: string
+            enum:
+              - terminate
+              - mark_completed
+              - create_new_call
+    ApiError:
+      type: object
+      additionalProperties: false
+      required:
+        - code
+        - message
+        - action
+        - fieldIssues
+        - traceId
+        - retryable
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        action:
+          type: string
+        fieldIssues:
+          type: array
+          items:
+            type: object
+            required:
+              - field
+              - message
+            properties:
+              field:
+                type: string
+              message:
+                type: string
+        traceId:
+          type: string
+        retryable:
+          type: boolean
     VersionedMutation:
       type: object
       required:
@@ -1414,188 +2758,64 @@ components:
             - terminate
             - mark_completed
             - create_new_call
-    Envelope:
-      type: object
-      required:
-        - data
-        - traceId
-      properties:
-        data: {}
-        traceId:
-          type: string
-    RunnerBinaryInspectionEnvelope:
+    CreateProductObjectMutation:
       type: object
       additionalProperties: false
       required:
-        - data
-        - traceId
-      properties:
-        data:
-          $ref: "#/components/schemas/RunnerBinaryInspection"
-        traceId:
-          type: string
-    RunnerBinaryInspection:
-      type: object
-      additionalProperties: false
-      required:
-        - requestedPath
-        - realPath
-        - sha256
-        - device
-        - inode
-        - byteLength
-        - modifiedAtMs
-      properties:
-        requestedPath:
-          type: string
-          minLength: 1
-        realPath:
-          type: string
-          minLength: 1
-        sha256:
-          type: string
-          pattern: ^[0-9a-f]{64}$
-        device:
-          type: string
-          minLength: 1
-        inode:
-          type: string
-          minLength: 1
-        byteLength:
-          type: integer
-          minimum: 1
-        modifiedAtMs:
-          type: number
-          minimum: 0
-    CodingReconciliationEnvelope:
-      type: object
-      additionalProperties: false
-      required:
-        - data
-        - traceId
-      properties:
-        data:
-          $ref: "#/components/schemas/CodingReconciliation"
-        traceId:
-          type: string
-    CodingReconciliation:
-      type: object
-      additionalProperties: false
-      required:
-        - executionId
         - workspaceId
-        - taskTitle
-        - nextStep
-        - runnerId
-        - status
         - expectedStreamVersion
-        - expectedCodingStreamVersion
-        - evidence
-        - newCall
-        - availableDecisions
+        - input
       properties:
-        executionId:
-          type: string
-          minLength: 1
         workspaceId:
           type: string
           minLength: 1
-        taskTitle:
-          type: string
-          minLength: 1
-        nextStep:
-          type: string
-          minLength: 1
-        runnerId:
-          type: string
-          enum:
-            - claude-cli
-            - codex-cli
-        status:
-          type: string
-          const: needs_reconciliation
         expectedStreamVersion:
           type: integer
-          minimum: 1
-        expectedCodingStreamVersion:
+          const: 0
+        input:
+          type: string
+          minLength: 1
+    RunReadOnlySampleMutation:
+      type: object
+      additionalProperties: false
+      required:
+        - workspaceId
+        - expectedStreamVersion
+      properties:
+        workspaceId:
+          type: string
+          minLength: 1
+        expectedStreamVersion:
           type: integer
-          minimum: 1
-        evidence:
-          type: object
-          additionalProperties: false
-          required:
-            - candidateCount
-            - gateCount
-            - markCompletedAllowed
-            - summary
-          properties:
-            candidateCount:
-              type: integer
-              minimum: 0
-            gateCount:
-              type: integer
-              minimum: 0
-            markCompletedAllowed:
-              type: boolean
-            codeEvidenceDigest:
-              type: string
-              pattern: ^[0-9a-f]{64}$
-            summary:
-              type: string
-              minLength: 1
-        newCall:
-          type: object
-          additionalProperties: false
-          required:
-            - allowed
-            - summary
-          properties:
-            allowed:
-              type: boolean
-            summary:
-              type: string
-              minLength: 1
-        availableDecisions:
-          type: array
-          minItems: 0
-          uniqueItems: true
-          items:
-            type: string
-            enum:
-              - terminate
-              - mark_completed
-              - create_new_call
-    FieldIssue:
-      type: object
-      required:
-        - field
-        - message
-      properties:
-        field:
-          type: string
-        message:
-          type: string
-    ApiError:
-      type: object
-      required:
-        - code
-        - message
-        - action
-        - fieldIssues
-        - traceId
-        - retryable
-      properties:
-        code:
-          type: string
-        message:
-          type: string
-        action:
-          type: string
-        fieldIssues:
-          type: array
-          items:
-            $ref: "#/components/schemas/FieldIssue"
-        traceId:
-          type: string
-        retryable:
-          type: boolean
+          const: 0
+  responses:
+    BadRequest:
+      description: 请求无效
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    Unauthorized:
+      description: 需要认证
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    Conflict:
+      description: 流版本或幂等键冲突
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    CursorExpired:
+      description: 事件游标已过保留期
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    Unprocessable:
+      description: 请求不符合领域约束
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"

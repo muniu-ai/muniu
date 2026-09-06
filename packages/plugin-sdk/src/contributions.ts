@@ -2,8 +2,10 @@ import type {
   JsonObject,
   PluginManifestV1,
   ToolEffectClass,
+  PluginSurfacesV1,
 } from "@mn/contracts";
 import { PluginPolicyError } from "./errors.js";
+import { assertPluginSurfaces } from "./surfaces.js";
 
 export type PluginTrustBoundary = "process_equivalent";
 
@@ -93,6 +95,7 @@ export interface PluginActivationContextV1 {
 }
 
 export interface PluginDefinitionV1 {
+  readonly surfaces?: PluginSurfacesV1;
   readonly id: string;
   readonly version: string;
   readonly official: boolean;
@@ -170,6 +173,7 @@ export function assertPluginDefinition(definition: PluginDefinitionV1): void {
     }
   }
   if (definition.manifest) assertManifestDeclarations(definition.manifest, definition.contributions);
+  if (definition.surfaces) assertPluginSurfaces(definition.surfaces, definition.contributions);
   if (definition.manifest
     && Boolean(definition.manifest.contributes.healthCheck) !== Boolean(definition.healthCheck)) {
     throw invalidContribution("健康检查贡献与签名清单不一致");

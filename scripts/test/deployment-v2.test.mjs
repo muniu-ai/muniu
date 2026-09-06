@@ -14,6 +14,18 @@ const root = fileURLToPath(new URL("../..", import.meta.url));
 const read = (file) => readFileSync(join(root, file), "utf8");
 const legacyControlPlane = /apps\/api|mn-api|["'`]\/v1(?:\/|["'`])/u;
 
+test("container builds exclude host artifacts and compile Worker before Host", () => {
+  const ignored = read(".dockerignore").split(/\r?\n/u);
+  for (const pattern of ["**/dist", "**/node_modules", "apps/desktop-mac/src-tauri/binaries", "**/.env"]) {
+    assert.ok(ignored.includes(pattern), `missing Docker context exclusion: ${pattern}`);
+  }
+  const build = read("scripts/build-v2-runtime.mjs");
+  assert.ok(build.indexOf('"apps/worker"') < build.indexOf('"apps/host"'));
+  for (const vendor of ["loader", "include", "group", "timer", "hmr", "logger-console"]) {
+    assert.ok(build.includes(`"vendor/${vendor}"`), `missing clean build: ${vendor}`);
+  }
+});
+
 test("enterprise compose runs two v2 Hosts and two 30-second-lease Workers", () => {
   const compose = read("docker-compose.enterprise.yml");
   for (const service of ["host-a:", "host-b:", "worker-a:", "worker-b:"]) {
@@ -25,6 +37,10 @@ test("enterprise compose runs two v2 Hosts and two 30-second-lease Workers", () 
   assert.match(compose, /MN_ENGINE_LOCK_DIGEST:/);
   assert.match(compose, /MN_PLUGIN_LOCK_DIGEST:/);
   assert.doesNotMatch(compose, legacyControlPlane);
+  assert.match(compose, /127\.0\.0\.1:59080:8080/);
+  assert.match(compose, /host-a:\n\s+<<: \*runtime\n\s+networks: \[mn-v2, mn-v2-client\]/);
+  assert.match(compose, /mn-v2:\n\s+driver: bridge\n\s+internal: true/);
+  assert.doesNotMatch(compose.slice(compose.indexOf("  worker-a:"), compose.indexOf("\nvolumes:")), /mn-v2-client/);
 });
 
 test("企业 Host 可通过 Vault Transit 端口包装和解包受保护数据的 DEK", async () => {
@@ -157,6 +173,19 @@ test("Kind keeps candidate evidence separate from the authoritative Coding Gate"
   assert.match(gate, /issuer:\s*"coding-control-plane"/u);
   assert.match(verifier, /--read-only --network none/u);
   assert.match(verifier, /kind-authoritative-gate\.mjs/u);
+  assert.match(verifier, /kind-sandbox-image\.mjs/u);
+  const codingProof = read("scripts/kind-coding-proof.mjs");
+  assert.ok(codingProof.indexOf('"FailureTarget"') < codingProof.indexOf('"--for=condition=Complete"'));
+  assert.match(read("scripts/kind-production-coding.mjs"), /await captureCodingTask/u);
+});
+
+test("Kind downloads the complete pinned Calico manifest with bounded retries before applying it", () => {
+  const verifier = read("scripts/verify-kind-sandbox.sh");
+  assert.match(verifier, /curl --fail --location --retry 3 --retry-all-errors/u);
+  assert.match(verifier, /--connect-timeout 10 --max-time 120/u);
+  assert.match(verifier, /--output "\$\{calico_manifest\}"/u);
+  assert.match(verifier, /kubectl apply -f "\$\{calico_manifest\}"/u);
+  assert.doesNotMatch(verifier, /kubectl apply -f "https:/u);
 });
 
 test("PostgreSQL Host transaction commits Job and outbox with the event", () => {
@@ -205,6 +234,8 @@ test("enterprise Worker ships a production Agent execution bootstrap", async () 
   };
   const handlers = await module.createHandlers({
     store,
+    cas: {}, protectedPayloadKeyProvider: {}, sandboxRoot: "/fixture/sandboxes",
+    commandExecutor: { commitment: { driver: "kubernetes" }, async run() { throw new Error("unused"); } },
     secretStore: { async read() { return "fixture-key"; } },
     modelInvoker: async () => ({ content: "fixture", finishReason: "stop", usage: {} }),
     opcPublicWebReader: { async read() { return { status: 200 }; } },
@@ -221,7 +252,10 @@ test("enterprise Worker ships a production Agent execution bootstrap", async () 
   assert.match(host, /MN_WORKER_ENABLED/u);
   assert.match(host, /MN_WORKER_SUPPORTED_KINDS/u);
   assert.equal(typeof handlers["agent.execution.run"], "function");
-  assert.deepEqual(module.supportedKinds, ["system.noop", "agent.execution.run"]);
+  assert.deepEqual(module.supportedKinds, ["system.noop", "agent.execution.run",
+    "coding.reconciliation.verify", "coding.sandbox.cleanup"]);
+  assert.equal(typeof handlers["coding.reconciliation.verify"], "function");
+  assert.equal(typeof handlers["coding.sandbox.cleanup"], "function");
   assert.match(builtin, /VaultModelSecretStore/u);
   assert.match(builtin, /createKernelAgentTurnHandler/u);
   assert.match(builtin, /configured:\s*true/u);

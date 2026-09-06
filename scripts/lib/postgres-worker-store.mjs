@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { randomUUID } from "node:crypto";
+import { createProjectionFacts } from "@mn/contracts";
 
 import {
   computeEventDigest,
@@ -219,6 +220,7 @@ function assertJobProjectionMatchesPhysical(context, row, mode, workerId, fencin
 }
 
 async function appendEvent(client, hmacKey, context, request, occurredAt) {
+  if (!request.projection) throw new Error("Worker lifecycle event is missing projection facts");
   const expected = safeInteger(request.expectedStreamVersion, "expected streamVersion");
   await client.query(`
     insert into mn_v2.stream_heads (tenant_id, aggregate_type, aggregate_id, stream_version)
@@ -251,7 +253,10 @@ async function appendEvent(client, hmacKey, context, request, occurredAt) {
     ...(context.executionId ? { executionId: context.executionId } : {}),
     generation: context.generation,
     correlationId: request.correlationId,
-    publicPayload: request.publicPayload,
+    publicPayload: { ...request.publicPayload, projectionFacts: createProjectionFacts([
+      { namespace: request.aggregateType, id: request.aggregateId, value: request.projection },
+      ...(request.relatedProjections ?? []),
+    ]) },
     ...(context.head.previousDigest ? { previousDigest: context.head.previousDigest } : {}),
   };
   const digest = computeEventDigest(body);
@@ -343,6 +348,7 @@ async function settleTerminalJobBeforeClaim(client, hmacKey, context, row, worke
   };
   await appendEvent(client, hmacKey, context, {
     aggregateType: "job", aggregateId: jobId, expectedStreamVersion: context.jobStreamVersion,
+    projection: nextJob,
     type: "job.failed", actorId: `worker:${workerId}`,
     correlationId: `job:${jobId}:terminal-before-claim`,
     publicPayload: {
@@ -371,6 +377,7 @@ async function recordClaim(client, hmacKey, context, row, workerId, leaseExpires
   };
   await appendEvent(client, hmacKey, context, {
     aggregateType: "job", aggregateId: jobId, expectedStreamVersion: context.jobStreamVersion,
+    projection: nextJob,
     type: "job.leased", actorId: `worker:${workerId}`, correlationId,
     publicPayload: {
       ...(context.workspaceId ? { workspaceId: context.workspaceId } : {}),
@@ -395,6 +402,7 @@ async function recordClaim(client, hmacKey, context, row, workerId, leaseExpires
   await appendEvent(client, hmacKey, context, {
     aggregateType: "execution", aggregateId: context.executionId,
     expectedStreamVersion: context.executionStreamVersion, type: "execution.running",
+    projection: nextExecution,
     actorId: `worker:${workerId}`, correlationId,
     publicPayload: {
       workspaceId: context.workspaceId, jobId, status: "running", workerId, fencingToken,
@@ -418,6 +426,7 @@ async function recordRenewal(client, hmacKey, context, row, workerId, leaseExpir
   };
   await appendEvent(client, hmacKey, context, {
     aggregateType: "job", aggregateId: jobId, expectedStreamVersion: context.jobStreamVersion,
+    projection: nextJob,
     type: "job.lease_renewed", actorId: `worker:${workerId}`,
     correlationId: `job:${jobId}:fence:${fencingToken}`,
     publicPayload: {
@@ -451,6 +460,7 @@ async function recordTerminal(client, hmacKey, context, row, workerId, fencingTo
   };
   await appendEvent(client, hmacKey, context, {
     aggregateType: "job", aggregateId: jobId, expectedStreamVersion: context.jobStreamVersion,
+    projection: nextJob,
     type: `job.${status}`, actorId: `worker:${workerId}`, correlationId,
     publicPayload: {
       ...(context.workspaceId ? { workspaceId: context.workspaceId } : {}),
@@ -486,6 +496,7 @@ async function recordTerminal(client, hmacKey, context, row, workerId, fencingTo
   await appendEvent(client, hmacKey, context, {
     aggregateType: "execution", aggregateId: context.executionId,
     expectedStreamVersion: context.executionStreamVersion, type: `execution.${status}`,
+    projection: nextExecution,
     actorId: `worker:${workerId}`, correlationId,
     publicPayload: {
       workspaceId: context.workspaceId, jobId, status, ...(failureCode ? { failureCode } : {}),
@@ -518,6 +529,7 @@ async function recordInterrupted(client, hmacKey, context, row, workerId, fencin
   };
   await appendEvent(client, hmacKey, context, {
     aggregateType: "job", aggregateId: jobId, expectedStreamVersion: context.jobStreamVersion,
+    projection: nextJob,
     type: "job.failed", actorId: `worker:${workerId}`, correlationId,
     publicPayload: {
       workspaceId: context.workspaceId,
@@ -545,6 +557,7 @@ async function recordInterrupted(client, hmacKey, context, row, workerId, fencin
   await appendEvent(client, hmacKey, context, {
     aggregateType: "execution", aggregateId: context.executionId,
     expectedStreamVersion: context.executionStreamVersion, type: "execution.interrupted",
+    projection: nextExecution,
     actorId: `worker:${workerId}`, correlationId,
     publicPayload: {
       workspaceId: context.workspaceId,
@@ -582,6 +595,7 @@ async function recordJobReconciliation(client, hmacKey, context, row, workerId, 
     aggregateType: "job", aggregateId: jobId, expectedStreamVersion: context.jobStreamVersion,
     type: "job.failed", actorId: `worker:${workerId}`,
     correlationId: `reconciliation:${jobId}:${fencingToken}`,
+    projection: nextJob,
     publicPayload: {
       workspaceId: context.workspaceId, executionId: context.executionId, status: "failed",
       failureCode: RECONCILIATION_FAILURE.code, needsReconciliation: true, fencingToken,
@@ -623,14 +637,24 @@ export class PostgresWorkerStore {
       while (true) {
         await client.query("begin");
         try {
-          const prior = (await client.query(`
+          const candidate = (await client.query(`
             select * from mn_v2.jobs where ${conditions.join(" and ")}
             order by available_at, created_at, job_id
-            for update skip locked limit 1
+            limit 1
           `, parameters)).rows[0];
-          if (!prior) {
+          if (!candidate) {
             await client.query("commit");
             return undefined;
+          }
+          await client.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [String(candidate.tenant_id)]);
+          const prior = (await client.query(`
+            select * from mn_v2.jobs where ${conditions.join(" and ")}
+              and job_id = $${parameters.length + 1}
+            for update skip locked limit 1
+          `, [...parameters, String(candidate.job_id)])).rows[0];
+          if (!prior) {
+            await client.query("commit");
+            continue;
           }
           const context = await loadExecutionContext(client, prior);
           const genericContext = await loadGenericJobContext(client, prior);
@@ -695,6 +719,10 @@ export class PostgresWorkerStore {
   }
 
   async #ownedLeasedJob(client, jobId, workerId, fencingToken, occurredAt) {
+    const identity = (await client.query("select tenant_id from mn_v2.jobs where job_id = $1", [jobId])).rows[0];
+    if (!identity) throw new StaleFencingTokenError(jobId);
+    // Match Kernel lock ordering before acquiring any physical Job row lock.
+    await client.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [String(identity.tenant_id)]);
     const row = (await client.query(`
       select * from mn_v2.jobs
       where job_id = $1 and status = 'leased' and lease_owner = $2 and fencing_token = $3
@@ -883,7 +911,16 @@ export class PostgresWorkerStore {
         streamVersion: context.executionStreamVersion + 1,
         updatedAt: occurredAt,
       };
+      const inboxId = `reconciliation:${executionId}:${input.jobId}`;
+      const inbox = {
+        id: inboxId, tenantId: context.tenantId, workspaceId: context.workspaceId, executionId,
+        kind: "reconciliation", title: "外部操作结果需要人工核对",
+        summary: RECONCILIATION_FAILURE.message, risk: "unknown",
+        resourceSummary: input.jobId, createdAt: occurredAt, status: "open",
+      };
       await appendEvent(client, this.#hmacKey, context, {
+        projection: nextExecution,
+        relatedProjections: [{ namespace: "inbox", id: inboxId, value: inbox }],
         aggregateType: "execution", aggregateId: executionId,
         expectedStreamVersion: context.executionStreamVersion,
         type: "execution.needs_reconciliation", actorId: `worker:${workerId}`,
@@ -907,13 +944,6 @@ export class PostgresWorkerStore {
         returning execution_id
       `, [executionId, input.jobId, input.fencingToken, occurredAt]);
       if (reconciliation.rowCount !== 1) throw new Error("Execution 已由其他 Job 标记为需要人工核对");
-      const inboxId = `reconciliation:${executionId}:${input.jobId}`;
-      const inbox = {
-        id: inboxId, tenantId: context.tenantId, workspaceId: context.workspaceId, executionId,
-        kind: "reconciliation", title: "外部操作结果需要人工核对",
-        summary: RECONCILIATION_FAILURE.message, risk: "unknown",
-        resourceSummary: input.jobId, createdAt: occurredAt, status: "open",
-      };
       await client.query(`
         insert into mn_v2.projections (
           tenant_id, namespace, projection_key, stream_version, value_json, updated_at

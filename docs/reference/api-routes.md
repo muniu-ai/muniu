@@ -29,6 +29,9 @@ Agent OS 0.2 默认监听 `http://127.0.0.1:7318`。成功的 JSON 响应使用 
 
 | 方法 | 路径 | operationId | 幂等键 | stream version |
 | --- | --- | --- | --- | --- |
+| `POST` | `/v2/plugins/{pluginId}/{commandId}` | `runPluginCommand` | 必需 | 必需 |
+| `GET` | `/v2/workspaces/{workspaceId}/plugin-surfaces` | `getPluginSurfaces` | — | — |
+| `GET` | `/v2/plugins/catalog` | `listPluginCatalog` | — | — |
 | `GET` | `/v2/openapi.json` | `getOpenApi` | — | — |
 | `GET` | `/v2/health` | `getHealth` | — | — |
 | `GET` | `/v2/readiness` | `getReadiness` | — | — |

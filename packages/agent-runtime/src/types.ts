@@ -7,6 +7,7 @@ import type {
   JsonValue,
   ResourceRef,
   ToolCallIntent,
+  ToolCallCommitment,
   ToolEffectClass,
 } from "@mn/contracts";
 
@@ -60,6 +61,7 @@ export interface ContributionResource {
 }
 
 export interface PromptContribution extends ContributionResource {
+  readonly refreshAtBoundary?: boolean;
   readonly render: (context: {
     readonly scope: ScopeIdentity;
     readonly executionId: string;
@@ -193,8 +195,8 @@ export interface RuntimeStore {
 }
 
 export type ToolAuthorization =
-  | { readonly mode: "auto"; readonly intent: ToolCallIntent }
-  | { readonly mode: "approve_once"; readonly approvedIntent: ToolCallIntent }
+  | { readonly mode: "auto"; readonly intent: ToolCallCommitment }
+  | { readonly mode: "approve_once"; readonly approvedIntent: ToolCallCommitment }
   | { readonly mode: "deny"; readonly reason?: string };
 
 /**

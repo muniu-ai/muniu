@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+import { appendKernelEvent } from "@mn/kernel";
 
 import type { Approval, Asset, Deliverable, JsonObject, Thread, Workspace } from "@mn/contracts";
 import {
@@ -163,7 +164,7 @@ export class KernelOpcRepository implements OpcRepository {
         transaction.putProjection(OPC_EVENTS_PROJECTION, key, events);
         transaction.putProjection(OPC_PROJECTION, request.opportunityId, aggregate);
         for (const event of appended) {
-          transaction.appendEvent({
+          appendKernelEvent(transaction, {
             tenantId: scope.tenantId,
             aggregateType: "opc.opportunity",
             aggregateId: request.opportunityId,
@@ -304,7 +305,7 @@ export async function captureOpportunity(options: ProductMutationOptions): Promi
       transaction.putProjection(OPC_EVENTS_PROJECTION, opcEventsKey(options.workspaceId, opportunityId), [storedEvent]);
       transaction.putProjection(OPC_PROJECTION, opportunityId, aggregate);
       transaction.putProjection("thread", threadId, thread);
-      transaction.appendEvent({
+      appendKernelEvent(transaction, {
         tenantId: options.tenantId,
         aggregateType: "thread",
         aggregateId: threadId,
@@ -320,7 +321,7 @@ export async function captureOpportunity(options: ProductMutationOptions): Promi
           resourceId: opportunityId,
         },
       });
-      transaction.appendEvent({
+      appendKernelEvent(transaction, {
         tenantId: options.tenantId,
         aggregateType: "opc.opportunity",
         aggregateId: opportunityId,
@@ -392,7 +393,7 @@ export async function exportOpcOpportunity(options: OpcExportOptions): Promise<r
           updatedAt: createdAt,
         };
         transaction.putProjection("deliverable", deliverable.id, deliverable);
-        transaction.appendEvent({
+        appendKernelEvent(transaction, {
           tenantId: options.tenantId,
           aggregateType: "deliverable",
           aggregateId: deliverable.id,
@@ -505,7 +506,7 @@ export async function captureCodingRepository(options: ProductMutationOptions): 
         updatedAt: createdAt,
       };
       transaction.putProjection(CODING_REPOSITORY_PROJECTION, repository.id, repository);
-      transaction.appendEvent({
+      appendKernelEvent(transaction, {
         tenantId: options.tenantId,
         aggregateType: "coding.repository",
         aggregateId: repository.id,
@@ -565,7 +566,7 @@ export async function captureCodingTask(options: ProductMutationOptions): Promis
       };
       transaction.putProjection(CODING_TASK_PROJECTION, task.id, task);
       transaction.putProjection("thread", thread.id, thread);
-      transaction.appendEvent({
+      appendKernelEvent(transaction, {
         tenantId: options.tenantId,
         aggregateType: "coding.task",
         aggregateId: task.id,
@@ -576,7 +577,7 @@ export async function captureCodingTask(options: ProductMutationOptions): Promis
         correlationId,
         publicPayload: { workspaceId: options.workspaceId, repositoryId: task.repositoryId, title: task.title },
       });
-      transaction.appendEvent({
+      appendKernelEvent(transaction, {
         tenantId: options.tenantId,
         aggregateType: "thread",
         aggregateId: thread.id,
@@ -644,7 +645,7 @@ export async function runReadOnlySample(options: Omit<ProductMutationOptions, "i
         status: "completed",
         summary: pluginId === "opc" ? "公开资料读取策略检查通过" : "仓库只读能力检查通过",
       } as const;
-      transaction.appendEvent({
+      appendKernelEvent(transaction, {
         tenantId: options.tenantId,
         aggregateType: "plugin.sample",
         aggregateId: sampleId,

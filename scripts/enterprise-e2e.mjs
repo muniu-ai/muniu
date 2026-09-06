@@ -9,9 +9,12 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { computeEventHmac } from "@mn/storage";
+import { replayCoreProjections } from "@mn/kernel";
 
 import { seedHostFlow, verifyCommittedEvent } from "./enterprise-host-flow.mjs";
 import { SigV4S3Client } from "./lib/s3-client.mjs";
+import { createPostgresPool } from "./lib/postgres-pool.mjs";
+import { PostgresKernelStore } from "./lib/postgres-kernel-store.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const composeFile = join(root, "docker-compose.enterprise.yml");
@@ -80,10 +83,9 @@ async function waitFor(check, label, timeoutMs = 60_000, intervalMs = 250) {
 }
 
 async function composeFixture() {
-  const pg = await import("pg");
   await compose("config", "--quiet");
   await compose("up", "--build", "--detach", "--wait");
-  const pool = new pg.default.Pool({ connectionString: "postgresql://mn:mn-e2e-only@127.0.0.1:55432/mn_enterprise" });
+  const pool = createPostgresPool({ connectionString: "postgresql://mn:mn-e2e-only@127.0.0.1:55432/mn_enterprise" });
   try {
     const state = await seedHostFlow();
     const tenantBTokenResponse = await fetch("http://127.0.0.1:59080/token?tenant=tenant-b&sub=owner-b@example.test", { method: "POST" });
@@ -121,11 +123,32 @@ async function composeFixture() {
 
     await compose("restart", "postgres");
     await waitFor(async () => {
-      const response = await fetch("http://127.0.0.1:17319/v2/readiness").catch(() => undefined);
-      return response?.ok;
+      const response = await fetch("http://127.0.0.1:17319/v2/readiness", { signal: AbortSignal.timeout(5000) });
+      if (response.ok) return true;
+      const body = await response.json();
+      const codes = (body.data?.issues ?? []).map(issue => issue.code)
+        .filter(code => typeof code === "string" && /^[A-Z_]+$/u.test(code));
+      throw new Error(`readiness HTTP ${response.status}: ${codes.join(",")}`);
     }, "PostgreSQL 重启后的 Host readiness");
     await verifyCommittedEvent(state);
     process.stdout.write("PostgreSQL 重启后，已提交事件仍可读取，RPO 0\n");
+
+    const hmacKey = Buffer.from("ZW50ZXJwcmlzZS1lMmUtaG1hYy1maXh0dXJlLWtleS0wMg==", "base64");
+    const kernelStore = new PostgresKernelStore({ pool, hmacKey });
+    const allEvents = [];
+    for (;;) {
+      const page = await kernelStore.readEvents(state.tenantId, allEvents.at(-1)?.position ?? 0, 500);
+      allEvents.push(...page.events);
+      if (page.events.length < 500) break;
+    }
+    const rebuilt = replayCoreProjections(allEvents, state.tenantId, hmacKey);
+    for (const record of rebuilt.records) {
+      const persisted = await pool.query(`select value_json from mn_v2.projections
+        where tenant_id = $1 and namespace = $2 and projection_key = $3`,
+      [state.tenantId, record.namespace, record.id]);
+      assert.deepEqual(persisted.rows[0]?.value_json, record.value, `${record.namespace}:${record.id}`);
+    }
+    process.stdout.write("企业核心投影从已认证事件重放后与查询表一致\n");
 
     await pool.query("update mn_v2.tenant_heads set retention_floor = $2 where tenant_id = $1", [state.tenantId, state.cursor + 1]);
     const expired = await fetch(`http://127.0.0.1:17319/v2/workspaces/${state.workspaceId}/events?after=0`, {
@@ -251,7 +274,8 @@ async function verifyWorkers(pool, workspaceId) {
   `);
   assert.equal(lifecycleProjection.rows[0]?.value_json.status, "failed");
   assert.equal(Number(lifecycleProjection.rows[0]?.stream_version), 2);
-  assert.equal(lifecycleProjection.rows[0]?.value_json.failureCode, "JOB_HANDLER_NOT_FOUND");
+  assert.equal(lifecycleProjection.rows[0]?.value_json.failureCode, "JOB_EXECUTION_FAILED",
+    "fixture 注册失败执行器，验证已知失败的原子提交；真实模型与沙箱由 Kind 生产链验证");
   const lifecycleJobProjection = await pool.query(`
     select stream_version, value_json from mn_v2.projections
     where tenant_id = 'tenant-enterprise-e2e'

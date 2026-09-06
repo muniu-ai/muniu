@@ -6,3 +6,4 @@ export * from "./kernel.js";
 export * from "./memory.js";
 export * from "./models.js";
 export * from "./store.js";
+export * from "./projections.js";

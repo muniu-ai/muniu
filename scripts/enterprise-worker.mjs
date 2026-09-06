@@ -9,14 +9,16 @@ import {
   WORKER_LEASE_MILLISECONDS,
   workerHandlerReadiness,
 } from "@mn/worker";
-import pg from "pg";
+import { S3Cas } from "@mn/storage";
+import { createPostgresPool } from "./lib/postgres-pool.mjs";
+import { createReadinessHeartbeat, probeWorkerLocks } from "./lib/worker-readiness.mjs";
 
 import { PostgresKernelStore } from "./lib/postgres-kernel-store.mjs";
 import { PostgresWorkerStore } from "./lib/postgres-worker-store.mjs";
 import { createEnterpriseWorkerStore } from "./lib/enterprise-worker-store.mjs";
 import { parseWorkerSupportedKinds } from "./lib/worker-handler-capabilities.mjs";
-
-const { Pool } = pg;
+import { VaultTransitKeyProvider } from "./lib/enterprise-secrets.mjs";
+import { SigV4S3Client } from "./lib/s3-client.mjs";
 
 function required(name) {
   const value = process.env[name]?.trim();
@@ -47,7 +49,7 @@ if ((process.env.MN_TELEMETRY_ENABLED ?? "false") !== "false") {
 }
 
 const workerId = required("MN_WORKER_INSTANCE_ID");
-const pool = new Pool({
+const pool = createPostgresPool({
   connectionString: required("MN_POSTGRES_URL"),
   application_name: workerId,
   max: Number(process.env.MN_POSTGRES_POOL_SIZE ?? "4"),
@@ -57,6 +59,32 @@ const kernelStore = new PostgresKernelStore({ pool, hmacKey: eventHmacKey });
 await kernelStore.initialize();
 const jobStore = new PostgresWorkerStore({ pool, hmacKey: eventHmacKey });
 const store = createEnterpriseWorkerStore({ kernelStore, jobStore });
+const fixtureMode = process.env.MN_WORKER_FIXTURE_MODE === "true";
+let cas;
+let protectedPayloadKeyProvider;
+if (!fixtureMode) {
+  const s3Client = new SigV4S3Client({
+    endpoint: required("MN_S3_ENDPOINT"),
+    region: process.env.MN_S3_REGION ?? "us-east-1",
+    accessKeyId: required("MN_S3_ACCESS_KEY_ID"),
+    secretAccessKey: required("MN_S3_SECRET_ACCESS_KEY"),
+    ...(process.env.MN_S3_SESSION_TOKEN
+      ? { sessionToken: process.env.MN_S3_SESSION_TOKEN }
+      : {}),
+  });
+  cas = new S3Cas({
+    client: s3Client,
+    bucket: required("MN_S3_BUCKET"),
+    prefix: process.env.MN_S3_PREFIX ?? "v2/",
+  });
+  protectedPayloadKeyProvider = new VaultTransitKeyProvider({
+    address: required("MN_VAULT_ADDR"),
+    token: required("MN_VAULT_TOKEN"),
+    mount: process.env.MN_VAULT_TRANSIT_MOUNT ?? "transit",
+    keyName: process.env.MN_VAULT_TRANSIT_KEY ?? "muniu-v2-protected-payloads",
+    namespace: process.env.MN_VAULT_NAMESPACE,
+  });
+}
 
 const localEngineLock = lockDigest("MN_ENGINE_LOCK_DIGEST");
 const localPluginLock = lockDigest("MN_PLUGIN_LOCK_DIGEST");
@@ -88,7 +116,9 @@ const handlers = typeof loaded.createHandlers === "function"
       kernelStore,
       jobStore,
       workerId,
-      fixtureMode: process.env.MN_WORKER_FIXTURE_MODE === "true",
+      fixtureMode,
+      ...(cas ? { cas } : {}),
+      ...(protectedPayloadKeyProvider ? { protectedPayloadKeyProvider } : {}),
     }))
   : loaded.handlers;
 if (!handlers || typeof handlers !== "object") {
@@ -123,22 +153,26 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
   process.once(signal, () => { stopped = true; });
 }
 
-process.stdout.write(`mn-worker ${workerId} 已就绪，lease=30000ms\n`);
-const touchReadiness = () => writeFile(readyFile, new Date().toISOString(), { mode: 0o600 })
-  .catch((error) => process.stderr.write(`Worker readiness 写入失败：${error.message}\n`));
-await touchReadiness();
-const readinessTimer = setInterval(() => { void touchReadiness(); }, 1_000);
+const heartbeat = createReadinessHeartbeat({
+  check: async () => worker.readiness().ready
+    && await probeWorkerLocks(pool, { engine: localEngineLock, plugin: localPluginLock }),
+  publish: () => writeFile(readyFile, new Date().toISOString(), { mode: 0o600 }),
+  remove: () => unlink(readyFile).catch(error => { if (error.code !== "ENOENT") throw error; }),
+});
+await heartbeat.tick();
+process.stdout.write(`mn-worker ${workerId} 已启动，lease=30000ms\n`);
+const readinessTimer = setInterval(() => { void heartbeat.tick(); }, 1_000);
 readinessTimer.unref();
 while (!stopped) {
   try {
     const result = await worker.pollOnce();
     if (result.status !== "idle") process.stdout.write(`${JSON.stringify(result)}\n`);
-  } catch (error) {
-    process.stderr.write(`${error instanceof Error ? error.message : "Worker 轮询失败"}\n`);
+  } catch {
+    process.stderr.write("Worker 轮询失败；未确认的执行结果不会自动重放\n");
   }
   await new Promise((resolve) => setTimeout(resolve, 250));
 }
 
 clearInterval(readinessTimer);
-await unlink(readyFile).catch(() => undefined);
+await heartbeat.stop();
 await kernelStore.close();

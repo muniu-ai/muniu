@@ -123,6 +123,9 @@ class WorkerFixtureClient {
       this.snapshot = undefined;
       return { rows: [], rowCount: 0 };
     }
+    if (normalized.startsWith("select tenant_id from mn_v2.jobs where job_id")) {
+      return { rows: this.job.job_id === parameters[0] ? [{ tenant_id: this.job.tenant_id }] : [], rowCount: 1 };
+    }
     if (normalized.startsWith("select * from mn_v2.jobs where available_at")) {
       const claimable = Date.parse(this.job.available_at) <= Date.parse(parameters[0])
         && (this.job.status === "available"
@@ -254,8 +257,9 @@ class WorkerFixtureClient {
         aggregateId: parameters[4],
         streamVersion: parameters[5],
         type: parameters[6],
-        digest: parameters[14],
-        hmac: parameters[15],
+        publicPayload: JSON.parse(parameters.length === 18 ? parameters[13] : parameters[12]),
+        digest: parameters.at(-2),
+        hmac: parameters.at(-1),
       });
       return { rows: [], rowCount: 1 };
     }
@@ -337,11 +341,28 @@ test("Agent Job 领取与完成原子推进 Job、Execution、HMAC 事件和 out
     "job.leased", "execution.running", "job.completed", "execution.completed",
   ]);
   for (const event of client.events) {
+    assert.equal(event.publicPayload?.projectionFacts?.version, 1,
+      `${event.type} must contain reconstructable projection facts`);
     assert.match(event.digest, /^[a-f0-9]{64}$/u);
     assert.equal(event.hmac, computeEventHmac(event.digest, hmacKey));
   }
   assert.equal(client.outbox.length, 4);
   assert.equal(client.queries.filter(({ sql }) => sql === "commit").length, 2);
+});
+
+test("Worker claim and renewal acquire the Kernel tenant lock before locking Jobs", async () => {
+  const client = new WorkerFixtureClient();
+  const store = fixtureStore(client);
+  const claimed = await store.claimJob("worker-a", startedAt);
+  const assertOrder = () => {
+    const tenantLock = client.queries.findIndex(({ sql }) => sql.includes("pg_advisory_xact_lock"));
+    const jobLock = client.queries.findIndex(({ sql }) => sql.includes("from mn_v2.jobs") && sql.includes("for update"));
+    assert.ok(tenantLock >= 0 && tenantLock < jobLock, "tenant lock must precede the physical Job lock");
+  };
+  assertOrder();
+  client.queries.length = 0;
+  await store.renewJobLease(claimed.id, "worker-a", claimed.fencingToken, "2025-01-02T03:04:10.000Z");
+  assertOrder();
 });
 
 test("企业 Kernel 业务事务原子终结 Agent Job、Execution 和产品投影", async () => {
@@ -375,6 +396,10 @@ test("企业 Kernel 业务事务原子终结 Agent Job、Execution 和产品投�
   assert.equal(projection(client, "job", "job-a").status, "completed");
   assert.equal(projection(client, "execution", "execution-a").status, "completed");
   assert.equal(projection(client, "coding.execution", "execution-a").status, "completed");
+  for (const event of client.events.slice(-2)) {
+    assert.deepEqual(event.publicPayload.projectionFacts?.changes[0]?.value,
+      projection(client, event.aggregateType, event.aggregateId));
+  }
   assert.deepEqual(client.events.slice(-2).map(({ type }) => type), [
     "job.completed",
     "execution.completed",
@@ -635,6 +660,11 @@ test("未知外部副作用在同一事务终止 Agent Job 并创建人工核对
     "job.lease_renewed", "job.failed", "execution.needs_reconciliation",
   ]);
   assert.ok(client.outbox.some(({ topic }) => topic === "execution.reconciliation_required"));
+  const changes = client.events.at(-1).publicPayload.projectionFacts?.changes;
+  assert.deepEqual(changes?.find(change => change.namespace === "execution")?.value,
+    projection(client, "execution", "execution-a"));
+  assert.deepEqual(changes?.find(change => change.namespace === "inbox")?.value,
+    client.inbox.get("reconciliation:execution-a:job-a"));
 });
 
 test("带投影的 generic Job 在领取、续租与完成时原子推进生命周期", async () => {

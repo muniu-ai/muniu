@@ -2,11 +2,28 @@
 
 Notable changes to Muniu Agent OS 0.2 are recorded here. Versions follow Semantic Versioning.
 
-## 0.2.0 - 2026-09-04
+## 0.2.0 - Unreleased
+
+Architecture acceptance is incomplete. Product projections are not yet fully rebuildable from events, Coding does not yet consume `follow_up` through AgentHandle, and public API response types remain incomplete. Historical backups can retain deleted wrapped data keys. Do not treat this branch as the completed 0.2 release.
+
+### Added
+
+- Added encrypted Memory, Thread input, Inbox, and runtime payload storage with scoped reads and revocable memory sharing.
+- Added signed plugin installation and UI/CLI/Worker contribution loading, including explicit host-process trust confirmation.
+- Added an OpenAPI-generated client operation catalog shared by Desktop and CLI.
+- Added Kubernetes candidate command execution with pinned images, runtime checks, and authoritative Coding Gate verification.
+
+### Fixed
+
+- Rebuilt protected runtime indexes from event references and retained same-thread model context across restarts.
+- Made Worker readiness recheck database locks; retry only PostgreSQL transactions confirmed aborted by serialization conflicts or deadlocks.
+- Removed event-head rewrites from read-only PostgreSQL queries and aligned Worker and Kernel tenant-lock ordering to prevent renewal deadlocks.
+- Sent complete UID preconditions when deleting Kubernetes candidate Pods and verified imported image manifests before creating digest-pinned references.
+- Applied a container-local PID limit to the dedicated Kind sandbox runtime and bounded Calico manifest downloads before applying them.
 
 ### Changed
 
-- Replaced separate Agent Session and Task/Run control planes with one Agent OS kernel and one event model.
+- Introduced a shared Agent OS kernel and event contract; Coding execution orchestration still requires consolidation.
 - Made `apps/host` the Cordis composition root and separated persistent work into `apps/worker`.
 - Moved product behavior into the bundled OPC and Coding plugins; made Claude and Codex CLI optional Runner adapters.
 - Introduced workspace-scoped Thread, Execution, Approval, Event, Memory, Deliverable, Asset, Job, and Agent Runtime contracts.

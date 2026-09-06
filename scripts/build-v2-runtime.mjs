@@ -11,6 +11,12 @@ const buildOrder = [
   "vendor/cosmokit",
   "vendor/schemastery",
   "vendor/cordis",
+  "vendor/loader",
+  "vendor/include",
+  "vendor/group",
+  "vendor/timer",
+  "vendor/hmr",
+  "vendor/logger-console",
   "packages/contracts",
   "packages/storage",
   "packages/kernel",
@@ -20,8 +26,8 @@ const buildOrder = [
   "plugins/coding",
   "plugins/runner-claude-cli",
   "plugins/runner-codex-cli",
-  "apps/host",
   "apps/worker",
+  "apps/host",
   "apps/cli",
 ];
 

@@ -2,6 +2,12 @@
 .mn
 .muniu
 node_modules
+**/node_modules
+**/dist
 **/dist-test
 **/coverage
+**/.env
+**/.env.*
+**/.npmrc
 apps/desktop-mac/src-tauri/target
+apps/desktop-mac/src-tauri/binaries

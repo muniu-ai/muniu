@@ -1,3 +1,4 @@
+import { appendKernelEvent } from "@mn/kernel";
 import { randomUUID } from "node:crypto";
 import type {
   Execution,
@@ -579,7 +580,7 @@ export class LocalProductionPluginInstaller implements PluginInstallerPort {
           verifiedAt: registry.verifiedAt,
         } satisfies PluginRegistryStateV1);
         transaction.putProjection(PLUGIN_LOCK_PROJECTION, "current", lock);
-        transaction.appendEvent({
+        appendKernelEvent(transaction, {
           tenantId: this.#tenantId,
           aggregateType: "pluginInstallation",
           aggregateId: request.pluginId,
@@ -785,7 +786,7 @@ export class LocalProductionPluginInstaller implements PluginInstallerPort {
             verifiedAt: registry.verifiedAt,
           } satisfies PluginRegistryStateV1);
           transaction.putProjection(PLUGIN_LOCK_PROJECTION, "current", lock);
-          transaction.appendEvent({
+          appendKernelEvent(transaction, {
             tenantId: this.#tenantId,
             aggregateType: "pluginInstallation",
             aggregateId: pluginId,
@@ -893,7 +894,7 @@ export class LocalProductionPluginInstaller implements PluginInstallerPort {
         }
         transaction.putProjection(PLUGIN_LIFECYCLE_PROJECTION, pluginId, active);
         transaction.putProjection(PLUGIN_INSTALLATION_PROJECTION, pluginId, installation);
-        transaction.appendEvent({
+        appendKernelEvent(transaction, {
           tenantId: this.#tenantId,
           aggregateType: "pluginInstallation",
           aggregateId: pluginId,
@@ -1049,7 +1050,7 @@ export class LocalProductionPluginInstaller implements PluginInstallerPort {
               updatedAt: timestamp,
             };
             transaction.putProjection("workspace", workspace.id, nextWorkspace);
-            transaction.appendEvent({
+            appendKernelEvent(transaction, {
               tenantId: this.#tenantId,
               aggregateType: "workspace",
               aggregateId: workspace.id,
@@ -1064,7 +1065,7 @@ export class LocalProductionPluginInstaller implements PluginInstallerPort {
           transaction.putProjection(PLUGIN_LIFECYCLE_PROJECTION, pluginId, disabledRecord);
           transaction.putProjection(PLUGIN_INSTALLATION_PROJECTION, pluginId, disabledInstallation);
           transaction.putProjection(PLUGIN_LOCK_PROJECTION, "current", lock);
-          transaction.appendEvent({
+          appendKernelEvent(transaction, {
             tenantId: this.#tenantId,
             aggregateType: "pluginInstallation",
             aggregateId: pluginId,
@@ -1241,7 +1242,7 @@ export class LocalProductionPluginInstaller implements PluginInstallerPort {
             purgedAt: timestamp,
           } satisfies PluginInstallationTombstoneV1);
           transaction.putProjection(PLUGIN_LOCK_PROJECTION, "current", lock);
-          transaction.appendEvent({
+          appendKernelEvent(transaction, {
             tenantId: this.#tenantId,
             aggregateType: "pluginInstallation",
             aggregateId: pluginId,
@@ -1329,7 +1330,7 @@ export class LocalProductionPluginInstaller implements PluginInstallerPort {
         );
       }
       transaction.putProjection(PLUGIN_OPERATION_PROJECTION, pluginId, marker);
-      transaction.appendEvent({
+      appendKernelEvent(transaction, {
         tenantId: this.#tenantId,
         aggregateType: "pluginOperation",
         aggregateId: marker.operationId,
@@ -1368,7 +1369,7 @@ export class LocalProductionPluginInstaller implements PluginInstallerPort {
       );
     }
     transaction.deleteProjection(PLUGIN_OPERATION_PROJECTION, operation.pluginId);
-    transaction.appendEvent({
+    appendKernelEvent(transaction, {
       tenantId: this.#tenantId,
       aggregateType: "pluginOperation",
       aggregateId: operation.operationId,
@@ -1438,7 +1439,7 @@ export class LocalProductionPluginInstaller implements PluginInstallerPort {
         );
       }
       transaction.putProjection(PLUGIN_USE_LEASE_PROJECTION, lease.leaseId, lease);
-      transaction.appendEvent({
+      appendKernelEvent(transaction, {
         tenantId: this.#tenantId,
         aggregateType: "pluginUse",
         aggregateId: lease.leaseId,
@@ -1468,7 +1469,7 @@ export class LocalProductionPluginInstaller implements PluginInstallerPort {
         );
       }
       transaction.deleteProjection(PLUGIN_USE_LEASE_PROJECTION, lease.leaseId);
-      transaction.appendEvent({
+      appendKernelEvent(transaction, {
         tenantId: this.#tenantId,
         aggregateType: "pluginUse",
         aggregateId: lease.leaseId,
@@ -1538,7 +1539,7 @@ export class LocalProductionPluginInstaller implements PluginInstallerPort {
       };
       transaction.putProjection(PLUGIN_LIFECYCLE_PROJECTION, record.manifest.id, nextRecord);
       transaction.putProjection(PLUGIN_INSTALLATION_PROJECTION, record.manifest.id, nextInstallation);
-      transaction.appendEvent({
+      appendKernelEvent(transaction, {
         tenantId: this.#tenantId,
         aggregateType: "pluginInstallation",
         aggregateId: record.manifest.id,

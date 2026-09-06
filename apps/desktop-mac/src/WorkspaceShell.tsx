@@ -7,6 +7,9 @@ import {
 import { AgentOsApiError, AgentOsClient } from "./api";
 import { CommandPalette, type PaletteItem } from "./components/CommandPalette";
 import { PluginBoundary } from "./components/PluginBoundary";
+import { PluginCard } from "./components/PluginSurface";
+import { PluginManager } from "./components/PluginManager";
+import type { WorkspacePluginSurfaceV1 } from "@mn/contracts";
 import { ErrorState, Loading } from "./components/Status";
 import {
   ActivityPage, AgentsPage, DeliverablesPage, HomePage, InboxPage, IntegrationsPage,
@@ -18,7 +21,7 @@ import type {
   OpportunitySummary, PluginHealth, ProductPluginId, WorkspaceMemberSummary, WorkspaceSummary,
 } from "./types";
 
-type PageId = "home" | "workspaces" | "inbox" | "deliverables" | "activity" | "agents" | "integrations" | "settings" | "opc" | "coding";
+type PageId = "home" | "workspaces" | "inbox" | "deliverables" | "activity" | "agents" | "integrations" | "settings" | "opc" | "coding" | `plugin:${string}`;
 
 const emptyHome: HomeSummary = { todayActions: [], blockers: [], approvals: [], recentDeliverables: [] };
 const emptyAgentCatalog: AgentCatalog = { agents: [], skills: [] };
@@ -63,6 +66,7 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces }: Wor
   const [selectedOpportunityId, setSelectedOpportunityId] = useState<string>();
   const [selectedCodingTaskId, setSelectedCodingTaskId] = useState<string>();
   const [health, setHealth] = useState<readonly PluginHealth[]>([]);
+  const [surfaces, setSurfaces] = useState<readonly WorkspacePluginSurfaceV1[]>([]);
   const [coreLoading, setCoreLoading] = useState(true);
   const [coreError, setCoreError] = useState<string>();
   const [opcLoading, setOpcLoading] = useState(false);
@@ -105,6 +109,12 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces }: Wor
 
   useEffect(() => { void refreshCore(); void refreshOpc(); void refreshCoding(); }, [refreshCoding, refreshCore, refreshOpc]);
   useEffect(() => {
+    let current = true;
+    void api.pluginSurfaces(workspace.id).then((value) => { if (current) setSurfaces(value); })
+      .catch(() => { if (current) setSurfaces([]); });
+    return () => { current = false; };
+  }, [api, workspace.id, workspace.streamVersion]);
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); setPaletteOpen(true); }
       if (event.key === "Escape") setPaletteOpen(false);
@@ -116,11 +126,12 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces }: Wor
   const paletteItems = useMemo<readonly PaletteItem[]>(() => [
     { id: "home", kind: "命令", title: "打开首页", action: () => setPage("home") },
     { id: "inbox", kind: "命令", title: "打开收件箱", detail: `${home.approvals.length} 项待处理`, action: () => setPage("inbox") },
+    ...surfaces.flatMap((surface) => (surface.ui?.pages ?? []).map((entry) => ({ id: `plugin:${surface.pluginId}:${entry.routeId}`, kind: "命令" as const, title: entry.title, action: () => setPage(`plugin:${surface.pluginId}:${entry.routeId}`) }))),
     ...opportunities.map((item) => ({ id: `opportunity:${item.id}`, kind: "机会" as const, title: item.title, detail: item.nextAction, action: () => { setSelectedOpportunityId(item.id); setPage("opc"); } })),
     ...codingTasks.map((item) => ({ id: `task:${item.id}`, kind: "Coding 任务" as const, title: item.title, detail: item.status, action: () => { setSelectedCodingTaskId(item.id); setPage("coding"); } })),
     ...deliverables.map((item) => ({ id: `deliverable:${item.id}`, kind: "成果" as const, title: item.title, detail: item.outcome, action: () => setPage(item.pluginId) })),
     ...agentCatalog.skills.map((skill) => ({ id: `skill:${skill.id}`, kind: "Skill" as const, title: skill.title, detail: skill.expectedOutcome, action: () => setPage("agents") })),
-  ], [agentCatalog.skills, codingTasks, deliverables, home.approvals.length, opportunities]);
+  ], [agentCatalog.skills, codingTasks, deliverables, home.approvals.length, opportunities, surfaces]);
 
   async function submitCapture() {
     const value = captureText.trim();
@@ -161,6 +172,10 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces }: Wor
         {!sidebarCompact && <p className="nav-label">已启用插件</p>}
         {workspace.activePluginIds.includes("opc") && <NavButton compact={sidebarCompact} active={page === "opc"} label="OPC" icon={<BriefcaseBusiness />} onClick={() => setPage("opc")} status={health.find((item) => item.pluginId === "opc")?.status} />}
         {workspace.activePluginIds.includes("coding") && <NavButton compact={sidebarCompact} active={page === "coding"} label="Coding" icon={<Code2 />} onClick={() => setPage("coding")} status={health.find((item) => item.pluginId === "coding")?.status} />}
+        {surfaces.flatMap((surface) => (surface.ui?.pages ?? []).map((entry) => {
+          const target: PageId = `plugin:${surface.pluginId}:${entry.routeId}`;
+          return <NavButton key={target} compact={sidebarCompact} active={page === target} label={surface.navigation.find((item) => item.routeId === entry.routeId)?.label ?? entry.title} icon={<Plug />} onClick={() => setPage(target)} />;
+        }))}
       </nav>
       <div className="technical-nav"><button className="technical-toggle" onClick={() => setTechnicalOpen((value) => !value)} title="技术配置"><span><Boxes size={17} />{!sidebarCompact && "技术配置"}</span>{!sidebarCompact && <ChevronDown className={technicalOpen ? "rotated" : ""} size={15} />}</button>{technicalOpen && <div><NavButton compact={sidebarCompact} active={page === "agents"} label="Agents" icon={<Bot />} onClick={() => setPage("agents")} /><NavButton compact={sidebarCompact} active={page === "integrations"} label="集成" icon={<Plug />} onClick={() => setPage("integrations")} /><NavButton compact={sidebarCompact} active={page === "settings"} label="设置" icon={<Settings />} onClick={() => setPage("settings")} /></div>}</div>
       <footer className="sidebar-footer"><span className="connection-dot" />{!sidebarCompact && <span><strong>本地数据已连接</strong><small>遥测已关闭</small></span>}</footer>
@@ -188,7 +203,9 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces }: Wor
         {page === "activity" && <ActivityPage items={activity} professional={professional} />}
         {page === "agents" && <AgentsPage catalog={agentCatalog} />}
         {page === "integrations" && <IntegrationsPage />}
-        {page === "settings" && <SettingsPage workspace={workspace} memories={memories} api={api} onModeChanged={updateWorkspace} onMemoriesChanged={() => void refreshCore()} />}
+        {page === "settings" && <div className="page-stack"><SettingsPage workspace={workspace} memories={memories} api={api} onModeChanged={updateWorkspace} onMemoriesChanged={() => void refreshCore()} /><PluginManager api={api} workspace={workspace} onChanged={updateWorkspace} /></div>}
+        {surfaces.flatMap((surface) => (surface.ui?.pages ?? []).filter((entry) => page === `plugin:${surface.pluginId}:${entry.routeId}`).map((entry) => <PluginBoundary key={`${surface.pluginId}:${surface.version}:${entry.routeId}`} pluginName={surface.pluginId}><div className="page-stack"><h1>{entry.title}</h1>{entry.cards.map((card, index) => <PluginCard key={index} card={card} pluginId={surface.pluginId} workspaceId={workspace.id} api={api} />)}</div></PluginBoundary>))}
+        {page === "home" && surfaces.flatMap((surface) => (surface.ui?.widgets ?? []).map((widget) => <PluginBoundary key={`${surface.pluginId}:${surface.version}:${widget.widgetId}`} pluginName={surface.pluginId}><PluginCard card={widget.card} pluginId={surface.pluginId} workspaceId={workspace.id} api={api} /></PluginBoundary>))}
         {page === "opc" && <PluginBoundary pluginName="OPC"><OpcPage api={api} workspaceId={workspace.id} items={opportunities} selectedId={selectedOpportunityId} onSelect={setSelectedOpportunityId} loading={opcLoading} error={opcError} viewMode={workspace.viewMode} onRetry={() => void refreshOpc()} onChanged={async () => { await Promise.all([refreshOpc(), refreshCore()]); }} /></PluginBoundary>}
         {page === "coding" && <PluginBoundary pluginName="Coding"><CodingPage items={codingTasks} selectedId={selectedCodingTaskId} onSelect={setSelectedCodingTaskId} loading={codingLoading} error={codingError} viewMode={workspace.viewMode} onRetry={() => void refreshCoding()} /></PluginBoundary>}
       </div>

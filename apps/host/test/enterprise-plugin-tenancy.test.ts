@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import type { OrganizationRole, PluginManifestV1 } from "@mn/contracts";
 import { InMemoryKernelStore } from "@mn/kernel";
+import { createKernelAgentTurnHandler } from "@mn/worker";
 import {
   createSignedRegistryMetadata,
   createPluginPackageArchive,
@@ -17,6 +18,7 @@ import {
 import {
   createAgentOsHost,
   createEnterpriseFilePluginRepository,
+  createSignedWorkerResolver,
   LocalSignedPluginRepository,
   PLUGIN_LOCK_PROJECTION,
   type ModelSecretStore,
@@ -470,14 +472,14 @@ export default (manifest) => ({
   manifest,
   contributions: {
     routes: [{ id: "research.home", path: "/plugins/research" }],
-    navigation: [], widgets: [], agents: [], skills: [], workflows: [], tools: [], memorySchemas: [],
+    navigation: [], widgets: [], agents: [{ id: "research.reader", displayName: "研究员", description: "整理资料" }], skills: [], workflows: [], tools: [], memorySchemas: [],
     commands: [{ id: "summarize", title: "生成摘要", run: async (input) => ({ outcome: String(input.topic) }) }]
   }
 });
 `, "utf8");
-  const uiSource = Buffer.from("export const screen = 'research';\n", "utf8");
-  const cliSource = Buffer.from("export const commands = ['summarize'];\n", "utf8");
-  const workerSource = Buffer.from("export const handlers = {};\n", "utf8");
+  const uiSource = Buffer.from("export default () => ({ pages: [{ routeId: 'research.home', title: '研究', cards: [{ title: '摘要', body: '整理来源', commandId: 'summarize' }] }], widgets: [] });\n", "utf8");
+  const cliSource = Buffer.from("export default () => ({ commands: [{ name: 'summarize', commandId: 'summarize', description: '整理来源', fields: [] }] });\n", "utf8");
+  const workerSource = Buffer.from("export default () => ({ agents: [{ id: 'research.reader', instructions: '按来源整理研究结果', toolIds: [] }], tools: [] });\n", "utf8");
   const packageBytes = createPluginPackageArchive({
     "./dist/host.mjs": { content: source },
     "./dist/ui.mjs": { content: uiSource },
@@ -514,7 +516,7 @@ export default (manifest) => ({
     },
     contributes: {
       routes: ["research.home"], navigation: [], widgets: [], commands: ["summarize"],
-      agents: [], skills: [], workflows: [], tools: [], memorySchemas: [],
+      agents: ["research.reader"], skills: [], workflows: [], tools: [], memorySchemas: [],
     },
     permissions: [], dataNamespace: "research", eventSchemas: {}, projections: [], dependencies: [],
     packageSha256: sha256Hex(packageBytes),
@@ -560,14 +562,16 @@ export default (manifest) => ({
       workerSource,
     );
     assert.equal((globalThis as any)[evaluationKey], 0, "读取非 Host 入口不得执行插件代码");
+    const store = new InMemoryKernelStore();
     const host = await createAgentOsHost({
       profile: "enterprise",
-      store: new InMemoryKernelStore(),
+      store,
       secretStore: secrets,
       now: () => NOW,
       ...loaded,
+      modelProbe: async () => ({ models: ["fixture-model"], defaultModel: "fixture-model" }),
       identityResolver: () => ({
-        tenantId: "tenant-a", principalId: "governance-a", organizationRoles: ["governance_admin"],
+        tenantId: "tenant-a", principalId: "governance-a", organizationRoles: ["organization_admin", "governance_admin"],
       }),
     });
     assert.equal((globalThis as any)[evaluationKey], 0, "创建 Host 不得提前执行未安装插件");
@@ -578,6 +582,51 @@ export default (manifest) => ({
     }));
     assert.equal(installed.status, 201, await installed.clone().text());
     assert.equal((globalThis as any)[evaluationKey], 1);
+    const definition = await (await loaded.pluginRepository.read())!.releases[0]!.loadDefinition!();
+    assert.equal(definition.surfaces?.ui?.pages[0]?.title, "研究");
+    assert.equal(definition.surfaces?.cli?.commands[0]?.name, "summarize");
+    const resolveWorker = createSignedWorkerResolver({ store, repository: loaded.pluginRepository });
+    const execution = { tenantId: "tenant-a", pluginId: "research", pluginPackageSha256: manifest.packageSha256 } as any;
+    assert.deepEqual(await resolveWorker(execution), { agents: [{ id: "research.reader", instructions: "按来源整理研究结果", toolIds: [] }], tools: [] });
+    await assert.rejects(resolveWorker({ ...execution, tenantId: "tenant-b" }));
+    await assert.rejects(resolveWorker({ ...execution, pluginPackageSha256: "0".repeat(64) }));
+    let commandIndex = 0;
+    const post = async (path: string, input: unknown) => {
+      const response = await host.dispatch(new Request(`http://host.test${path}`, { method: "POST",
+        headers: { "content-type": "application/json", "Idempotency-Key": `signed-worker-${++commandIndex}` },
+        body: JSON.stringify(input) }));
+      assert.ok(response.ok, await response.clone().text());
+      return (await response.json() as any).data;
+    };
+    const workspace = await post("/v2/workspaces", { name: "签名 Worker", pluginIds: ["research"], viewMode: "business" });
+    const model = await post("/v2/model-connections", { presetId: "deepseek", apiKey: "fixture-key" });
+    await post(`/v2/model-connections/${model.id}/probe`, { expectedStreamVersion: model.streamVersion });
+    const thread = await post(`/v2/workspaces/${workspace.id}/threads`, { subject: "研究资料", pluginId: "research" });
+    const submitted = await post(`/v2/workspaces/${workspace.id}/threads/${thread.id}/turns`, {
+      expectedStreamVersion: thread.streamVersion, message: "整理来源", agentDefinitionId: "research.reader",
+    });
+    assert.equal(submitted.pluginPackageSha256, manifest.packageSha256);
+    const job = store.readJobs("tenant-a").find((entry) => entry.payload.executionId === submitted.id)!;
+    let modelCalls = 0;
+    const unclaimed = async (): Promise<never> => { throw new Error("该测试直接调用 handler，不应操作物理租约"); };
+    const handler = createKernelAgentTurnHandler({ store: {
+      transact: store.transact.bind(store), readEvents: store.readEvents.bind(store),
+      claimJob: unclaimed, completeJob: unclaimed, failJob: unclaimed, interruptJob: unclaimed,
+      renewJobLease: unclaimed, markNeedsReconciliation: unclaimed,
+    }, secretStore: secrets, resolvePluginWorker: resolveWorker,
+      approvalKernel: host.kernel, acceptsSecretReference: (reference) => reference.startsWith("vault://muniu/v2/"),
+      modelInvoker: async ({ request: modelRequest }) => {
+        modelCalls += 1;
+        assert.match(modelRequest.messages[0]?.content ?? "", /按来源整理研究结果/u);
+        assert.deepEqual(modelRequest.availableToolIds, []);
+        return { text: "研究结果已整理", toolCalls: [] };
+      },
+    });
+    const result = await handler({ ...job, status: "leased", attempts: 1, fencingToken: 1,
+      createdAt: NOW, updatedAt: NOW, leaseOwner: "worker", leaseExpiresAt: "2026-09-04T12:00:30.000Z" },
+      { workerId: "worker", fencingToken: 1, leaseExpiresAt: "2026-09-04T12:00:30.000Z", signal: new AbortController().signal });
+    assert.equal(modelCalls, 1);
+    assert.deepEqual(result, { executionId: submitted.id, status: "completed" });
     await host.close();
 
     (globalThis as any)[evaluationKey] = 0;

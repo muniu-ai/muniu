@@ -1,6 +1,6 @@
 # Agent OS 0.2 架构
 
-木牛只有一个通用内核和一套事实模型。Desktop、CLI 与 HTTP API 是 Shell；OPC、Coding 与外部 Runner 通过插件贡献能力。
+0.2 的目标是一个通用内核和一套事实模型。Desktop、CLI 与 HTTP API 是 Shell；OPC、Coding 与外部 Runner 通过插件贡献能力。当前分支尚未完成整体验收：产品投影重建、Coding 的完整 AgentHandle 控制链和 API 响应类型仍有缺口，不应作为完成版发布。
 
 ```text
 Desktop / CLI / API Shell
@@ -48,6 +48,10 @@ Scope 销毁必须撤销监听、计时器、资源句柄和子 Scope。内核�
 
 Session Log 保存模型可见上下文。Surface 和 Compaction 可以改变模型看到的内容，但不能覆盖事实事件、原始访谈或工具记录。模型请求的完整上下文必须先持久化，再发送给模型服务。
 
+Thread 输入、Inbox 消息和 RuntimeRecord 正文使用独立 DEK 加密后写入 CAS；数据库事件只保存引用与执行元数据。运行时可从事件恢复丢失的记录索引。后续 turn 从同一 tenant、workspace、plugin 和 thread 的已完成 Execution 读取历史用户与助手消息。OPC 上下文另行装入当前机会的证据、反证和授权访谈资料，并标记为不可信业务输入，不能据此修改权限。
+
+已提交轮次通过 Thread 的 `threadStreamVersion` 排序，读取对话历史不依赖 SSE 游标保留期。Coding builtin 已使用共用 Session Log，并在模型边界接收 steer；但执行主体仍是 CodingExecutionEngine，尚未完成通过 AgentHandle 消费后续 follow_up 的控制链。不能把上述通用运行时能力等同于 Coding 全部接入。
+
 Execution 状态为：
 
 ```text
@@ -68,7 +72,9 @@ Workflow 使用类型化声明式状态机，不执行插件提供的任意 Java
 - 公开 payload 与加密 payload 引用；
 - 前序摘要、当前摘要与 HMAC。
 
-所有写入提供 `expectedStreamVersion`。版本冲突返回 `409`。事件、投影、Job、outbox、审批和幂等结果在同一数据库事务提交；查询表与快照可从事件重建，不是事实源。
+所有写入提供 `expectedStreamVersion`。版本冲突返回 `409`。事件、投影、Job、outbox、审批和幂等结果在同一数据库事务提交。查询表与快照应能从事件重建，不得作为事实源。
+
+当前 `replayCoreProjections` 可校验完整 tenant 事件链的连续位置、摘要和 HMAC，并重建核心元数据；受保护 RuntimeRecord 可通过事件引用恢复索引。OPC 领域事件数组、Coding 领域状态与成果正文仍有仅存于查询投影的内容，尚不能只凭 KernelEvent 完整重建。补齐加密领域事实和重放测试前，不得删除这些产品投影，也不得将核心重建测试视为全部数据可重建的证明。
 
 文件先按摘要 create-only 写入 CAS，再在事务中提交事件引用。未被事件引用的对象由保留期 GC 清理。已经提交的事件不会因 Host 或 Worker 重启而丢失。
 
@@ -104,13 +110,15 @@ Job 使用至少一次投递、30 秒租约与 fencing token。数据库拒绝�
 
 企业实现使用 PostgreSQL schema `mn_v2`、S3 `v2/` 对象前缀与 Vault/KMS。事件 HMAC 能检测没有密钥的数据库改写，不用于抵御宿主或 KMS 管理员失陷。
 
-受保护 Asset 的明文先由随机 DEK 和 AES-256-GCM 加密，CAS 只接收密文。Asset 保存密文摘要，独立的可删除密钥记录保存 wrapped DEK 与认证参数；两者在不同存储位置关联。密钥记录不是可重建的事实投影，因为删除操作必须能永久移除它。删除事务移除 Asset 与密钥记录，并追加只含对象摘要和原因摘要的 tombstone 事件；孤立密文由 CAS 保留期 GC 清理。
+受保护 Asset 的明文先由随机 DEK 和 AES-256-GCM 加密，CAS 只接收密文。Asset 保存密文摘要，独立的可删除密钥记录保存 wrapped DEK 与认证参数。密钥记录不进入事件重放。删除事务移除当前 Asset 与密钥记录，并追加只含对象摘要和原因摘要的 tombstone 事件；孤立密文由 CAS 保留期 GC 清理。
+
+当前删除不覆盖 SQLite WAL、存储快照和历史备份。若其中仍有 wrapped DEK 且包装密钥仍有效，副本仍可能解密。因此当前实现不能宣称跨备份的密码学擦除；独立密钥撤销和恢复后的删除约束仍需补齐。
 
 Host、Worker 的 engine lock 与 plugin lock 摘要必须一致，否则 readiness 或 Job claim 失败。企业环境使用蓝绿切换，不进行混合版本滚动升级。
 
 ## 插件边界
 
-`PluginManifestV1` 声明服务、Worker、UI、CLI、路由、导航、组件、命令、Agent、Skill、Workflow、Tool、Memory schema、健康检查、权限、数据 namespace、事件 schema 和投影。
+`PluginManifestV1` 声明服务、Worker、UI、CLI、路由、导航和组件。清单还包含命令、Agent、Skill、Workflow、Tool、Memory schema、健康检查、权限、数据 namespace、事件 schema 和投影。
 
 生产插件与 Host 同进程运行，拥有宿主进程可见的能力。这是信任边界，不是沙箱；`ExecutionAuthority` 无法约束恶意插件直接调用进程能力。生产安装只接受受信仓库的 Ed25519 签名、精确依赖、包 SHA-256 和单调 release sequence。
 
@@ -142,6 +150,8 @@ discover → specify → impact → implement → verify → approve → learn
 ## 记忆与共享
 
 `MemoryRecord` 使用 `scopeType + namespace + resourceId`，并记录来源事件、置信度、确认时间、有效期和 share grant。模型只能提出记忆 proposal；用户可接受、修改、拒绝或删除。
+
+记忆正文始终保存为加密 payload，公开事件和投影不保存正文。Worker 只读取已接受、未过期且在当前 Execution 数据范围内的记忆，每个模型边界重新检查授权；删除来源记忆或撤销共享会递归使派生记忆失效。
 
 跨插件默认不可见。撤销 share grant 会立即阻止后续读取，并使派生记忆失效；已经发送到模型或外部服务的数据无法召回，授权界面必须说明这一限制。删除敏感内容时销毁对应数据密钥并写入 tombstone，不可变审计只保留操作者、时间、对象摘要和删除原因。
 

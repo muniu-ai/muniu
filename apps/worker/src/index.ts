@@ -6,10 +6,12 @@ import type {
   JsonObject,
   JsonValue,
   Thread,
+  PluginWorkerV1,
 } from "@mn/contracts";
 import {
   AgentHandle,
   AgentScope,
+  DefaultSessionSurface,
   KernelProjectionRuntimeStore,
   type AgentHandleOptions,
   type Awaitable,
@@ -37,9 +39,17 @@ import { createKernelToolApprovalPort, type ToolApprovalKernel } from "./approva
 import {
   CodingWorkerOutcomeError,
   createCodingExecutionWorkerHandler,
+  fencedCodingStore,
 } from "./coding.js";
+import { buildAgentMemoryPrompt, type AgentMemoryReader } from "./memory.js";
+import { readThreadHistory } from "./thread-context.js";
+import { createProtectedRuntimeStore, readExecutionInput, type RuntimeProtection } from "./runtime-store.js";
+export * from "./runtime-store.js";
+export * from "./kubernetes-sandbox.js";
+import type { CodingCommandExecutor } from "./kubernetes-sandbox.js";
 export * from "./approval.js";
 export * from "./coding.js";
+export * from "./memory.js";
 
 export * from "./model-invoker.js";
 
@@ -459,6 +469,7 @@ export async function runWorkerMain(
 }
 
 export interface AgentTurnHandlerOptions {
+  readonly resolveMessage?: (job: StoredJob) => Promise<string>;
   readonly resolveOptions: (
     job: StoredJob,
     context: WorkerJobContext,
@@ -476,7 +487,8 @@ export function createAgentTurnHandler(options: AgentTurnHandlerOptions): Worker
     const command = optionalPayloadString(job.payload, "command");
     const isResume = command === "resume";
     if (command !== undefined && !isResume) throw new Error("Agent Job command 无效");
-    const message = isResume ? undefined : requiredPayloadString(job.payload, "message");
+    const message = isResume ? undefined : options.resolveMessage
+      ? await options.resolveMessage(job) : requiredPayloadString(job.payload, "message");
     const handleOptions = await options.resolveOptions(job, context);
     if (handleOptions.executionId !== executionId) {
       throw new Error("Job 的 executionId 与 Runtime 配置不一致");
@@ -564,14 +576,19 @@ export interface OpcPublicWebReader {
 export interface AgentExecutionStore extends WorkerJobStore, KernelStore {}
 
 export interface KernelAgentTurnHandlerOptions {
+  readonly resolveThreadContext?: (thread: Thread) => Promise<string | undefined>;
+  readonly resolvePluginWorker?: (execution: Execution) => Promise<PluginWorkerV1>;
   readonly store: AgentExecutionStore;
   readonly secretStore: ModelSecretReader;
   readonly modelInvoker?: ByokModelInvoker;
   readonly approvalKernel?: ToolApprovalKernel;
   readonly approvalPollIntervalMs?: number;
   readonly opcPublicWebReader?: OpcPublicWebReader;
+  readonly memoryReader?: AgentMemoryReader;
+  readonly runtimeProtection?: RuntimeProtection;
   readonly codingSandboxRoot?: string;
   readonly codingSandboxExecutable?: string;
+  readonly codingCommandExecutor?: CodingCommandExecutor;
   readonly controlPollIntervalMs?: number;
   readonly acceptsSecretReference?: (reference: string) => boolean;
   readonly now?: () => string;
@@ -592,13 +609,23 @@ export function createKernelAgentTurnHandler(
     throw new TypeError("执行控制轮询间隔必须是正整数毫秒");
   }
   const genericHandler = createAgentTurnHandler({
+    resolveMessage: async (job) => {
+      const execution = await options.store.transact(job.tenantId, tx =>
+        tx.getProjection<Execution>("execution", requiredPayloadString(job.payload, "executionId")));
+      if (!execution) throw new Error("Execution 不存在");
+      return readExecutionInput({ store: options.store, execution, payload: job.payload,
+        ...(options.runtimeProtection ? { protection: options.runtimeProtection } : {}) });
+    },
     observeControl: async (handle, job) => observeExecutionControl(
       options.store,
       job.tenantId,
       handle,
       controlPollIntervalMs,
     ),
-    resolveOptions: async (job) => {
+    resolveOptions: async (job, context) => {
+      const runtimeStore = options.runtimeProtection
+        ? fencedCodingStore(options.store, job, context, options.now ?? (() => new Date().toISOString()))
+        : options.store;
       const executionId = requiredPayloadString(job.payload, "executionId");
       const state = await options.store.transact(job.tenantId, (transaction) => {
         const execution = transaction.getProjection<Execution>("execution", executionId);
@@ -614,7 +641,10 @@ export function createKernelAgentTurnHandler(
         if (!model) throw new Error("模型连接不存在");
         return { execution, authority, thread, model };
       });
-      assertExecutionState(job, state.execution, state.authority, state.thread, state.model);
+      const pluginWorker = !["opc", "coding"].includes(state.execution.pluginId)
+        ? await options.resolvePluginWorker?.(state.execution) : undefined;
+      const pluginAgent = pluginWorker?.agents.find((agent) => agent.id === state.execution.agentDefinitionId);
+      assertExecutionState(job, state.execution, state.authority, state.thread, state.model, pluginAgent?.id);
       if (!acceptsSecretReference(state.model.secretRef)) {
         throw new Error("模型密钥引用不属于当前运行环境");
       }
@@ -625,18 +655,36 @@ export function createKernelAgentTurnHandler(
         .createChild("thread", state.thread.id)
         .createChild("execution", state.execution.id);
       const promptId = `${state.execution.pluginId}.outcome`;
+      const memoryPromptId = `${state.execution.pluginId}.memory`;
       const llmId = `byok:${state.model.id}`;
       const hasPublicWebTool = state.execution.pluginId === "opc"
         && state.authority.toolIds.includes("opc.public-web.read")
         && options.opcPublicWebReader !== undefined;
       executionScope.register("prompt", {
         id: promptId,
-        render: () => productPrompt(
+        render: () => pluginAgent?.instructions ?? productPrompt(
           state.execution.pluginId,
           state.thread.subject,
           hasPublicWebTool,
         ),
       });
+      if (options.memoryReader) {
+        executionScope.register("prompt", {
+          id: memoryPromptId,
+          refreshAtBoundary: true,
+          render: () => buildAgentMemoryPrompt({
+            tenantId: job.tenantId,
+            workspaceId: state.execution.workspaceId,
+            thread: state.thread,
+            authority: state.authority,
+            requestingNamespace: state.execution.pluginId,
+            executionPrincipalId: state.execution.executionPrincipalId,
+            store: options.store,
+            reader: options.memoryReader!,
+            ...(options.now ? { now: options.now } : {}),
+          }),
+        });
+      }
       executionScope.register("llm", {
         id: llmId,
         complete: async (request, context) => {
@@ -661,6 +709,11 @@ export function createKernelAgentTurnHandler(
         },
       });
       const toolIds: string[] = [];
+      for (const tool of pluginWorker?.tools ?? []) {
+        if (!pluginAgent?.toolIds.includes(tool.id) || !state.authority.toolIds.includes(tool.id)) continue;
+        executionScope.register("tool", tool);
+        toolIds.push(tool.id);
+      }
       if (hasPublicWebTool) {
         const toolId = "opc.public-web.read";
         executionScope.register("tool", {
@@ -681,19 +734,31 @@ export function createKernelAgentTurnHandler(
         });
         toolIds.push(toolId);
       }
-      return {
-        executionId,
-        scope: executionScope,
-        store: new KernelProjectionRuntimeStore({
+      const agentStore = options.runtimeProtection ? createProtectedRuntimeStore({
+          ...options.runtimeProtection, tenantId: job.tenantId,
+          workspaceId: state.execution.workspaceId, store: runtimeStore,
+          ...(options.now ? { now: options.now } : {}),
+        }) : new KernelProjectionRuntimeStore({
           tenantId: job.tenantId,
           store: options.store,
           ...(options.now ? { now: options.now } : {}),
           id: (sequence) => `${executionId}:runtime:${sequence}`,
-        }),
+        });
+      const history = await readThreadHistory(options.store, agentStore, state.execution);
+      const threadContext = await options.resolveThreadContext?.(state.thread);
+      const surface = new DefaultSessionSurface();
+      return {
+        executionId,
+        scope: executionScope,
+        store: agentStore,
+        surface: { project: (snapshot) => [
+          ...(threadContext ? [{ role: "user" as const, content: threadContext }] : []),
+          ...(snapshot.compactions.length ? [] : history), ...surface.project(snapshot),
+        ] },
         definition: {
           id: state.execution.agentDefinitionId,
           llmId,
-          promptIds: [promptId],
+          promptIds: options.memoryReader ? [promptId, memoryPromptId] : [promptId],
           toolIds,
         },
         authority: {
@@ -722,8 +787,11 @@ export function createKernelAgentTurnHandler(
         store: options.store,
         secretStore: options.secretStore,
         modelInvoker: invokeModel,
+        ...(options.memoryReader ? { memoryReader: options.memoryReader } : {}),
+        ...(options.runtimeProtection ? { runtimeProtection: options.runtimeProtection } : {}),
         approvalKernel,
         sandboxRoot: options.codingSandboxRoot,
+        ...(options.codingCommandExecutor ? { commandExecutor: options.codingCommandExecutor } : {}),
         ...(options.codingSandboxExecutable
           ? { sandboxExecutable: options.codingSandboxExecutable }
           : {}),
@@ -864,6 +932,7 @@ function assertExecutionState(
   authority: ExecutionAuthority,
   thread: Thread,
   model: StoredModelConnection,
+  pluginAgentId?: string,
 ): void {
   if (execution.tenantId !== job.tenantId
     || authority.tenantId !== job.tenantId
@@ -885,7 +954,7 @@ function assertExecutionState(
     ? "opc.opportunity-validator"
     : execution.pluginId === "coding"
       ? "coding.builtin"
-      : undefined;
+      : pluginAgentId;
   if (!expectedAgent || execution.agentDefinitionId !== expectedAgent) {
     throw new Error("Agent 定义不受当前产品插件支持");
   }

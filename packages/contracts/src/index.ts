@@ -7,3 +7,5 @@ export * from "./models.js";
 export * from "./openapi.js";
 export * from "./plugin.js";
 export * from "./workflow.js";
+export * from "./plugin-surfaces.js";
+export * from "./projection-facts.js";

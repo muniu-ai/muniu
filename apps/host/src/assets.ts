@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+import { appendKernelEvent } from "@mn/kernel";
 
 import { createHash } from "node:crypto";
 
@@ -310,7 +311,7 @@ export async function createAssets(options: CreateAssetsOptions): Promise<readon
         transaction.putProjection(PROTECTED_PAYLOAD_KEY_NAMESPACE, stored.keyRecord.id, stored.keyRecord);
       }
       transaction.putProjection("asset", asset.id, asset);
-      transaction.appendEvent({
+      appendKernelEvent(transaction, {
         tenantId: options.tenantId,
         aggregateType: "asset",
         aggregateId: asset.id,
@@ -431,7 +432,7 @@ export async function deleteAsset(options: DeleteAssetOptions): Promise<AssetTom
     }
     transaction.deleteProjection("asset", asset.id);
     transaction.putProjection(ASSET_TOMBSTONE_NAMESPACE, asset.id, tombstone);
-    transaction.appendEvent({
+    appendKernelEvent(transaction, {
       tenantId: options.tenantId,
       aggregateType: "asset",
       aggregateId: asset.id,

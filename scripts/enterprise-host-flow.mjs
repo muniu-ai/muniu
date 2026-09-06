@@ -3,6 +3,7 @@
 
 import assert from "node:assert/strict";
 import { pathToFileURL } from "node:url";
+import { readSsePage } from "./lib/enterprise-sse.mjs";
 
 async function token(jwksUrl, tenantId, principalId) {
   const endpoint = new URL("/token", jwksUrl);
@@ -18,6 +19,7 @@ async function token(jwksUrl, tenantId, principalId) {
 async function request(baseUrl, accessToken, method, path, body, key) {
   const response = await fetch(new URL(path, baseUrl), {
     method,
+    signal: AbortSignal.timeout(15_000),
     headers: {
       authorization: `Bearer ${accessToken}`,
       ...(body === undefined ? {} : { "content-type": "application/json" }),
@@ -25,7 +27,8 @@ async function request(baseUrl, accessToken, method, path, body, key) {
     },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
-  const text = await response.text();
+  const text = response.headers.get("content-type")?.includes("text/event-stream")
+    ? await readSsePage(response) : await response.text();
   return { response, text, body: text && response.headers.get("content-type")?.includes("json") ? JSON.parse(text) : undefined };
 }
 
@@ -64,7 +67,10 @@ export async function seedHostFlow({
 
   const installations = await request(hostB, accessToken, "GET", "/v2/plugins/installations");
   assert.equal(installations.response.status, 200, installations.text);
-  assert.deepEqual(installations.body.data.map((plugin) => plugin.pluginId).sort(), ["coding", "opc"]);
+  assert.deepEqual(installations.body.data.map((plugin) => plugin.pluginId).sort(),
+    ["coding", "opc", "runner-claude-cli", "runner-codex-cli"]);
+  assert.deepEqual([...created.body.data.activePluginIds].sort(), ["coding", "opc"],
+    "预装 Runner Adapter 不得自动启用");
 
   const events = await request(
     hostB,

@@ -36,12 +36,8 @@ secrets/
 *.p12
 *.mobileprovision
 
-# Generated desktop sidecars (keep the dispatcher script)
-apps/desktop-mac/src-tauri/binaries/mn-api-aarch64-apple-darwin
-apps/desktop-mac/src-tauri/binaries/mn-api-x86_64-apple-darwin
-apps/desktop-mac/src-tauri/binaries/mn-descriptor-lock-aarch64-apple-darwin
-apps/desktop-mac/src-tauri/binaries/mn-descriptor-lock-x86_64-apple-darwin
-packages/agent-session/native/.build/
+# Generated desktop sidecars
+apps/desktop-mac/src-tauri/binaries/
 
 # Developer-local state
 .DS_Store

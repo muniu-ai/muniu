@@ -11,7 +11,10 @@ export interface ApiOperationV2 {
   readonly versioned: boolean;
 }
 
-export const API_OPERATIONS_V2: readonly ApiOperationV2[] = [
+export const API_OPERATIONS_V2 = [
+  { method: "post", path: "/v2/plugins/{pluginId}/{commandId}", operationId: "runPluginCommand", mutation: true, versioned: true },
+  { method: "get", path: "/v2/workspaces/{workspaceId}/plugin-surfaces", operationId: "getPluginSurfaces", mutation: false, versioned: false },
+  { method: "get", path: "/v2/plugins/catalog", operationId: "listPluginCatalog", mutation: false, versioned: false },
   { method: "get", path: "/v2/openapi.json", operationId: "getOpenApi", mutation: false, versioned: false },
   { method: "get", path: "/v2/health", operationId: "getHealth", mutation: false, versioned: false },
   { method: "get", path: "/v2/readiness", operationId: "getReadiness", mutation: false, versioned: false },
@@ -73,7 +76,7 @@ export const API_OPERATIONS_V2: readonly ApiOperationV2[] = [
   { method: "post", path: "/v2/plugins/coding/runners/{runnerId}/confirmations", operationId: "confirmCodingRunner", mutation: true, versioned: true },
   { method: "get", path: "/v2/plugins/coding/executions/{executionId}/reconciliation", operationId: "getCodingReconciliation", mutation: false, versioned: false },
   { method: "post", path: "/v2/plugins/coding/executions/{executionId}/reconciliation-decisions", operationId: "decideCodingReconciliation", mutation: true, versioned: true },
-] as const;
+] as const satisfies readonly ApiOperationV2[];
 
 function successStatus(operationId: string): "200" | "201" | "202" {
   if (operationId === "createTurn") return "202";
@@ -117,6 +120,15 @@ export function createOpenApiDocument(): JsonObject {
           : { type: "string" },
       });
     }
+    if (operation.operationId === "streamWorkspaceEvents") {
+      parameters.push(
+        { in: "header", name: "Last-Event-ID", required: false, schema: { type: "integer", minimum: 0 } },
+        { in: "query", name: "after", required: false, schema: { type: "integer", minimum: 0 } },
+      );
+    }
+    if (["listInbox", "listMemories", "listDeliverables", "getHealth"].includes(operation.operationId)) parameters.push({ in: "query", name: "workspaceId", required: false, schema: { type: "string" } });
+    if (operation.operationId === "getAsset") parameters.push({ in: "query", name: "content", required: false, schema: { type: "integer", enum: [1] } });
+    if (operation.operationId === "listMemories") parameters.push({ in: "query", name: "namespace", required: false, schema: { type: "string" } });
     if ([
       "listCodingRunners",
       "listOpcOpportunities",
@@ -148,7 +160,9 @@ export function createOpenApiDocument(): JsonObject {
       responses: {
         [successStatus(operation.operationId)]: {
           description: "成功",
-          content: { "application/json": { schema: successResponseSchema(operation.operationId) } },
+          content: operation.operationId === "streamWorkspaceEvents"
+            ? { "text/event-stream": { schema: { type: "string" } } }
+            : { "application/json": { schema: successResponseSchema(operation.operationId) } },
         },
         ...(operation.operationId === "decideCodingReconciliation" ? {
           "202": {
@@ -449,6 +463,42 @@ export function createOpenApiDocument(): JsonObject {
 }
 
 function mutationSchema(operationId: string, versioned: boolean): JsonObject {
+  const string = { type: "string", minLength: 1 };
+  const version = { type: "integer", minimum: 0 };
+  const strings = { type: "array", items: string };
+  const object = (required: readonly string[], properties: JsonObject, additionalProperties = false): JsonObject => ({ type: "object", required: [...required], properties, additionalProperties });
+  const core: Readonly<Record<string, JsonObject>> = {
+    setup: object([], {}),
+    createWorkspace: object(["name", "viewMode", "pluginIds"], { name: string, viewMode: { enum: ["business", "professional"] }, pluginIds: strings }),
+    updateWorkspace: object(["expectedStreamVersion"], { expectedStreamVersion: version, name: string, viewMode: { enum: ["business", "professional"] } }),
+    createThread: object(["subject", "pluginId"], { subject: string, pluginId: string, resourceRef: object(["namespace", "resourceId"], { namespace: string, resourceId: string }) }),
+    commandExecution: object(["expectedStreamVersion", "command"], { expectedStreamVersion: version, command: { enum: ["follow_up", "steer", "cancel", "resume"] }, message: string }),
+    decideApproval: object(["expectedStreamVersion", "decision"], { expectedStreamVersion: version, decision: { enum: ["approve_once", "deny"] } }),
+    createModelConnection: object(["presetId", "apiKey"], { presetId: { enum: ["openai", "deepseek", "anthropic"] }, apiKey: string, displayName: string }),
+    probeModelConnection: object(["expectedStreamVersion"], { expectedStreamVersion: version }),
+    installPlugin: object(["pluginId", "version"], { pluginId: string, version: string }),
+    updatePlugin: object(["expectedStreamVersion", "version"], { expectedStreamVersion: version, version: string }),
+    activatePlugin: object(["expectedStreamVersion", "pluginId"], { expectedStreamVersion: version, pluginId: string }),
+    deactivatePlugin: object(["expectedStreamVersion"], { expectedStreamVersion: version }),
+    disablePlugin: object(["expectedStreamVersion"], { expectedStreamVersion: version }),
+    purgePlugin: object(["expectedStreamVersion"], { expectedStreamVersion: version }),
+    runPluginCommand: object(["workspaceId", "expectedStreamVersion"], { workspaceId: string, expectedStreamVersion: version }, true),
+    decideMemory: object(["expectedStreamVersion", "decision"], { expectedStreamVersion: version, decision: { enum: ["accept", "reject"] } }),
+    deleteMemory: object(["expectedStreamVersion", "reason"], { expectedStreamVersion: version, reason: string }),
+    proposeMemory: object(["workspaceId", "namespace", "resourceId", "sourceEventId", "value"], {
+      workspaceId: string, namespace: string, resourceId: string, sourceEventId: string,
+      scopeType: { enum: ["workspace", "thread", "resource", "principal"] }, confidence: { type: "number", minimum: 0, maximum: 1 },
+      value: { type: "object", additionalProperties: true }, expiresAt: string, derivedFromMemoryId: string, derivedViaShareGrantId: string,
+    }),
+    reviseMemoryProposal: object(["expectedStreamVersion", "confidence", "value"], {
+      expectedStreamVersion: version, confidence: { type: "number", minimum: 0, maximum: 1 }, value: { type: "object", additionalProperties: true },
+    }),
+    createShareGrant: object(["memoryId", "toNamespace", "expectedStreamVersion"], { memoryId: string, toNamespace: string, expectedStreamVersion: version }),
+    revokeShareGrant: object(["expectedStreamVersion"], { expectedStreamVersion: version }),
+    setWorkspaceMember: object(["expectedStreamVersion", "workspaceRole"], { expectedStreamVersion: version, workspaceRole: { enum: ["owner", "operator", "reviewer", "viewer"] } }),
+    removeWorkspaceMember: object(["expectedStreamVersion"], { expectedStreamVersion: version }),
+  };
+  if (core[operationId]) return core[operationId]!;
   const schemas: Readonly<Record<string, string>> = {
     createAssets: "CreateAssetsMutation",
     deleteAsset: "DeleteAssetMutation",

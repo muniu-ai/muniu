@@ -63,6 +63,23 @@ try {
   if (mode === "onboarding") await verifyOnboarding(page, requests);
   if (mode === "opc") await verifyOpc(page, requests, apiUrl);
   if (mode === "coding") await verifyCoding(page, requests);
+  await page.getByTitle("技术配置").click();
+  if (!await page.getByRole("button", { name: "设置", exact: true }).isVisible()) await page.getByTitle("技术配置").click();
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  await page.getByRole("region", { name: "插件管理" }).waitFor({ state: "visible" });
+  const manager = page.getByRole("region", { name: "插件管理" });
+  const install = manager.getByRole("button", { name: "安装", exact: true });
+  await install.waitFor({ state: "visible" });
+  if (await install.isEnabled()) throw new Error("插件未确认宿主权限时不得安装");
+  await manager.getByRole("checkbox").check();
+  await install.click();
+  const research = manager.locator("div").filter({ has: page.getByText("research · 1.0.0", { exact: true }) }).last();
+  await research.getByRole("button", { name: "在此工作区启用" }).click();
+  await page.getByRole("button", { name: "研究助手", exact: true }).click();
+  await page.getByRole("heading", { name: "研究工作台" }).waitFor({ state: "visible" });
+  await page.getByLabel("研究主题").fill("插件跨入口验证");
+  await page.getByRole("button", { name: "生成研究结果", exact: true }).click();
+  await page.getByRole("status").filter({ hasText: "研究结果：插件跨入口验证" }).waitFor({ state: "visible" });
 
   await assertViewportFit(page);
   await page.waitForTimeout(350);
@@ -76,7 +93,10 @@ try {
   });
   if (!shortcut.metaKey || !shortcut.prevented) throw new Error(`Cmd-K 未被应用接管：${JSON.stringify(shortcut)}`);
   await page.getByRole("dialog", { name: "命令中心" }).waitFor({ state: "visible" });
+  await page.keyboard.press("ArrowDown");
+  await page.getByRole("dialog", { name: "命令中心" }).getByRole("option", { selected: true }).waitFor({ state: "visible" });
   await page.keyboard.press("Escape");
+  await page.getByRole("dialog", { name: "命令中心" }).waitFor({ state: "hidden" });
   console.log(JSON.stringify({ ok: true, mode, screenshotPath, requestCount: requests.length }));
 } finally {
   await browser?.close().catch(() => undefined);
@@ -340,7 +360,9 @@ async function verifyOpc(page, requestLog, hostUrl) {
   await expectText(page, "目标客户明确重视可预测的获客节奏");
   await page.getByRole("button", { name: "删除记忆：目标客户明确重视可预测的获客节奏" }).click();
   await page.getByRole("button", { name: "确认删除记忆" }).click();
-  await expectText(page, "不可用");
+  await page.getByText("目标客户明确重视可预测的获客节奏", { exact: true }).waitFor({ state: "hidden" });
+  const remainingMemories = await hostData(hostUrl, `/v2/memories?workspaceId=${encodeURIComponent(workspace.id)}`);
+  if (remainingMemories.length !== 0) throw new Error("删除后的记忆仍存在于查询投影");
   if ((await page.locator("body").innerText()).includes("目标客户明确重视可预测的获客节奏")) throw new Error("删除后的记忆仍暴露原内容");
   await page.getByRole("button", { name: "专业视图" }).click();
   await page.getByRole("button", { name: "OPC" }).click();
@@ -407,7 +429,7 @@ async function verifyCoding(page, requestLog) {
   await expectText(page, "统一 Agent OS API");
   await page.keyboard.press("Meta+k");
   await page.getByRole("dialog", { name: "命令中心" }).getByRole("textbox").fill("统一 Agent OS API");
-  await page.getByRole("dialog", { name: "命令中心" }).getByRole("button", { name: /统一 Agent OS API/ }).click();
+  await page.keyboard.press("Enter");
   await page.getByRole("button", { name: "返回任务列表" }).waitFor({ state: "visible" });
   await page.getByRole("button", { name: "返回任务列表" }).click();
   if ((await page.locator("body").innerText()).includes("Harness 摘要")) throw new Error("经营视图不应显示 Harness");

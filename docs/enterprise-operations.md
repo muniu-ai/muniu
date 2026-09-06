@@ -12,6 +12,7 @@
 - Host 与 Worker 使用相同的 engine lock、plugin lock 和镜像摘要。
 - 启用第三方插件时，所有 Host 镜像包含相同的只读签名仓库、Ed25519 受信根和仓库摘要。
 - Coding sandbox 使用明确的 RuntimeClass、无 token 的 ServiceAccount 与默认拒绝网络策略。
+- 专用容器运行时将 PID 上限设为 256；只设置 kubelet 的 Pod 上限不足以通过容器内检查。Kind fixture 为 `test-handler` 配置独立 OCI base spec，不修改默认 `runc`。
 
 缺少保留策略、密钥、存储或 lock 一致性时，readiness 必须失败。
 
@@ -57,11 +58,13 @@ Host 通过 `MN_VAULT_TRANSIT_MOUNT` 和 `MN_VAULT_TRANSIT_KEY` 选择专用于 
 
 Job 是至少一次投递，默认租约为 30 秒，并携带 fencing token。Worker owner 丢失后，数据库在租约到期时允许新 Worker 领取；陈旧 owner 的续租、结果与 checkpoint 必须被拒绝。
 
+Worker 每秒重新检查数据库中的 engine/plugin lock。数据库不可达或摘要不一致时撤下就绪标记；停止进程后不再补写标记。
+
 已提交事件的恢复目标是 RPO 0。Host 或 Worker 中断不应丢失已经提交的事件、审批或 outbox。模型上下文和工具承诺都在外部请求前持久化。
 
 外部副作用的结果未知时，执行进入 `needs_reconciliation`。恢复流程只能等待人工核对，不能自动重放。只读任务和明确可恢复的本地写入仍需遵循原幂等键、generation 和 authority commitment。
 
-企业 `mark_completed` 是显式 Worker capability，不是 Host 的内置保证。发布配置 `MN_WORKER_SUPPORTED_KINDS`、handler 模块导出的 `supportedKinds` 与实际 `handlers` 必须完全一致；Worker 校验通过后才按这些 kind 领取 Job。只有同时声明并实现 `coding.reconciliation.verify` 与 `coding.sandbox.cleanup`，Host 才会提供“标记完成”。生产实现必须在真实 Kubernetes 隔离环境中验证保留候选、执行权威 Gate，并以租约和 fencing token 提交证据及清理结果。仓库内置企业 fixture、Kind 探针和 sandbox 控制器不包含这套生产 handler，不得将它们登记为该 capability。未部署时保持失败关闭，选择终止或创建全新调用。
+企业 `mark_completed` 是显式 Worker capability。发布配置 `MN_WORKER_SUPPORTED_KINDS`、handler 模块导出的 `supportedKinds` 与实际 `handlers` 必须完全一致；Worker 校验通过后才按这些 kind 领取 Job。内置生产模块同时提供 `coding.reconciliation.verify` 与 `coding.sandbox.cleanup`，在 Kubernetes 候选 Pod 中执行权威 Gate，并以租约和 fencing token 提交证据及清理结果。自定义模块未同时提供两项能力时，Host 关闭“标记完成”，保留终止或创建全新调用。
 
 ## 备份与恢复
 
@@ -72,11 +75,11 @@ Job 是至少一次投递，默认租约为 30 秒，并携带 fencing token。W
 - plugin lock、engine lock、签名信任根和撤销元数据；
 - Vault/KMS key 标识、恢复权限和轮换记录，但不导出明文密钥。
 
-恢复演练先在隔离环境完成。按事件摘要链验证数据库，从 CAS 抽样重新计算 SHA-256，再重建投影并比较 checkpoint。KMS 不可用或事件 HMAC 失败时停止 readiness，不能跳过校验启动。
+恢复演练先在隔离环境完成。按事件摘要链验证数据库，从 CAS 抽样重新计算 SHA-256，再重建投影并比较 checkpoint。当前核心元数据可重建，产品投影尚未全部具备完整事实来源；备份必须保留产品投影，不能只备份 events 表。KMS 不可用或事件 HMAC 失败时应停止上线验收，不能跳过校验。
 
 ## 保留与删除
 
-生产 profile 必须分别配置业务数据、执行、成果和审计保留期。删除敏感内容时销毁对应数据密钥并写入 tombstone；审计只保留操作者、时间、对象摘要与删除原因。
+生产 profile 必须分别配置业务数据、执行、成果和审计保留期。当前删除移除活动数据库中的密钥记录并写入 tombstone；审计只保留操作者、时间、对象摘要与删除原因。历史备份、WAL 和存储快照中的 wrapped DEK 不会被该事务抹除，恢复时必须核对后续删除记录。跨备份密钥撤销尚未实现，不能宣称不可恢复删除。
 
 撤销 share grant 立即阻止后续读取，并使派生记忆失效。已经发送到模型或外部服务的数据无法召回，操作界面与审计记录必须说明这一限制。
 
@@ -100,3 +103,7 @@ npm run verify:kind
 - 外部副作用未知结果只进入人工核对。
 
 `verify:kind` 需要 Docker、Kind、kubectl、Helm、buildx 和 curl。测试通过只证明仓库定义的故障注入场景，不等同于生产可用性或隔离认证。
+
+Kind 使用导入后的 OCI manifest 摘要固定候选镜像，并校验该 manifest 引用本次构建的配置摘要；不能把 Docker image ID 当成 manifest 摘要。Calico 清单按固定版本经 IPv4 完整下载后应用，下载采用有限重试。
+
+Compose fixture 的对外端口只绑定 `127.0.0.1`。PostgreSQL、S3、认证 fixture 和 Host 另接测试客户端网络，以支持 Docker Desktop 端口映射；Worker 只接内部网络。测试使用独立的 `COMPOSE_PROJECT_NAME`，清理时只删除该项目的测试容器和卷。

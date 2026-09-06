@@ -1,11 +1,9 @@
 #!/usr/bin/env node
 // SPDX-License-Identifier: Apache-2.0
 
-import pg from "pg";
+import { createPostgresPool } from "./lib/postgres-pool.mjs";
 
 import { PostgresKernelStore } from "./lib/postgres-kernel-store.mjs";
-
-const { Pool } = pg;
 
 function required(name) {
   const value = process.env[name]?.trim();
@@ -25,7 +23,7 @@ if ((process.env.MN_POSTGRES_SCHEMA ?? "mn_v2") !== "mn_v2") {
 const key = Buffer.from(required("MN_EVENT_HMAC_KEY"), "base64");
 if (key.byteLength < 32) throw new Error("MN_EVENT_HMAC_KEY 解码后至少需要 32 字节");
 
-const pool = new Pool({ connectionString: required("MN_POSTGRES_URL"), application_name: "mn-v2-migrate" });
+const pool = createPostgresPool({ connectionString: required("MN_POSTGRES_URL"), application_name: "mn-v2-migrate" });
 const store = new PostgresKernelStore({ pool, hmacKey: key });
 try {
   await store.initialize();

@@ -11,6 +11,8 @@ export function canReadMemory(
   return grants.some(
     (grant) =>
       grant.memoryId === memory.id &&
+      grant.tenantId === memory.tenantId &&
+      grant.workspaceId === memory.workspaceId &&
       grant.fromNamespace === memory.namespace &&
       grant.toNamespace === requestingNamespace &&
       grant.revokedAt === undefined,
@@ -29,18 +31,6 @@ export function rejectMemory(memory: MemoryRecord, now: string): MemoryRecord {
     throw new KernelError("MEMORY_NOT_PROPOSED", "只有待确认记忆可以拒绝", "刷新记忆状态");
   }
   return { ...memory, status: "rejected", updatedAt: now, streamVersion: memory.streamVersion + 1 };
-}
-
-export function deleteMemory(memory: MemoryRecord, now: string): MemoryRecord {
-  return {
-    ...memory,
-    status: "deleted",
-    value: undefined,
-    protectedPayloadRef: undefined,
-    shareGrantIds: [],
-    updatedAt: now,
-    streamVersion: memory.streamVersion + 1,
-  };
 }
 
 export function invalidateSharedMemory(memory: MemoryRecord, now: string): MemoryRecord {

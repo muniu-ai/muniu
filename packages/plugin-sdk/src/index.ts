@@ -6,3 +6,4 @@ export * from "./lifecycle.js";
 export * from "./package.js";
 export * from "./registry.js";
 export * from "./resources.js";
+export * from "./surfaces.js";

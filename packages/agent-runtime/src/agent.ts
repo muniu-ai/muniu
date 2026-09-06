@@ -403,18 +403,24 @@ export class AgentHandle {
     for (let boundary = firstBoundary; boundary <= this.#maxModelBoundariesPerTurn; boundary += 1) {
       if (this.#status !== "running") return;
       await this.#appendSteersAtBoundary(runtime.turn);
+      const prompts = await Promise.all(this.#definition.promptIds.map((id, index) => {
+        const contribution = requiredContribution(runtime.contributions, "prompt", id);
+        return contribution.refreshAtBoundary ? contribution.render({
+          scope: this.#scope.identity, executionId: this.#executionId, generation: runtime.generation,
+        }) : runtime.prompts[index]!;
+      }));
       const request: ModelRequest = {
         executionId: this.#executionId,
         agentId: this.#definition.id,
         generation: runtime.generation,
         messages: [
-          ...runtime.prompts.map((content): ModelMessage => ({ role: "system", content })),
+          ...prompts.map((content): ModelMessage => ({ role: "system", content })),
           ...await this.#sessionLog.modelView(this.#surface),
         ],
         availableToolIds: runtime.availableToolIds,
       };
 
-      await this.#persistModelRequest(request, boundary, runtime.prompts);
+      await this.#persistModelRequest(request, boundary, prompts);
       const response = await runtime.llm.complete(request, {
         signal: this.#abortController?.signal ?? AbortSignal.abort("执行已结束"),
         scope: this.#scope.identity,
@@ -703,7 +709,7 @@ export class AgentHandle {
   }
 }
 
-function sameApprovedIntent(approved: ToolCallIntent, current: ToolCallIntent): boolean {
+function sameApprovedIntent(approved: Omit<ToolCallIntent, "normalizedArguments">, current: ToolCallIntent): boolean {
   return approvalStillMatches(approved, current)
     && approved.id === current.id
     && approved.effectClass === current.effectClass

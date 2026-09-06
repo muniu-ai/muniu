@@ -6,6 +6,7 @@ import { dirname, isAbsolute, posix, relative, resolve } from "node:path";
 import { assertPluginManifestShape, type PluginManifestV1 } from "@mn/contracts";
 import {
   cloneJson,
+  assertPluginSurfaces,
   canonicalJson,
   openVerifiedPluginPackage,
   sha256Hex,
@@ -194,7 +195,17 @@ function verifiedModuleLoader(
       if (!isObject(definition)) {
         throw new Error(`插件 ${manifest.id} 的 Host 定义无效`);
       }
-      return definition as unknown as PluginDefinitionV1;
+      const surfaces: Record<string, unknown> = {};
+      for (const kind of ["ui", "cli"] as const) {
+        const entry = await loadEntrypoint(kind);
+        if (!entry) continue;
+        const surfaceModule = await import(`data:text/javascript;base64,${Buffer.from(entry).toString("base64")}`);
+        if (typeof surfaceModule.default !== "function") throw new Error(`插件 ${manifest.id} 的 ${kind} 入口必须默认导出贡献工厂`);
+        surfaces[kind] = await surfaceModule.default(cloneJson(manifest));
+      }
+      const typed = definition as unknown as PluginDefinitionV1;
+      assertPluginSurfaces(surfaces, typed.contributions);
+      return { ...typed, surfaces };
     })();
     return loaded;
   };

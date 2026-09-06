@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import { Context } from "@deepseek-ai/cordis";
 import { KernelProjectionRuntimeStore, type RuntimeRecord } from "@mn/agent-runtime";
+import { createProtectedRuntimeStore, readProtectedRuntimePayload, type RuntimeProtection } from "@mn/worker";
 import {
   apiError,
   createOpenApiDocument,
@@ -13,6 +14,7 @@ import {
   type JsonObject,
   type JsonValue,
   type MemoryRecord,
+  type MemoryTombstone,
   type OrganizationRole,
   type Thread,
   type ThreadTurnSessionEntry,
@@ -23,6 +25,7 @@ import {
 } from "@mn/contracts";
 import {
   AgentOsKernel,
+  appendKernelEvent,
   KernelError,
   PROVIDER_PRESETS,
   sha256,
@@ -31,7 +34,6 @@ import {
   type KernelStore,
   type KernelTransaction,
   type ModelConnection,
-  type ProtectedPayloadKeyDestroyer,
   type ProviderPreset,
 } from "@mn/kernel";
 import {
@@ -45,6 +47,7 @@ import {
   CursorExpiredError,
   IdempotencyConflictError,
   StreamVersionConflictError as StorageStreamVersionConflictError,
+  storeProtectedJson,
   type ContentAddressedStorage,
   type KeyProvider,
 } from "@mn/storage";
@@ -59,6 +62,11 @@ import {
   deleteAsset,
   readAssetContent,
 } from "./assets.js";
+import {
+  prepareMemoryPayload,
+  publicMemory,
+  readMemoryValue,
+} from "./memories.js";
 import {
   KernelOpcRepository,
   captureCodingRepository,
@@ -172,7 +180,6 @@ export interface AgentOsHostOptions {
   }>;
   /** 仅用于本地开发或测试宿主附加受信 WebView 来源。 */
   readonly allowedOrigins?: readonly string[];
-  readonly protectedPayloadKeys?: ProtectedPayloadKeyDestroyer;
   /** 本地注入 Keychain provider；企业注入 Vault/KMS provider。 */
   readonly protectedPayloadKeyProvider?: KeyProvider;
   /** Local hosts passively inspect same-node binaries; enterprise hosts require an injected trusted inspector. */
@@ -505,7 +512,8 @@ interface SubmittedSessionEntry {
   readonly threadId: string;
   readonly executionId: string;
   readonly role: "user";
-  readonly message: string;
+  readonly message?: string;
+  readonly protectedPayloadRef?: string;
   readonly generation: number;
   readonly createdAt: string;
 }
@@ -526,6 +534,7 @@ function enqueueRuntimeInbox(
     readonly occurredAt: string;
     readonly recordId: string;
     readonly itemId: string;
+    readonly preparedPayload?: Awaited<ReturnType<typeof storeProtectedJson>>;
   },
 ): RuntimeRecord {
   const current = transaction.getProjection<DurableRuntimeProjection>(
@@ -547,18 +556,30 @@ function enqueueRuntimeInbox(
       "停止执行并检查事件与投影",
     );
   }
-  const record: RuntimeRecord = {
+  const record: RuntimeRecord & { readonly protectedPayloadRef?: string } = {
     sequence: current.nextSequence,
     id: input.recordId,
     executionId: input.executionId,
     type: "inbox/enqueued",
     occurredAt: input.occurredAt,
-    payload: {
+    ...(input.preparedPayload ? { protectedPayloadRef: input.preparedPayload.protectedPayloadRef } : {}),
+    payload: input.preparedPayload ? {} : {
       id: input.itemId,
       kind: input.kind,
       text: input.text,
     },
   };
+  if (input.preparedPayload) {
+    transaction.putProjection("protectedPayloadKey", input.preparedPayload.protectedPayloadRef,
+      input.preparedPayload.keyRecord);
+    const execution = transaction.getProjection<Execution>("execution", input.executionId)!;
+    const { payload: _payload, protectedPayloadRef: _ref, ...metadata } = record;
+    transaction.appendEvent({ tenantId: execution.tenantId, aggregateType: "runtimeRecord",
+      aggregateId: record.id, expectedStreamVersion: 0, type: "agent.runtime_recorded",
+      actorId: execution.initiatedBy, executionId: execution.id, generation: execution.generation,
+      correlationId: execution.id, protectedPayloadRef: input.preparedPayload.protectedPayloadRef,
+      publicPayload: { workspaceId: execution.workspaceId, record: metadata as unknown as JsonObject } });
+  }
   transaction.putProjection<DurableRuntimeProjection>("agent-runtime", input.executionId, {
     executionId: input.executionId,
     streamVersion: current.streamVersion + 1,
@@ -572,15 +593,27 @@ async function threadTurns(
   store: KernelStore,
   tenantId: string,
   threadId: string,
+  protection?: RuntimeProtection,
 ): Promise<ThreadTurnsView> {
   const executions = (await projectionList<Execution>(store, tenantId, "execution"))
     .filter((execution) => execution.threadId === threadId)
     .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
-  const submittedEntries = await projectionList<SubmittedSessionEntry>(store, tenantId, "session-log-entry");
-  const runtime = new KernelProjectionRuntimeStore({ tenantId, store });
+  const storedEntries = await projectionList<SubmittedSessionEntry>(store, tenantId, "session-log-entry");
+  const submittedEntries = await Promise.all(storedEntries.filter((entry) => entry.threadId === threadId)
+    .map(async (entry) => {
+      if (!entry.protectedPayloadRef) return { ...entry, message: entry.message ?? "" };
+      if (!protection) throw new Error("会话缺少解密配置");
+      const value = await readProtectedRuntimePayload({ ...protection, store, tenantId,
+        workspaceId: entry.workspaceId, ownerType: "thread", ownerId: entry.threadId,
+        protectedPayloadRef: entry.protectedPayloadRef });
+      if (typeof value.message !== "string") throw new Error("会话内容无效");
+      return { ...entry, message: value.message };
+    }));
   return {
     threadId,
     turns: await Promise.all(executions.map(async (execution) => {
+      const runtime = protection ? createProtectedRuntimeStore({ ...protection, tenantId,
+        workspaceId: execution.workspaceId, store }) : new KernelProjectionRuntimeStore({ tenantId, store });
       const runtimeEntries = (await runtime.readExecution(execution.id))
         .filter((record) => record.type === "session/entry")
         .map(runtimeSessionEntry)
@@ -1228,7 +1261,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
               updatedAt: now(),
             };
             transaction.putProjection("workspace", id, next);
-            transaction.appendEvent({
+            appendKernelEvent(transaction, {
               tenantId: TENANT_ID, aggregateType: "workspace", aggregateId: id,
               expectedStreamVersion: expected, type: "workspace.updated", actorId: ACTOR_ID,
               generation: 0, correlationId: nextId("correlation"), publicPayload: { name: next.name, viewMode: next.viewMode },
@@ -1284,6 +1317,26 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           principalId,
           expectedVersion(body),
         ), 200, traceId);
+      }
+      if (url.pathname === "/v2/plugins/catalog" && request.method === "GET") {
+        const snapshot = await options.pluginRepository?.read();
+        return json((snapshot?.releases ?? []).map(({ manifest }) => ({
+          pluginId: manifest.id, version: manifest.version, displayName: manifest.displayName,
+          description: manifest.description, license: manifest.license,
+          permissions: manifest.permissions, packageSha256: manifest.packageSha256,
+          trustBoundary: "process_equivalent", release: manifest.release,
+        })), 200, traceId);
+      }
+      const surfacesMatch = url.pathname.match(/^\/v2\/workspaces\/([^/]+)\/plugin-surfaces$/u);
+      if (surfacesMatch && request.method === "GET") {
+        const workspaceId = decodeURIComponent(surfacesMatch[1]!);
+        const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId);
+        await ensurePluginsActive(TENANT_ID, workspace, tenantRuntime, ACTOR_ID);
+        return json(workspace.activePluginIds.flatMap((pluginId) => {
+          const definition = tenantPlugins.definition(pluginId);
+          return definition?.surfaces ? [{ pluginId, version: definition.version,
+            navigation: definition.contributions.navigation, ...definition.surfaces }] : [];
+        }), 200, traceId);
       }
       const agentCatalogMatch = url.pathname.match(/^\/v2\/workspaces\/([^/]+)\/agent-catalog$/u);
       if (agentCatalogMatch && request.method === "GET") {
@@ -1349,7 +1402,9 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         if (!thread || thread.workspaceId !== workspaceId) {
           throw new KernelError("THREAD_NOT_FOUND", "会话不存在", "刷新工作区会话");
         }
-        return json(await threadTurns(options.store, TENANT_ID, threadId), 200, traceId);
+        return json(await threadTurns(options.store, TENANT_ID, threadId,
+          options.cas && options.protectedPayloadKeyProvider
+            ? { cas: options.cas, keyProvider: options.protectedPayloadKeyProvider } : undefined), 200, traceId);
       }
       if (turnMatch && request.method === "POST") {
         const body = await readBody(request);
@@ -1427,6 +1482,12 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         if (toolIds.some((toolId) => toolId.includes("repository") || toolId.includes("sandbox"))) {
           dataNamespaces.add("repository");
         }
+        const message = stringField(body, "message")!;
+        const preparedMessage = options.cas && options.protectedPayloadKeyProvider
+          ? await storeProtectedJson({ tenantId: TENANT_ID, workspaceId, ownerType: "thread",
+            ownerId: threadId, protectedPayloadRef: nextId("thread-payload"), value: { message: message.trim() },
+            cas: options.cas, keyProvider: options.protectedPayloadKeyProvider, createdAt: now() })
+          : undefined;
         const execution = await withPluginUse(
           tenantRuntime,
           thread.pluginId,
@@ -1440,8 +1501,10 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
               workspaceId,
               threadId,
               expectedStreamVersion: expected,
-              message: stringField(body, "message")!,
+              message,
+              ...(preparedMessage ? { preparedMessage } : {}),
               agentDefinitionId: agentDefinition.id,
+              ...(definition.manifest ? { pluginPackageSha256: definition.manifest.packageSha256 } : {}),
               modelBindingId: modelConnection.id,
               executionPrincipalId: `agent:${thread.pluginId}`,
               ...(runnerId ? { runnerId } : {}),
@@ -1497,6 +1560,12 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         if (command === "follow_up" || command === "steer") {
           const text = stringField(body, "message")!;
           const expected = expectedVersion(body);
+          const inboxItemId = nextId("inbox-item");
+          const preparedPayload = options.cas && options.protectedPayloadKeyProvider
+            ? await storeProtectedJson({ tenantId: TENANT_ID, workspaceId: execution.workspaceId,
+              ownerType: "runtime", ownerId: executionId, protectedPayloadRef: nextId("runtime-payload"),
+              value: { id: inboxItemId, kind: command, text }, cas: options.cas,
+              keyProvider: options.protectedPayloadKeyProvider, createdAt: now() }) : undefined;
           const result = await idempotentProjectionMutation({
             store: options.store,
             tenantId: TENANT_ID,
@@ -1518,7 +1587,6 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
                 );
               }
               const timestamp = now();
-              const inboxItemId = nextId("inbox-item");
               enqueueRuntimeInbox(transaction, {
                 executionId,
                 kind: command,
@@ -1526,6 +1594,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
                 occurredAt: timestamp,
                 recordId: nextId("runtime"),
                 itemId: inboxItemId,
+                ...(preparedPayload ? { preparedPayload } : {}),
               });
               const next: Execution = {
                 ...current,
@@ -1533,7 +1602,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
                 updatedAt: timestamp,
               };
               transaction.putProjection("execution", executionId, next);
-              transaction.appendEvent({
+              appendKernelEvent(transaction, {
                 tenantId: TENANT_ID,
                 aggregateType: "execution",
                 aggregateId: executionId,
@@ -1733,19 +1802,28 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         if (workspaceId) await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId);
         const allowed = workspaceId ? undefined : await accessibleWorkspaceIds();
         const values = await projectionList<MemoryRecord>(options.store, TENANT_ID, "memory");
-        return json(values
+        const visible = values
           .filter((value) => workspaceId ? value.workspaceId === workspaceId : allowed!.has(value.workspaceId))
-          .filter((value) => !namespace || value.namespace === namespace)
-          .map((value) => ({
+          .filter((value) => !namespace || value.namespace === namespace);
+        return json(await Promise.all(visible.map(async (value) => {
+          const memoryValue = await readMemoryValue({
+            store: options.store,
+            cas: options.cas,
+            keyProvider: options.protectedPayloadKeyProvider,
+            tenantId: TENANT_ID,
+            memory: value,
+          });
+          return {
             id: value.id,
             namespace: value.namespace,
             resourceId: value.resourceId,
-            summary: typeof value.value?.summary === "string" ? value.value.summary : "待审阅的记忆提案",
+            summary: typeof memoryValue.summary === "string" ? memoryValue.summary : "待审阅的记忆提案",
             source: value.sourceEventId,
             confidence: value.confidence,
-            status: value.status === "deleted" ? "invalidated" : value.status,
+            status: value.status,
             streamVersion: value.streamVersion,
-          })), 200, traceId);
+          };
+        })), 200, traceId);
       }
       if (url.pathname === "/v2/memories" && request.method === "POST") {
         const body = await readBody(request);
@@ -1756,21 +1834,38 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
             "提交明文输入，由 Host 创建受保护数据引用",
           );
         }
-        await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, stringField(body, "workspaceId")!, "operate");
+        if (!isObject(body.value)) {
+          throw new KernelError("INVALID_BODY", "记忆提案需要 value", "提交结构化记忆内容");
+        }
+        const workspaceId = stringField(body, "workspaceId")!;
+        await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId, "operate");
+        const memoryId = nextId("memory");
+        const preparedPayload = await prepareMemoryPayload({
+          store: options.store,
+          cas: options.cas,
+          keyProvider: options.protectedPayloadKeyProvider,
+          tenantId: TENANT_ID,
+          workspaceId,
+          memoryId,
+          protectedPayloadRef: nextId("protected-payload"),
+          value: body.value as JsonObject,
+          createdAt: now(),
+        });
         const memory = await kernel.proposeMemory(TENANT_ID, ACTOR_ID, mutationKey as string, {
-          workspaceId: stringField(body, "workspaceId")!,
+          workspaceId,
           scopeType: body.scopeType === "thread" || body.scopeType === "resource" || body.scopeType === "principal"
             ? body.scopeType : "workspace",
           namespace: stringField(body, "namespace")!, resourceId: stringField(body, "resourceId")!,
           sourceEventId: stringField(body, "sourceEventId")!,
           confidence: typeof body.confidence === "number" ? body.confidence : 0,
-          ...(isObject(body.value) ? { value: body.value as JsonObject } : {}),
+          ...(typeof body.expiresAt === "string" ? { expiresAt: body.expiresAt } : {}),
           ...(typeof body.derivedFromMemoryId === "string"
             ? { derivedFromMemoryId: body.derivedFromMemoryId } : {}),
           ...(typeof body.derivedViaShareGrantId === "string"
             ? { derivedViaShareGrantId: body.derivedViaShareGrantId } : {}),
+          preparedPayload,
         });
-        return json(memory, 201, traceId);
+        return json(publicMemory(memory, body.value as JsonObject), 201, traceId);
       }
       const memoryDecisionMatch = url.pathname.match(/^\/v2\/memories\/([^/]+)\/decisions$/u);
       if (memoryDecisionMatch && request.method === "POST") {
@@ -1783,14 +1878,21 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         if (decision !== "accept" && decision !== "reject") {
           throw new KernelError("INVALID_DECISION", "记忆决定无效", "选择 accept 或 reject");
         }
-        return json(await kernel.decideMemory(
+        const decided = await kernel.decideMemory(
           TENANT_ID,
           ACTOR_ID,
           mutationKey as string,
           memoryId,
           expectedVersion(body),
           decision,
-        ), 200, traceId);
+        );
+        return json(publicMemory(decided, await readMemoryValue({
+          store: options.store,
+          cas: options.cas,
+          keyProvider: options.protectedPayloadKeyProvider,
+          tenantId: TENANT_ID,
+          memory: decided,
+        })), 200, traceId);
       }
       const memoryMatch = url.pathname.match(/^\/v2\/memories\/([^/]+)$/u);
       if (memoryMatch && request.method === "PATCH") {
@@ -1799,32 +1901,45 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         const memory = await projectionGet<MemoryRecord>(options.store, TENANT_ID, "memory", memoryId);
         if (!memory) throw new KernelError("MEMORY_NOT_FOUND", "记忆不存在", "刷新记忆列表");
         await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, memory.workspaceId, "operate");
+        if (Object.hasOwn(body, "protectedPayloadRef")) {
+          throw new KernelError(
+            "PROTECTED_PAYLOAD_REF_FORBIDDEN",
+            "客户端不能指定受保护数据引用",
+            "提交明文输入，由 Host 创建受保护数据引用",
+          );
+        }
         if (!isObject(body.value) || typeof body.confidence !== "number") {
           throw new KernelError("INVALID_BODY", "修改记忆需要 value 和 confidence", "填写修正后的内容与置信度");
         }
-        return json(await kernel.reviseMemoryProposal(
+        const preparedPayload = await prepareMemoryPayload({
+          store: options.store,
+          cas: options.cas,
+          keyProvider: options.protectedPayloadKeyProvider,
+          tenantId: TENANT_ID,
+          workspaceId: memory.workspaceId,
+          memoryId,
+          protectedPayloadRef: nextId("protected-payload"),
+          value: body.value as JsonObject,
+          createdAt: now(),
+        });
+        const revised = await kernel.reviseMemoryProposal(
           TENANT_ID,
           ACTOR_ID,
           mutationKey as string,
           memoryId,
           expectedVersion(body),
-          { confidence: body.confidence, value: body.value as JsonObject },
-        ), 200, traceId);
+          { confidence: body.confidence, preparedPayload },
+        );
+        return json(publicMemory(revised, body.value as JsonObject), 200, traceId);
       }
       if (memoryMatch && request.method === "DELETE") {
         const body = await readBody(request);
         const memoryId = decodeURIComponent(memoryMatch[1]!);
-        const memory = await projectionGet<MemoryRecord>(options.store, TENANT_ID, "memory", memoryId);
+        const memory = await options.store.transact(TENANT_ID, (transaction) =>
+          transaction.getProjection<MemoryRecord>("memory", memoryId)
+          ?? transaction.getProjection<MemoryTombstone>("memoryTombstone", memoryId));
         if (!memory) throw new KernelError("MEMORY_NOT_FOUND", "记忆不存在", "刷新记忆列表");
         await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, memory.workspaceId, "owner");
-        if (memory.protectedPayloadRef && !options.protectedPayloadKeys) {
-          throw new KernelError(
-            "KEY_DESTROYER_UNAVAILABLE",
-            "敏感记忆暂时无法安全删除",
-            "修复 Keychain 或 KMS 连接后重试",
-            true,
-          );
-        }
         return json(await kernel.deleteMemory(
           TENANT_ID,
           ACTOR_ID,
@@ -1832,7 +1947,6 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           memoryId,
           expectedVersion(body),
           stringField(body, "reason")!,
-          options.protectedPayloadKeys ?? { async destroy() { /* 非敏感记忆没有数据密钥。 */ } },
         ), 200, traceId);
       }
       if (url.pathname === "/v2/share-grants" && request.method === "GET") {
@@ -1925,7 +2039,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
                 status: "ready" as const, streamVersion: value.streamVersion + 1,
               };
               transaction.putProjection("modelConnection", id, next);
-              transaction.appendEvent({
+              appendKernelEvent(transaction, {
                 tenantId: TENANT_ID, aggregateType: "modelConnection", aggregateId: id,
                 expectedStreamVersion: expected, type: "model_connection.probed", actorId: ACTOR_ID,
                 generation: 0, correlationId: nextId("correlation"),
@@ -2069,7 +2183,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
                 ? value.activePluginIds : [...value.activePluginIds, pluginId];
               const next = { ...value, activePluginIds, streamVersion: value.streamVersion + 1, updatedAt: now() };
               transaction.putProjection("workspace", workspaceId, next);
-              transaction.appendEvent({
+              appendKernelEvent(transaction, {
                 tenantId: TENANT_ID, aggregateType: "workspace", aggregateId: workspaceId,
                 expectedStreamVersion: expected, type: "workspace.plugin_activated", actorId: ACTOR_ID,
                 generation: 0, correlationId: nextId("correlation"), publicPayload: { pluginId },
@@ -2131,7 +2245,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
                   updatedAt: now(),
                 };
                 transaction.putProjection("workspace", workspaceId, next);
-                transaction.appendEvent({
+                appendKernelEvent(transaction, {
                   tenantId: TENANT_ID,
                   aggregateType: "workspace",
                   aggregateId: workspaceId,

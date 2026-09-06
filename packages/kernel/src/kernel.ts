@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
   Approval,
   EventAppendRequest,
@@ -6,6 +7,8 @@ import type {
   Job,
   JsonObject,
   MemoryRecord,
+  MemoryTombstone,
+  ToolCallCommitment,
   OrganizationRole,
   ShareGrant,
   Thread,
@@ -15,13 +18,14 @@ import type {
   WorkspaceRole,
   CodingRunnerId,
 } from "@mn/contracts";
-import { acceptMemory, deleteMemory, rejectMemory } from "./memory.js";
+import { acceptMemory, rejectMemory } from "./memory.js";
 import { authorityAllowsIntent, computeExecutionAuthorityCommitment } from "./authority.js";
 import { sha256 } from "./canonical.js";
 import { KernelError, StreamVersionConflictError } from "./errors.js";
 import { transitionExecution, type ExecutionCommand } from "./execution.js";
 import type { InboxItem, ModelConnection } from "./models.js";
 import type { KernelStore, KernelTransaction } from "./store.js";
+import { appendKernelEvent } from "./projections.js";
 
 export interface KernelOptions {
   readonly now?: () => string;
@@ -30,12 +34,22 @@ export interface KernelOptions {
   readonly acceptsModelSecretReference?: (reference: string) => boolean;
 }
 
-export interface ProtectedPayloadKeyDestroyer {
-  /** 必须幂等：进程中断后可能用同一引用再次确认销毁。 */
-  destroy(reference: string): Promise<void>;
+export const PROTECTED_PAYLOAD_KEY_NAMESPACE = "protectedPayloadKey";
+export const MEMORY_TOMBSTONE_NAMESPACE = "memoryTombstone";
+
+export interface PreparedMemoryPayload {
+  readonly memoryId: string;
+  readonly protectedPayloadRef: string;
+  readonly plaintextDigest: string;
+  readonly keyRecord: object;
 }
 
 export interface SubmitTurnInput {
+  readonly pluginPackageSha256?: string;
+  readonly preparedMessage?: {
+    readonly protectedPayloadRef: string;
+    readonly keyRecord: object;
+  };
   readonly workspaceId: string;
   readonly threadId: string;
   readonly expectedStreamVersion: number;
@@ -63,8 +77,7 @@ export class AgentOsKernel {
     this.now = options.now ?? (() => new Date().toISOString());
     this.acceptsModelSecretReference = options.acceptsModelSecretReference
       ?? ((reference) => reference.startsWith("keychain://muniu.v2/"));
-    let counter = 0;
-    this.nextId = options.id ?? ((kind) => `${kind}-${++counter}`);
+    this.nextId = options.id ?? ((kind) => `${kind}-${randomUUID()}`);
   }
 
   private async mutation<T>(
@@ -106,7 +119,7 @@ export class AgentOsKernel {
       readonly correlationId?: string;
     },
   ) {
-    return transaction.appendEvent({
+    return appendKernelEvent(transaction, {
       ...request,
       generation: request.generation ?? 0,
       correlationId: request.correlationId ?? this.nextId("correlation"),
@@ -418,7 +431,8 @@ export class AgentOsKernel {
     idempotencyKey: string,
     input: SubmitTurnInput,
   ): Promise<Execution> {
-    return this.mutation(tenantId, `thread.turn:${input.threadId}`, idempotencyKey, input, (transaction) => {
+    const { preparedMessage, ...request } = input;
+    return this.mutation(tenantId, `thread.turn:${input.threadId}`, idempotencyKey, request, (transaction) => {
       const workspace = transaction.getProjection<Workspace>("workspace", input.workspaceId);
       if (!workspace) throw new KernelError("WORKSPACE_NOT_FOUND", "工作区不存在", "刷新工作区列表");
       const thread = transaction.getProjection<Thread>("thread", input.threadId);
@@ -467,6 +481,7 @@ export class AgentOsKernel {
       };
       const execution: Execution = {
         id: executionId,
+        ...(input.pluginPackageSha256 ? { pluginPackageSha256: input.pluginPackageSha256 } : {}),
         tenantId,
         workspaceId: input.workspaceId,
         threadId: input.threadId,
@@ -488,7 +503,9 @@ export class AgentOsKernel {
         tenantId,
         workspaceId: input.workspaceId,
         kind: "agent.execution.run",
-        payload: { executionId, message: input.message.trim() },
+        payload: { executionId, ...(preparedMessage
+          ? { protectedPayloadRef: preparedMessage.protectedPayloadRef, threadId: thread.id }
+          : { message: input.message.trim() }) },
         status: "available",
         attempts: 0,
         availableAt: timestamp,
@@ -510,11 +527,17 @@ export class AgentOsKernel {
         workspaceId: input.workspaceId,
         threadId: input.threadId,
         executionId,
+        threadStreamVersion: thread.streamVersion + 1,
         role: "user",
-        message: input.message.trim(),
+        ...(preparedMessage ? { protectedPayloadRef: preparedMessage.protectedPayloadRef }
+          : { message: input.message.trim() }),
         generation: 1,
         createdAt: timestamp,
       });
+      if (preparedMessage) {
+        transaction.putProjection(PROTECTED_PAYLOAD_KEY_NAMESPACE,
+          preparedMessage.protectedPayloadRef, preparedMessage.keyRecord);
+      }
       transaction.putProjection("execution", executionId, execution);
       transaction.putProjection("authority", authorityId, authority);
       transaction.putProjection("job", jobId, job);
@@ -524,6 +547,7 @@ export class AgentOsKernel {
         aggregateId: thread.id,
         expectedStreamVersion: thread.streamVersion,
         type: "thread.turn_submitted",
+        ...(preparedMessage ? { protectedPayloadRef: preparedMessage.protectedPayloadRef } : {}),
         actorId,
         executionId,
         generation: 1,
@@ -531,6 +555,7 @@ export class AgentOsKernel {
           workspaceId: input.workspaceId,
           executionId,
           pluginId: thread.pluginId,
+          turnId,
           ...(input.runnerId ? { runnerId: input.runnerId } : {}),
         },
       });
@@ -704,7 +729,7 @@ export class AgentOsKernel {
     actorId: string,
     idempotencyKey: string,
     intent: ToolCallIntent,
-  ): Promise<{ readonly mode: "auto"; readonly intent: ToolCallIntent } | { readonly mode: "approval"; readonly approval: Approval }> {
+  ): Promise<{ readonly mode: "auto"; readonly intent: ToolCallCommitment } | { readonly mode: "approval"; readonly approval: Approval }> {
     return this.mutation(tenantId, `tool.intent:${intent.executionId}`, idempotencyKey, intent, (transaction) => {
       const execution = transaction.getProjection<Execution>("execution", intent.executionId);
       if (!execution) throw new KernelError("EXECUTION_NOT_FOUND", "执行不存在", "刷新执行状态");
@@ -714,7 +739,10 @@ export class AgentOsKernel {
       if (execution.generation !== intent.generation) {
         throw new KernelError("STALE_GENERATION", "工具调用来自旧执行代次", "重新运行当前 turn");
       }
-      transaction.putProjection("toolIntent", intent.id, intent);
+      const { normalizedArguments: _arguments, ...commitment } = intent;
+      transaction.putProjection("toolIntent", intent.id, commitment);
+      const updatedExecution = { ...execution, streamVersion: execution.streamVersion + 1, updatedAt: this.now() };
+      transaction.putProjection("execution", execution.id, updatedExecution);
       this.append(transaction, {
         tenantId, aggregateType: "execution", aggregateId: execution.id,
         expectedStreamVersion: execution.streamVersion, type: "tool.intent_recorded", actorId,
@@ -725,9 +753,7 @@ export class AgentOsKernel {
           resourcesDigest: intent.resourcesDigest, authorityCommitment: intent.authorityCommitment,
         },
       });
-      const updatedExecution = { ...execution, streamVersion: execution.streamVersion + 1, updatedAt: this.now() };
-      transaction.putProjection("execution", execution.id, updatedExecution);
-      if (mode === "auto") return { mode, intent } as const;
+      if (mode === "auto") return { mode, intent: commitment } as const;
       const now = this.now();
       const approvalId = this.nextId("approval");
       const approval: Approval = {
@@ -737,6 +763,14 @@ export class AgentOsKernel {
         expiresAt: intent.expiresAt, status: "pending", streamVersion: 1, createdAt: now, updatedAt: now,
       };
       transaction.putProjection("approval", approvalId, approval);
+      const inbox: InboxItem = {
+        id: `approval:${approvalId}`, tenantId, workspaceId: execution.workspaceId,
+        executionId: execution.id, kind: "approval", title: "操作需要批准", summary: intent.intent,
+        risk: intent.effectClass, resourceSummary: intent.resourceRefs.map((resource) => resource.resourceId).join("、"),
+        expiresAt: intent.expiresAt, createdAt: now, status: "open",
+      };
+      transaction.putProjection("inbox", inbox.id, inbox);
+      transaction.putProjection("execution", execution.id, { ...updatedExecution, status: "waiting_approval" });
       this.append(transaction, {
         tenantId,
         aggregateType: "approval",
@@ -753,14 +787,6 @@ export class AgentOsKernel {
           expiresAt: intent.expiresAt,
         },
       });
-      const inbox: InboxItem = {
-        id: `approval:${approvalId}`, tenantId, workspaceId: execution.workspaceId,
-        executionId: execution.id, kind: "approval", title: "操作需要批准", summary: intent.intent,
-        risk: intent.effectClass, resourceSummary: intent.resourceRefs.map((resource) => resource.resourceId).join("、"),
-        expiresAt: intent.expiresAt, createdAt: now, status: "open",
-      };
-      transaction.putProjection("inbox", inbox.id, inbox);
-      transaction.putProjection("execution", execution.id, { ...updatedExecution, status: "waiting_approval" });
       return { mode, approval } as const;
     });
   }
@@ -801,7 +827,7 @@ export class AgentOsKernel {
           "刷新执行与收件箱状态",
         );
       }
-      const intent = transaction.getProjection<ToolCallIntent>("toolIntent", approval.toolCallId);
+      const intent = transaction.getProjection<ToolCallCommitment>("toolIntent", approval.toolCallId);
       if (!intent
         || intent.executionId !== execution.id
         || intent.generation !== execution.generation
@@ -864,9 +890,30 @@ export class AgentOsKernel {
     tenantId: string,
     actorId: string,
     idempotencyKey: string,
-    input: Omit<MemoryRecord, "id" | "tenantId" | "streamVersion" | "status" | "createdAt" | "updatedAt" | "shareGrantIds">,
+    input: Omit<
+      MemoryRecord,
+      "id" | "tenantId" | "streamVersion" | "status" | "createdAt" | "updatedAt"
+      | "shareGrantIds" | "protectedPayloadRef"
+    > & { readonly preparedPayload?: PreparedMemoryPayload },
   ): Promise<MemoryRecord> {
-    return this.mutation(tenantId, "memory.propose", idempotencyKey, input, (transaction) => {
+    const { preparedPayload } = input;
+    const metadata = {
+      workspaceId: input.workspaceId,
+      scopeType: input.scopeType,
+      namespace: input.namespace,
+      resourceId: input.resourceId,
+      sourceEventId: input.sourceEventId,
+      confidence: input.confidence,
+      ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
+      ...(input.derivedFromMemoryId ? { derivedFromMemoryId: input.derivedFromMemoryId } : {}),
+      ...(input.derivedViaShareGrantId
+        ? { derivedViaShareGrantId: input.derivedViaShareGrantId }
+        : {}),
+    };
+    return this.mutation(tenantId, "memory.propose", idempotencyKey, {
+      ...metadata,
+      payloadDigest: preparedPayload?.plaintextDigest,
+    }, (transaction) => {
       if (Boolean(input.derivedFromMemoryId) !== Boolean(input.derivedViaShareGrantId)) {
         throw new KernelError(
           "MEMORY_DERIVATION_INVALID",
@@ -887,12 +934,46 @@ export class AgentOsKernel {
           );
         }
       }
+      if (!Number.isFinite(input.confidence) || input.confidence < 0 || input.confidence > 1) {
+        throw new KernelError("MEMORY_CONFIDENCE_INVALID", "记忆置信度必须在 0 到 1 之间", "修正置信度");
+      }
       const now = this.now();
-      const id = this.nextId("memory");
+      const id = preparedPayload?.memoryId ?? this.nextId("memory");
       const memory: MemoryRecord = {
-        ...input, id, tenantId, streamVersion: 1, status: "proposed", shareGrantIds: [],
+        ...metadata,
+        id,
+        tenantId,
+        streamVersion: 1,
+        status: "proposed",
+        shareGrantIds: [],
+        ...(preparedPayload ? { protectedPayloadRef: preparedPayload.protectedPayloadRef } : {}),
         createdAt: now, updatedAt: now,
       };
+      if (preparedPayload) {
+        if (!preparedPayload.memoryId.trim() || !preparedPayload.protectedPayloadRef.trim()) {
+          throw new KernelError(
+            "PROTECTED_PAYLOAD_INVALID",
+            "受保护记忆引用无效",
+            "重新提交记忆内容",
+          );
+        }
+        if (transaction.getProjection(
+          PROTECTED_PAYLOAD_KEY_NAMESPACE,
+          preparedPayload.protectedPayloadRef,
+        )) {
+          throw new KernelError(
+            "PROTECTED_PAYLOAD_CONFLICT",
+            "受保护记忆引用已存在",
+            "重新提交记忆内容",
+            true,
+          );
+        }
+        transaction.putProjection(
+          PROTECTED_PAYLOAD_KEY_NAMESPACE,
+          preparedPayload.protectedPayloadRef,
+          preparedPayload.keyRecord,
+        );
+      }
       transaction.putProjection("memory", id, memory);
       this.append(transaction, {
         tenantId, aggregateType: "memory", aggregateId: id, expectedStreamVersion: 0,
@@ -935,13 +1016,18 @@ export class AgentOsKernel {
     idempotencyKey: string,
     memoryId: string,
     expectedStreamVersion: number,
-    revision: { readonly confidence: number; readonly value: JsonObject },
+    revision: { readonly confidence: number; readonly preparedPayload?: PreparedMemoryPayload },
   ): Promise<MemoryRecord> {
+    const { preparedPayload } = revision;
     return this.mutation(
       tenantId,
       `memory.revise:${memoryId}`,
       idempotencyKey,
-      { expectedStreamVersion, revision },
+      {
+        expectedStreamVersion,
+        confidence: revision.confidence,
+        payloadDigest: preparedPayload?.plaintextDigest,
+      },
       (transaction) => {
         const memory = transaction.getProjection<MemoryRecord>("memory", memoryId);
         if (!memory) throw new KernelError("MEMORY_NOT_FOUND", "记忆不存在", "刷新记忆列表");
@@ -955,13 +1041,43 @@ export class AgentOsKernel {
           || revision.confidence < 0 || revision.confidence > 1) {
           throw new KernelError("MEMORY_CONFIDENCE_INVALID", "记忆置信度必须在 0 到 1 之间", "修正置信度");
         }
+        if (preparedPayload && (preparedPayload.memoryId !== memoryId
+          || !preparedPayload.protectedPayloadRef.trim()
+          || preparedPayload.protectedPayloadRef === memory.protectedPayloadRef)) {
+          throw new KernelError(
+            "PROTECTED_PAYLOAD_INVALID",
+            "受保护记忆引用无效",
+            "重新提交记忆内容",
+          );
+        }
         const next: MemoryRecord = {
           ...memory,
           confidence: revision.confidence,
-          value: revision.value,
+          ...(preparedPayload ? { protectedPayloadRef: preparedPayload.protectedPayloadRef } : {}),
           updatedAt: this.now(),
           streamVersion: memory.streamVersion + 1,
         };
+        if (memory.protectedPayloadRef && preparedPayload) {
+          transaction.deleteProjection(PROTECTED_PAYLOAD_KEY_NAMESPACE, memory.protectedPayloadRef);
+        }
+        if (preparedPayload) {
+          if (transaction.getProjection(
+            PROTECTED_PAYLOAD_KEY_NAMESPACE,
+            preparedPayload.protectedPayloadRef,
+          )) {
+            throw new KernelError(
+              "PROTECTED_PAYLOAD_CONFLICT",
+              "受保护记忆引用已存在",
+              "重新提交记忆内容",
+              true,
+            );
+          }
+          transaction.putProjection(
+            PROTECTED_PAYLOAD_KEY_NAMESPACE,
+            preparedPayload.protectedPayloadRef,
+            preparedPayload.keyRecord,
+          );
+        }
         transaction.putProjection("memory", memoryId, next);
         this.append(transaction, {
           tenantId,
@@ -971,6 +1087,7 @@ export class AgentOsKernel {
           type: "memory.proposal_revised",
           actorId,
           publicPayload: { workspaceId: memory.workspaceId, confidence: next.confidence },
+          ...(preparedPayload ? { protectedPayloadRef: preparedPayload.protectedPayloadRef } : {}),
         });
         return next;
       },
@@ -1101,73 +1218,73 @@ export class AgentOsKernel {
     memoryId: string,
     expectedStreamVersion: number,
     reason: string,
-    keys: ProtectedPayloadKeyDestroyer,
-  ): Promise<MemoryRecord> {
-    const pending = await this.mutation(
+  ): Promise<MemoryTombstone> {
+    return this.mutation(
       tenantId,
-      `memory.delete.request:${memoryId}`,
+      `memory.delete:${memoryId}`,
       idempotencyKey,
       { expectedStreamVersion, reason },
       (transaction) => {
-      const current = transaction.getProjection<MemoryRecord>("memory", memoryId);
-      if (!current) throw new KernelError("MEMORY_NOT_FOUND", "记忆不存在", "刷新记忆列表");
-      if (current.streamVersion !== expectedStreamVersion) {
-        throw new KernelError("STREAM_VERSION_CONFLICT", "记忆版本已变化", "刷新记忆后重试", true);
-      }
-      const next: MemoryRecord = {
-        ...current,
-        status: "deletion_pending",
-        value: undefined,
-        shareGrantIds: [],
-        updatedAt: this.now(),
-        streamVersion: current.streamVersion + 1,
-      };
-      transaction.putProjection("memory", memoryId, next);
-      this.append(transaction, {
-        tenantId, aggregateType: "memory", aggregateId: memoryId, expectedStreamVersion,
-        type: "memory.deletion_requested", actorId,
-        publicPayload: {
-          workspaceId: current.workspaceId,
-          objectDigest: sha256({ id: current.id, namespace: current.namespace, resourceId: current.resourceId }),
-        },
-      });
-      return next;
-    });
-    const latest = await this.store.transact(tenantId, (transaction) =>
-      transaction.getProjection<MemoryRecord>("memory", memoryId));
-    if (latest?.status === "deleted") return latest;
-    if (pending.protectedPayloadRef) await keys.destroy(pending.protectedPayloadRef);
-    return this.mutation(
-      tenantId,
-      `memory.delete.finalize:${memoryId}`,
-      idempotencyKey,
-      { deletionRequestVersion: pending.streamVersion, reason },
-      (transaction) => {
         const current = transaction.getProjection<MemoryRecord>("memory", memoryId);
-        if (!current || current.status !== "deletion_pending"
-          || current.streamVersion !== pending.streamVersion) {
-          throw new KernelError(
-            "MEMORY_DELETE_RECONCILIATION_REQUIRED",
-            "无法确认敏感记忆删除结果",
-            "核对密钥状态与审计记录",
-          );
+        if (!current) throw new KernelError("MEMORY_NOT_FOUND", "记忆不存在", "刷新记忆列表");
+        if (current.streamVersion !== expectedStreamVersion) {
+          throw new KernelError("STREAM_VERSION_CONFLICT", "记忆版本已变化", "刷新记忆后重试", true);
         }
-        const next = deleteMemory(current, this.now());
-        transaction.putProjection("memory", memoryId, next);
+        const deletedAt = this.now();
+        const objectDigest = sha256({
+          id: current.id,
+          namespace: current.namespace,
+          resourceId: current.resourceId,
+        });
+        const tombstone: MemoryTombstone = {
+          id: current.id,
+          tenantId: current.tenantId,
+          workspaceId: current.workspaceId,
+          status: "deleted",
+          objectDigest,
+          reason,
+          deletedAt,
+          streamVersion: current.streamVersion + 1,
+          createdAt: current.createdAt,
+          updatedAt: deletedAt,
+        };
+        if (current.protectedPayloadRef) {
+          transaction.deleteProjection(PROTECTED_PAYLOAD_KEY_NAMESPACE, current.protectedPayloadRef);
+        }
+        transaction.deleteProjection("memory", memoryId);
+        transaction.putProjection(MEMORY_TOMBSTONE_NAMESPACE, memoryId, tombstone);
+        const invalidatedIds = new Set([memoryId]);
+        const descendants = transaction.listProjections<MemoryRecord>("memory");
+        let changed = true;
+        while (changed) {
+          changed = false;
+          for (const derived of descendants) {
+            if (!derived.derivedFromMemoryId || invalidatedIds.has(derived.id)
+              || !invalidatedIds.has(derived.derivedFromMemoryId)) continue;
+            invalidatedIds.add(derived.id);
+            changed = true;
+            if (derived.status === "invalidated") continue;
+            transaction.putProjection("memory", derived.id, {
+              ...derived, status: "invalidated", updatedAt: deletedAt,
+              streamVersion: derived.streamVersion + 1,
+            });
+            this.append(transaction, {
+              tenantId, aggregateType: "memory", aggregateId: derived.id,
+              expectedStreamVersion: derived.streamVersion, type: "memory.invalidated", actorId,
+              publicPayload: { workspaceId: derived.workspaceId, deletedSourceDigest: objectDigest },
+            });
+          }
+        }
         this.append(transaction, {
-          tenantId,
-          aggregateType: "memory",
-          aggregateId: memoryId,
-          expectedStreamVersion: current.streamVersion,
-          type: "memory.deleted",
-          actorId,
+          tenantId, aggregateType: "memory", aggregateId: memoryId, expectedStreamVersion,
+          type: "memory.deleted", actorId,
           publicPayload: {
             workspaceId: current.workspaceId,
-            objectDigest: sha256({ id: current.id, namespace: current.namespace, resourceId: current.resourceId }),
+            objectDigest,
             reason,
           },
         });
-        return next;
+        return tombstone;
       },
     );
   }

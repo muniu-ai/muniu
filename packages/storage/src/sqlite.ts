@@ -6,6 +6,7 @@ import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import type { EventAppendRequest, JsonObject, JsonValue, KernelEventV1 } from "@mn/contracts";
+import { createProjectionFacts } from "@mn/contracts";
 
 import { computeEventDigest, computeEventHmac } from "./integrity.js";
 import {
@@ -1137,6 +1138,8 @@ export class SqliteStorage implements StoragePort {
       generation: context.generation,
       correlationId: `job:${String(job.job_id)}:terminal-before-claim`,
       publicPayload: {
+        projectionFacts: createProjectionFacts([{ namespace: "job", id: String(updatedJob.id), value: updatedJob }]),
+
         workspaceId: context.workspaceId,
         executionId: context.executionId,
         status: "failed",
@@ -1203,6 +1206,8 @@ export class SqliteStorage implements StoragePort {
       generation: context.generation,
       correlationId: `job:${String(job.job_id)}:fence:${fencingToken}`,
       publicPayload: {
+        projectionFacts: createProjectionFacts([{ namespace: "job", id: String(updatedJob.id), value: updatedJob }]),
+
         ...(context.workspaceId ? { workspaceId: context.workspaceId } : {}),
         ...(context.executionId ? { executionId: context.executionId } : {}),
         jobId: context.jobId,
@@ -1250,6 +1255,8 @@ export class SqliteStorage implements StoragePort {
       generation: context.generation,
       correlationId: `job:${String(job.job_id)}:fence:${fencingToken}`,
       publicPayload: {
+        projectionFacts: createProjectionFacts([{ namespace: "execution", id: String(updatedExecution.id), value: updatedExecution }]),
+
         workspaceId: context.workspaceId,
         jobId: String(job.job_id),
         status: "running",
@@ -1303,6 +1310,8 @@ export class SqliteStorage implements StoragePort {
       generation: context.generation,
       correlationId: `job:${String(job.job_id)}:fence:${fencingToken}`,
       publicPayload: {
+        projectionFacts: createProjectionFacts([{ namespace: "job", id: String(updatedJob.id), value: updatedJob }]),
+
         ...(context.workspaceId ? { workspaceId: context.workspaceId } : {}),
         ...(context.executionId ? { executionId: context.executionId } : {}),
         jobId: context.jobId,
@@ -1367,6 +1376,8 @@ export class SqliteStorage implements StoragePort {
       generation: context.generation,
       correlationId: `job:${String(job.job_id)}:fence:${fencingToken}`,
       publicPayload: {
+        projectionFacts: createProjectionFacts([{ namespace: "job", id: String(updatedJob.id), value: updatedJob }]),
+
         ...(context.workspaceId ? { workspaceId: context.workspaceId } : {}),
         ...(context.executionId ? { executionId: context.executionId } : {}),
         jobId: context.jobId,
@@ -1429,6 +1440,8 @@ export class SqliteStorage implements StoragePort {
       generation: context.generation,
       correlationId: `job:${String(job.job_id)}:fence:${fencingToken}`,
       publicPayload: {
+        projectionFacts: createProjectionFacts([{ namespace: "execution", id: String(updatedExecution.id), value: updatedExecution }]),
+
         workspaceId: context.workspaceId,
         jobId: String(job.job_id),
         status: outcome,
@@ -1489,6 +1502,8 @@ export class SqliteStorage implements StoragePort {
       generation: context.generation,
       correlationId: `job:${String(job.job_id)}:fence:${fencingToken}`,
       publicPayload: {
+        projectionFacts: createProjectionFacts([{ namespace: "job", id: String(updatedJob.id), value: updatedJob }]),
+
         ...(context.workspaceId ? { workspaceId: context.workspaceId } : {}),
         ...(context.executionId ? { executionId: context.executionId } : {}),
         jobId: context.jobId,
@@ -1534,6 +1549,8 @@ export class SqliteStorage implements StoragePort {
       generation: context.generation,
       correlationId: `job:${String(job.job_id)}:fence:${fencingToken}`,
       publicPayload: {
+        projectionFacts: createProjectionFacts([{ namespace: "execution", id: String(updatedExecution.id), value: updatedExecution }]),
+
         workspaceId: context.workspaceId,
         jobId: String(job.job_id),
         status: "interrupted",
@@ -1595,6 +1612,8 @@ export class SqliteStorage implements StoragePort {
       generation: context.generation,
       correlationId: `reconciliation:${String(job.job_id)}:${fencingToken}`,
       publicPayload: {
+        projectionFacts: createProjectionFacts([{ namespace: "job", id: String(updatedJob.id), value: updatedJob }]),
+
         workspaceId: context.workspaceId,
         executionId: context.executionId,
         status: "failed",
@@ -1704,7 +1723,13 @@ export class SqliteStorage implements StoragePort {
         executionId,
         generation,
         correlationId: `reconciliation:${input.jobId}:${input.fencingToken}`,
-        publicPayload: { workspaceId, jobId: input.jobId, status: "needs_reconciliation" },
+        publicPayload: {
+          projectionFacts: createProjectionFacts([
+            { namespace: "execution", id: String(updatedExecution.id), value: updatedExecution },
+            { namespace: "inbox", id: inboxId, value: inbox },
+          ]),
+          workspaceId, jobId: input.jobId, status: "needs_reconciliation",
+        },
       }, input.occurredAt);
       const writeProjection = this.#database.prepare(`
         insert into projections (

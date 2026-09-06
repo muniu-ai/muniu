@@ -6,13 +6,15 @@
 
 生产部署必须提供 PostgreSQL、事件 HMAC 和 S3 凭据 Secret，并配置 OIDC issuer、audience 与 JWKS URL。启用模型连接时还必须配置 Vault KV；Vault token 只能来自已有 Secret。遥测固定关闭。
 
-启用第三方插件时，将仓库索引、Ed25519 受信根和自包含 Host 模块放入发布镜像的只读目录，再配置 `pluginRepository.enabled`、`indexFile`、`trustedRootsFile` 和 `digest`。Chart 拒绝相对路径或无效摘要。Host 在执行模块前完成仓库、manifest、包摘要与包策略校验；当前不接受带 Worker、UI 或 CLI 入口的第三方包。
+启用第三方插件时，将仓库索引、Ed25519 受信根和自包含模块归档放入发布镜像的只读目录，再配置 `pluginRepository.enabled`、`indexFile`、`trustedRootsFile` 和 `digest`。Chart 拒绝相对路径或无效摘要。Host 在执行模块前完成仓库、manifest、包摘要与包策略校验。UI、CLI 入口返回声明式贡献，由 Shell 渲染；Worker 入口按租户安装记录和 Execution 固定摘要加载，工具仍经过内核审批。
 
 Worker 的 `worker.handlerModule` 必须指向受信的绝对路径。该模块需要导出 `handlers`，或导出异步 `createHandlers(context)`，并显式导出与实际 handler 完全一致的 `supportedKinds`。`worker.supportedKinds` 是 Host 与 Worker 共用的受信发布配置；它必须与模块声明逐项一致。Worker 在 readiness 通过前校验三者，只领取已经注册的 kind。
 
-内置 `scripts/enterprise-worker-handlers.mjs` 在生产 profile 提供 `agent.execution.run`：它使用 PostgreSQL `mn_v2` RuntimeStore、Vault KV v2 BYOK、Cordis Scope 与内核审批端口。fixture profile 仍使用确定性的失败 handler，只验证恢复链路。生产部署必须配置 `vault.address` 与 `vault.existingSecret`；Worker 不接受环境变量中的明文模型密钥。
+内置 `scripts/enterprise-worker-handlers.mjs` 在生产 profile 提供 `agent.execution.run`：它使用 PostgreSQL `mn_v2` RuntimeStore、S3 加密上下文、Vault Transit 包装密钥、Vault KV v2 BYOK、Cordis Scope 与内核审批端口。fixture profile 使用确定性的失败 handler 验证恢复链路。生产部署必须配置 `vault.address` 与 `vault.existingSecret`；Worker 不接受环境变量中的明文模型密钥。
 
-企业部署默认不提供 `coding.reconciliation.verify`。如需允许用户把结果未知的 Coding 调用标记完成，生产镜像必须自行实现 `coding.reconciliation.verify` 与 `coding.sandbox.cleanup`，并把两者同时加入模块和 Helm 的 `supportedKinds`。验证 handler 必须在真正的 Kubernetes 隔离候选中执行权威 Gate，使用 Job 租约与 fencing token 提交结果；清理 handler 必须只处理 Worker 管理的路径。Chart 中的 sandbox 控制器、共享卷和 fixture 不是这两个业务 handler，也不能作为已实现能力申报。缺少任一能力时，Host 会从详情和决定接口中关闭 `mark_completed`，仍允许终止或在其他条件满足时创建新调用。
+内置生产模块同时提供 `coding.reconciliation.verify` 和 `coding.sandbox.cleanup`。builtin Coding 使用共享卷中的独立候选目录，每次 Git 命令由固定镜像摘要的短期 Kubernetes Pod 执行。Pod 禁止网络出口，不挂载 ServiceAccount token，只挂载授权子目录。Worker 核对 Pod UID、实际镜像摘要和运行时证明后，使用 Job 租约与 fencing token 提交 Gate 和证据。Claude/Codex 外部 Runner 的本地执行依赖 macOS 沙箱，不能直接用于企业 Kubernetes。
+
+自定义 handler 模块若缺少验证或清理能力，Host 会关闭 `mark_completed`，仍允许终止或在其他条件满足时创建新调用。
 
 Chart 在下列条件不成立时拒绝渲染：
 
@@ -45,3 +47,5 @@ npm run verify:kind
 - 租约接管与陈旧 fencing token 拒绝；
 - 已提交事件 RPO 0、S3 CAS 与 PostgreSQL 重启恢复；
 - 候选 Pod 与权威 Coding Gate 隔离。
+
+节点镜像固定为 Kubernetes `v1.34.0` 及其 SHA-256，不跟随本机 Kind 的默认版本。摘要来源为 [Kind v0.30.0 发布记录](https://github.com/kubernetes-sigs/kind/releases/tag/v0.30.0)，配置见 `deploy/kind/config.yaml`。生产 Coding 测试使用生产 handler、真实 PostgreSQL/S3 和候选 Pod；模型输出使用确定性 fixture，不调用外部模型。

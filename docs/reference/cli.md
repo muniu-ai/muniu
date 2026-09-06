@@ -15,7 +15,7 @@
   inbox             查看审批、问题、失败和人工核对
   resume            恢复暂停或中断的执行
   doctor --fix      检查连接与可安全修复项
-  plugin            查看、启用、停用或清除插件
+  plugin            查看、安装、更新、启用、停用或运行插件命令
   opc               管理机会验证工作
   code              管理 Coding 任务
   backup            创建、校验或恢复本地加密备份
@@ -28,6 +28,14 @@
   mn backup create state.mnbackup --verify
   mn backup check state.mnbackup
   mn backup restore state.mnbackup --destination restored.sqlite3
+
+签名插件：
+  mn plugin catalog
+  mn plugin install <插件 ID> --release <精确版本> --trust-process
+  mn plugin update <插件 ID> --release <精确版本> --version <当前版本号> --trust-process
+  mn plugin commands <插件 ID> --workspace <工作区 ID>
+  mn plugin run <插件 ID> <命令> --workspace <工作区 ID> --version <对象版本号>
+  --trust-process 确认插件拥有宿主进程权限；插件不是沙箱
 
 外部 Coding Runner：
   生产 Worker 只接受官方原生安装的 macOS Mach-O CLI，不支持 npm/shebang wrapper

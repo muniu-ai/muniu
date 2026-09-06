@@ -8,6 +8,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./client": { "types": "./dist/client.d.ts", "import": "./dist/client.js" },
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"

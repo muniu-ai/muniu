@@ -39,6 +39,7 @@ interface PhysicalJobRow extends Record<string, unknown> {
 }
 
 interface RecordedEvent {
+  publicPayload: Record<string, unknown>;
   aggregateType: string;
   aggregateId: string;
   streamVersion: number;
@@ -250,6 +251,7 @@ class PostgresLifecycleFixture {
     }
     if (normalized.startsWith("insert into mn_v2.events")) {
       this.events.push({
+        publicPayload: JSON.parse(String(parameters[13])),
         aggregateType: String(parameters[3]),
         aggregateId: String(parameters[4]),
         streamVersion: Number(parameters[5]),
@@ -413,6 +415,7 @@ test("PostgreSQL Agent Job 领取、续租与完成原子推进投影、HMAC 事
   for (const event of client.events) {
     assert.match(event.digest, /^[a-f0-9]{64}$/u);
     assert.equal(event.hmac, computeEventHmac(event.digest, hmacKey));
+    assert.ok(event.publicPayload.projectionFacts, `${event.type} must record reconstructable state`);
   }
   assert.deepEqual(client.outbox.map((message) => message.topic), client.events.map((event) => event.type));
   assert.equal(client.queries.filter(({ sql }) => sql === "commit").length, 3);

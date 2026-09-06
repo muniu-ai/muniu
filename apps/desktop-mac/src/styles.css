@@ -482,8 +482,9 @@ pre { overflow: auto; padding: 10px; border-radius: 7px; color: #dce5dc; backgro
 .palette-search svg { color: var(--accent); }
 .palette-search input { min-width: 0; height: 30px; flex: 1; border: 0; outline: 0; }
 .palette-results { max-height: 340px; overflow: auto; padding: 7px; }
+.plugin-result { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; }
 .palette-results button { display: flex; width: 100%; gap: 10px; align-items: center; padding: 10px; text-align: left; border: 0; border-radius: 8px; background: transparent; cursor: pointer; }
-.palette-results button:hover, .palette-results button:focus { background: #f1f3ee; }
+.palette-results button:hover, .palette-results button:focus, .palette-results button[aria-selected="true"] { background: #f1f3ee; }
 .palette-results button > svg { color: var(--green); }
 .palette-results button span { min-width: 0; flex: 1; }
 .palette-results strong, .palette-results small { display: block; }

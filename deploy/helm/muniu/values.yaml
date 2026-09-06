@@ -30,6 +30,8 @@ worker:
   supportedKinds:
     - system.noop
     - agent.execution.run
+    - coding.reconciliation.verify
+    - coding.sandbox.cleanup
   resources:
     requests: { cpu: 250m, memory: 512Mi }
     limits: { cpu: "2", memory: 2Gi }
@@ -146,7 +148,7 @@ telemetry:
 
 sandbox:
   driver: kubernetes
-  image: ghcr.io/muniu-ai/muniu-sandbox:0.2.0
+  image: ghcr.io/muniu-ai/muniu
   imageDigest: ""
   serviceAccountName: ""
   runtimeClassName: ""

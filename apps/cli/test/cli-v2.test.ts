@@ -655,12 +655,14 @@ test("doctor --fix 明确报告无需修复且不发起写请求", async () => {
     requests.push(request);
     if (request.path === "/v2/health") return ok({ core: { status: "healthy" }, plugins: [] });
     if (request.path === "/v2/readiness") return ok({ ready: true, issues: [] });
+    if (request.path === "/v2/model-connections") return ok([]);
     return Response.json({}, { status: 404 });
   };
   assert.equal(await runCli(["doctor", "--fix", "--json"], { io: output, fetch }), 0);
   assert.deepEqual(requests.map(({ method, path }) => ({ method, path })), [
     { method: "GET", path: "/v2/health" },
     { method: "GET", path: "/v2/readiness" },
+    { method: "GET", path: "/v2/model-connections" },
   ]);
   assert.deepEqual(JSON.parse(output.out[0] ?? "").data.fix, {
     requested: true,
@@ -678,6 +680,7 @@ test("doctor --fix 不把需人工处理的问题报告为已修复", async () =
   };
   const fetch: typeof globalThis.fetch = async (input) => {
     const path = new URL(input instanceof Request ? input.url : input).pathname;
+    if (path === "/v2/model-connections") return ok([]);
     return path === "/v2/readiness"
       ? ok({ ready: false, issues: [issue] }, 503)
       : ok({ core: { status: "healthy" }, plugins: [] });
@@ -689,6 +692,22 @@ test("doctor --fix 不把需人工处理的问题报告为已修复", async () =
     actions: [],
     remainingIssues: [issue],
   });
+});
+
+test("doctor --fix 仅重探测未就绪连接，保留人工核对和 lock 故障", async () => {
+  const requests: CapturedRequest[] = [];
+  const output = io();
+  const fetch: typeof globalThis.fetch = async (input, init) => {
+    const request = await captureRequest(input, init); requests.push(request);
+    if (request.path === "/v2/model-connections") return ok([{ id: "pending-model", status: "pending", streamVersion: 3 }, { id: "ready-model", status: "ready", streamVersion: 2 }]);
+    if (request.path.endsWith("/probe")) return ok({ status: "ready", streamVersion: 4 });
+    return ok({ ready: true, issues: [] });
+  };
+  assert.equal(await runCli(["doctor", "--fix", "--json"], { io: output, fetch }), 0);
+  assert.deepEqual(requests.filter((request) => request.method !== "GET").map(({ path, body }) => ({ path, body })), [
+    { path: "/v2/model-connections/pending-model/probe", body: { expectedStreamVersion: 3 } },
+  ]);
+  assert.equal(JSON.parse(output.out[0]!).data.fix.status, "repaired");
 });
 
 test("backup 在本地创建、校验并恢复 SQLite 与 CAS 加密快照", async () => {
@@ -770,4 +789,41 @@ test("--json 原样保留 Host 错误字段", async () => {
     command: "resume",
     error: detail,
   });
+});
+test("签名插件安装需确认宿主权限，更新带精确版本和乐观版本", async () => {
+  const requests: CapturedRequest[] = [];
+  const fetch: typeof globalThis.fetch = async (input, init) => { requests.push(await captureRequest(input, init)); return ok({ pluginId: "research" }); };
+  assert.equal(await runCli(["plugin", "install", "research", "--release", "1.2.3"], { io: io(), fetch }), 2);
+  assert.equal(requests.length, 0);
+  assert.equal(await runCli(["plugin", "install", "research", "--release", "1.2.3", "--trust-process"], { io: io(), fetch }), 0);
+  assert.equal(await runCli(["plugin", "update", "research", "--release", "1.2.4", "--version", "2", "--trust-process"], { io: io(), fetch }), 0);
+  assert.deepEqual(requests.map(({ method, path, body }) => ({ method, path, body })), [
+    { method: "POST", path: "/v2/plugins/installations", body: { pluginId: "research", version: "1.2.3" } },
+    { method: "PATCH", path: "/v2/plugins/installations/research", body: { version: "1.2.4", expectedStreamVersion: 2 } },
+  ]);
+});
+
+test("插件 CLI 从签名字段定义验证参数并调用统一领域接口", async () => {
+  const requests: CapturedRequest[] = [];
+  const fetch: typeof globalThis.fetch = async (input, init) => {
+    const request = await captureRequest(input, init); requests.push(request);
+    if (request.method === "GET") return ok([{ pluginId: "research", cli: { commands: [{
+      name: "summarize", commandId: "summarize", description: "整理资料", fields: [
+        { name: "topic", type: "string", required: true },
+        { name: "limit", type: "number" }, { name: "brief", type: "boolean" },
+      ],
+    }] } }]);
+    return ok({ outcome: "资料摘要" });
+  };
+  const args = ["plugin", "run", "research", "summarize", "--workspace", "space", "--version", "4"];
+  assert.equal(await runCli([...args, "--topic", "研究", "--limit", "5", "--brief", "true"], { io: io(), fetch }), 0);
+  assert.equal(await runCli([...args, "--limit", "5"], { io: io(), fetch }), 2);
+  assert.equal(await runCli([...args, "--topic", "研究", "--limit", "NaN"], { io: io(), fetch }), 2);
+  assert.equal(await runCli([...args, "--topic", "研究", "--brief", "yes"], { io: io(), fetch }), 2);
+  assert.equal(await runCli([...args, "--topic", "研究", "--unlisted", "yes"], { io: io(), fetch }), 2);
+  const mutations = requests.filter((request) => request.method !== "GET");
+  assert.equal(mutations.length, 1);
+  assert.deepEqual(mutations[0]?.body, { workspaceId: "space", expectedStreamVersion: 4, topic: "研究", limit: 5, brief: true });
+  assert.equal(mutations[0]?.path, "/v2/plugins/research/summarize");
+  assert.ok(mutations[0]?.idempotencyKey);
 });

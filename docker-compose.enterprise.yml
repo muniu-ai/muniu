@@ -60,7 +60,7 @@ services:
       POSTGRES_PASSWORD: mn-e2e-only
       POSTGRES_DB: mn_enterprise
     ports:
-      - "55432:5432"
+      - "127.0.0.1:55432:5432"
     volumes:
       - mn-v2-postgres:/var/lib/postgresql/data
     healthcheck:
@@ -69,7 +69,7 @@ services:
       timeout: 3s
       retries: 30
       start_period: 5s
-    networks: [mn-v2]
+    networks: [mn-v2, mn-v2-client]
 
   minio:
     image: minio/minio:RELEASE.2025-04-22T22-12-26Z
@@ -78,7 +78,7 @@ services:
       MINIO_ROOT_USER: mn-e2e
       MINIO_ROOT_PASSWORD: mn-e2e-secret-only
     ports:
-      - "59000:9000"
+      - "127.0.0.1:59000:9000"
     volumes:
       - mn-v2-minio:/data
     healthcheck:
@@ -87,7 +87,7 @@ services:
       timeout: 3s
       retries: 30
       start_period: 5s
-    networks: [mn-v2]
+    networks: [mn-v2, mn-v2-client]
 
   minio-init:
     image: minio/mc:RELEASE.2025-04-16T18-13-26Z
@@ -111,13 +111,13 @@ services:
       JWKS_ISSUER: http://jwks:8080
       JWKS_AUDIENCE: mn-v2-enterprise
     ports:
-      - "59080:8080"
+      - "127.0.0.1:59080:8080"
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 2s
       timeout: 3s
       retries: 30
-    networks: [mn-v2]
+    networks: [mn-v2, mn-v2-client]
 
   migrate:
     <<: *runtime
@@ -132,6 +132,7 @@ services:
 
   host-a:
     <<: *runtime
+    networks: [mn-v2, mn-v2-client]
     command: ["scripts/enterprise-host.mjs"]
     environment:
       <<: *runtime-environment
@@ -140,7 +141,7 @@ services:
       MN_HOST_PORT: "7318"
     depends_on: *runtime-dependencies
     ports:
-      - "17318:7318"
+      - "127.0.0.1:17318:7318"
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:7318/v2/readiness').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 2s
@@ -149,6 +150,7 @@ services:
 
   host-b:
     <<: *runtime
+    networks: [mn-v2, mn-v2-client]
     command: ["scripts/enterprise-host.mjs"]
     environment:
       <<: *runtime-environment
@@ -157,7 +159,7 @@ services:
       MN_HOST_PORT: "7318"
     depends_on: *runtime-dependencies
     ports:
-      - "17319:7318"
+      - "127.0.0.1:17319:7318"
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:7318/v2/readiness').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 2s
@@ -197,6 +199,8 @@ volumes:
   mn-v2-minio:
 
 networks:
+  mn-v2-client:
+    driver: bridge
   mn-v2:
     driver: bridge
     internal: true

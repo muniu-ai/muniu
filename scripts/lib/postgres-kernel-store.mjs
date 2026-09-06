@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { randomUUID } from "node:crypto";
+import { createProjectionFacts } from "@mn/contracts";
 
 import { computeEventDigest, computeEventHmac, POSTGRES_SCHEMA_SQL } from "@mn/storage";
 
@@ -133,6 +134,19 @@ export class PostgresKernelStore {
   }
 
   async transact(tenantId, work) {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.#transactOnce(tenantId, work);
+      } catch (error) {
+        // These SQLSTATEs confirm rollback. Connection loss may hide a committed
+        // result and must never replay the transaction callback automatically.
+        if (attempt >= 4 || (error.code !== "40001" && error.code !== "40P01")) throw error;
+        await new Promise(resolve => setTimeout(resolve, 10 * (attempt + 1) + Math.floor(Math.random() * 20)));
+      }
+    }
+  }
+
+  async #transactOnce(tenantId, work) {
     if (typeof tenantId !== "string" || !tenantId.trim()) throw new TypeError("tenantId 不能为空");
     const client = await this.#pool.connect();
     try {
@@ -171,6 +185,7 @@ export class PostgresKernelStore {
         `${row.aggregate_type}\0${row.aggregate_id}`,
         safeInteger(row.stream_version, "事件流版本"),
       ]));
+      const changedStreams = new Map();
       const projections = new Map(projectionResult.rows.map((row) => [
         projectionKey(String(row.namespace), String(row.projection_key)),
         json(row.value_json),
@@ -231,6 +246,7 @@ export class PostgresKernelStore {
           const event = { ...body, digest: eventDigest, hmac: computeEventHmac(eventDigest, this.#hmacKey) };
           previousDigest = eventDigest;
           streams.set(streamKey, actual + 1);
+          changedStreams.set(streamKey, actual + 1);
           events.push(event);
           return event;
         },
@@ -334,6 +350,7 @@ export class PostgresKernelStore {
             generation: Number.isSafeInteger(projected.generation) ? projected.generation : 1,
             correlationId: `job:${input.jobId}:fence:${input.fencingToken}`,
             publicPayload: {
+              projectionFacts: createProjectionFacts([{ namespace: "job", id: input.jobId, value: nextJob }]),
               ...(workspaceId ? { workspaceId } : {}),
               ...(executionId ? { executionId } : {}),
               jobId: input.jobId,
@@ -386,6 +403,7 @@ export class PostgresKernelStore {
                 generation: Number.isSafeInteger(execution.generation) ? execution.generation : 1,
                 correlationId: `job:${input.jobId}:fence:${input.fencingToken}`,
                 publicPayload: {
+                  projectionFacts: createProjectionFacts([{ namespace: "execution", id: executionId, value: nextExecution }]),
                   ...(workspaceId ? { workspaceId } : {}),
                   jobId: input.jobId,
                   status: input.outcome,
@@ -515,7 +533,7 @@ export class PostgresKernelStore {
           event.protectedPayloadRef ?? null, event.previousDigest ?? null, event.digest, event.hmac,
         ]);
       }
-      for (const [streamKey, streamVersion] of streams) {
+      for (const [streamKey, streamVersion] of changedStreams) {
         const [aggregateType, aggregateId] = streamKey.split("\0");
         await client.query(`
           insert into mn_v2.stream_heads (tenant_id, aggregate_type, aggregate_id, stream_version)
@@ -524,10 +542,12 @@ export class PostgresKernelStore {
             stream_version = excluded.stream_version
         `, [tenantId, aggregateType, aggregateId, streamVersion]);
       }
-      await client.query(`
-        update mn_v2.tenant_heads set next_position = $2, previous_digest = $3
-        where tenant_id = $1
-      `, [tenantId, nextPosition, previousDigest ?? null]);
+      if (events.length) {
+        await client.query(`
+          update mn_v2.tenant_heads set next_position = $2, previous_digest = $3
+          where tenant_id = $1
+        `, [tenantId, nextPosition, previousDigest ?? null]);
+      }
       for (const job of jobs) {
         const createdAt = this.#now();
         await client.query(`

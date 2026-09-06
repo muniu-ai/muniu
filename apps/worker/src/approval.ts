@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { ToolApprovalPort } from "@mn/agent-runtime";
-import type { Approval, ToolCallIntent } from "@mn/contracts";
+import type { Approval, ToolCallIntent, ToolCallCommitment } from "@mn/contracts";
 
 export interface ToolApprovalKernel {
   requestToolApproval(
@@ -10,7 +10,7 @@ export interface ToolApprovalKernel {
     idempotencyKey: string,
     intent: ToolCallIntent,
   ): Promise<
-    | { readonly mode: "auto"; readonly intent: ToolCallIntent }
+    | { readonly mode: "auto"; readonly intent: ToolCallCommitment }
     | { readonly mode: "approval"; readonly approval: Approval }
   >;
 }
@@ -55,7 +55,7 @@ export function createKernelToolApprovalPort(
         if (signal.aborted) throw new Error("工具审批等待已取消");
         const state = await options.store.transact(options.tenantId, (transaction) => ({
           approval: transaction.getProjection<Approval>("approval", requested.approval.id),
-          persistedIntent: transaction.getProjection<ToolCallIntent>("toolIntent", intent.id),
+          persistedIntent: transaction.getProjection<ToolCallCommitment>("toolIntent", intent.id),
         }));
         if (!state.approval) throw new Error("持久化批准请求不存在");
         if (state.approval.status === "approved_once") {

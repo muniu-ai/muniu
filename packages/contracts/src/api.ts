@@ -143,6 +143,9 @@ export interface CodingReconciliationViewV2 {
 }
 
 export const CORE_API_ROUTES = [
+  "/v2/plugins/{pluginId}/{commandId}",
+  "/v2/workspaces/{workspaceId}/plugin-surfaces",
+  "/v2/plugins/catalog",
   "/v2/openapi.json",
   "/v2/health",
   "/v2/readiness",
@@ -208,3 +211,4 @@ export function apiError(
     retryable: options.retryable ?? false,
   };
 }
+// UI and CLI shells consume these declarations over the same authenticated API.

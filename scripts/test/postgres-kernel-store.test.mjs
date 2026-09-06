@@ -31,6 +31,23 @@ class FixtureClient {
   release() {}
 }
 
+test("read-only Kernel queries do not rewrite tenant or unchanged aggregate heads", async () => {
+  const client = new FixtureClient();
+  const original = client.query.bind(client);
+  client.query = async (sql, parameters) => {
+    const response = await original(sql, parameters);
+    if (sql.includes("select aggregate_type, aggregate_id, stream_version")) {
+      return { rows: [{ aggregate_type: "workspace", aggregate_id: "workspace-a", stream_version: 8 }], rowCount: 1 };
+    }
+    return response;
+  };
+  const store = new PostgresKernelStore({
+    pool: { query: client.query, connect: async () => client }, hmacKey: Buffer.alloc(32, 7),
+  });
+  await store.transact("tenant-a", tx => tx.listProjections("approval"));
+  assert.equal(client.queries.some(query => /^(?:insert into mn_v2\.stream_heads|update mn_v2\.tenant_heads)/u.test(query.sql)), false);
+});
+
 test("PostgreSQL Kernel transaction stages event, projection, Job, outbox, and idempotency atomically", async () => {
   const client = new FixtureClient();
   const pool = { query: client.query.bind(client), connect: async () => client, end: async () => {} };
@@ -111,4 +128,26 @@ test("PostgreSQL Kernel store lists tenants for plugin lock readiness", async ()
   const store = new PostgresKernelStore({ pool, hmacKey: Buffer.alloc(32, 11) });
   assert.deepEqual(await store.listTenantIds(), ["tenant-a", "tenant-b"]);
   assert.match(queries[0], /from mn_v2\.tenant_heads order by tenant_id asc/u);
+});
+
+test("PostgreSQL retries only confirmed transaction aborts, never an unknown commit outcome", async () => {
+  for (const code of ["40001", "40P01", "ECONNRESET"]) {
+    const client = new FixtureClient();
+    const original = client.query.bind(client);
+    let commits = 0;
+    let calls = 0;
+    client.query = async (sql, parameters) => {
+      if (sql === "commit" && ++commits === 1) throw Object.assign(new Error("fixture database abort"), { code });
+      return original(sql, parameters);
+    };
+    const store = new PostgresKernelStore({ pool: { query: client.query, connect: async () => client }, hmacKey: Buffer.alloc(32, 11) });
+    const pending = store.transact("tenant-a", () => { calls++; return "done"; });
+    if (code === "ECONNRESET") {
+      await assert.rejects(pending, error => error.code === code);
+      assert.equal(calls, 1);
+    } else {
+      assert.equal(await pending, "done");
+      assert.equal(calls, 2);
+    }
+  }
 });

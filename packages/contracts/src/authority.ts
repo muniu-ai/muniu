@@ -18,6 +18,7 @@ export interface ToolCallIntent {
 }
 
 export type ApprovalDecision = "approve_once" | "deny";
+export type ToolCallCommitment = Omit<ToolCallIntent, "normalizedArguments">;
 
 const AUTO_EFFECTS = new Set<ToolEffectClass>([
   "local_read",
@@ -30,8 +31,8 @@ export function isPotentiallyAutoApprovable(effectClass: ToolEffectClass): boole
 }
 
 export function approvalStillMatches(
-  approved: ToolCallIntent,
-  current: ToolCallIntent,
+  approved: ToolCallCommitment,
+  current: ToolCallCommitment,
 ): boolean {
   return (
     approved.executionId === current.executionId &&
