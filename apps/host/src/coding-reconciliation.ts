@@ -137,6 +137,7 @@ interface ExternalInvocationCheckpoint {
 }
 
 interface StoredCodingRun {
+  readonly turn?: number;
   readonly executionId: string;
   readonly generation: number;
   readonly taskId: string;
@@ -957,12 +958,13 @@ function createCleanupJob(
     kind: "coding.sandbox.cleanup",
     payload: {
       reconciliationExecutionId: execution.id,
+      codingRunId: `${execution.id}:${run.generation}:${run.turn ?? 1}`,
     },
     status: "available",
     attempts: 0,
     availableAt: occurredAt,
     fencingToken: 0,
-    idempotencyKey: `coding:cleanup:${execution.id}:${run.generation}:${invocation.attempt}`,
+    idempotencyKey: `coding:cleanup:${execution.id}:${run.generation}:${run.turn ?? 1}:${invocation.attempt}`,
     streamVersion: 1,
     createdAt: occurredAt,
     updatedAt: occurredAt,

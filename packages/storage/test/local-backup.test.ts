@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { createHash, randomBytes } from "node:crypto";
 import {
   existsSync,
@@ -50,6 +52,116 @@ interface BackupFixture {
   readonly manifest: LocalBackupManifestV1;
   readonly envelope: EncryptedEnvelopeV1;
 }
+
+test("恢复状态目录可直接作为 v2 状态根使用，且拒绝覆盖现有目录", async t => {
+  const root = temporaryDirectory();
+  const databaseFile = join(root, "state.sqlite3");
+  const storage = new SqliteStorage({ databaseFile, hmacKey: Buffer.alloc(32, 2) });
+  t.after(() => storage.close());
+  const cas = new FileCas({ rootDir: join(root, "cas") });
+  const object = await cas.put(Buffer.from("restore state fixture"));
+  const backup = new LocalSqliteBackup({ databaseFile, casDirectory: join(root, "cas"),
+    backupDirectory: join(root, "backups"), restoreDirectory: join(root, "restore"),
+    keyProvider: new InMemoryKeyProvider(Buffer.alloc(32, 3)) });
+  await backup.create("state.mnbackup");
+  const restore = () => backup.restoreState("state.mnbackup", "verified-state", {
+    hmacKey: Buffer.alloc(32, 2), keyProvider: new InMemoryKeyProvider(Buffer.alloc(32, 3)),
+  });
+  const result = await restore();
+  assert.equal(result.verified, true);
+  assert.equal(existsSync(join(result.stateRoot, ".restore-pending")), false);
+  assert.equal(result.file, join(result.stateRoot, "state.sqlite3"));
+  assert.equal(result.casDirectory, join(result.stateRoot, "cas"));
+  assert.deepEqual(await new FileCas({ rootDir: result.casDirectory }).get(object.digest), Buffer.from("restore state fixture"));
+  const marker = join(result.stateRoot, "user-marker");
+  writeFileSync(marker, "keep");
+  await assert.rejects(restore(), hasBackupCode("BACKUP_DESTINATION_EXISTS"));
+  assert.equal(readFileSync(marker, "utf8"), "keep");
+});
+
+test("恢复状态根在事件 HMAC 校验失败时不返回可启动目录", async t => {
+  const root = temporaryDirectory();
+  const databaseFile = join(root, "state.sqlite3");
+  const storage = new SqliteStorage({ databaseFile, hmacKey: Buffer.alloc(32, 2) });
+  t.after(() => storage.close());
+  await storage.transact("local", tx => tx.appendEvent({ tenantId: "local", aggregateType: "fixture", aggregateId: "fixture",
+    expectedStreamVersion: 0, type: "fixture.created", actorId: "owner", generation: 0, correlationId: "fixture", publicPayload: {} }));
+  const keyProvider = new InMemoryKeyProvider(Buffer.alloc(32, 3));
+  const backup = new LocalSqliteBackup({ databaseFile, backupDirectory: join(root, "backups"), restoreDirectory: join(root, "restore"), keyProvider });
+  await backup.create("state.mnbackup");
+  const restore = backup.restoreState as (...args: any[]) => Promise<unknown>;
+  await assert.rejects(restore.call(backup, "state.mnbackup", "rejected", { hmacKey: Buffer.alloc(32, 4), keyProvider }),
+    hasBackupCode("BACKUP_INTEGRITY_FAILED"));
+  assert.equal(existsSync(join(root, "restore", "rejected")), false);
+  assert.equal(existsSync(databaseFile), true);
+  const raw = new DatabaseSync(databaseFile);
+  try { raw.exec("delete from tenant_heads"); } finally { raw.close(); }
+  await backup.create("missing-head.mnbackup");
+  await assert.rejects(restore.call(backup, "missing-head.mnbackup", "missing-head", { hmacKey: Buffer.alloc(32, 2), keyProvider }),
+    hasBackupCode("BACKUP_INTEGRITY_FAILED"));
+  assert.equal(existsSync(join(root, "restore", "missing-head")), false);
+});
+
+test("backup checks the source size before loading a snapshot and synchronizes created directory entries", async t => {
+  const root = temporaryDirectory();
+  const databaseFile = join(root, "state.sqlite");
+  const storage = new SqliteStorage({ databaseFile, hmacKey: Buffer.alloc(32, 3) });
+  t.after(() => storage.close());
+  const options = { databaseFile, backupDirectory: join(root, "backups"), restoreDirectory: join(root, "restore"),
+    keyProvider: new InMemoryKeyProvider(Buffer.alloc(32, 4)) };
+  let snapshotReads = 0;
+  let directorySyncs = 0;
+  const read = fs.readFileSync;
+  const sync = fs.fsyncSync;
+  const readMock = t.mock.method(fs, "readFileSync", (...args: Parameters<typeof read>) => {
+    if (String(args[0]).endsWith("snapshot.sqlite")) snapshotReads++;
+    return read(...args);
+  });
+  const syncMock = t.mock.method(fs, "fsyncSync", (descriptor: number) => {
+    if (fs.fstatSync(descriptor).isDirectory()) directorySyncs++;
+    return sync(descriptor);
+  });
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(new LocalSqliteBackup({ ...options, maxArchiveBytes: 100 }).create("limited.mnbackup"), hasBackupCode("BACKUP_ARCHIVE_TOO_LARGE"));
+    assert.equal(snapshotReads, 0);
+    const backup = new LocalSqliteBackup(options);
+    await backup.create("state.mnbackup");
+    assert.ok(directorySyncs > 0);
+    const before = directorySyncs;
+    await backup.restore("state.mnbackup", "restored.sqlite");
+    assert.ok(directorySyncs > before);
+  } finally { readMock.mock.restore(); syncMock.mock.restore(); syncBuiltinESMExports(); }
+});
+
+test("a concurrent restore destination is never removed by failed CAS creation", async (t) => {
+  const root = temporaryDirectory();
+  const databaseFile = join(root, "state.sqlite");
+  const storage = new SqliteStorage({ databaseFile, hmacKey: randomBytes(32) });
+  const restoreDirectory = join(root, "restore");
+  const backup = new LocalSqliteBackup({ databaseFile, backupDirectory: join(root, "backups"), restoreDirectory,
+    keyProvider: new InMemoryKeyProvider(Buffer.alloc(32, 1)) });
+  try {
+    await backup.create("state.mnbackup");
+    const target = join(fs.realpathSync(restoreDirectory), "restored.sqlite.cas");
+    const marker = join(target, "existing-user-data");
+    const originalMkdir = fs.mkdirSync;
+    const mock = t.mock.method(fs, "mkdirSync", (...args: Parameters<typeof fs.mkdirSync>) => {
+      if (String(args[0]) === target) {
+        originalMkdir(target);
+        writeFileSync(marker, "preserve");
+        throw Object.assign(new Error("target exists"), { code: "EEXIST" });
+      }
+      return Reflect.apply(originalMkdir, fs, args);
+    });
+    syncBuiltinESMExports();
+    try { await assert.rejects(backup.restore("state.mnbackup", "restored.sqlite")); }
+    finally { mock.mock.restore(); syncBuiltinESMExports(); }
+    assert.equal(existsSync(marker), true);
+    assert.equal(readFileSync(marker, "utf8"), "preserve");
+    assert.equal(existsSync(join(restoreDirectory, "restored.sqlite")), false);
+  } finally { storage.close(); }
+});
 
 test("本地备份从活动 WAL 生成包含 CAS 的统一加密快照", async () => {
   const root = temporaryDirectory();

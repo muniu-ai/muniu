@@ -134,6 +134,7 @@ export class FileCas implements ContentAddressedStorage {
     referencedDigests: ReadonlySet<string>,
     olderThan: Date
   ): Promise<readonly string[]> {
+    if (!Number.isFinite(olderThan.getTime())) throw new TypeError("CAS GC cutoff must be a valid date");
     const removed: string[] = [];
     const root = join(this.#rootDir, "sha256");
     for (const prefix of readdirSync(root, { withFileTypes: true })) {
@@ -239,6 +240,7 @@ export class S3Cas implements ContentAddressedStorage {
     referencedDigests: ReadonlySet<string>,
     olderThan: Date
   ): Promise<readonly string[]> {
+    if (!Number.isFinite(olderThan.getTime())) throw new TypeError("CAS GC cutoff must be a valid date");
     const objects = await this.#client.listObjects({
       bucket: this.#bucket,
       prefix: `${this.#prefix}sha256/`
@@ -246,9 +248,10 @@ export class S3Cas implements ContentAddressedStorage {
     const keys: string[] = [];
     const digests: string[] = [];
     for (const object of objects) {
+      if (!object.key.startsWith(`${this.#prefix}sha256/`)) continue;
       const digest = object.key.slice(`${this.#prefix}sha256/`.length);
       if (!/^[a-f0-9]{64}$/.test(digest) || referencedDigests.has(digest)) continue;
-      if (!object.lastModified || object.lastModified.getTime() >= olderThan.getTime()) continue;
+      if (!object.lastModified || !Number.isFinite(object.lastModified.getTime()) || object.lastModified.getTime() >= olderThan.getTime()) continue;
       keys.push(object.key);
       digests.push(digest);
     }

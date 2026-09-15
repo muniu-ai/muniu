@@ -17,7 +17,6 @@ cleanup() {
     kind delete cluster --name "${cluster_name}" >/dev/null 2>&1 || true
   fi
 }
-trap cleanup EXIT
 
 diagnose() {
   kubectl --namespace "${namespace}" get pods,deployments,jobs,services -o wide || true
@@ -26,6 +25,16 @@ diagnose() {
   kubectl --namespace "${namespace}" logs deployment/muniu-worker --all-pods=true --tail=200 || true
   kubectl --namespace "${namespace}" logs job/muniu-sandbox-probe --all-containers=true || true
 }
+
+finish() {
+  local result="$?"
+  if [[ "${result}" != "0" && "${cluster_created}" == "true" ]]; then
+    diagnose
+  fi
+  cleanup
+  return "${result}"
+}
+trap finish EXIT
 
 for command in docker kind kubectl helm curl; do
   command -v "${command}" >/dev/null || { echo "缺少命令：${command}" >&2; exit 127; }
@@ -57,13 +66,15 @@ dependency_images=(
   "minio/minio:RELEASE.2025-04-22T22-12-26Z"
   "minio/mc:RELEASE.2025-04-16T18-13-26Z"
 )
-for dependency in "${calico_images[@]}" "${dependency_images[@]}"; do
+vault_image="hashicorp/vault:1.21.4@sha256:4e33b126a59c0c333b76fb4e894722462659a6bec7c48c9ee8cea56fccfd2569"
+for dependency in "${calico_images[@]}" "${dependency_images[@]}" "${vault_image}"; do
   docker image inspect "${dependency}" >/dev/null 2>&1 || docker pull "${dependency}"
 done
-kind load docker-image "${image}" "${calico_images[@]}" "${dependency_images[@]}" --name "${cluster_name}"
+vault_import_image="$(node scripts/lib/kind-vault-image.mjs "${cluster_name}" --import-reference)"
+kind load docker-image "${image}" "${calico_images[@]}" "${dependency_images[@]}" "${vault_import_image}" --name "${cluster_name}"
 sandbox_image_digest="$(node scripts/lib/kind-sandbox-image.mjs "${cluster_name}")"
 calico_manifest="$(mktemp -t muniu-calico.XXXXXXXX)"
-curl --fail --location --retry 3 --retry-all-errors \
+curl --http1.1 --fail --location --retry 3 --retry-all-errors \
   --ipv4 --silent --show-error \
   --connect-timeout 10 --max-time 120 \
   --output "${calico_manifest}" \
@@ -90,11 +101,13 @@ if [[ ! "${image_digest}" =~ ^[a-f0-9]{64}$ ]]; then
   exit 1
 fi
 kubectl --namespace "${namespace}" create configmap muniu-kind-image --from-literal="digest=${image_digest}"
-kubectl apply -f deploy/kind/enterprise-fixture.yaml
+node scripts/lib/kind-vault-image.mjs "${cluster_name}" | kubectl apply -f -
 kubectl --namespace "${namespace}" rollout status deployment/muniu-kind-postgres --timeout=180s
 kubectl --namespace "${namespace}" rollout status deployment/muniu-kind-minio --timeout=180s
+kubectl --namespace "${namespace}" rollout status deployment/muniu-kind-vault --timeout=180s
 kubectl --namespace "${namespace}" rollout status deployment/muniu-kind-fixture --timeout=180s
 kubectl --namespace "${namespace}" wait --for=condition=Complete job/muniu-kind-minio-init --timeout=180s
+kubectl --namespace "${namespace}" wait --for=condition=Complete job/muniu-kind-vault-init --timeout=180s
 
 control_plane_ip="$(docker inspect --format '{{(index .NetworkSettings.Networks "kind").IPAddress}}' "${cluster_name}-control-plane")"
 if [[ ! "${control_plane_ip}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -112,6 +125,7 @@ helm upgrade --install muniu deploy/helm/muniu \
   --timeout 5m || { diagnose; exit 1; }
 kubectl --namespace "${namespace}" rollout status deployment/muniu-host --timeout=180s
 kubectl --namespace "${namespace}" rollout status deployment/muniu-worker --timeout=180s
+kubectl --namespace "${namespace}" exec deployment/muniu-worker -- node scripts/enterprise-idle-transaction-proof.mjs
 
 kubectl apply -f deploy/kind/sandbox-probe.yaml
 kubectl --namespace "${namespace}" wait --for=condition=Complete job/muniu-sandbox-probe --timeout=180s || { diagnose; exit 1; }

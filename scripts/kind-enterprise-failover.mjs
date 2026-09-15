@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 
 import { seedHostFlow, verifyCommittedEvent } from "./enterprise-host-flow.mjs";
 import { SigV4S3Client } from "./lib/s3-client.mjs";
+import { createKindPortForward } from "./lib/kind-port-forward.mjs";
 
 const namespace = process.env.MN_KIND_NAMESPACE ?? "muniu-kind";
 const release = process.env.MN_KIND_RELEASE ?? "muniu";
@@ -30,14 +31,7 @@ function run(args, { capture = true } = {}) {
 }
 
 function portForward(resource, mapping) {
-  const child = spawn("kubectl", ["--namespace", namespace, "port-forward", resource, mapping], {
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  let diagnostics = "";
-  child.stdout.on("data", (chunk) => { diagnostics += chunk.toString(); });
-  child.stderr.on("data", (chunk) => { diagnostics += chunk.toString(); });
-  forwards.push(child);
-  return { child, diagnostics: () => diagnostics };
+  return createKindPortForward(namespace, resource, mapping, forwards);
 }
 
 async function waitFor(check, label, timeoutMs = 60_000, intervalMs = 250) {
@@ -57,8 +51,9 @@ async function waitFor(check, label, timeoutMs = 60_000, intervalMs = 250) {
 
 async function waitHttp(url, forward) {
   await waitFor(async () => {
+    forward.reconnect();
     if (forward.child.exitCode !== null) throw new Error(forward.diagnostics());
-    const response = await fetch(url).catch(() => undefined);
+    const response = await fetch(url, { signal: AbortSignal.timeout(5000) }).catch(() => undefined);
     return response?.ok;
   }, url);
 }
@@ -179,7 +174,10 @@ try {
   await run(["delete", "pod", postgresPod, "--wait=false"], { capture: false });
   await run(["rollout", "status", "deployment/muniu-kind-postgres", "--timeout=180s"], { capture: false });
   await waitFor(async () => {
-    const response = await fetch("http://127.0.0.1:27319/v2/readiness").catch(() => undefined);
+    hostBForward.reconnect();
+    const response = await fetch("http://127.0.0.1:27319/v2/readiness", {
+      signal: AbortSignal.timeout(5000),
+    }).catch(() => undefined);
     return response?.ok;
   }, "PostgreSQL 重启后的 Host readiness", 180_000);
   await verifyCommittedEvent(state);

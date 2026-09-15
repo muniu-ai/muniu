@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { spawn } from "node:child_process";
+import { runKeychainCommand } from "@mn/storage";
 
 export const V2_KEYCHAIN_SERVICE = "com.muniu.agent-os.v2";
 
@@ -8,23 +8,7 @@ export interface ModelSecretStore {
   read(secretRef: string): Promise<string>;
 }
 
-export type KeychainCommand = (arguments_: readonly string[]) => Promise<string>;
-
-function runSecurity(arguments_: readonly string[]): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const child = spawn("/usr/bin/security", arguments_, { stdio: ["pipe", "pipe", "pipe"] });
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-    child.once("error", reject);
-    child.once("close", (code) => {
-      if (code === 0) resolve(Buffer.concat(stdout).toString("utf8").trim());
-      else reject(new Error(Buffer.concat(stderr).toString("utf8").trim() || `security exited ${code}`));
-    });
-    child.stdin.end();
-  });
-}
+export type KeychainCommand = (arguments_: readonly string[], stdin?: string) => Promise<string>;
 
 function accountFromRef(reference: string): string {
   const prefix = "keychain://muniu.v2/";
@@ -36,18 +20,18 @@ function accountFromRef(reference: string): string {
 
 export class MacOsKeychainSecretStore implements ModelSecretStore {
   constructor(
-    private readonly command: KeychainCommand = runSecurity,
+    private readonly command: KeychainCommand = runKeychainCommand,
     private readonly service = V2_KEYCHAIN_SERVICE,
   ) {
     if (!service.includes("v2")) throw new TypeError("Keychain service 必须与 0.1 隔离");
   }
 
   async save(connectionId: string, apiKey: string): Promise<string> {
-    if (!connectionId.trim() || !apiKey.trim()) throw new TypeError("连接名称和密钥不能为空");
+    if (!connectionId.trim() || !apiKey.trim() || /[\r\n\0]/u.test(apiKey)) throw new TypeError("连接名称和密钥不能为空，密钥不得包含控制换行");
     const account = `model-${connectionId}`;
     await this.command([
-      "add-generic-password", "-U", "-s", this.service, "-a", account, "-w", apiKey,
-    ]);
+      "add-generic-password", "-U", "-s", this.service, "-a", account, "-w",
+    ], `${apiKey}\n`);
     return `keychain://muniu.v2/${account}`;
   }
 
@@ -70,8 +54,8 @@ export class MacOsKeychainSecretStore implements ModelSecretStore {
       const value = randomBytes(byteLength);
       await this.command([
         "add-generic-password", "-s", this.service, "-a", account,
-        "-w", value.toString("base64"),
-      ]);
+        "-w",
+      ], `${value.toString("base64")}\n`);
       return value;
     }
   }

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
-import { apiPath, operationInputFields } from "@mn/contracts/client";
+import { apiPath, operationInputFields, matchApiOperation, parseApiResponse, type ApiPath, type JsonApiOperationIdV2, type ApiOutputsV2 } from "@mn/contracts/client";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -9,9 +9,10 @@ import {
   LocalBackupError,
   LocalSqliteBackup,
   MacOsKeychainKeyProvider,
+  runKeychainCommand,
   type LocalBackupCheckResult,
   type LocalBackupCreateResult,
-  type LocalBackupRestoreResult,
+  type LocalStateRestoreResult,
 } from "@mn/storage";
 
 const DEFAULT_API_URL = "http://127.0.0.1:7318";
@@ -38,7 +39,7 @@ const HELP = `木牛 Agent OS 0.2
 备份示例：
   mn backup create state.mnbackup --verify
   mn backup check state.mnbackup
-  mn backup restore state.mnbackup --destination restored.sqlite3
+  mn backup restore state.mnbackup --destination restored-v2
 
 签名插件：
   mn plugin catalog
@@ -47,6 +48,11 @@ const HELP = `木牛 Agent OS 0.2
   mn plugin commands <插件 ID> --workspace <工作区 ID>
   mn plugin run <插件 ID> <命令> --workspace <工作区 ID> --version <对象版本号>
   --trust-process 确认插件拥有宿主进程权限；插件不是沙箱
+
+Coding 仓库与任务：
+  mn code repositories --workspace <工作区 ID>
+  mn code repository --workspace <工作区 ID> --input /仓库绝对路径
+  mn code task --workspace <工作区 ID> --repository <仓库名称或绝对路径> --input <任务描述>
 
 外部 Coding Runner：
   生产 Worker 只接受官方原生安装的 macOS Mach-O CLI，不支持 npm/shebang wrapper
@@ -77,7 +83,7 @@ export interface CliDependencies {
 export interface CliBackup {
   create(fileName: string): Promise<LocalBackupCreateResult>;
   check(fileName: string): Promise<LocalBackupCheckResult>;
-  restore(fileName: string, destinationName: string): Promise<LocalBackupRestoreResult>;
+  restore(fileName: string, destinationName: string): Promise<LocalStateRestoreResult>;
 }
 
 interface ParsedArguments {
@@ -121,15 +127,15 @@ class ApiClient {
     private readonly nextIdempotencyKey: () => string,
   ) {}
 
-  async get(path: string): Promise<unknown> {
+  async get<K extends JsonApiOperationIdV2>(path: ApiPath<K>): Promise<ApiOutputsV2[K]> {
     return this.request(path, { method: "GET" });
   }
 
-  async readiness(): Promise<unknown> {
+  async readiness(): Promise<ApiOutputsV2["getReadiness"]> {
     return this.request(apiPath("getReadiness", { }), { method: "GET" }, new Set([503]));
   }
 
-  async mutate(path: string, body: unknown, method: "POST" | "PATCH" | "DELETE" = "POST"): Promise<unknown> {
+  async mutate<K extends JsonApiOperationIdV2>(path: ApiPath<K>, body: unknown, method: "POST" | "PATCH" | "DELETE" = "POST"): Promise<ApiOutputsV2[K]> {
     return this.request(path, {
       method,
       headers: {
@@ -140,7 +146,7 @@ class ApiClient {
     });
   }
 
-  async request(path: string, init: RequestInit, acceptedDataStatuses: ReadonlySet<number> = new Set()): Promise<unknown> {
+  async request<K extends JsonApiOperationIdV2>(path: ApiPath<K>, init: RequestInit, acceptedDataStatuses: ReadonlySet<number> = new Set()): Promise<ApiOutputsV2[K]> {
     const response = await this.fetchImplementation(`${this.baseUrl}${path}`, init);
     let value: unknown;
     try {
@@ -155,7 +161,16 @@ class ApiClient {
       };
       throw new ApiRequestError(isApiError(value) ? value : fallback, response.status);
     }
-    return hasData(value) ? value.data : value;
+    const operationId = matchApiOperation(init.method ?? "GET", new URL(path, this.baseUrl).pathname);
+    if (!operationId) throw new CliUsageError("未知 API 操作");
+    try { return parseApiResponse(operationId as K, value); }
+    catch {
+      throw new ApiRequestError({
+        code: "RESPONSE_CONTRACT_INVALID", message: "Host 响应不符合公共契约",
+        action: "确认 CLI 与 Host 均为同一 0.2 版本后重试", fieldIssues: [],
+        traceId: response.headers.get("X-Trace-Id") ?? "unknown", retryable: false,
+      }, response.status);
+    }
   }
 }
 
@@ -582,8 +597,8 @@ async function productCommand(
   parsed: ParsedArguments,
   api: ApiClient,
 ): Promise<CliResult> {
-  assertAllowedFlags(parsed, ["workspace", "version", "input"]);
   const operation = parsed.positional[0] ?? (product === "opc" ? "capture" : "task");
+  assertAllowedFlags(parsed, ["workspace", "version", "input", ...(product === "coding" && operation === "task" ? ["repository"] : [])]);
   const workspaceId = flag(parsed, "workspace", true)!;
   const input = (flag(parsed, "input") ?? parsed.positional.slice(1).join(" ")).trim();
   let resource: "opportunities" | "repositories" | "tasks" | "samples/read-only";
@@ -607,10 +622,21 @@ async function productCommand(
   if (resource === "samples/read-only" && input) throw new CliUsageError("sample 不接受 --input 或额外文本");
   const operationId = product === "opc" ? resource === "samples/read-only" ? "runOpcReadOnlySample" : "createOpcOpportunity"
     : resource === "samples/read-only" ? "runCodingReadOnlySample" : resource === "repositories" ? "createCodingRepository" : "createCodingTask";
+  const selection = flag(parsed, "repository");
+  let repositoryId: string | undefined;
+  if (selection) {
+    const repositories = await api.get(apiPath("listCodingRepositories", {}, { workspaceId }));
+    const matches = repositories.filter(item => [item.id, item.name, item.rootRealPath].includes(selection));
+    if (matches.length !== 1) throw new CliUsageError(matches.length === 0
+      ? "未找到该仓库；运行 mn code repositories 查看当前工作区的仓库"
+      : "仓库名称重复；请通过 --repository 指定完整路径或仓库 ID");
+    repositoryId = matches[0]!.id;
+  }
   const data = await api.mutate(apiPath(operationId, {}), {
     workspaceId,
     expectedStreamVersion: integerFlag(parsed, "version", 0),
     ...(input ? { input } : {}),
+    ...(repositoryId ? { repositoryId } : {}),
   });
   return { command, data, human };
 }
@@ -629,6 +655,12 @@ function absoluteRunnerPath(parsed: ParsedArguments): string {
 }
 
 async function code(parsed: ParsedArguments, api: ApiClient): Promise<CliResult> {
+  if (parsed.positional[0] === "repositories") {
+    assertAllowedFlags(parsed, ["workspace"]);
+    if (parsed.positional.length !== 1) throw new CliUsageError("code repositories 不接受额外参数");
+    const data = await api.get(apiPath("listCodingRepositories", {}, { workspaceId: flag(parsed, "workspace", true)! }));
+    return { command: "code", data, human: data.length ? data.map(item => `${item.name} · ${item.rootRealPath || "尚未指定路径"}`).join("\n") : "当前工作区还没有仓库；运行 mn code repository 登记仓库" };
+  }
   const operation = parsed.positional[0] ?? "task";
   if (operation === "reconcile") {
     assertAllowedFlags(parsed, []);
@@ -648,7 +680,7 @@ async function code(parsed: ParsedArguments, api: ApiClient): Promise<CliResult>
       apiPath("getCodingReconciliation", { executionId: executionId });
     const versions = reconciliationVersions(await api.get(reconciliationPath), executionId);
     const data = await api.mutate(
-      `${reconciliationPath}-decisions`,
+      apiPath("decideCodingReconciliation", { executionId }),
       {
         ...versions,
         decision,
@@ -820,14 +852,14 @@ async function backup(
     if (operation === "restore") {
       const fileName = flag(parsed, "file") ?? parsed.positional[1];
       if (!fileName || parsed.positional.length > 2) {
-        throw new CliUsageError("用法：mn backup restore <备份文件名> --destination <新数据库文件名>");
+        throw new CliUsageError("用法：mn backup restore <备份文件名> --destination <新状态目录名>");
       }
       const destination = flag(parsed, "destination", true)!;
       const restored = await getClient().restore(fileName, destination);
       return {
         command: "backup",
         data: { operation, restored },
-        human: `备份已恢复到独立文件：${restored.file}；确认后再切换状态目录`,
+        human: `备份已恢复到独立状态目录：${restored.stateRoot}；退出当前木牛进程后，将 MN_V2_STATE_ROOT 指向此目录启动。原状态未修改，仍需原 v2 Keychain 密钥。`,
       };
     }
     throw new CliUsageError("backup 仅支持 create、check 或 restore");
@@ -852,15 +884,28 @@ function backupErrorAction(code: string): string {
   return "检查本地 v2 状态目录与文件权限后重试";
 }
 
+export function resolveCliStateRoot(explicit?: string, environment: Readonly<Record<string, string | undefined>> = process.env,
+  homeDirectory = homedir()): string {
+  return resolve(explicit ?? environment.MN_V2_STATE_ROOT ?? join(homeDirectory, ".muniu", "v2"));
+}
+
 function createDefaultBackup(dependencies: CliDependencies): CliBackup {
-  const stateRoot = resolve(dependencies.stateRoot ?? process.env.MN_STATE_ROOT ?? join(homedir(), ".muniu", "v2"));
-  return new LocalSqliteBackup({
+  const stateRoot = resolveCliStateRoot(dependencies.stateRoot);
+  const backup = new LocalSqliteBackup({
     databaseFile: join(stateRoot, "state.sqlite3"),
     casDirectory: join(stateRoot, "cas"),
     backupDirectory: join(stateRoot, "backups"),
     restoreDirectory: join(stateRoot, "restore"),
     keyProvider: new MacOsKeychainKeyProvider({ account: "backup-wrapping-key" }),
   });
+  return { create: backup.create.bind(backup), check: backup.check.bind(backup), async restore(fileName, destinationName) {
+    const encoded = await runKeychainCommand(["find-generic-password", "-s", "com.muniu.agent-os.v2", "-a", "event-hmac", "-w"]);
+    const hmacKey = Buffer.from(encoded, "base64");
+    try {
+      return await backup.restoreState(fileName, destinationName, { hmacKey,
+        keyProvider: new MacOsKeychainKeyProvider({ account: "protected-payload-wrapping-key", individuallyRevocable: true }) });
+    } finally { hmacKey.fill(0); }
+  } };
 }
 
 export async function runCli(arguments_: readonly string[], dependencies: CliDependencies = {}): Promise<number> {

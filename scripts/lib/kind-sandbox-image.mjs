@@ -4,7 +4,8 @@ import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 
 export function verifyImportedSandboxManifest(manifestDigest, bytes, configurationDigest) {
-  if (!/^sha256:[a-f0-9]{64}$/u.test(manifestDigest)
+  if (!/^sha256:[a-f0-9]{64}$/u.test(configurationDigest)
+    || !/^sha256:[a-f0-9]{64}$/u.test(manifestDigest)
     || `sha256:${createHash("sha256").update(bytes).digest("hex")}` !== manifestDigest) {
     throw new Error("Imported sandbox manifest digest does not match its content");
   }

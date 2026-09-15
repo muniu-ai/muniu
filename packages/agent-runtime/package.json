@@ -19,6 +19,7 @@
     "test": "tsc -p tsconfig.test.json && node --test dist-test/test/**/*.test.js"
   },
   "dependencies": {
+    "@deepseek-ai/cordis": "4.0.1",
     "@mn/contracts": "0.2.0"
   }
 }

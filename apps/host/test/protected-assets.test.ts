@@ -171,14 +171,14 @@ test("受保护附件先写密文 CAS，再提交独立 wrapped DEK，并在授�
   assert.equal(event?.protectedPayloadRef, asset.protectedPayloadRef);
   assert.doesNotMatch(JSON.stringify(event?.publicPayload), /客户明确要求不得公开|wrappedKey|nonce|tag/u);
 
-  const denied = await host.dispatch(request(`/v2/assets/${asset.id}?content=1`, undefined, {
+  const denied = await host.dispatch(request(`/v2/assets/${asset.id}/content`, undefined, {
     principal: "viewer-without-membership",
   }));
   assert.equal(denied.status, 403);
   assert.equal(reads(), 0);
   assert.equal(unwraps, 0);
 
-  const content = await host.dispatch(request(`/v2/assets/${asset.id}?content=1`, undefined, {
+  const content = await host.dispatch(request(`/v2/assets/${asset.id}/content`, undefined, {
     principal: "owner-a",
   }));
   assert.equal(content.status, 200);
@@ -210,7 +210,7 @@ test("受保护附件先写密文 CAS，再提交独立 wrapped DEK，并在授�
   assert.deepEqual(state.tombstone, tombstone);
   assert.doesNotMatch(JSON.stringify(state.tombstone), /客户要求删除|原始访谈|vault|wrapped|ciphertext/u);
 
-  const afterDelete = await host.dispatch(request(`/v2/assets/${asset.id}?content=1`, undefined, {
+  const afterDelete = await host.dispatch(request(`/v2/assets/${asset.id}/content`, undefined, {
     principal: "owner-a",
   }));
   assert.equal(afterDelete.status, 404);
@@ -331,17 +331,21 @@ test("包装密钥或 CAS 写入失败时不提交 Asset 事实，客户端不�
 
 test("本地组合根可注入 v2 Keychain provider，并在 SQLite 与文件 CAS 重启后解密", async () => {
   const stateRoot = await mkdtemp(join(tmpdir(), "muniu-protected-assets-"));
-  let keychainValue: string | undefined;
+  const keychainValues = new Map<string, string>();
   const keychainCommand = async (args: readonly string[], stdin?: string): Promise<string> => {
+    const account = args[args.indexOf("-a") + 1]!;
     if (args[0] === "find-generic-password") {
-      if (!keychainValue) throw new Error("not found");
-      return keychainValue;
+      const value = keychainValues.get(account);
+      if (!value) throw new Error("not found");
+      return value;
     }
-    keychainValue = stdin?.trim();
+    if (args[0] === "delete-generic-password") keychainValues.delete(account);
+    else keychainValues.set(account, stdin!.trim());
     return "";
   };
   const provider = () => new MacOsKeychainKeyProvider({
     account: "protected-payload-wrapping-key",
+    individuallyRevocable: true,
     command: keychainCommand,
   });
   const localSecrets = new LocalSecrets();
@@ -382,7 +386,7 @@ test("本地组合根可注入 v2 Keychain provider，并在 SQLite 与文件 CA
       protectedPayloadKeyProvider: provider(),
       workerIdleDelayMs: 1,
     });
-    const content = await second.dispatch(request(`/v2/assets/${asset.id}?content=1`));
+    const content = await second.dispatch(request(`/v2/assets/${asset.id}/content`));
     assert.equal(content.status, 200);
     assert.equal(await content.text(), "restart-safe protected content");
     const deletion = await second.dispatch(request(`/v2/assets/${asset.id}`, {

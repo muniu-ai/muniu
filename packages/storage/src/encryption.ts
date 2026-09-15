@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import { spawn } from "node:child_process";
+import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from "node:crypto";
+import { runKeychainCommand } from "./keychain-command.js";
 
 import type { JsonObject } from "@mn/contracts";
 
@@ -25,6 +25,8 @@ export interface WrappedDataKey {
 export interface KeyProvider {
   wrapKey(dataKey: Uint8Array, context: KeyContext): Promise<WrappedDataKey>;
   unwrapKey(wrapped: WrappedDataKey): Promise<Buffer>;
+  revokeKey?(wrapped: WrappedDataKey): Promise<void>;
+  isKeyRevoked?(wrapped: WrappedDataKey): Promise<boolean>;
 }
 
 export interface EncryptedEnvelopeV1 {
@@ -67,6 +69,7 @@ export class InMemoryKeyProvider implements KeyProvider {
   readonly #masterKey: Buffer;
   readonly #provider: string;
   readonly #keyId: string;
+  readonly #revoked = new Set<string>();
 
   constructor(masterKey: Uint8Array, options: { provider?: string; keyId?: string } = {}) {
     if (masterKey.byteLength !== 32) throw new TypeError("Wrapping key must contain exactly 32 bytes");
@@ -87,11 +90,16 @@ export class InMemoryKeyProvider implements KeyProvider {
   }
 
   async unwrapKey(wrapped: WrappedDataKey): Promise<Buffer> {
+    if (await this.isKeyRevoked(wrapped)) throw new Error("Data wrapping key was revoked");
     if (wrapped.keyId !== this.#keyId || wrapped.provider !== this.#provider) {
       throw new Error("Wrapped key belongs to a different key provider");
     }
     return decryptWithKey(wrapped, this.#masterKey, wrapped.context);
   }
+
+  /** Process-local fixture behavior only; production revocation uses an external key store. */
+  async revokeKey(wrapped: WrappedDataKey): Promise<void> { this.#revoked.add(canonicalJson(wrapped)); }
+  async isKeyRevoked(wrapped: WrappedDataKey): Promise<boolean> { return this.#revoked.has(canonicalJson(wrapped)); }
 }
 
 export class EnvelopeCipher {
@@ -139,39 +147,26 @@ function isKeychainDuplicate(error: unknown): boolean {
   return /already exists|-25299|errSecDuplicateItem/i.test(String(error));
 }
 
-function runSecurity(args: readonly string[], stdin?: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const child = spawn("/usr/bin/security", args, { stdio: ["pipe", "pipe", "pipe"] });
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code === 0) resolve(Buffer.concat(stdout).toString("utf8").trim());
-      else reject(new Error(Buffer.concat(stderr).toString("utf8").trim() || `security exited ${code}`));
-    });
-    child.stdin.end(stdin);
-  });
-}
-
 export interface MacOsKeychainKeyProviderOptions {
   readonly account: string;
   readonly service?: string;
   readonly command?: KeychainCommand;
+  readonly individuallyRevocable?: boolean;
 }
 
 export class MacOsKeychainKeyProvider implements KeyProvider {
   readonly #account: string;
   readonly #service: string;
   readonly #command: KeychainCommand;
+  readonly #individuallyRevocable: boolean;
   #masterKey?: Buffer;
 
   constructor(options: MacOsKeychainKeyProviderOptions) {
     this.#account = options.account;
     this.#service = options.service ?? "com.muniu.agent-os.v2";
     if (!this.#service.includes("v2")) throw new TypeError("Keychain service must be isolated for v2");
-    this.#command = options.command ?? runSecurity;
+    this.#command = options.command ?? runKeychainCommand;
+    this.#individuallyRevocable = options.individuallyRevocable ?? false;
   }
 
   async #loadMasterKey(): Promise<Buffer> {
@@ -218,6 +213,16 @@ export class MacOsKeychainKeyProvider implements KeyProvider {
   }
 
   async wrapKey(dataKey: Uint8Array, context: KeyContext): Promise<WrappedDataKey> {
+    if (this.#individuallyRevocable) {
+      if (dataKey.byteLength !== 32) throw new TypeError("Data key must contain exactly 32 bytes");
+      const account = `${this.#account}:payload:${randomUUID()}`;
+      const key = randomBytes(32);
+      try {
+        await this.#command(["add-generic-password", "-s", this.#service, "-a", account, "-w"], `${key.toString("base64")}\n`);
+        return { algorithm: "AES-256-GCM", provider: "macos-keychain-individual",
+          keyId: `${this.#service}:${account}`, ...encryptWithKey(dataKey, key, context), context };
+      } finally { key.fill(0); }
+    }
     const provider = new InMemoryKeyProvider(await this.#loadMasterKey(), {
       provider: "macos-keychain",
       keyId: `${this.#service}:${this.#account}`
@@ -226,10 +231,45 @@ export class MacOsKeychainKeyProvider implements KeyProvider {
   }
 
   async unwrapKey(wrapped: WrappedDataKey): Promise<Buffer> {
+    if (this.#individuallyRevocable) {
+      const account = this.#individualAccount(wrapped);
+      // Never create or cache an individual key on read: an old backup must not undo revocation.
+      const encoded = await this.#command(["find-generic-password", "-s", this.#service, "-a", account, "-w"]);
+      const key = Buffer.from(encoded.trim(), "base64");
+      try {
+        if (key.byteLength !== 32) throw new Error("Keychain wrapping key is invalid");
+        return decryptWithKey(wrapped, key, wrapped.context);
+      } finally { key.fill(0); }
+    }
     const provider = new InMemoryKeyProvider(await this.#loadMasterKey(), {
       provider: "macos-keychain",
       keyId: `${this.#service}:${this.#account}`
     });
     return provider.unwrapKey(wrapped);
+  }
+
+  #individualAccount(wrapped: WrappedDataKey): string {
+    const prefix = `${this.#service}:${this.#account}:payload:`;
+    if (wrapped.algorithm !== "AES-256-GCM" || wrapped.provider !== "macos-keychain-individual"
+      || !wrapped.keyId.startsWith(prefix) || !/^[a-f0-9-]{36}$/u.test(wrapped.keyId.slice(prefix.length))) {
+      throw new Error("Wrapped key belongs to a different individual Keychain provider");
+    }
+    return wrapped.keyId.slice(this.#service.length + 1);
+  }
+
+  async revokeKey(wrapped: WrappedDataKey): Promise<void> {
+    if (!this.#individuallyRevocable) throw new Error("Shared wrapping keys cannot be individually revoked");
+    const account = this.#individualAccount(wrapped);
+    try { await this.#command(["delete-generic-password", "-s", this.#service, "-a", account]); }
+    catch (error) { if (!isKeychainNotFound(error)) throw error; }
+  }
+
+  async isKeyRevoked(wrapped: WrappedDataKey): Promise<boolean> {
+    if (!this.#individuallyRevocable) throw new Error("Shared wrapping keys cannot be individually revoked");
+    const account = this.#individualAccount(wrapped);
+    try {
+      await this.#command(["find-generic-password", "-s", this.#service, "-a", account]);
+      return false;
+    } catch (error) { if (isKeychainNotFound(error)) return true; throw error; }
   }
 }

@@ -1,4 +1,5 @@
 export * from "./config.js";
+export * from "./composition.js";
 export * from "./enterprise-plugin-repository.js";
 export * from "./assets.js";
 export * from "./coding-runners.js";
@@ -9,7 +10,9 @@ export * from "./memories.js";
 export * from "./opc-api.js";
 export * from "./opc-protected-sources.js";
 export * from "./plugin-installation.js";
+export * from "./plugin-projections.js";
 export * from "./product-state.js";
 export * from "./secrets.js";
 export * from "./plugin-worker.js";
 export * from "./opc-model-context.js";
+export * from "./projection-journal.js";

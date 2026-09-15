@@ -80,8 +80,8 @@ test("S3 client signs create-only v2 CAS operations and parses listings", async 
   const responses = [
     new Response(null, { status: 200 }),
     new Response("bytes", { status: 200 }),
-    new Response("<ListBucketResult><Contents><Key>v2/sha256/a&amp;b</Key><LastModified>2025-01-02T03:04:05Z</LastModified></Contents></ListBucketResult>", { status: 200 }),
-    new Response("", { status: 200 }),
+    new Response("<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>v2/sha256/a&amp;b</Key><LastModified>2025-01-02T03:04:05Z</LastModified></Contents></ListBucketResult>", { status: 200 }),
+    new Response("<DeleteResult/>", { status: 200 }),
   ];
   const client = new SigV4S3Client({
     endpoint: "https://s3.example.test/base",

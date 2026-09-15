@@ -1,11 +1,18 @@
+import { inboxFixture, workspaceFixture, opportunityFixture, sampleFixture, repositoryFixture, modelFixture, executionFixture, codingTaskFixture, installationFixture, runnerInspectionFixture, runnerConfigurationFixture, reconciliationFixture, reconciliationDecisionFixture } from "./api-fixtures.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import type {
   LocalBackupCheckResult,
   LocalBackupCreateResult,
-  LocalBackupRestoreResult,
+  LocalStateRestoreResult,
 } from "@mn/storage";
-import { runCli, type CliIo } from "../src/index.js";
+import { runCli, resolveCliStateRoot, type CliIo } from "../src/index.js";
+
+test("CLI 备份使用与 Host 相同的 v2 状态根，忽略旧环境变量", () => {
+  assert.equal(resolveCliStateRoot(undefined, { MN_V2_STATE_ROOT: "/state/custom-v2", MN_STATE_ROOT: "/state/old" }, "/fixture"), "/state/custom-v2");
+  assert.equal(resolveCliStateRoot(undefined, { MN_STATE_ROOT: "/state/old" }, "/fixture"), "/fixture/.muniu/v2");
+  assert.equal(resolveCliStateRoot("/state/explicit-v2", { MN_V2_STATE_ROOT: "/state/custom-v2" }, "/fixture"), "/state/explicit-v2");
+});
 
 interface CapturedRequest {
   readonly method: string;
@@ -53,12 +60,12 @@ test("帮助只暴露 0.2 命令", async () => {
 
 test("--json 输出固定成功 envelope", async () => {
   const output = io();
-  const fetch: typeof globalThis.fetch = async () => ok([{ id: "approval:1", title: "操作需要批准" }]);
+  const fetch: typeof globalThis.fetch = async () => ok([inboxFixture({ id: "approval:1", title: "操作需要批准" })]);
   assert.equal(await runCli(["inbox", "--json"], { io: output, fetch }), 0);
   assert.deepEqual(JSON.parse(output.out[0] ?? ""), {
     ok: true,
     command: "inbox",
-    data: [{ id: "approval:1", title: "操作需要批准" }],
+    data: [inboxFixture({ id: "approval:1", title: "操作需要批准" })],
   });
 });
 
@@ -77,11 +84,11 @@ test("setup 完成引导初始化、OPC 首对象和只读样例", async () => {
     requests.push(request);
     if (request.path === "/v2/setup") return ok({ tenantId: "local", principalId: "local-owner" });
     if (request.path === "/v2/workspaces") {
-      return ok({ id: "workspace-1", streamVersion: 1, activePluginIds: ["opc"] }, 201);
+      return ok(workspaceFixture({ id: "workspace-1", streamVersion: 1, activePluginIds: ["opc"] }), 201);
     }
-    if (request.path === "/v2/plugins/opc/opportunities") return ok({ id: "opportunity-1", state: "captured" }, 201);
+    if (request.path === "/v2/plugins/opc/opportunities") return ok(opportunityFixture({ id: "opportunity-1", state: "captured" }), 201);
     if (request.path === "/v2/plugins/opc/samples/read-only") {
-      return ok({ id: "sample-1", effectClass: "external_read", status: "completed" });
+      return ok(sampleFixture({ id: "sample-1", effectClass: "external_read", status: "completed" }));
     }
     return Response.json({}, { status: 404 });
   };
@@ -111,9 +118,9 @@ test("setup 完成引导初始化、OPC 首对象和只读样例", async () => {
   ]);
   assert.deepEqual(JSON.parse(output.out[0] ?? "").data, {
     setup: { tenantId: "local", principalId: "local-owner" },
-    workspace: { id: "workspace-1", streamVersion: 1, activePluginIds: ["opc"] },
-    firstObject: { id: "opportunity-1", state: "captured" },
-    sample: { id: "sample-1", effectClass: "external_read", status: "completed" },
+    workspace: workspaceFixture({ id: "workspace-1", streamVersion: 1, activePluginIds: ["opc"] }),
+    firstObject: opportunityFixture({ id: "opportunity-1", state: "captured" }),
+    sample: sampleFixture({ id: "sample-1", effectClass: "external_read", status: "completed" }),
   });
 });
 
@@ -124,10 +131,10 @@ test("setup 为 Coding 创建真实仓库和本地只读样例", async () => {
     const request = await captureRequest(input, init);
     requests.push(request);
     if (request.path === "/v2/setup") return ok({ tenantId: "local", principalId: "local-owner" });
-    if (request.path === "/v2/workspaces") return ok({ id: "workspace-code", streamVersion: 1 }, 201);
-    if (request.path === "/v2/plugins/coding/repositories") return ok({ id: "repository-1", name: "muniu" }, 201);
+    if (request.path === "/v2/workspaces") return ok(workspaceFixture({ id: "workspace-code", streamVersion: 1 }), 201);
+    if (request.path === "/v2/plugins/coding/repositories") return ok(repositoryFixture({ id: "repository-1", name: "muniu" }), 201);
     if (request.path === "/v2/plugins/coding/samples/read-only") {
-      return ok({ id: "sample-code", effectClass: "local_read", status: "completed" });
+      return ok(sampleFixture({ id: "sample-code", effectClass: "local_read", status: "completed" }));
     }
     return Response.json({}, { status: 404 });
   };
@@ -153,11 +160,11 @@ test("setup 模型连接使用厂商预设并探测默认模型", async () => {
     const request = await captureRequest(input, init);
     requests.push(request);
     if (request.path === "/v2/setup") return ok({ tenantId: "local", principalId: "local-owner" });
-    if (request.path === "/v2/model-connections") return ok({ id: "connection-1", streamVersion: 1 }, 201);
+    if (request.path === "/v2/model-connections") return ok(modelFixture({ id: "connection-1", streamVersion: 1 }), 201);
     if (request.path === "/v2/model-connections/connection-1/probe") {
-      return ok({ id: "connection-1", streamVersion: 2, defaultModel: "deepseek-chat", status: "ready" });
+      return ok(modelFixture({ id: "connection-1", streamVersion: 2, defaultModel: "deepseek-chat", status: "ready" }));
     }
-    if (request.path === "/v2/workspaces") return ok({ id: "workspace-1", streamVersion: 1 }, 201);
+    if (request.path === "/v2/workspaces") return ok(workspaceFixture({ id: "workspace-1", streamVersion: 1 }), 201);
     return Response.json({}, { status: 404 });
   };
 
@@ -195,8 +202,11 @@ test("plugin 命令映射工作区停用、全局停用与清除接口", async (
   const output = io();
   const requests: CapturedRequest[] = [];
   const fetch: typeof globalThis.fetch = async (input, init) => {
-    requests.push(await captureRequest(input, init));
-    return ok({ pluginId: "research" });
+    const request = await captureRequest(input, init);
+    requests.push(request);
+    if (request.path.includes("/plugin-activations/")) return ok(workspaceFixture({ activePluginIds: [] }));
+    if (request.path.endsWith("/disable")) return ok(installationFixture({ status: "disabled", streamVersion: 4 }));
+    return ok({ pluginId: "research", purged: true, streamVersion: 5, purgedAt: "2026-09-04T08:00:00.000Z" });
   };
   const nextKey = (() => { let id = 0; return () => `plugin-key-${++id}`; })();
 
@@ -283,7 +293,11 @@ test("OPC 与 Coding 命令只映射已实现的插件资源", async () => {
     let request: CapturedRequest | undefined;
     const fetch: typeof globalThis.fetch = async (input, init) => {
       request = await captureRequest(input, init);
-      return ok({ id: "created" }, entry.path.includes("samples") ? 200 : 201);
+      const data = entry.path.includes("samples") ? sampleFixture({ id: "created" })
+        : entry.path.endsWith("repositories") ? repositoryFixture({ id: "created" })
+          : entry.path.endsWith("tasks") ? codingTaskFixture({ id: "created" })
+            : opportunityFixture({ id: "created" });
+      return ok(data, entry.path.includes("samples") ? 200 : 201);
     };
     assert.equal(await runCli(entry.arguments, { io: output, fetch }), 0);
     assert.equal(request?.path, entry.path);
@@ -298,11 +312,36 @@ test("OPC 与 Coding 命令只映射已实现的插件资源", async () => {
   assert.match(output.err[0] ?? "", /opc 支持/);
 });
 
+test("Coding 按仓库名称或路径选择，不在重名时任意绑定", async () => {
+  const repositories = [repositoryFixture(), repositoryFixture({ id: "repository-2", name: "service", rootRealPath: "/work/service" })];
+  const requests: CapturedRequest[] = [];
+  const fetch: typeof globalThis.fetch = async (input, init) => {
+    const request = await captureRequest(input, init); requests.push(request);
+    return ok(request.method === "GET" ? repositories : codingTaskFixture({ repositoryId: "repository-2" }));
+  };
+  for (const selection of ["service", "/work/service", "repository-2"]) {
+    const output = io(); requests.length = 0;
+    assert.equal(await runCli(["code", "task", "--workspace", "workspace-1", "--repository", selection, "--input", "修复错误处理"], { io: output, fetch }), 0, output.err.join("\n"));
+    assert.equal(requests[0]?.path, "/v2/plugins/coding/repositories");
+    assert.equal((requests[1]?.body as { repositoryId?: string }).repositoryId, "repository-2");
+  }
+  repositories.push(repositoryFixture({ id: "repository-3", name: "service", rootRealPath: "/other/service" }));
+  for (const selection of ["service", "不存在的仓库"]) {
+    const output = io(); requests.length = 0;
+    assert.equal(await runCli(["code", "task", "--workspace", "workspace-1", "--repository", selection, "--input", "修复错误处理"], { io: output, fetch }), 2);
+    assert.equal(requests.length, 1);
+    assert.match(output.err.join("\n"), /仓库/);
+  }
+  const output = io();
+  assert.equal(await runCli(["code", "repositories", "--workspace", "workspace-1"], { io: output, fetch }), 0);
+  assert.match(output.out.join("\n"), /service.*\/work\/service/);
+});
+
 test("ask 仅在显式指定时发送外部 Coding Runner", async () => {
   const requests: CapturedRequest[] = [];
   const fetch: typeof globalThis.fetch = async (input, init) => {
     requests.push(await captureRequest(input, init));
-    return ok({ id: "execution-1", runnerId: "claude-cli" }, 202);
+    return ok(executionFixture({ id: "execution-1", runnerId: "claude-cli" }), 202);
   };
 
   assert.equal(await runCli([
@@ -338,7 +377,7 @@ test("ask 不需要会话 ID，自动使用工作区最近的业务会话", asyn
     requests.push(request);
     if (request.method === "GET") {
       return ok([
-        {
+        { tenantId: "local", workspaceId: "workspace-1",
           id: "thread-old",
           subject: "旧机会",
           pluginId: "opc",
@@ -347,7 +386,7 @@ test("ask 不需要会话 ID，自动使用工作区最近的业务会话", asyn
           createdAt: "2026-09-01T08:00:00.000Z",
           updatedAt: "2026-09-01T08:00:00.000Z",
         },
-        {
+        { tenantId: "local", workspaceId: "workspace-1",
           id: "thread-current",
           subject: "设计师访谈整理",
           pluginId: "opc",
@@ -358,7 +397,7 @@ test("ask 不需要会话 ID，自动使用工作区最近的业务会话", asyn
         },
       ]);
     }
-    return ok({ id: "execution-1", status: "queued" }, 202);
+    return ok(executionFixture({ id: "execution-1", status: "queued" }), 202);
   };
 
   assert.equal(await runCli([
@@ -385,7 +424,7 @@ test("ask 可用机会标题选择 OPC 上下文，不暴露会话 ID", async ()
     requests.push(request);
     if (request.method === "GET") {
       return ok([
-        {
+        { tenantId: "local", workspaceId: "workspace-1",
           id: "thread-opc",
           subject: "设计师增长机会",
           pluginId: "opc",
@@ -394,7 +433,7 @@ test("ask 可用机会标题选择 OPC 上下文，不暴露会话 ID", async ()
           createdAt: "2026-09-01T08:00:00.000Z",
           updatedAt: "2026-09-01T08:00:00.000Z",
         },
-        {
+        { tenantId: "local", workspaceId: "workspace-1",
           id: "thread-code",
           subject: "设计师增长页面",
           pluginId: "coding",
@@ -405,7 +444,7 @@ test("ask 可用机会标题选择 OPC 上下文，不暴露会话 ID", async ()
         },
       ]);
     }
-    return ok({ id: "execution-1", status: "queued" }, 202);
+    return ok(executionFixture({ id: "execution-1", status: "queued" }), 202);
   };
 
   assert.equal(await runCli([
@@ -422,12 +461,12 @@ test("ask 在机会标题不唯一时要求缩小范围，且不提交 turn", as
     const request = await captureRequest(input, init);
     if (request.method !== "GET") mutationCount += 1;
     return ok([
-      {
+      { tenantId: "local", workspaceId: "workspace-1",
         id: "thread-1", subject: "设计师增长 A", pluginId: "opc",
         resourceRef: { namespace: "opc.opportunity", resourceId: "opportunity-1" },
         streamVersion: 2, createdAt: "2026-09-01T08:00:00.000Z", updatedAt: "2026-09-01T08:00:00.000Z",
       },
-      {
+      { tenantId: "local", workspaceId: "workspace-1",
         id: "thread-2", subject: "设计师增长 B", pluginId: "opc",
         resourceRef: { namespace: "opc.opportunity", resourceId: "opportunity-2" },
         streamVersion: 3, createdAt: "2026-09-02T08:00:00.000Z", updatedAt: "2026-09-02T08:00:00.000Z",
@@ -450,19 +489,19 @@ test("ask 指定 Runner 时自动选择最近的 Coding 会话", async () => {
     requests.push(request);
     if (request.method === "GET") {
       return ok([
-        {
+        { tenantId: "local", workspaceId: "workspace-1",
           id: "thread-opc", subject: "更新的机会", pluginId: "opc",
           resourceRef: { namespace: "opc.opportunity", resourceId: "opportunity-1" },
           streamVersion: 8, createdAt: "2026-09-04T08:00:00.000Z", updatedAt: "2026-09-04T08:00:00.000Z",
         },
-        {
+        { tenantId: "local", workspaceId: "workspace-1",
           id: "thread-code", subject: "修复事件游标", pluginId: "coding",
           resourceRef: { namespace: "coding.task", resourceId: "task-1" },
           streamVersion: 5, createdAt: "2026-09-02T08:00:00.000Z", updatedAt: "2026-09-02T08:00:00.000Z",
         },
       ]);
     }
-    return ok({ id: "execution-code", status: "queued" }, 202);
+    return ok(executionFixture({ id: "execution-code", status: "queued" }), 202);
   };
 
   assert.equal(await runCli([
@@ -499,16 +538,12 @@ test("code runner 提供检查、人工确认与状态查询", async () => {
     const url = new URL(input instanceof Request ? input.url : input);
     requests.push({ ...request, search: url.search });
     if (request.path.endsWith("/inspections")) {
-      return ok({
-        requestedPath: "/opt/homebrew/bin/claude",
-        realPath: "/opt/homebrew/bin/claude",
-        sha256: "a".repeat(64),
-      });
+      return ok(runnerInspectionFixture());
     }
     if (request.path.endsWith("/confirmations")) {
-      return ok({ runnerId: "claude-cli", status: "confirmed", streamVersion: 3 });
+      return ok(runnerConfigurationFixture());
     }
-    return ok([{ runnerId: "builtin", status: "ready" }]);
+    return ok([{ runnerId: "builtin", external: false, status: "ready" }]);
   };
   const nextKey = (() => { let id = 0; return () => `runner-key-${++id}`; })();
 
@@ -585,18 +620,9 @@ test("code reconcile 自动读取两个流版本并提交三种人工核对决�
       const request = await captureRequest(input, init);
       requests.push(request);
       if (request.method === "GET") {
-        return ok({
-          executionId: "execution/a",
-          status: "needs_reconciliation",
-          expectedStreamVersion: 4,
-          expectedCodingStreamVersion: 7,
-          evidence: {
-            markCompletedAllowed: decision === "mark_completed",
-            summary: "核对证据摘要",
-          },
-        });
+        return ok(reconciliationFixture(decision));
       }
-      return ok({ decision, cleanupJobId: "cleanup-1" });
+      return ok(reconciliationDecisionFixture(decision));
     };
     assert.equal(await runCli([
       "code", "reconcile", "execution/a", decision,
@@ -644,7 +670,18 @@ test("code reconcile 拒绝未知决定或无效的 Host 版本快照", async ()
   ], { io: output, fetch }), 2);
   assert.equal(calls, 1);
   assert.match(output.err[0] ?? "", /核对决定/);
-  assert.match(output.err[1] ?? "", /人工核对版本/);
+  assert.match(output.err[1] ?? "", /公共契约/);
+});
+
+test("畸形 Host 响应不作为成功结果输出，也不泄漏原始字段", async () => {
+  const output = io();
+  const fetch: typeof globalThis.fetch = async () => ok([{ id: "bad", apiKey: "do-not-expose" }]);
+  assert.equal(await runCli(["inbox", "--json"], { io: output, fetch }), 2);
+  const result = JSON.parse(output.out[0]!);
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, "RESPONSE_CONTRACT_INVALID");
+  assert.equal(result.error.retryable, false);
+  assert.doesNotMatch(JSON.stringify(output), /do-not-expose/);
 });
 
 test("doctor --fix 明确报告无需修复且不发起写请求", async () => {
@@ -699,8 +736,9 @@ test("doctor --fix 仅重探测未就绪连接，保留人工核对和 lock 故�
   const output = io();
   const fetch: typeof globalThis.fetch = async (input, init) => {
     const request = await captureRequest(input, init); requests.push(request);
-    if (request.path === "/v2/model-connections") return ok([{ id: "pending-model", status: "pending", streamVersion: 3 }, { id: "ready-model", status: "ready", streamVersion: 2 }]);
-    if (request.path.endsWith("/probe")) return ok({ status: "ready", streamVersion: 4 });
+    if (request.path === "/v2/model-connections") return ok([modelFixture({ id: "pending-model", status: "pending", streamVersion: 3 }), modelFixture({ id: "ready-model", status: "ready", streamVersion: 2 })]);
+    if (request.path.endsWith("/probe")) return ok(modelFixture({ id: "pending-model", status: "ready", streamVersion: 4 }));
+    if (request.path === "/v2/health") return ok({ core: { status: "healthy" }, plugins: [] });
     return ok({ ready: true, issues: [] });
   };
   assert.equal(await runCli(["doctor", "--fix", "--json"], { io: output, fetch }), 0);
@@ -741,11 +779,13 @@ test("backup 在本地创建、校验并恢复 SQLite 与 CAS 加密快照", asy
       calls.push(["check", fileName]);
       return { file: `/state/backups/${fileName}`, manifest, verified: true };
     },
-    async restore(fileName: string, destinationName: string): Promise<LocalBackupRestoreResult> {
+    async restore(fileName: string, destinationName: string): Promise<LocalStateRestoreResult> {
       calls.push(["restore", fileName, destinationName]);
       return {
-        file: `/state/restore/${destinationName}`,
-        casDirectory: `/state/restore/${destinationName}.cas`,
+        stateRoot: `/state/restore/${destinationName}`,
+        verified: true,
+        file: `/state/restore/${destinationName}/state.sqlite3`,
+        casDirectory: `/state/restore/${destinationName}/cas`,
         manifest,
       };
     },
@@ -757,14 +797,14 @@ test("backup 在本地创建、校验并恢复 SQLite 与 CAS 加密快照", asy
     "backup", "check", "state.mnbackup", "--json",
   ], { io: output, fetch, backup }), 0);
   assert.equal(await runCli([
-    "backup", "restore", "state.mnbackup", "--destination", "restored.sqlite3", "--json",
+    "backup", "restore", "state.mnbackup", "--destination", "restored-v2", "--json",
   ], { io: output, fetch, backup }), 0);
   assert.equal(called, false);
   assert.deepEqual(calls, [
     ["create", "state.mnbackup"],
     ["check", "state.mnbackup"],
     ["check", "state.mnbackup"],
-    ["restore", "state.mnbackup", "restored.sqlite3"],
+    ["restore", "state.mnbackup", "restored-v2"],
   ]);
   assert.deepEqual(JSON.parse(output.out[0] ?? "").data.created.manifest.capabilities, {
     sqlite: true,
@@ -792,7 +832,7 @@ test("--json 原样保留 Host 错误字段", async () => {
 });
 test("签名插件安装需确认宿主权限，更新带精确版本和乐观版本", async () => {
   const requests: CapturedRequest[] = [];
-  const fetch: typeof globalThis.fetch = async (input, init) => { requests.push(await captureRequest(input, init)); return ok({ pluginId: "research" }); };
+  const fetch: typeof globalThis.fetch = async (input, init) => { requests.push(await captureRequest(input, init)); return ok(installationFixture()); };
   assert.equal(await runCli(["plugin", "install", "research", "--release", "1.2.3"], { io: io(), fetch }), 2);
   assert.equal(requests.length, 0);
   assert.equal(await runCli(["plugin", "install", "research", "--release", "1.2.3", "--trust-process"], { io: io(), fetch }), 0);
@@ -807,7 +847,7 @@ test("插件 CLI 从签名字段定义验证参数并调用统一领域接口", 
   const requests: CapturedRequest[] = [];
   const fetch: typeof globalThis.fetch = async (input, init) => {
     const request = await captureRequest(input, init); requests.push(request);
-    if (request.method === "GET") return ok([{ pluginId: "research", cli: { commands: [{
+    if (request.method === "GET") return ok([{ pluginId: "research", version: "1.0.0", navigation: [], cli: { commands: [{
       name: "summarize", commandId: "summarize", description: "整理资料", fields: [
         { name: "topic", type: "string", required: true },
         { name: "limit", type: "number" }, { name: "brief", type: "boolean" },

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 import { readFile, writeFile } from "node:fs/promises";
 import { loadApiContract } from "./lib/api-contract.mjs";
+import { generateResponseSchemas } from "./lib/generate-response-schemas.mjs";
+await generateResponseSchemas({ check: process.argv.includes("--check") });
 const { createOpenApiDocument } = await loadApiContract();
 
 const document = createOpenApiDocument();
@@ -20,8 +22,9 @@ const operations = [];
 const fields = {};
 for (const methods of Object.values(document.paths)) for (const operation of Object.values(methods)) {
   const path = operation.parameters.filter((item) => item.in === "path");
+  const query = operation.parameters.filter((item) => item.in === "query");
   const schema = resolve(operation.requestBody?.content["application/json"].schema);
-  operations.push(`  readonly ${operation.operationId}: { ${path.length ? `readonly path: { ${path.map((item) => `readonly ${item.name}: ${type(item.schema)};`).join(" ")} };` : "readonly path?: Record<string, never>;"}${operation.requestBody ? ` readonly body: ${type(schema)};` : ""} };`);
+  operations.push(`  readonly ${operation.operationId}: { ${path.length ? `readonly path: { ${path.map((item) => `readonly ${item.name}: ${type(item.schema)};`).join(" ")} };` : "readonly path?: Record<string, never>;"}${query.length ? ` readonly query${query.some((item) => item.required) ? "" : "?"}: { ${query.map((item) => `readonly ${item.name}${item.required ? "" : "?"}: ${type(item.schema)};`).join(" ")} };` : ""}${operation.requestBody ? ` readonly body: ${type(schema)};` : ""} };`);
   fields[operation.operationId] = [...path.map((item) => ({ name: item.name, location: "path", required: true, ...item.schema })),
     ...operation.parameters.filter((item) => item.in === "query").map((item) => ({ name: item.name, location: "query", required: item.required ?? false, ...item.schema })),
     ...Object.entries(schema.properties ?? {}).map(([name, value]) => ({ ...value, name, location: "body", required: schema.required?.includes(name) ?? false }))];

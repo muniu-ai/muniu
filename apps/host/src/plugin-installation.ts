@@ -1,7 +1,8 @@
-import { appendKernelEvent } from "@mn/kernel";
+import { appendKernelEvent, expireExecutionApprovals } from "@mn/kernel";
 import { randomUUID } from "node:crypto";
 import type {
   Execution,
+  Job,
   JsonObject,
   PluginInstallation,
   PluginManifestV1,
@@ -20,6 +21,7 @@ import {
   PluginContributionHost,
   PluginLifecycleManager,
   PluginPolicyError,
+  assertResolvedPluginDependencies,
   canonicalJson,
   cloneJson,
   sha256Hex,
@@ -32,6 +34,7 @@ import {
   type RegistryMetadataV1,
   type ResolvedPluginDependency,
   type TrustedRegistryRoot,
+  type VerifiedPluginArtifact,
 } from "@mn/plugin-sdk";
 import { encodePluginWorkspace } from "./plugin-workspace.js";
 
@@ -124,10 +127,16 @@ interface PluginRegistryStateV1 {
   readonly verifiedAt: string;
 }
 
+interface PluginRegistryObservationV1 extends PluginRegistryStateV1 {
+  readonly streamVersion: number;
+}
+const PLUGIN_REGISTRY_OBSERVATION = "plugin-registry-observation";
+
 interface PluginInstallationTombstoneV1 {
   readonly pluginId: string;
   readonly streamVersion: number;
   readonly purgedAt: string;
+  readonly manifest: PluginManifestV1;
 }
 
 type PluginOperationKind = "update" | "disable" | "purge";
@@ -206,10 +215,13 @@ export interface PreparedProductionProjectionUpgrade {
 }
 
 export interface ProductionPluginProjectionManager {
+  loadDefinition?(input: { readonly artifact: VerifiedPluginArtifact; readonly packageBytes: Uint8Array }): Promise<void>;
   replayAndValidate(input: {
     readonly pluginId: string;
     readonly manifest: PluginManifestV1;
     readonly namespace: string;
+    readonly artifact?: VerifiedPluginArtifact;
+    readonly packageBytes?: Uint8Array;
   }): Promise<PreparedProductionProjectionUpgrade>;
   /** 仅删除可由事实事件重建的插件投影；该回调与安装态和 lock 在同一事务内执行。 */
   purge?(input: {
@@ -281,7 +293,15 @@ export class LocalProductionPluginInstaller implements PluginInstallerPort {
         }
         return;
       }
-      const snapshot = await this.#repository.read();
+      let snapshot: LocalSignedPluginRepositorySnapshot | undefined;
+      try { snapshot = await this.#repository.read(); }
+      catch (error) {
+        for (const record of state.records) {
+          await this.#removeRuntimeDefinition(record.manifest.id);
+          await this.#markLoadFailure(record, "failed", policyMessage(error));
+        }
+        return;
+      }
       if (!snapshot) {
         for (const record of state.records) {
           await this.#removeRuntimeDefinition(record.manifest.id);
@@ -296,9 +316,11 @@ export class LocalProductionPluginInstaller implements PluginInstallerPort {
           operation: "offline_start",
           minimumSequence: Math.max(
             state.registry?.sequence ?? 0,
+            state.observation?.sequence ?? 0,
             ...state.records.map((record) => record.registrySequence),
           ),
         });
+        await this.#observeRegistry(registry.metadata.sequence, registry.verifiedAt);
       } catch (error) {
         for (const record of state.records) {
           await this.#removeRuntimeDefinition(record.manifest.id);
@@ -306,6 +328,7 @@ export class LocalProductionPluginInstaller implements PluginInstallerPort {
         }
         return;
       }
+      const artifacts = new Map<string, VerifiedPluginArtifact>();
       for (const record of state.records) {
         if (record.status === "revoked" || record.status === "failed") {
           await this.#removeRuntimeDefinition(record.manifest.id);
@@ -331,6 +354,24 @@ export class LocalProductionPluginInstaller implements PluginInstallerPort {
             installedRelease: releaseIdentity(record),
             packageMetadata: release.packageMetadata,
           });
+          artifacts.set(record.manifest.id, artifact);
+        } catch (error) {
+          const status = error instanceof PluginPolicyError
+            && (error.code === "PLUGIN_RELEASE_REVOKED" || error.code === "RELEASE_KEY_REVOKED")
+            ? "revoked" as const : "failed" as const;
+          await this.#removeRuntimeDefinition(record.manifest.id);
+          await this.#markLoadFailure(record, status, policyMessage(error));
+        }
+      }
+      await this.#invalidateBrokenDependencies();
+      const verifiedState = await this.#readState();
+      for (const record of verifiedState.records) {
+        if (record.status === "failed" || record.status === "revoked") continue;
+        const artifact = artifacts.get(record.manifest.id);
+        const release = findRelease(snapshot, record.manifest.id, record.manifest.version);
+        if (!artifact || !release) throw new Error("插件预检状态不一致");
+        try {
+          await this.#projections?.loadDefinition?.({ artifact, packageBytes: release.packageBytes });
           const definition = await loadVerifiedDefinition(release);
           const registered = this.#contributions.definition(record.manifest.id);
           if (!registered) {
@@ -342,7 +383,7 @@ export class LocalProductionPluginInstaller implements PluginInstallerPort {
               "更换第三方插件 ID",
             );
           } else if (canonicalJson(registered.manifest) !== canonicalJson(artifact.manifest)) {
-            this.#contributions.replaceVerified(artifact, definition);
+            await this.#contributions.reloadVerified(artifact, definition);
           }
           this.#available.add(record.manifest.id);
           if (record.status === "active") this.#active.add(record.manifest.id);
@@ -356,7 +397,26 @@ export class LocalProductionPluginInstaller implements PluginInstallerPort {
           await this.#markLoadFailure(record, status, policyMessage(error));
         }
       }
+      await this.#invalidateBrokenDependencies();
     });
+  }
+
+  async #invalidateBrokenDependencies(): Promise<void> {
+    let records = [...(await this.#readState()).records];
+    let changed: boolean;
+    do {
+      changed = false;
+      for (const record of records) {
+        if (record.status === "failed" || record.status === "revoked") continue;
+        try { assertResolvedPluginDependencies(record.manifest, resolveDependencies(record.manifest, records)); }
+        catch {
+          await this.#removeRuntimeDefinition(record.manifest.id);
+          await this.#markLoadFailure(record, "failed", "插件依赖不可用或与精确版本、摘要不一致");
+          records = records.map(item => item.manifest.id === record.manifest.id ? { ...item, status: "failed" } : item);
+          changed = true;
+        }
+      }
+    } while (changed);
   }
 
   async synchronize(): Promise<void> {
@@ -494,7 +554,7 @@ export class LocalProductionPluginInstaller implements PluginInstallerPort {
       const registry = verifyRegistryMetadata(snapshot.metadata, this.#trustedRoots, {
         now: new Date(this.#now()),
         operation: "install",
-        minimumSequence: state.registry?.sequence,
+        minimumSequence: Math.max(state.registry?.sequence ?? 0, state.observation?.sequence ?? 0),
       });
       const release = findRelease(snapshot, request.pluginId, request.version);
       if (!release) {
@@ -512,14 +572,23 @@ export class LocalProductionPluginInstaller implements PluginInstallerPort {
         );
       }
       const resolvedDependencies = resolveDependencies(release.manifest, state.records);
+      const tombstone = state.tombstones.find((item) => item.pluginId === request.pluginId);
       const artifact = verifyPluginArtifact({
         manifest: release.manifest,
         packageBytes: release.packageBytes,
         registry,
         now: new Date(this.#now()),
         operation: "install",
+        ...(tombstone ? { installedRelease: releaseIdentity(tombstone) } : {}),
         packageMetadata: release.packageMetadata,
       });
+      for (const [eventType, schema] of Object.entries(tombstone?.manifest.eventSchemas ?? {})) {
+        if (!Object.hasOwn(artifact.manifest.eventSchemas, eventType)
+          || canonicalJson(artifact.manifest.eventSchemas[eventType]) !== canonicalJson(schema)) {
+          throw new PluginPolicyError("PLUGIN_UPGRADE_INVALID", "重新安装不能删除或重定义已有事件类型", "保留原事件结构，并为变更声明新事件类型");
+        }
+      }
+      await this.#projections?.loadDefinition?.({ artifact, packageBytes: release.packageBytes });
       const definition = await loadVerifiedDefinition(release);
       preflightDefinition(artifact, definition);
       const lifecycleStore = new InMemoryPluginStateStore(state.records);
@@ -530,7 +599,6 @@ export class LocalProductionPluginInstaller implements PluginInstallerPort {
       });
       const record = lifecycle.installVerified(artifact, resolvedDependencies);
       const timestamp = this.#now();
-      const tombstone = state.tombstones.find((item) => item.pluginId === request.pluginId);
       const installation = installationFromRecord(
         record,
         undefined,
@@ -540,7 +608,17 @@ export class LocalProductionPluginInstaller implements PluginInstallerPort {
       );
       const records = [...state.records, record];
       const lock = createPluginLock(records, registry.metadata.sequence, timestamp);
-      const persisted = await this.#store.transact(this.#tenantId, (transaction) => {
+      if (record.manifest.projections.length && !this.#projections) throw new PluginPolicyError(
+        "PLUGIN_UPGRADE_INVALID", "插件声明了投影，但 Host 未配置投影重放器", "配置投影重放器后重试");
+      const prepared = record.manifest.projections.length ? await this.#projections!.replayAndValidate({ pluginId: request.pluginId, manifest: artifact.manifest,
+        namespace: record.projectionNamespace, artifact, packageBytes: release.packageBytes }) : undefined;
+      if (prepared && prepared.namespace !== record.projectionNamespace) {
+        await prepared.discard();
+        throw new PluginPolicyError("PLUGIN_UPGRADE_INVALID", "投影准备返回了错误命名空间", "检查投影升级实现");
+      }
+      let persisted;
+      try {
+      persisted = await this.#store.transact(this.#tenantId, (transaction) => {
         const previous = context
           ? transaction.getIdempotency(context.idempotencyScope, context.idempotencyKey)
           : undefined;
@@ -580,6 +658,7 @@ export class LocalProductionPluginInstaller implements PluginInstallerPort {
           verifiedAt: registry.verifiedAt,
         } satisfies PluginRegistryStateV1);
         transaction.putProjection(PLUGIN_LOCK_PROJECTION, "current", lock);
+        prepared?.activate(transaction);
         appendKernelEvent(transaction, {
           tenantId: this.#tenantId,
           aggregateType: "pluginInstallation",
@@ -608,6 +687,7 @@ export class LocalProductionPluginInstaller implements PluginInstallerPort {
         }
         return { installation, applied: true };
       });
+      } finally { await prepared?.discard(); }
       if (!persisted.applied) return persisted.installation;
       this.#contributions.registerVerified(artifact, definition);
       this.#available.add(request.pluginId);
@@ -660,7 +740,7 @@ export class LocalProductionPluginInstaller implements PluginInstallerPort {
       const registry = verifyRegistryMetadata(snapshot.metadata, this.#trustedRoots, {
         now: new Date(this.#now()),
         operation: "update",
-        minimumSequence: Math.max(state.registry?.sequence ?? 0, before.registrySequence),
+        minimumSequence: Math.max(state.registry?.sequence ?? 0, state.observation?.sequence ?? 0, before.registrySequence),
       });
       const release = findRelease(snapshot, pluginId, request.version);
       if (!release) {
@@ -716,6 +796,8 @@ export class LocalProductionPluginInstaller implements PluginInstallerPort {
             pluginId,
             manifest: artifact.manifest,
             namespace: planned.projectionNamespace,
+            artifact,
+            packageBytes: release.packageBytes,
           })
           : {
             namespace: planned.projectionNamespace,
@@ -729,6 +811,11 @@ export class LocalProductionPluginInstaller implements PluginInstallerPort {
             "检查投影升级实现",
           );
         }
+
+        const healthWorkspaces = await this.#store.transact(this.#tenantId, transaction =>
+          transaction.listProjections<Workspace>("workspace").filter(workspace => workspace.activePluginIds.includes(pluginId))
+            .map(workspace => encodePluginWorkspace(this.#tenantId, workspace.id)));
+        await assertUpgradeHealth(definition, healthWorkspaces);
 
         const timestamp = this.#now();
         const installation = installationFromRecord(
@@ -825,7 +912,7 @@ export class LocalProductionPluginInstaller implements PluginInstallerPort {
         projectionCommitted = true;
         try {
           if (this.#contributions.definition(pluginId)) {
-            this.#contributions.replaceVerified(artifact, definition);
+            await this.#contributions.reloadVerified(artifact, definition);
           } else {
             this.#contributions.registerVerified(artifact, definition);
           }
@@ -1240,6 +1327,7 @@ export class LocalProductionPluginInstaller implements PluginInstallerPort {
             pluginId,
             streamVersion: result.streamVersion,
             purgedAt: timestamp,
+            manifest: before.manifest,
           } satisfies PluginInstallationTombstoneV1);
           transaction.putProjection(PLUGIN_LOCK_PROJECTION, "current", lock);
           appendKernelEvent(transaction, {
@@ -1495,11 +1583,13 @@ export class LocalProductionPluginInstaller implements PluginInstallerPort {
     readonly tombstones: readonly PluginInstallationTombstoneV1[];
     readonly operations: readonly PluginOperationV1[];
     readonly useLeases: readonly PluginUseLeaseV1[];
+    readonly observation?: PluginRegistryObservationV1;
   }> {
     return this.#store.transact(this.#tenantId, (transaction) => ({
       records: transaction.listProjections<InstalledPluginRecord>(PLUGIN_LIFECYCLE_PROJECTION),
       installations: transaction.listProjections<PluginInstallation>(PLUGIN_INSTALLATION_PROJECTION),
       registry: transaction.getProjection<PluginRegistryStateV1>(PLUGIN_REGISTRY_PROJECTION, "current"),
+      observation: transaction.getProjection<PluginRegistryObservationV1>(PLUGIN_REGISTRY_OBSERVATION, "current"),
       lock: transaction.getProjection<PluginLockV1>(PLUGIN_LOCK_PROJECTION, "current"),
       tombstones: transaction.listProjections<PluginInstallationTombstoneV1>(PLUGIN_TOMBSTONE_PROJECTION),
       operations: transaction.listProjections<PluginOperationV1>(PLUGIN_OPERATION_PROJECTION),
@@ -1512,7 +1602,7 @@ export class LocalProductionPluginInstaller implements PluginInstallerPort {
     status: "failed" | "revoked",
     reason: string,
   ): Promise<void> {
-    if (record.status === status) return;
+    if (record.status === status || record.status === "revoked") return;
     this.#available.delete(record.manifest.id);
     this.#active.delete(record.manifest.id);
     await this.#store.transact(this.#tenantId, (transaction) => {
@@ -1524,7 +1614,7 @@ export class LocalProductionPluginInstaller implements PluginInstallerPort {
         PLUGIN_INSTALLATION_PROJECTION,
         record.manifest.id,
       );
-      if (!current || !installation) return;
+      if (!current || !installation || current.status === status || current.status === "revoked") return;
       const timestamp = this.#now();
       const nextRecord: InstalledPluginRecord = {
         ...current,
@@ -1539,6 +1629,35 @@ export class LocalProductionPluginInstaller implements PluginInstallerPort {
       };
       transaction.putProjection(PLUGIN_LIFECYCLE_PROJECTION, record.manifest.id, nextRecord);
       transaction.putProjection(PLUGIN_INSTALLATION_PROJECTION, record.manifest.id, nextInstallation);
+      for (const execution of transaction.listProjections<Execution>("execution")) {
+        if (execution.pluginId !== record.manifest.id || !["queued", "running", "waiting_approval"].includes(execution.status)) continue;
+        const queued = execution.status === "queued";
+        expireExecutionApprovals(transaction, { tenantId: this.#tenantId, executionId: execution.id,
+          generation: execution.generation, actorId: this.#actorId, occurredAt: timestamp, reason: "plugin_unavailable" });
+        if (queued) {
+          for (const job of transaction.listProjections<Job>("job")) {
+            if (job.payload.executionId !== execution.id || job.status !== "available") continue;
+            if (!transaction.invalidateJob) throw new Error("存储无法撤销待执行插件任务");
+            const failure = { code: "PLUGIN_UNAVAILABLE", message: "插件不可用，任务已停止", retryable: false };
+            const receipt = transaction.invalidateJob({ jobId: job.id, reason: failure, occurredAt: timestamp });
+            transaction.putProjection("job", job.id, { ...job, status: "failed", failure,
+              fencingToken: receipt.fencingToken, streamVersion: job.streamVersion + 1, updatedAt: timestamp });
+            appendKernelEvent(transaction, { tenantId: this.#tenantId, aggregateType: "job", aggregateId: job.id,
+              expectedStreamVersion: job.streamVersion, type: "job.invalidated", actorId: this.#actorId,
+              executionId: execution.id, generation: execution.generation, correlationId: execution.id,
+              publicPayload: { workspaceId: execution.workspaceId, code: failure.code, fencingToken: receipt.fencingToken } });
+          }
+        } else {
+          transaction.putProjection("execution-control", execution.id, { executionId: execution.id,
+            generation: execution.generation, command: "interrupt", reasonCode: "PLUGIN_UNAVAILABLE", requestedAt: timestamp });
+        }
+        transaction.putProjection("execution", execution.id, { ...execution,
+          ...(queued ? { status: "interrupted" } : {}), streamVersion: execution.streamVersion + 1, updatedAt: timestamp });
+        appendKernelEvent(transaction, { tenantId: this.#tenantId, aggregateType: "execution", aggregateId: execution.id,
+          expectedStreamVersion: execution.streamVersion, type: queued ? "execution.interrupted" : "execution.control_requested",
+          actorId: this.#actorId, executionId: execution.id, generation: execution.generation, correlationId: execution.id,
+          publicPayload: { workspaceId: execution.workspaceId, pluginId: execution.pluginId, command: "interrupt", reasonCode: "PLUGIN_UNAVAILABLE" } });
+      }
       appendKernelEvent(transaction, {
         tenantId: this.#tenantId,
         aggregateType: "pluginInstallation",
@@ -1551,6 +1670,7 @@ export class LocalProductionPluginInstaller implements PluginInstallerPort {
         publicPayload: { pluginId: record.manifest.id, reason },
       });
     });
+    await this.#executionControl.interruptAtSafeBoundary(record.manifest.id);
   }
 
   async #removeRuntimeDefinition(pluginId: string): Promise<void> {
@@ -1561,6 +1681,18 @@ export class LocalProductionPluginInstaller implements PluginInstallerPort {
     if (definition && !definition.official) this.#contributions.unregisterVerified(pluginId);
     this.#available.delete(pluginId);
     this.#active.delete(pluginId);
+  }
+
+  async #observeRegistry(sequence: number, verifiedAt: string): Promise<void> {
+    await this.#store.transact(this.#tenantId, tx => {
+      const previous = tx.getProjection<PluginRegistryObservationV1>(PLUGIN_REGISTRY_OBSERVATION, "current");
+      if (previous && previous.sequence > sequence) throw new PluginPolicyError("REGISTRY_SEQUENCE_ROLLBACK", "仓库序号已变化", "刷新受信仓库后重试");
+      if (previous?.sequence === sequence) return;
+      tx.putProjection(PLUGIN_REGISTRY_OBSERVATION, "current", { sequence, verifiedAt, streamVersion: (previous?.streamVersion ?? 0) + 1 });
+      appendKernelEvent(tx, { tenantId: this.#tenantId, aggregateType: "pluginRegistryObservation", aggregateId: "current",
+        expectedStreamVersion: previous?.streamVersion ?? 0, type: "plugin.registry_observed", actorId: this.#actorId,
+        generation: 0, correlationId: randomUUID(), publicPayload: { sequence, verifiedAt } });
+    });
   }
 
   async #exclusive<T>(work: () => Promise<T>): Promise<T> {
@@ -1698,7 +1830,23 @@ async function loadVerifiedDefinition(release: LocalSignedPluginRelease): Promis
   );
 }
 
-function releaseIdentity(record: InstalledPluginRecord) {
+async function assertUpgradeHealth(definition: PluginDefinitionV1, workspaceIds: readonly string[]): Promise<void> {
+  if (!definition.healthCheck || !workspaceIds.length) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      Promise.all(workspaceIds.map(async workspaceId => {
+        const health = await definition.healthCheck!({ workspaceId });
+        if (health.status !== "healthy") throw new Error("degraded");
+      })),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("timeout")), 10_000); }),
+    ]);
+  } catch {
+    throw new PluginPolicyError("PLUGIN_UPGRADE_INVALID", "新版本插件健康检查未通过，已保留当前版本", "检查插件依赖和发布制品");
+  } finally { if (timer) clearTimeout(timer); }
+}
+
+function releaseIdentity(record: Pick<InstalledPluginRecord, "manifest">) {
   return {
     sequence: record.manifest.release.sequence,
     version: record.manifest.version,

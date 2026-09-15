@@ -43,12 +43,17 @@ networkPolicy:
         - { protocol: TCP, port: 5432 }
         - { protocol: TCP, port: 9000 }
         - { protocol: TCP, port: 8080 }
+        - { protocol: TCP, port: 8200 }
 
 postgres:
   existingSecret: muniu-postgres-v2
 
 eventIntegrity:
   existingSecret: muniu-event-integrity-v2
+
+vault:
+  address: http://muniu-kind-vault:8200
+  existingSecret: muniu-vault-v2
 
 s3:
   endpoint: http://muniu-kind-minio:9000

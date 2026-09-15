@@ -107,10 +107,41 @@ CLI 工厂返回 `{ commands: [{ name, commandId, description, fields }] }`。�
 
 Worker 工厂返回 `PluginWorkerV1`，包含 `agents` 和 `tools`。Agent 声明 `id`、`instructions` 与 `toolIds`；工具声明 `id`、`version`、`effectClass`、`prepare` 与 `execute`。Worker 按租户 installation、plugin lock 和 Execution 固定包摘要加载工厂。工具必须先提交规范化参数及资源摘要，再经内核权限与审批路径执行；声明不会授予插件额外权限。
 
-## 数据与记忆
+## 数据与投影
 
-- 领域事件写入插件自己的 namespace，通过 `expectedStreamVersion` 参与乐观并发。
-- SQLite 和 PostgreSQL 投影使用独立 namespace，不能直接修改其他插件表。
+生产 Host 为签名插件命令提供 `context.data`，绑定当前 tenant、工作区、插件和命令幂等键。`append` 的 `key` 是命令内稳定的步骤键；同一次命令重试必须使用相同的步骤键和内容。每次写入都重新检查工作区成员权限、插件状态和包摘要。
+
+```ts
+const event = await context.data!.append({
+  key: "capture",
+  resourceId: "record-1",
+  eventType: "example.recorded",
+  expectedStreamVersion: 0,
+  payload: { title: "待验证的客户问题" },
+});
+const record = await context.data!.get("records", "record-1");
+```
+
+`append` 返回领域事件，`get` 返回投影记录或 `undefined`。事件正文与投影均使用加密 CAS，公开事件只保存身份、版本和引用。命令参数错误或版本冲突不将插件标记为故障。
+
+每个投影 namespace 必须声明 `sqlite` 和 `postgresql` 两个 `.json` 入口，两份定义的规范化内容必须一致。定义格式如下：
+
+```json
+{
+  "schemaVersion": 1,
+  "rules": [
+    { "eventType": "example.recorded", "operation": "replace", "fields": { "name": "/title" }, "defaults": { "status": "pending" } }
+  ],
+  "requiredFields": ["name", "status"]
+}
+```
+
+规则支持 `replace`、`merge` 和 `delete`。`fields` 使用 JSON Pointer；省略时复制事件正文。`defaults` 提供默认字段，`requiredFields` 校验输出。每个事件类型最多一条规则，未匹配的事件不改变该投影。定义最多 1 MiB、256 条规则，不执行 SQL、JavaScript 或远程引用。
+
+`eventSchemas` 支持 `type`、`properties`、`required`、`additionalProperties`、`items`、`enum`、`const`、`anyOf`、`allOf`、`oneOf`，以及数值、字符串长度和数组长度边界。类型使用单个类型名；不支持 `$ref`、正则表达式或未知关键字。结构最多 32 层、4096 个节点，单次领域正文最多 1 MiB。变更结构时新增事件类型，不覆盖原定义。
+
+## 记忆
+
 - 记忆使用 `scopeType + namespace + resourceId`。跨 namespace 默认不可见，只有有效的 `ShareGrant` 才能读取。
 - 敏感字段放入加密 payload 或 CAS，不得复制到公开事件、日志或搜索索引。
 
@@ -124,7 +155,7 @@ Worker 工厂返回 `PluginWorkerV1`，包含 `agents` 和 `tools`。Agent 声�
 4. 在新投影 namespace 重放事件并校验结果。
 5. 原子切换版本与投影，记录审计事件。
 
-插件产生新事件后不支持自动降级。撤销的插件不再接收新任务，活动任务在下一个安全边界进入中断状态。插件健康检查失败时，只将该插件标为 degraded；核心页面和其他插件继续工作。
+插件产生新事件后不支持自动降级。撤销的插件不再接收新任务，活动任务在下一个安全边界进入中断状态，未消费的审批失效。Host 在加载代码前检查完整依赖链；依赖被撤销或不符合固定版本、摘要时，依赖它的插件也停止加载和接收任务，重启不会清除此状态。核心页面和无关插件继续工作。
 
 ## 开发模式
 

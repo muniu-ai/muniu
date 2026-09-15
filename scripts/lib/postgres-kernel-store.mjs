@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { randomUUID } from "node:crypto";
-import { createProjectionFacts } from "@mn/contracts";
+import { createProjectionFacts, CORE_PROJECTION_NAMESPACES, replayCoreProjections } from "@mn/contracts";
 
-import { computeEventDigest, computeEventHmac, POSTGRES_SCHEMA_SQL } from "@mn/storage";
+import { computeEventDigest, computeEventHmac, POSTGRES_SCHEMA_SQL, captureProjectionJournal, prepareJournalRebuild, isJournalNamespace, assertEventPageIntegrity } from "@mn/storage";
 
 const ENTERPRISE_SCHEMA_SQL = `
 ${POSTGRES_SCHEMA_SQL}
@@ -92,8 +92,9 @@ export class PostgresKernelStore {
   #pool;
   #hmacKey;
   #now;
+  #projectionJournal;
 
-  constructor({ pool, hmacKey, now = () => new Date().toISOString() }) {
+  constructor({ pool, hmacKey, now = () => new Date().toISOString(), projectionJournal }) {
     if (!pool?.connect || !pool?.query) throw new TypeError("PostgreSQL pool 无效");
     if (!(hmacKey instanceof Uint8Array) || hmacKey.byteLength < 32) {
       throw new TypeError("事件 HMAC 密钥至少需要 32 字节");
@@ -101,6 +102,12 @@ export class PostgresKernelStore {
     this.#pool = pool;
     this.#hmacKey = Buffer.from(hmacKey);
     this.#now = now;
+    this.#projectionJournal = projectionJournal;
+  }
+
+  configureProjectionJournal(options) {
+    if (this.#projectionJournal) throw new Error("Projection journal is already configured");
+    this.#projectionJournal = options;
   }
 
   async initialize() {
@@ -128,7 +135,7 @@ export class PostgresKernelStore {
 
   async listTenantIds() {
     const result = await this.#pool.query(
-      "select tenant_id from mn_v2.tenant_heads order by tenant_id asc",
+      "select tenant_id from mn_v2.tenant_heads union select tenant_id from mn_v2.events order by tenant_id asc",
     );
     return result.rows.map((row) => String(row.tenant_id));
   }
@@ -373,6 +380,8 @@ export class PostgresKernelStore {
             const failureCode = typeof failure?.code === "string" && failure.code
               ? failure.code
               : "WORKER_FAILED";
+            const nextStatus = input.outcome === "completed" && input.value && typeof input.value === "object"
+              && !Array.isArray(input.value) && input.value.status === "paused" ? "paused" : input.outcome;
             const alreadyTerminal = input.outcome === "failed"
               && (execution.status === "failed"
                 || execution.status === "completed"
@@ -386,9 +395,9 @@ export class PostgresKernelStore {
               }
               const nextExecution = {
                 ...execution,
-                status: input.outcome,
+                status: nextStatus,
                 ...(input.outcome === "failed" ? { failureCode } : {}),
-                finishedAt: input.occurredAt,
+                ...(nextStatus === "paused" ? {} : { finishedAt: input.occurredAt }),
                 streamVersion: execution.streamVersion + 1,
                 updatedAt: input.occurredAt,
               };
@@ -397,7 +406,7 @@ export class PostgresKernelStore {
                 aggregateType: "execution",
                 aggregateId: executionId,
                 expectedStreamVersion: execution.streamVersion,
-                type: `execution.${input.outcome}`,
+                type: `execution.${nextStatus}`,
                 actorId: `worker:${input.workerId}`,
                 executionId,
                 generation: Number.isSafeInteger(execution.generation) ? execution.generation : 1,
@@ -406,7 +415,7 @@ export class PostgresKernelStore {
                   projectionFacts: createProjectionFacts([{ namespace: "execution", id: executionId, value: nextExecution }]),
                   ...(workspaceId ? { workspaceId } : {}),
                   jobId: input.jobId,
-                  status: input.outcome,
+                  status: nextStatus,
                   ...(input.outcome === "failed" ? { failureCode } : {}),
                 },
               });
@@ -446,7 +455,11 @@ export class PostgresKernelStore {
         },
       };
 
-      const result = await work(transaction);
+      const journal = this.#projectionJournal ? captureProjectionJournal(transaction, tenantId, this.#projectionJournal,
+        [...projections].map(([key, value]) => { const [namespace, id] = splitPair(key, "投影"); return { namespace, id, value }; }), [...idempotency.values()]) : undefined;
+      await journal?.prepare();
+      const result = await work(journal?.transaction ?? transaction);
+      await journal?.flush(this.#now);
 
       for (const invalidation of invalidatedJobs) {
         const changed = await client.query(`
@@ -598,14 +611,64 @@ export class PostgresKernelStore {
     }
   }
 
+  async rebuildJournalProjections(tenantId) {
+    return this.#rebuildProjections(tenantId, false);
+  }
+
+  async rebuildProjections(tenantId) {
+    return this.#rebuildProjections(tenantId, true);
+  }
+
+  async #rebuildProjections(tenantId, includeCore) {
+    if (!this.#projectionJournal) throw new Error("Projection journal is not configured");
+    const client = await this.#pool.connect();
+    try {
+      await client.query("begin isolation level serializable");
+      await client.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [tenantId]);
+      const head = await client.query("select next_position from mn_v2.tenant_heads where tenant_id = $1 for update", [tenantId]);
+      const position = safeInteger(head.rows[0]?.next_position ?? 1, "Event position") - 1;
+      const rows = await client.query("select * from mn_v2.events where tenant_id = $1 order by position", [tenantId]);
+      const plan = await prepareJournalRebuild({ ...this.#projectionJournal, tenantId, events: rows.rows.map(rowToEvent),
+        expectedPosition: position, hmacKey: this.#hmacKey });
+      const core = includeCore ? replayCoreProjections(rows.rows.map(rowToEvent), tenantId, this.#hmacKey).records : [];
+      const namespaces = await client.query("select distinct namespace from mn_v2.projections where tenant_id = $1", [tenantId]);
+      for (const row of namespaces.rows) if (isJournalNamespace(row.namespace, this.#projectionJournal)
+        || (includeCore && CORE_PROJECTION_NAMESPACES.includes(row.namespace))) {
+        await client.query("delete from mn_v2.projections where tenant_id = $1 and namespace = $2", [tenantId, row.namespace]);
+      }
+      for (const row of [...plan.projections, ...core]) await client.query(`
+        insert into mn_v2.projections (tenant_id, namespace, projection_key, stream_version, value_json, updated_at)
+        values ($1, $2, $3, $4, $5::jsonb, $6)
+      `, [tenantId, row.namespace, row.id, row.value.streamVersion ?? 0, JSON.stringify(row.value), this.#now()]);
+      await client.query("delete from mn_v2.idempotency where tenant_id = $1 and response_json->>'format' = 'muniu.projection.reference'", [tenantId]);
+      for (const receipt of plan.idempotency) await client.query(`
+        insert into mn_v2.idempotency (tenant_id, idempotency_key, request_hash, response_json, created_at)
+        values ($1, $2, $3, $4::jsonb, $5)
+        on conflict(tenant_id, idempotency_key) do update set request_hash = excluded.request_hash,
+        response_json = excluded.response_json, created_at = excluded.created_at
+      `, [tenantId, idempotencyStorageKey(receipt.scope, receipt.key), receipt.requestDigest, JSON.stringify(receipt.response), receipt.createdAt]);
+      await client.query("commit");
+      return { position, count: plan.projections.length + core.length };
+    } catch (error) { await client.query("rollback"); throw error; }
+    finally { client.release(); }
+  }
+
   async readEvents(tenantId, afterPosition, limit) {
+    return this.#eventPage(tenantId, afterPosition, limit, true);
+  }
+
+  async readEventHistory(tenantId, afterPosition, limit) {
+    return this.#eventPage(tenantId, afterPosition, limit, false);
+  }
+
+  async #eventPage(tenantId, afterPosition, limit, enforceRetention) {
     if (!Number.isSafeInteger(afterPosition) || afterPosition < 0) throw new RangeError("事件游标无效");
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) throw new RangeError("事件页大小无效");
     const head = await this.#pool.query(`
-      select retention_floor from mn_v2.tenant_heads where tenant_id = $1
+      select next_position, retention_floor from mn_v2.tenant_heads where tenant_id = $1
     `, [tenantId]);
     const retentionFloor = safeInteger(head.rows[0]?.retention_floor ?? 1, "保留期游标");
-    if (afterPosition < retentionFloor - 1) {
+    if (enforceRetention && afterPosition < retentionFloor - 1) {
       const error = new Error(`事件游标早于保留位置 ${retentionFloor}`);
       error.code = "EVENT_CURSOR_EXPIRED";
       error.retentionFloor = retentionFloor;
@@ -616,6 +679,8 @@ export class PostgresKernelStore {
       order by position asc limit $3
     `, [tenantId, afterPosition, limit]);
     const events = page.rows.map(rowToEvent);
+    assertEventPageIntegrity(events, tenantId, afterPosition, limit,
+      safeInteger(head.rows[0]?.next_position ?? 1, "Event position") - 1, this.#hmacKey);
     return {
       events,
       nextPosition: events.at(-1)?.position ?? afterPosition,

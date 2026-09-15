@@ -21,6 +21,7 @@ export interface KernelProjectionRuntimeStoreOptions {
   readonly namespace?: string;
   readonly now?: () => string;
   readonly id?: (sequence: number) => string;
+  readonly onCommit?: (transaction: RuntimeProjectionTransaction, records: readonly RuntimeRecord[]) => void | (() => void);
 }
 
 interface RuntimeProjection {
@@ -37,17 +38,23 @@ export class InMemoryRuntimeStore implements RuntimeStore {
   #sequence = 0;
 
   async append(input: RuntimeRecordInput): Promise<RuntimeRecord> {
-    const sequence = ++this.#sequence;
-    const record: RuntimeRecord = {
-      sequence,
-      id: `runtime-${String(sequence)}`,
-      executionId: input.executionId,
-      type: input.type,
-      occurredAt: new Date().toISOString(),
-      payload: cloneJsonObject(input.payload),
-    };
-    this.#records.push(record);
-    return cloneRecord(record);
+    return this.#appendBatch([input])[0]!;
+  }
+
+  async commit(executionId: string, expectedLastSequence: number, inputs: readonly RuntimeRecordInput[]): Promise<readonly RuntimeRecord[] | undefined> {
+    assertRuntimeBatch(executionId, expectedLastSequence, inputs);
+    if ((this.#records.filter(record => record.executionId === executionId).at(-1)?.sequence ?? 0) !== expectedLastSequence) return undefined;
+    return this.#appendBatch(inputs);
+  }
+
+  #appendBatch(inputs: readonly RuntimeRecordInput[]): readonly RuntimeRecord[] {
+    const records = inputs.map((input, index): RuntimeRecord => ({
+      sequence: this.#sequence + index + 1, id: `runtime-${this.#sequence + index + 1}`,
+      executionId: input.executionId, type: input.type, occurredAt: new Date().toISOString(), payload: cloneJsonObject(input.payload),
+    }));
+    this.#records.push(...records);
+    this.#sequence += records.length;
+    return records.map(cloneRecord);
   }
 
   async readExecution(executionId: string): Promise<readonly RuntimeRecord[]> {
@@ -68,6 +75,7 @@ export class KernelProjectionRuntimeStore implements RuntimeStore {
   readonly #namespace: string;
   readonly #now: () => string;
   readonly #id: (sequence: number) => string;
+  readonly #onCommit: KernelProjectionRuntimeStoreOptions["onCommit"];
 
   constructor(options: KernelProjectionRuntimeStoreOptions) {
     if (!options.tenantId.trim()) throw new TypeError("tenant id 不能为空");
@@ -77,33 +85,42 @@ export class KernelProjectionRuntimeStore implements RuntimeStore {
     if (!this.#namespace.trim()) throw new TypeError("runtime projection namespace 不能为空");
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#id = options.id ?? ((sequence) => `runtime-${sequence}`);
+    this.#onCommit = options.onCommit;
   }
 
   async append(input: RuntimeRecordInput): Promise<RuntimeRecord> {
     assertExecutionId(input.executionId);
-    return this.#store.transact(this.#tenantId, (transaction) => {
+    const records = await this.#appendBatch(input.executionId, [input]);
+    return records![0]!;
+  }
+
+  async commit(executionId: string, expectedLastSequence: number, inputs: readonly RuntimeRecordInput[]): Promise<readonly RuntimeRecord[] | undefined> {
+    assertRuntimeBatch(executionId, expectedLastSequence, inputs);
+    return this.#appendBatch(executionId, inputs, expectedLastSequence);
+  }
+
+  async #appendBatch(executionId: string, inputs: readonly RuntimeRecordInput[], expectedLastSequence?: number): Promise<readonly RuntimeRecord[] | undefined> {
+    const committed = await this.#store.transact(this.#tenantId, (transaction) => {
       const current = transaction.getProjection<RuntimeProjection>(
         this.#namespace,
-        input.executionId,
-      ) ?? emptyProjection(input.executionId);
-      assertProjection(current, input.executionId);
-      const sequence = current.nextSequence;
-      const record: RuntimeRecord = {
-        sequence,
-        id: this.#id(sequence),
-        executionId: input.executionId,
-        type: input.type,
-        occurredAt: this.#now(),
-        payload: cloneJsonObject(input.payload),
-      };
-      transaction.putProjection<RuntimeProjection>(this.#namespace, input.executionId, {
-        executionId: input.executionId,
-        streamVersion: current.streamVersion + 1,
-        nextSequence: sequence + 1,
-        records: [...current.records.map(cloneRecord), cloneRecord(record)],
+        executionId,
+      ) ?? emptyProjection(executionId);
+      assertProjection(current, executionId);
+      if (expectedLastSequence !== undefined && (current.records.at(-1)?.sequence ?? 0) !== expectedLastSequence) return undefined;
+      const records = inputs.map((input, index): RuntimeRecord => ({
+        sequence: current.nextSequence + index, id: this.#id(current.nextSequence + index), executionId,
+        type: input.type, occurredAt: this.#now(), payload: cloneJsonObject(input.payload),
+      }));
+      transaction.putProjection<RuntimeProjection>(this.#namespace, executionId, {
+        executionId,
+        streamVersion: current.streamVersion + records.length,
+        nextSequence: current.nextSequence + records.length,
+        records: [...current.records.map(cloneRecord), ...records.map(cloneRecord)],
       });
-      return cloneRecord(record);
+      return { records: records.map(cloneRecord), afterCommit: this.#onCommit?.(transaction, records.map(cloneRecord)) };
     });
+    committed?.afterCommit?.();
+    return committed?.records;
   }
 
   async readExecution(executionId: string): Promise<readonly RuntimeRecord[]> {
@@ -115,6 +132,12 @@ export class KernelProjectionRuntimeStore implements RuntimeStore {
       return projection.records.map(cloneRecord);
     });
   }
+}
+
+export function assertRuntimeBatch(executionId: string, expectedLastSequence: number, inputs: readonly RuntimeRecordInput[]): void {
+  assertExecutionId(executionId);
+  if (!Number.isSafeInteger(expectedLastSequence) || expectedLastSequence < 0) throw new TypeError("Runtime 序号无效");
+  if (inputs.length === 0 || inputs.some(input => input.executionId !== executionId)) throw new TypeError("Runtime 批次必须属于同一 execution 且非空");
 }
 
 function emptyProjection(executionId: string): RuntimeProjection {

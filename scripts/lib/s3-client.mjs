@@ -93,6 +93,7 @@ export class SigV4S3Client {
     const authorization = `AWS4-HMAC-SHA256 Credential=${this.#accessKeyId}/${scope}, SignedHeaders=${names.join(";")}, Signature=${signature}`;
     return this.#fetch(url, {
       method,
+      signal: AbortSignal.timeout(10_000),
       headers: { ...signedHeaders, authorization },
       ...(method === "GET" || method === "HEAD" ? {} : { body: bytes }),
       redirect: "error",
@@ -133,30 +134,48 @@ export class SigV4S3Client {
   }
 
   async listObjects({ bucket, prefix }) {
-    const response = await this.#request("GET", bucket, "", {
-      query: { "list-type": "2", prefix },
-    });
-    if (!response.ok) throw new Error(`S3 LIST 失败：HTTP ${response.status}`);
-    const xml = await response.text();
-    return [...xml.matchAll(/<Contents>([\s\S]*?)<\/Contents>/gu)].map((match) => {
-      const key = match[1].match(/<Key>([\s\S]*?)<\/Key>/u)?.[1];
-      const lastModified = match[1].match(/<LastModified>([\s\S]*?)<\/LastModified>/u)?.[1];
-      if (!key) throw new Error("S3 LIST 返回了缺少 Key 的对象");
-      return {
-        key: xmlDecode(key),
-        ...(lastModified ? { lastModified: new Date(lastModified) } : {}),
-      };
-    });
+    const objects = [];
+    const tokens = new Set();
+    let token;
+    for (let page = 0; page < 10_000; page++) {
+      const response = await this.#request("GET", bucket, "", {
+        query: { "list-type": "2", prefix, ...(token ? { "continuation-token": token } : {}) },
+      });
+      if (!response.ok) throw new Error(`S3 LIST 失败：HTTP ${response.status}`);
+      const xml = await response.text();
+      const truncated = xml.match(/<IsTruncated>(true|false)<\/IsTruncated>/u)?.[1];
+      if (!/<ListBucketResult(?:\s[^>]*)?>/u.test(xml) || !xml.includes("</ListBucketResult>")
+        || !truncated || /<!DOCTYPE|<!ENTITY|<Error\b/u.test(xml)) throw new Error("S3 LIST 响应无效");
+      for (const match of xml.matchAll(/<Contents>([\s\S]*?)<\/Contents>/gu)) {
+        const key = xmlDecode(match[1].match(/<Key>([\s\S]*?)<\/Key>/u)?.[1] ?? "");
+        const lastModified = new Date(match[1].match(/<LastModified>([\s\S]*?)<\/LastModified>/u)?.[1] ?? "");
+        if (!key.startsWith(prefix) || !Number.isFinite(lastModified.getTime())) throw new Error("S3 LIST 对象描述无效");
+        objects.push({ key, lastModified });
+      }
+      if (truncated === "false") return objects;
+      token = xmlDecode(xml.match(/<NextContinuationToken>([\s\S]*?)<\/NextContinuationToken>/u)?.[1] ?? "");
+      if (!token || tokens.has(token)) throw new Error("S3 LIST 分页游标无效");
+      tokens.add(token);
+    }
+    throw new Error("S3 LIST 超过分页上限");
   }
 
   async deleteObjects({ bucket, keys }) {
     if (keys.length === 0) return;
-    const body = Buffer.from(`<Delete>${keys.map((key) => `<Object><Key>${xmlEscape(key)}</Key></Object>`).join("")}<Quiet>true</Quiet></Delete>`);
-    const response = await this.#request("POST", bucket, "", {
-      body,
-      headers: { "content-md5": createHash("md5").update(body).digest("base64") },
-      query: { delete: "" },
-    });
-    if (!response.ok) throw new Error(`S3 DELETE 失败：HTTP ${response.status}`);
+    for (let offset = 0; offset < keys.length; offset += 1000) {
+      const batch = keys.slice(offset, offset + 1000);
+      const body = Buffer.from(`<Delete>${batch.map((key) => `<Object><Key>${xmlEscape(key)}</Key></Object>`).join("")}<Quiet>true</Quiet></Delete>`);
+      const response = await this.#request("POST", bucket, "", {
+        body,
+        headers: { "content-md5": createHash("md5").update(body).digest("base64") },
+        query: { delete: "" },
+      });
+      if (!response.ok) throw new Error(`S3 DELETE 失败：HTTP ${response.status}`);
+      const xml = await response.text();
+      if (!/^\s*(?:<\?xml[^>]*\?>\s*)?<DeleteResult(?:\s[^>]*)?(?:\s*\/>|>[\s\S]*<\/DeleteResult>)\s*$/u.test(xml)
+        || /<!DOCTYPE|<!ENTITY|<Error\b/u.test(xml)) {
+        throw new Error("S3 DELETE 未确认全部对象删除；请核对结果");
+      }
+    }
   }
 }

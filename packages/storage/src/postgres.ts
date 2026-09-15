@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import type { EventAppendRequest, JsonObject, JsonValue, KernelEventV1 } from "@mn/contracts";
 import { createProjectionFacts } from "@mn/contracts";
 
-import { computeEventDigest, computeEventHmac } from "./integrity.js";
+import { computeEventDigest, computeEventHmac, assertEventPageIntegrity } from "./integrity.js";
 import {
   CursorExpiredError,
   IdempotencyConflictError,
@@ -529,6 +529,14 @@ export class PostgresStorage implements StoragePort {
   }
 
   async readEvents(tenantId: string, options: EventReadOptions) {
+    return this.#eventPage(tenantId, options, true);
+  }
+
+  async readEventHistory(tenantId: string, afterPosition: number, limit: number) {
+    return this.#eventPage(tenantId, { afterPosition, limit }, false);
+  }
+
+  async #eventPage(tenantId: string, options: EventReadOptions, enforceRetention: boolean) {
     if (!Number.isInteger(options.afterPosition) || options.afterPosition < 0) {
       throw new RangeError("afterPosition must be a non-negative integer");
     }
@@ -541,7 +549,7 @@ export class PostgresStorage implements StoragePort {
     const retentionFloor = headResult.rows[0]
       ? safeInteger(headResult.rows[0].retention_floor, "Retention floor")
       : 1;
-    if (options.afterPosition < retentionFloor - 1) {
+    if (enforceRetention && options.afterPosition < retentionFloor - 1) {
       throw new CursorExpiredError(tenantId, retentionFloor);
     }
     const result = await this.#pool.query(`
@@ -549,6 +557,8 @@ export class PostgresStorage implements StoragePort {
       order by position asc limit $3
     `, [tenantId, options.afterPosition, options.limit]);
     const events = result.rows.map(rowToEvent);
+    assertEventPageIntegrity(events, tenantId, options.afterPosition, options.limit,
+      safeInteger(headResult.rows[0]?.next_position ?? 1, "Event position") - 1, this.#hmacKey);
     return {
       events,
       nextPosition: events.at(-1)?.position ?? options.afterPosition,
@@ -578,10 +588,7 @@ export class PostgresStorage implements StoragePort {
         on conflict (tenant_id) do update set
           retention_floor = greatest(mn_v2.tenant_heads.retention_floor, excluded.retention_floor)
       `, [tenantId, floorPosition]);
-      await client.query("delete from mn_v2.events where tenant_id = $1 and position < $2", [
-        tenantId,
-        floorPosition
-      ]);
+      // SSE expiry is independent from the retention of authoritative facts.
       await client.query("commit");
     } catch (error) {
       await client.query("rollback");
@@ -1355,6 +1362,8 @@ export class PostgresStorage implements StoragePort {
       ? failureObject.code
       : "WORKER_FAILED";
     const executionStatus = String(context.execution.status);
+    const nextStatus = outcome === "completed" && value && typeof value === "object" && !Array.isArray(value)
+      && "status" in value && value.status === "paused" ? "paused" : outcome;
     if (outcome === "failed" && (executionStatus === "failed"
       || executionStatus === "completed"
       || (executionStatus === "cancelled" && failureCode === "EXECUTION_CANCELLED"))) {
@@ -1368,9 +1377,9 @@ export class PostgresStorage implements StoragePort {
     }
     const updatedExecution: JsonObject = {
       ...context.execution,
-      status: outcome,
+      status: nextStatus,
       ...(outcome === "failed" ? { failureCode } : {}),
-      finishedAt: occurredAt,
+      ...(nextStatus === "paused" ? {} : { finishedAt: occurredAt }),
       streamVersion: context.executionStreamVersion + 1,
       updatedAt: occurredAt
     };
@@ -1379,7 +1388,7 @@ export class PostgresStorage implements StoragePort {
       aggregateType: "execution",
       aggregateId: context.executionId,
       expectedStreamVersion: context.executionStreamVersion,
-      type: `execution.${outcome}`,
+      type: `execution.${nextStatus}`,
       actorId: `worker:${workerId}`,
       executionId: context.executionId,
       generation: context.generation,
@@ -1389,7 +1398,7 @@ export class PostgresStorage implements StoragePort {
 
         workspaceId: context.workspaceId,
         jobId,
-        status: outcome,
+        status: nextStatus,
         ...(outcome === "failed" ? { failureCode } : {})
       }
     }, occurredAt);

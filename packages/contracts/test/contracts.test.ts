@@ -59,6 +59,9 @@ test("批准只匹配同一代、工具、参数、资源和权限承诺", () =>
   assert.equal(approvalStillMatches(intent, { ...intent }), true);
   assert.equal(approvalStillMatches(intent, { ...intent, generation: 3 }), false);
   assert.equal(approvalStillMatches(intent, { ...intent, resourcesDigest: "changed" }), false);
+  assert.equal(approvalStillMatches(intent, { ...intent, id: "another-call" }), false);
+  assert.equal(approvalStillMatches(intent, { ...intent, effectClass: "financial" }), false);
+  assert.equal(approvalStillMatches(intent, { ...intent, expiresAt: "2099-01-01T00:00:00.000Z" }), false);
   assert.equal(isPotentiallyAutoApprovable("local_reversible_write"), true);
   assert.equal(isPotentiallyAutoApprovable("external_side_effect"), false);
   assert.equal(isPotentiallyAutoApprovable("unknown"), false);
@@ -214,7 +217,7 @@ test("OpenAPI 目录只有 v2，所有写操作要求幂等键", () => {
   const officialProductMutations = {
     createOpcOpportunity: "CreateProductObjectMutation",
     createCodingRepository: "CreateProductObjectMutation",
-    createCodingTask: "CreateProductObjectMutation",
+    createCodingTask: "CreateCodingTaskMutation",
     runOpcReadOnlySample: "RunReadOnlySampleMutation",
     runCodingReadOnlySample: "RunReadOnlySampleMutation",
   };

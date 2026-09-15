@@ -93,6 +93,11 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .field textarea { padding: 11px 12px; resize: vertical; }
 .field small { color: var(--muted); font-size: 11px; }
 .form-stack { display: grid; gap: 18px; }
+.model-connections .field select { min-height: 42px; padding: 8px 12px; border: 1px solid #cfd5ce; border-radius: 9px; background: #fff; color: var(--ink); }
+.model-connection-list { display: grid; gap: 12px; margin: 18px 0; }
+.model-connection-list article { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 12px; border: 1px solid #cfd5ce; border-radius: 9px; }
+.model-connection-list article > div { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.model-connection-list small { width: 100%; overflow-wrap: anywhere; color: var(--muted); }
 .check-row { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; }
 .check-row input { width: 17px; height: 17px; margin: 1px 0 0; accent-color: var(--accent); }
 .check-row span, .check-row strong, .check-row small { display: block; }
@@ -175,6 +180,13 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .skill-catalog-card details p { margin: 8px 0 0; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; overflow-wrap: anywhere; }
 .quick-capture select { height: 31px; border: 0; border-radius: 7px; color: #566158; background: var(--surface-soft); font-size: 11px; font-weight: 650; }
 .quick-capture .primary-button { min-height: 32px; }
+.quick-capture select { max-width: 180px; }
+.repository-manager > p { color: var(--muted); line-height: 1.6; }
+.repository-manager ul { padding: 0; list-style: none; }
+.repository-manager li { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 8px 0; }
+.repository-manager li span { color: var(--muted); overflow-wrap: anywhere; }
+.repository-manager form { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
+.repository-manager .field { flex: 1; min-width: 220px; }
 .toast, .degraded-banner { display: flex; gap: 7px; align-items: center; margin: 9px 24px 0; padding: 8px 12px; border-radius: 8px; font-size: 11px; }
 .toast { color: #355e46; background: var(--green-soft); }
 .toast button { margin-left: auto; border: 0; color: inherit; background: transparent; cursor: pointer; font-size: 10px; }
@@ -469,6 +481,8 @@ pre { overflow: auto; padding: 10px; border-radius: 7px; color: #dce5dc; backgro
 .coding-result-grid > section { min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 9px; }
 .diff-summary, .approval-summary { display: flex; gap: 8px; align-items: flex-start; color: var(--blue); }
 .diff-summary p, .approval-summary p { margin: 1px 0 0; color: #59635b; font-size: 11px; line-height: 1.45; }
+.coding-diff { max-height: 360px; white-space: pre; }
+.agent-controls { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .check-list { display: grid; gap: 5px; }
 .check-list p { display: flex; gap: 6px; align-items: center; margin: 0; }
 .check-list p.pass span { color: var(--green); }
@@ -522,3 +536,18 @@ pre { overflow: auto; padding: 10px; border-radius: 7px; color: #dce5dc; backgro
   .opc-agent-composer > div { align-items: stretch; flex-direction: column; }
   .opc-lifecycle footer { align-items: stretch; flex-direction: column; }
 }
+
+.runner-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 16px; }
+.runner-card { min-width: 0; padding: 18px; border: 1px solid var(--line); border-radius: 12px; }
+.runner-card label { display: grid; gap: 7px; margin: 12px 0; font-size: 13px; }
+.runner-card p, .runner-card small { font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.runner-card input:not([type="checkbox"]), .runner-choice select { width: 100%; min-width: 0; padding: 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: inherit; }
+.runner-card .runner-review { display: flex; align-items: start; }
+.runner-inspection dd { margin: 5px 0 12px; overflow-wrap: anywhere; font-family: monospace; font-size: 12px; }
+.runner-inspection dt { font-size: 12px; }
+.opc-agent-composer > .runner-choice { display: grid; gap: 6px; margin-bottom: 12px; }
+.runner-choice label { display: grid; grid-template-columns: auto minmax(160px, 250px); align-items: center; gap: 12px; }
+.agent-metering { display: grid; gap: 7px; padding: 14px 20px; border-top: 1px solid var(--line); font-size: 13px; }
+.agent-metering p { margin: 0; }
+.agent-metering small, .agent-metering details { color: var(--muted); line-height: 1.6; }
+.agent-pause-reason { padding: 0 20px; font-size: 13px; line-height: 1.7; }

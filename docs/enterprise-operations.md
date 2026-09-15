@@ -35,7 +35,9 @@ helm upgrade --install muniu deploy/helm/muniu \
 
 不要把数据库口令、S3 secret 或模型 API Key 写入 values、镜像、ConfigMap 或仓库。Host 与 Worker 使用不同 ServiceAccount。Candidate Pod 不自动挂载 token，不使用 `hostPath`，不接收模型凭据或宿主 secret。
 
-Host 通过 `MN_VAULT_TRANSIT_MOUNT` 和 `MN_VAULT_TRANSIT_KEY` 选择专用于 0.2 受保护数据的 Transit key。Vault policy 只授予该 key 的 `encrypt` 与 `decrypt`，token 由 Secret 或工作负载身份注入。未配置 Vault/KMS 时，普通附件仍可用，但受保护附件上传与读取失败关闭且不产生 Asset 事实事件。
+Host 通过 `MN_VAULT_TRANSIT_MOUNT` 和 `MN_VAULT_TRANSIT_KEY` 指定 0.2 的 Transit mount 与密钥名前缀。每份受保护 payload 使用独立、不可导出的 Transit key，名称为前缀加 UUID；不共用可恢复已删除内容的包装密钥。令牌只允许访问该前缀下的 `keys`、`keys/*/config`、`encrypt` 和 `decrypt` 路径，分别授予创建、查询、配置、删除和加解密所需权限，不授予其他 mount 的管理权限。
+
+令牌由 Secret 或工作负载身份注入。就绪检查通过只读健康请求和 `sys/capabilities-self` 查询验证连接及权限，不创建探测密钥。缺少配置、Vault 被封印、令牌失效或权限不足时返回 `KMS_UNAVAILABLE`；不再继续读取加密插件投影。普通产品变更的事实日志和幂等结果也需要 KMS，不能绕过加密使部署通过验收。Vault API 说明见[健康检查](https://developer.hashicorp.com/vault/api-docs/system/health)和[令牌权限查询](https://developer.hashicorp.com/vault/api-docs/system/capabilities-self)。
 
 第三方插件应在构建阶段放入镜像内只读目录。Helm 的 `pluginRepository.enabled` 开启后，必须填写 `indexFile`、`trustedRootsFile` 与 `digest`；对应路径不能来自可变网络挂载。Host 不直接 import 文件路径，而是在仓库元数据、manifest、实际模块摘要和包策略全部通过后执行已读取的模块字节。仓库配置不完整、任一租户 lock 无法恢复或副本缺包时，readiness 失败。插件代码与 Host 进程权限等价，不是沙箱。
 
@@ -75,11 +77,33 @@ Worker 每秒重新检查数据库中的 engine/plugin lock。数据库不可达
 - plugin lock、engine lock、签名信任根和撤销元数据；
 - Vault/KMS key 标识、恢复权限和轮换记录，但不导出明文密钥。
 
-恢复演练先在隔离环境完成。按事件摘要链验证数据库，从 CAS 抽样重新计算 SHA-256，再重建投影并比较 checkpoint。当前核心元数据可重建，产品投影尚未全部具备完整事实来源；备份必须保留产品投影，不能只备份 events 表。KMS 不可用或事件 HMAC 失败时应停止上线验收，不能跳过校验。
+恢复演练先在隔离环境完成。核心元数据来自事件内的投影事实；产品查询表与幂等结果来自加密事实日志及 CAS 引用。仅备份 events 表不足以恢复加密内容，必须同时保留对应 CAS 和 KMS。不得手工清空运行中的查询表。KMS 不可用或事件 HMAC 失败时停止维护，不能跳过校验。
+
+### 离线维护入口
+
+`npm run maintenance:enterprise` 提供 `verify`、`rebuild` 和 `gc`。维护前停止所有共用该数据库和 CAS 前缀的 Host、Worker 及其他写入程序。数据库必须专用于这一份木牛部署，CAS 前缀不能与另一份数据库共用。运行账号需要目标数据库所有者权限、连接同一主库的 `postgres` 数据库权限，以及执行 `pg_control_system()` 的权限。管理连接和数据连接会比较实例标识、启动时间与主库状态；维护不会终止其他数据库连接。
+
+沿用 Host 的 `MN_POSTGRES_URL`、`MN_EVENT_HMAC_KEY`、S3 和 Vault 环境配置，另设 `MN_MAINTENANCE_ACTOR` 为运维操作者标识。密钥只通过私有环境注入，不写入命令行。完成构建后执行以下命令，将 `DATABASE` 替换为连接 URL 中的实际数据库名：
+
+```bash
+npm run maintenance:enterprise -- verify --offline --database DATABASE
+npm run maintenance:enterprise -- rebuild --offline --database DATABASE
+npm run maintenance:enterprise -- gc --offline --database DATABASE
+```
+
+`verify` 校验所有租户的完整 HMAC 事件链、事件头、核心事实、加密投影事实和 CAS 内容，不改写查询表。`rebuild` 先完成全部校验，再逐租户原子重建查询投影与幂等结果，不重放物理 Job 或外部副作用。`gc` 同样先完成校验，只清理未被任何历史事实引用且超过保留期的 CAS 对象；默认保留 7 天，`MN_CAS_ORPHAN_RETENTION_DAYS` 可设为 1 至 36500 天。空数据库不能授权清理 CAS。输出为不含业务内容的 JSON 汇总；重建和清理写入维护请求与完成事件。
+
+维护先检查其他连接和预备事务，再临时禁用新连接并重复检查。PostgreSQL 的 `ALLOW_CONNECTIONS false` 会拒绝新连接，见 [ALTER DATABASE](https://www.postgresql.org/docs/16/sql-alterdatabase.html)。成功后重新开放连接。开始维护后发生校验失败、连接中断或进程崩溃时，数据库保持离线；不自动重试，也不重新投递结果未知的删除。
+
+故障处理时继续保持 Host/Worker 停止。管理员从另一数据库连接，核对维护事件与对象存储状态并修复原因，再针对原目标执行 `ALTER DATABASE "实际数据库名" ALLOW_CONNECTIONS true`，随后重新执行 `verify`。只有完整校验通过后才启动业务进程。单租户超过 100 万事件时，当前入口拒绝维护，不截断事件后继续清理。
+
+当前 GC 由操作者在停机维护窗口显式执行，不提供在线定时清理。S3 批量删除每批最多 1000 个对象，并检查 HTTP 200 响应中的单对象错误；版本化 bucket 的历史对象版本仍遵循存储管理员配置的保留策略。参见 [S3 列表分页](https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html)和[批量删除](https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjects.html)。
 
 ## 保留与删除
 
-生产 profile 必须分别配置业务数据、执行、成果和审计保留期。当前删除移除活动数据库中的密钥记录并写入 tombstone；审计只保留操作者、时间、对象摘要与删除原因。历史备份、WAL 和存储快照中的 wrapped DEK 不会被该事务抹除，恢复时必须核对后续删除记录。跨备份密钥撤销尚未实现，不能宣称不可恢复删除。
+生产 profile 必须分别配置业务数据、执行、成果和审计保留期。删除在同一事务中写入 tombstone 与密钥撤销请求；后台销毁对应的独立 Transit key。销毁完成后，即使恢复旧数据库、WAL 或含 wrapped DEK 的备份，也不能通过当前 KMS 解密该数据。销毁请求超时或结果未知时保留人工核对项，不自动重发；收件箱提供显式核对和重新发起删除。只有 KMS 确认销毁后，才能显示密钥删除完成。
+
+恢复 KMS 自身在删除前的备份可能恢复已经销毁的密钥。KMS 管理员必须保留并执行后续撤销记录；上述机制不抵御宿主或 KMS 管理员失陷，也不能召回已导出的明文。
 
 撤销 share grant 立即阻止后续读取，并使派生记忆失效。已经发送到模型或外部服务的数据无法召回，操作界面与审计记录必须说明这一限制。
 
@@ -106,4 +130,6 @@ npm run verify:kind
 
 Kind 使用导入后的 OCI manifest 摘要固定候选镜像，并校验该 manifest 引用本次构建的配置摘要；不能把 Docker image ID 当成 manifest 摘要。Calico 清单按固定版本经 IPv4 完整下载后应用，下载采用有限重试。
 
-Compose fixture 的对外端口只绑定 `127.0.0.1`。PostgreSQL、S3、认证 fixture 和 Host 另接测试客户端网络，以支持 Docker Desktop 端口映射；Worker 只接内部网络。测试使用独立的 `COMPOSE_PROJECT_NAME`，清理时只删除该项目的测试容器和卷。
+Compose fixture 的对外端口只绑定 `127.0.0.1`。PostgreSQL、S3、Vault、认证 fixture 和 Host 另接测试客户端网络，以支持 Docker Desktop 端口映射；Worker 只接内部网络。测试使用独立的 `COMPOSE_PROJECT_NAME`，清理时只删除该项目的测试容器和卷。
+
+Compose 与 Kind 的 Vault 使用固定版本、摘要和公开测试令牌，仅用于一次性集成测试。`-dev` 使用内存存储，重启会丢失密钥，绝不能用于生产。连接中断测试通过暂停和恢复进程保留内存密钥；它不构成 Vault 持久化重启或集群容灾证明。参见 [Vault dev server 边界](https://developer.hashicorp.com/vault/docs/concepts/dev-server)。

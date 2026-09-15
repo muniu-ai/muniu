@@ -99,6 +99,8 @@ export interface KernelTransaction {
 export interface KernelStore {
   transact<T>(tenantId: string, work: (transaction: KernelTransaction) => T): Promise<T>;
   readEvents(tenantId: string, afterPosition: number, limit: number): Promise<EventPage>;
+  /** Internal authenticated history for rebuilding projections, independent of SSE cursor retention. */
+  readEventHistory?(tenantId: string, afterPosition: number, limit: number): Promise<EventPage>;
   /** 企业 Host 用于启动时逐租户恢复并校验插件 lock。 */
   listTenantIds?(): Promise<readonly string[]>;
 }
@@ -266,6 +268,10 @@ export class InMemoryKernelStore implements KernelStore {
       nextPosition: events.at(-1)?.position ?? afterPosition,
       retentionFloor: floor,
     };
+  }
+
+  async readEventHistory(tenantId: string, afterPosition: number, limit: number): Promise<EventPage> {
+    return this.readEvents(tenantId, afterPosition, limit);
   }
 
   async listTenantIds(): Promise<readonly string[]> {

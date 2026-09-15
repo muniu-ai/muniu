@@ -4,6 +4,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { computeEventHmac } from "@mn/storage";
+import { FileCas, InMemoryKeyProvider, SqliteStorage } from "@mn/storage";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { PostgresKernelStore } from "../lib/postgres-kernel-store.mjs";
 
@@ -30,6 +34,74 @@ class FixtureClient {
 
   release() {}
 }
+
+test("PostgreSQL rebuild authenticates ciphertext and atomically replaces encrypted references", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mn-pg-rebuild-"));
+  const hmacKey = Buffer.alloc(32, 21);
+  const projectionJournal = { cas: new FileCas({ rootDir: join(root, "cas") }),
+    keyProvider: new InMemoryKeyProvider(Buffer.alloc(32, 20)), namespaces: ["fixture"] };
+  const source = new SqliteStorage({ databaseFile: join(root, "source.sqlite"), hmacKey, projectionJournal });
+  try {
+    await source.transact("a", tx => {
+      tx.putProjection("fixture", "one", { content: "private replay", streamVersion: 1 });
+      tx.putIdempotency({ tenantId: "a", scope: "fixture", key: "one", requestDigest: "request",
+        response: { content: "private replay" }, createdAt: new Date().toISOString() });
+      tx.appendEvent({ tenantId: "a", aggregateType: "fixture", aggregateId: "one", expectedStreamVersion: 0,
+        type: "fixture.created", actorId: "owner", generation: 0, correlationId: "create", publicPayload: {} });
+    });
+    const events = (await source.readEvents("a", 0, 100)).events;
+    const rows = events.map(event => ({ tenant_id: event.tenantId, position: event.position, event_id: event.id,
+      aggregate_type: event.aggregateType, aggregate_id: event.aggregateId, stream_version: event.streamVersion,
+      event_type: event.type, occurred_at: event.occurredAt, actor_id: event.actorId, execution_id: event.executionId ?? null,
+      generation: event.generation, causation_id: event.causationId ?? null, correlation_id: event.correlationId,
+      public_payload: event.publicPayload, protected_payload_ref: event.protectedPayloadRef ?? null,
+      previous_digest: event.previousDigest ?? null, digest: event.digest, hmac: event.hmac }));
+    const client = new FixtureClient();
+    const query = client.query.bind(client);
+    client.query = async (sql, args) => {
+      await query(sql, args);
+      if (sql.includes("select next_position")) return { rows: [{ next_position: events.length + 1, retention_floor: 2 }] };
+      if (sql.includes("select * from mn_v2.events")) return { rows };
+      if (sql.includes("select distinct namespace")) return { rows: [{ namespace: "fixture" }] };
+      return { rows: [] };
+    };
+    const store = new PostgresKernelStore({ pool: { query: client.query, connect: async () => client }, hmacKey, projectionJournal });
+    assert.equal(typeof store.rebuildJournalProjections, "function");
+    assert.equal(typeof store.readEventHistory, "function");
+    await assert.rejects(store.readEvents("a", 0, 100), error => error.code === "EVENT_CURSOR_EXPIRED");
+    assert.deepEqual((await store.readEventHistory("a", 0, 100)).events.map(event => event.id), events.map(event => event.id));
+    assert.equal((await store.rebuildJournalProjections("a")).count, 1);
+    assert.equal(client.queries.at(-1).sql, "commit");
+    assert.equal(JSON.stringify(client.queries).includes("private replay"), false);
+    const receiptInsert = client.queries.find(query => query.sql.startsWith("insert into mn_v2.idempotency"));
+    assert.equal(receiptInsert.parameters[1], `kernel:${Buffer.from(JSON.stringify(["fixture", "one"])).toString("base64url")}`);
+    client.queries = [];
+    projectionJournal.cas.get = async () => { throw new Error("fixture corrupt ciphertext"); };
+    await assert.rejects(store.rebuildJournalProjections("a"), /corrupt ciphertext/);
+    assert.equal(client.queries.some(query => query.sql.startsWith("delete from")), false);
+    assert.equal(client.queries.at(-1).sql, "rollback");
+  } finally { await source.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("PostgreSQL commits protected product facts in the same transaction as projections", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mn-postgres-journal-"));
+  const client = new FixtureClient();
+  const store = new PostgresKernelStore({ pool: { query: client.query.bind(client), connect: async () => client },
+    hmacKey: Buffer.alloc(32, 18), projectionJournal: {
+      cas: new FileCas({ rootDir: join(root, "cas") }), keyProvider: new InMemoryKeyProvider(Buffer.alloc(32, 19)), namespaces: ["fixture"],
+    } });
+  try {
+    await store.transact("tenant-a", tx => {
+      tx.putProjection("fixture", "one", { content: "private original" });
+      tx.appendEvent({ tenantId: "tenant-a", aggregateType: "fixture", aggregateId: "one", expectedStreamVersion: 0,
+        type: "fixture.captured", actorId: "human", generation: 0, correlationId: "capture", publicPayload: {} });
+    });
+    const inserts = client.queries.filter(query => query.sql.includes("insert into mn_v2.events"));
+    assert.equal(inserts.length, 2, "product write must include a durable protected fact");
+    assert.equal(JSON.stringify(inserts).includes("private original"), false);
+    assert.equal(client.queries.at(-1).sql, "commit");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 test("read-only Kernel queries do not rewrite tenant or unchanged aggregate heads", async () => {
   const client = new FixtureClient();
@@ -127,7 +199,7 @@ test("PostgreSQL Kernel store lists tenants for plugin lock readiness", async ()
   };
   const store = new PostgresKernelStore({ pool, hmacKey: Buffer.alloc(32, 11) });
   assert.deepEqual(await store.listTenantIds(), ["tenant-a", "tenant-b"]);
-  assert.match(queries[0], /from mn_v2\.tenant_heads order by tenant_id asc/u);
+  assert.match(queries[0], /from mn_v2\.tenant_heads union select tenant_id from mn_v2\.events order by tenant_id asc/u);
 });
 
 test("PostgreSQL retries only confirmed transaction aborts, never an unknown commit outcome", async () => {

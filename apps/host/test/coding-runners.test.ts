@@ -321,6 +321,33 @@ test("Coding builtin 仍为默认 Runner，非 Coding turn 不接受 runnerId", 
   await host.close();
 });
 
+test("工作区成员可以查看 Runner，只有 owner 可以检查或确认二进制", async t => {
+  const store = new InMemoryKernelStore();
+  let principalId = "owner";
+  const host = await createAgentOsHost({ profile: "enterprise", store, secretStore: secrets,
+    identityResolver: () => ({ tenantId: "tenant-a", principalId, organizationRoles: principalId === "owner" ? ["organization_admin"] : [] }) });
+  t.after(() => host.close());
+  const workspace = (await body(await host.dispatch(mutation("/v2/workspaces", {
+    name: "团队执行", viewMode: "business", pluginIds: ["coding", "runner-claude-cli"],
+  }, "workspace-for-roles")))).data;
+  for (const role of ["operator", "reviewer", "viewer"]) {
+    await store.transact("tenant-a", tx => tx.putProjection("membership", `${workspace.id}:${role}`, {
+      id: `${workspace.id}:${role}`, tenantId: "tenant-a", workspaceId: workspace.id, principalId: role,
+      organizationRoles: [], workspaceRole: role, streamVersion: 1, createdAt: workspace.createdAt, updatedAt: workspace.updatedAt,
+    }));
+    principalId = role;
+    assert.equal((await host.dispatch(new Request(`http://host.test/v2/plugins/coding/runners?workspaceId=${workspace.id}`))).status, 200);
+    for (const action of ["inspections", "confirmations"]) {
+      assert.equal((await host.dispatch(mutation(`/v2/plugins/coding/runners/claude-cli/${action}`, {
+        workspaceId: workspace.id, binaryPath: INSPECTION.realPath, ...(action === "confirmations"
+          ? { expectedStreamVersion: 0, version: VERSION, sha256: INSPECTION.sha256 } : {}),
+      }, `${role}-${action}`))).status, 403);
+    }
+  }
+  principalId = "outsider";
+  assert.equal((await host.dispatch(new Request(`http://host.test/v2/plugins/coding/runners?workspaceId=${workspace.id}`))).status, 403);
+});
+
 test("企业 Host 没有受信的同节点身份检查器时拒绝外部 Runner", async () => {
   const host = await createAgentOsHost({
     profile: "enterprise",

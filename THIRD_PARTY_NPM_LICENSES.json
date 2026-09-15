@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "packageLockSha256": "c4411d103609ce88e3d2ce91738d6ed10369f45090258aae1b680ed040f39df3",
+  "packageLockSha256": "bf5cf30c91e00bad229b9f3f5f29b6b065d7b9e615fca0293c13acb20e1ccfe4",
   "packages": [
     {
       "name": "@algolia/abtesting",

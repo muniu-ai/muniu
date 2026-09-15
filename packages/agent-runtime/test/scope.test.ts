@@ -2,6 +2,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
+import { Context } from "@deepseek-ai/cordis";
 
 import {
   AgentScope,
@@ -18,6 +19,29 @@ function llm(id: string, label: string): LlmContribution {
     },
   };
 }
+
+test("Agent Scope belongs to its Cordis composition root and releases scoped effects", async () => {
+  const root = new Context();
+  const tenant = AgentScope.tenant("tenant-a", 1, root);
+  const thread = tenant.createChild("workspace", "workspace-a").createChild("thread", "thread-a");
+  const other = tenant.createChild("workspace", "workspace-b").createChild("thread", "thread-b");
+  await Promise.all([thread.ready, other.ready]);
+  const contextOf = (scope: AgentScope) => scope.context;
+  assert.equal(Context.is(contextOf(thread)), true);
+  assert.equal(contextOf(thread).root, root);
+  contextOf(thread).provide("model", "model-a");
+  assert.equal(contextOf(thread).get("model"), "model-a");
+  assert.equal(contextOf(other).get("model"), undefined);
+  const cleaned: string[] = [];
+  contextOf(thread).effect(() => () => { cleaned.push("thread"); });
+  thread.onDispose(() => { cleaned.push("runtime"); });
+  await root.fiber.dispose();
+  assert.deepEqual(cleaned, ["thread", "runtime"]);
+  assert.equal(thread.disposed, true);
+  assert.equal(other.disposed, true);
+  assert.equal(tenant.disposed, true);
+  assert.throws(() => thread.resolveTurn(), ScopeDisposedError);
+});
 
 test("作用域按 tenant/workspace/thread/execution/subagent 隔离并继承贡献", async () => {
   const tenant = AgentScope.tenant("tenant-a");

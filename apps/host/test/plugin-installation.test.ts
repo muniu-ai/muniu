@@ -126,6 +126,7 @@ function signedRepository(options: {
   return {
     root,
     release,
+    registry,
     manifest,
     packageBytes,
     definition,
@@ -135,6 +136,124 @@ function signedRepository(options: {
     }),
   };
 }
+
+test("撤销签名插件持久化中断请求、隔离其他租户，并阻止排队任务被领取", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "muniu-plugin-revocation-"));
+  const store = new SqliteStorage({ databaseFile: join(root, "state.sqlite3"), hmacKey: Buffer.alloc(32, 2) });
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const fixture = signedRepository();
+  let metadata = fixture.registry;
+  const repository = new LocalSignedPluginRepository(() => ({ metadata,
+    releases: [{ manifest: fixture.manifest, packageBytes: fixture.packageBytes, definition: fixture.definition }] }));
+  const host = await createAgentOsHost({ store, secretStore: secrets, now: () => NOW,
+    pluginRepository: repository, trustedPluginRoots: [{ keyId: "root-1", publicKey: fixture.root.publicKey }] });
+  t.after(() => host.close());
+  assert.equal((await host.dispatch(jsonRequest("/v2/plugins/installations", {
+    pluginId: "research", version: "1.2.3",
+  }, "install-for-revocation"))).status, 201);
+  const entity = { tenantId: "local", createdAt: NOW, updatedAt: NOW, streamVersion: 0 };
+  await store.transact("local", tx => {
+    for (const [id, status, pluginId] of [["queued", "queued", "research"], ["running", "running", "research"], ["other", "running", "opc"]] as const) {
+      tx.putProjection("execution", id, { ...entity, id, status, pluginId, workspaceId: "workspace", generation: 1 });
+    }
+    const job = { ...entity, id: "queued-job", workspaceId: "workspace", kind: "agent.execution.run",
+      payload: { executionId: "queued" }, status: "available", attempts: 0, availableAt: NOW, fencingToken: 0, idempotencyKey: "queued-job" };
+    tx.putProjection("job", job.id, job);
+    tx.putJob(job);
+    for (const [id, executionId, status] of [["pending", "running", "pending"], ["approved", "running", "approved_once"], ["unrelated", "other", "pending"]]) {
+      tx.putProjection("approval", id!, { ...entity, id, executionId, status, toolCallId: `tool-${id}`, generation: 1 });
+      tx.putProjection("inbox", `approval:${id}`, { ...entity, id: `approval:${id}`, executionId, status: "open", kind: "approval" });
+    }
+  });
+  await store.transact("tenant-b", tx => tx.putProjection("execution", "running", { ...entity, tenantId: "tenant-b", id: "running", status: "running", pluginId: "research", generation: 1 }));
+  const { signature: _signature, ...unsigned } = fixture.registry;
+  metadata = createSignedRegistryMetadata({ ...unsigned, sequence: unsigned.sequence + 1,
+    revokedReleases: [{ pluginId: "research", packageSha256: fixture.manifest.packageSha256, revokedAt: NOW, reason: "release withdrawn" }] },
+    "root-1", fixture.root.privateKey);
+  const listed = await host.dispatch(new Request("http://host.test/v2/plugins/installations"));
+  assert.equal(listed.status, 200);
+  assert.equal((await store.transact("local", tx => tx.getProjection<PluginInstallation>(PLUGIN_INSTALLATION_PROJECTION, "research")))?.status, "revoked");
+  assert.equal((await store.getJob("queued-job"))?.status, "failed");
+  assert.equal(await store.claimJob("worker", NOW), undefined);
+  const control = await store.transact("local", tx => tx.getProjection<{ command: string; generation: number }>("execution-control", "running"));
+  assert.deepEqual(control && { command: control.command, generation: control.generation }, { command: "interrupt", generation: 1 });
+  assert.equal(await store.transact("local", tx => tx.getProjection("execution-control", "other")), undefined);
+  assert.equal(await store.transact("tenant-b", tx => tx.getProjection("execution-control", "running")), undefined);
+  for (const id of ["pending", "approved"]) {
+    assert.equal((await store.transact("local", tx => tx.getProjection<any>("approval", id))).status, "expired");
+    assert.equal((await store.transact("local", tx => tx.getProjection<any>("inbox", `approval:${id}`))).status, "resolved");
+  }
+  assert.equal((await store.transact("local", tx => tx.getProjection<any>("approval", "unrelated"))).status, "pending");
+  const firstEvents = (await store.readEvents("local", 0, 100)).events;
+  assert.equal(firstEvents.filter(event => event.type === "plugin.revoked").length, 1);
+  assert.equal(firstEvents.filter(event => event.type === "execution.control_requested").length, 1);
+  await host.dispatch(new Request("http://host.test/v2/plugins/installations"));
+  assert.equal((await store.readEvents("local", 0, 100)).events.filter(event => event.type === "execution.control_requested").length, 1);
+});
+
+test("撤销依赖插件会沿依赖链中断执行，重启后也不能重新加载", async t => {
+  const fixture = signedRepository();
+  const releases = [{ manifest: fixture.manifest, packageBytes: fixture.packageBytes, definition: fixture.definition }];
+  for (const id of ["dependent", "consumer"]) {
+    const dependency = releases.at(-1)!;
+    const packageBytes = Buffer.from(`signed ${id} fixture`);
+    const contributes = { routes: [], navigation: [], widgets: [], commands: [], agents: [], skills: [], workflows: [], tools: [], memorySchemas: [] };
+    const manifest = signPluginManifest({ ...fixture.manifest, id, dataNamespace: id, contributes,
+      packageSha256: sha256Hex(packageBytes), dependencies: [{ id: dependency.manifest.id, version: dependency.manifest.version, sha256: dependency.manifest.packageSha256 }] }, fixture.release.privateKey);
+    releases.push({ manifest, packageBytes, definition: { ...fixture.definition, id, manifest, contributions: contributes } });
+  }
+  let metadata = fixture.registry;
+  const repository = new LocalSignedPluginRepository(() => ({ metadata, releases }));
+  const store = new InMemoryKernelStore();
+  const options = { store, secretStore: secrets, now: () => NOW, pluginRepository: repository,
+    trustedPluginRoots: [{ keyId: "root-1", publicKey: fixture.root.publicKey }] };
+  const host = await createAgentOsHost(options);
+  t.after(() => host.close());
+  for (const release of releases) {
+    const response = await host.dispatch(jsonRequest("/v2/plugins/installations", { pluginId: release.manifest.id, version: "1.2.3" }, `install-${release.manifest.id}`));
+    assert.equal(response.status, 201, await response.text());
+  }
+  await store.transact("local", tx => {
+    for (const pluginId of ["dependent", "consumer", "opc"]) tx.putProjection("execution", pluginId, {
+      id: pluginId, tenantId: "local", workspaceId: "workspace", pluginId, generation: 1,
+      status: "running", streamVersion: 0, createdAt: NOW, updatedAt: NOW,
+    });
+  });
+  const { signature: _signature, ...unsigned } = fixture.registry;
+  metadata = createSignedRegistryMetadata({ ...unsigned, sequence: unsigned.sequence + 1,
+    revokedReleases: [{ pluginId: "research", packageSha256: fixture.manifest.packageSha256, revokedAt: NOW, reason: "withdrawn" }] }, "root-1", fixture.root.privateKey);
+  assert.equal((await host.dispatch(new Request("http://host.test/v2/plugins/installations"))).status, 200);
+  for (const id of ["dependent", "consumer"]) {
+    assert.equal((await store.transact("local", tx => tx.getProjection<PluginInstallation>(PLUGIN_INSTALLATION_PROJECTION, id)))?.status, "failed");
+    assert.equal((await store.transact("local", tx => tx.getProjection<{ command: string }>("execution-control", id)))?.command, "interrupt");
+  }
+  assert.equal(await store.transact("local", tx => tx.getProjection("execution-control", "opc")), undefined);
+  const second = await createAgentOsHost(options); t.after(() => second.close());
+  assert.equal((await second.dispatch(new Request("http://host.test/v2/health"))).status, 200);
+  assert.equal((await store.readEvents("local", 0, 100)).events.filter(event => event.type === "execution.control_requested").length, 2);
+});
+
+test("插件仓库读取失败不阻塞核心工作区和收件箱", async (t) => {
+  const fixture = signedRepository();
+  let broken = false;
+  const repository = new LocalSignedPluginRepository(async () => {
+    if (broken) throw new Error("private-registry-read-error");
+    return fixture.repository.read();
+  });
+  const store = new InMemoryKernelStore();
+  const host = await createAgentOsHost({ store, secretStore: secrets, now: () => NOW, pluginRepository: repository,
+    trustedPluginRoots: [{ keyId: "root-1", publicKey: fixture.root.publicKey }] });
+  t.after(() => host.close());
+  assert.equal((await host.dispatch(jsonRequest("/v2/plugins/installations", { pluginId: "research", version: "1.2.3" }, "before-registry-failure"))).status, 201);
+  broken = true;
+  assert.equal((await host.dispatch(new Request("http://host.test/v2/workspaces"))).status, 200);
+  assert.equal((await host.dispatch(new Request("http://host.test/v2/inbox"))).status, 200);
+  const readiness = await host.dispatch(new Request("http://host.test/v2/readiness"));
+  assert.equal(readiness.status, 200);
+  assert.equal((await readiness.json()).data.ready, true);
+  assert.equal((await store.transact("local", tx => tx.getProjection<PluginInstallation>(PLUGIN_INSTALLATION_PROJECTION, "research")))?.status, "failed");
+  assert.equal(JSON.stringify((await store.readEvents("local", 0, 100)).events).includes("private-registry-read-error"), false);
+});
 
 test("工作区停用调用插件 hook，并以幂等事务移除激活状态", async () => {
   const store = new InMemoryKernelStore();
@@ -650,8 +769,11 @@ test("SQLite 重启后以 tombstone 延续已清除插件的事实流版本", as
   }
 });
 
-async function signedUpgradeRepository() {
-  const first = signedRepository();
+async function signedUpgradeRepository(lifecycle?: string[]) {
+  const first = signedRepository({
+    activate: () => { lifecycle?.push("activate:1.2.3"); },
+    deactivate: () => { lifecycle?.push("deactivate:1.2.3"); },
+  });
   const snapshot = (await first.repository.read())!;
   const nextPackageBytes = Buffer.from("local signed research plugin v1.3");
   const nextManifest = signPluginManifest({
@@ -669,6 +791,8 @@ async function signedUpgradeRepository() {
     ...first.definition,
     version: "1.3.0",
     manifest: nextManifest,
+    activate() { lifecycle?.push("activate:1.3.0"); },
+    deactivate() { lifecycle?.push("deactivate:1.3.0"); },
     contributions: {
       ...first.definition.contributions,
       commands: [{
@@ -695,7 +819,8 @@ async function signedUpgradeRepository() {
 
 test("生产更新先排空执行并重放投影，再原子更新 installation、lock 与运行贡献", async () => {
   const store = new InMemoryKernelStore();
-  const fixture = await signedUpgradeRepository();
+  const lifecycle: string[] = [];
+  const fixture = await signedUpgradeRepository(lifecycle);
   const order: string[] = [];
   let releaseDrain!: () => void;
   let markDrainStarted!: () => void;
@@ -755,6 +880,7 @@ test("生产更新先排空执行并重放投影，再原子更新 installation�
   assert.equal(updated.version, "1.3.0");
   assert.equal(updated.status, "active");
   assert.equal(updated.streamVersion, 3);
+  assert.deepEqual(lifecycle, ["activate:1.2.3", "deactivate:1.2.3", "activate:1.3.0"]);
   assert.deepEqual(order, [
     "drain:research",
     "replay:research__1_3_0__5",
@@ -791,6 +917,7 @@ test("生产更新先排空执行并重放投影，再原子更新 installation�
     .filter((event) => event.type === "plugin.upgraded");
   assert.equal(events.length, 1);
   await host.close();
+  assert.equal(lifecycle.at(-1), "deactivate:1.3.0");
 });
 
 test("生产更新的投影切换失败时回滚状态、lock 与新命名空间写入", async () => {

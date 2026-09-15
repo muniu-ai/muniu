@@ -2,13 +2,18 @@
 
 import { randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import type { EventAppendRequest, JsonObject, JsonValue, KernelEventV1 } from "@mn/contracts";
-import { createProjectionFacts } from "@mn/contracts";
+import { createProjectionFacts, CORE_PROJECTION_NAMESPACES, replayCoreProjections } from "@mn/contracts";
 
-import { computeEventDigest, computeEventHmac } from "./integrity.js";
+import { computeEventDigest, computeEventHmac, assertEventPageIntegrity } from "./integrity.js";
+import { captureProjectionJournal, readJournalProjection, prepareJournalRebuild, collectJournalCasReferences, isJournalNamespace, type ProjectionJournalOptions } from "./projection-journal.js";
+import { FileCas } from "./cas.js";
+import type { KeyProvider } from "./encryption.js";
+import { assertLocalStateLock, type LocalStateLock } from "./local-state-lock.js";
+import { serializeAsyncMethods } from "./serial-methods.js";
 import {
   CursorExpiredError,
   IdempotencyConflictError,
@@ -32,6 +37,7 @@ export interface SqliteStorageOptions {
   readonly databaseFile: string;
   readonly hmacKey: Uint8Array;
   readonly now?: () => Date;
+  readonly projectionJournal?: ProjectionJournalOptions;
 }
 
 type RecordRow = Record<string, unknown>;
@@ -214,15 +220,19 @@ export class SqliteStorage implements StoragePort {
   readonly #database: DatabaseSync;
   readonly #hmacKey: Uint8Array;
   readonly #now: () => Date;
+  readonly #stateRoot: string;
+  #projectionJournal?: ProjectionJournalOptions;
   #closed = false;
 
   constructor(options: SqliteStorageOptions) {
     if (options.hmacKey.byteLength < 32) throw new TypeError("Event HMAC key must contain at least 32 bytes");
     mkdirSync(dirname(options.databaseFile), { recursive: true, mode: 0o700 });
     this.#database = new DatabaseSync(options.databaseFile);
+    this.#stateRoot = resolve(dirname(options.databaseFile));
     chmodSync(options.databaseFile, 0o600);
     this.#hmacKey = Buffer.from(options.hmacKey);
     this.#now = options.now ?? (() => new Date());
+    this.#projectionJournal = options.projectionJournal;
     this.#database.exec("pragma journal_mode = WAL");
     this.#database.exec("pragma synchronous = FULL");
     this.#database.exec("pragma foreign_keys = ON");
@@ -232,14 +242,69 @@ export class SqliteStorage implements StoragePort {
       insert into storage_meta (key, value) values ('schema_version', '1')
       on conflict(key) do nothing
     `).run();
+    serializeAsyncMethods(this, ["initialize", "listTenantIds", "transact", "commit", "readEvents", "readEventHistory", "rebuildJournalProjections", "rebuildProjections",
+      "advanceRetentionFloor", "getProjection", "listOutbox", "getApproval", "claimJob", "completeJob",
+      "renewJobLease", "failJob", "interruptJob", "markNeedsReconciliation", "getJob", "gcLocalOrphans", "close"]);
+  }
+
+  configureProjectionJournal(options: ProjectionJournalOptions): void {
+    if (this.#projectionJournal) throw new Error("Projection journal is already configured");
+    this.#projectionJournal = options;
   }
 
   async initialize(): Promise<void> {}
 
+  /** Called only during cold start, before the state owner exposes HTTP or starts its Worker. */
+  async gcLocalOrphans(options: { readonly lock: LocalStateLock; readonly keyProvider: KeyProvider }): Promise<{
+    readonly status: "completed" | "not_due" | "empty"; readonly removedObjects: number;
+  }> {
+    this.#assertOpen();
+    assertLocalStateLock(options.lock, this.#stateRoot);
+    const now = this.#now();
+    const last = this.#database.prepare("select value from storage_meta where key = 'cas_gc_last_success'").get() as RecordRow | undefined;
+    if (last && Date.parse(String(last.value)) <= now.getTime() && now.getTime() - Date.parse(String(last.value)) < 86_400_000) {
+      return { status: "not_due", removedObjects: 0 };
+    }
+    this.#database.exec("begin immediate");
+    try {
+      const tenants = (this.#database.prepare("select tenant_id from tenant_heads union select tenant_id from events order by tenant_id").all() as RecordRow[])
+        .map(row => String(row.tenant_id));
+      if (!tenants.length) { this.#database.exec("commit"); return { status: "empty", removedObjects: 0 }; }
+      const cas = new FileCas({ rootDir: join(this.#stateRoot, "cas") });
+      const referenced = new Set<string>();
+      const deadlineMilliseconds = Date.now() + 10_000;
+      for (const tenantId of tenants) {
+        const head = this.#database.prepare("select next_position from tenant_heads where tenant_id = ?").get(tenantId) as RecordRow | undefined;
+        if (!head) throw new Error("Local CAS verification is missing the tenant event head");
+        const expectedPosition = safePosition(head.next_position) - 1;
+        if (expectedPosition > 1_000_000) throw new Error("Local CAS verification exceeds the event limit");
+        const events = (this.#database.prepare("select * from events where tenant_id = ? order by position").all(tenantId) as RecordRow[]).map(rowToEvent);
+        replayCoreProjections(events, tenantId, this.#hmacKey);
+        for (const digest of await collectJournalCasReferences({ cas, keyProvider: options.keyProvider, namespaces: ["*non-core"],
+          events, tenantId, expectedPosition, hmacKey: this.#hmacKey, deadlineMilliseconds })) referenced.add(digest);
+      }
+      assertLocalStateLock(options.lock, this.#stateRoot);
+      const cutoff = new Date(now.getTime() - 7 * 86_400_000);
+      const removed = await cas.gcOrphans(referenced, cutoff);
+      const runId = randomUUID();
+      for (const tenantId of tenants) {
+        const event = this.#appendEvent({ tenantId, aggregateType: "storageMaintenance", aggregateId: runId,
+          expectedStreamVersion: 0, type: "storage.local_gc_completed", actorId: "local-owner", generation: 0,
+          correlationId: runId, publicPayload: { cutoff: cutoff.toISOString(), removedObjects: removed.length } }, now.toISOString());
+        this.#writeOutbox({ outbox: [{ id: `local-gc:${tenantId}:${runId}`, tenantId, topic: event.type,
+          payload: { eventId: event.id }, availableAt: event.occurredAt }] }, event.occurredAt);
+      }
+      this.#database.prepare("insert into storage_meta (key, value) values ('cas_gc_last_success', ?) on conflict(key) do update set value = excluded.value")
+        .run(now.toISOString());
+      this.#database.exec("commit");
+      return { status: "completed", removedObjects: removed.length };
+    } catch (error) { this.#database.exec("rollback"); throw error; }
+  }
+
   async listTenantIds(): Promise<readonly string[]> {
     this.#assertOpen();
     const rows = this.#database.prepare(
-      "select tenant_id from tenant_heads order by tenant_id asc",
+      "select tenant_id from tenant_heads union select tenant_id from events order by tenant_id asc",
     ).all() as RecordRow[];
     return rows.map((row) => String(row.tenant_id));
   }
@@ -439,10 +504,21 @@ export class SqliteStorage implements StoragePort {
           };
         }
       };
-      const result = work(transaction);
+      const journal = this.#projectionJournal ? captureProjectionJournal(transaction, tenantId, this.#projectionJournal,
+        (this.#database.prepare("select namespace, projection_key, value_json from projections where tenant_id = ?")
+          .all(tenantId) as RecordRow[]).map(row => ({ namespace: String(row.namespace), id: String(row.projection_key), value: parseJson(row.value_json) })),
+        (this.#database.prepare("select hex(idempotency_key) as encoded_key, request_hash, response_json, created_at from idempotency where tenant_id = ?")
+          .all(tenantId) as RecordRow[]).flatMap(row => {
+            const key = Buffer.from(String(row.encoded_key), "hex").toString("utf8"); const separator = key.indexOf("\0");
+            return separator < 0 ? [] : [{ tenantId, scope: key.slice(0, separator), key: key.slice(separator + 1),
+              requestDigest: String(row.request_hash), response: parseJson(row.response_json), createdAt: String(row.created_at) }];
+          })) : undefined;
+      await journal?.prepare();
+      const result = work(journal?.transaction ?? transaction);
       if (result && typeof (result as { then?: unknown }).then === "function") {
         throw new TypeError("Storage transaction callbacks must be synchronous");
       }
+      await journal?.flush(() => this.#now().toISOString());
       this.#database.exec("commit");
       return result;
     } catch (error) {
@@ -453,6 +529,9 @@ export class SqliteStorage implements StoragePort {
 
   async commit(batch: StorageCommit): Promise<StorageCommitResult> {
     this.#assertOpen();
+    if (this.#projectionJournal && batch.projections?.some(row => isJournalNamespace(row.namespace, this.#projectionJournal!))) {
+      throw new Error("Protected projection writes require a journaled Kernel transaction");
+    }
     const tenants = new Set([
       ...(batch.event ? [batch.event.tenantId] : []),
       ...(batch.projections ?? []).map((value) => value.tenantId),
@@ -700,6 +779,14 @@ export class SqliteStorage implements StoragePort {
     const options: EventReadOptions = typeof optionsOrAfterPosition === "number"
       ? { afterPosition: optionsOrAfterPosition, limit: compatibilityLimit ?? 100 }
       : optionsOrAfterPosition;
+    return this.#eventPage(tenantId, options, true);
+  }
+
+  async readEventHistory(tenantId: string, afterPosition: number, limit: number): Promise<import("@mn/contracts").EventPage> {
+    return this.#eventPage(tenantId, { afterPosition, limit }, false);
+  }
+
+  #eventPage(tenantId: string, options: EventReadOptions, enforceRetention: boolean): import("@mn/contracts").EventPage {
     if (!Number.isInteger(options.afterPosition) || options.afterPosition < 0) {
       throw new RangeError("afterPosition must be a non-negative integer");
     }
@@ -710,7 +797,7 @@ export class SqliteStorage implements StoragePort {
       select next_position, retention_floor from tenant_heads where tenant_id = ?
     `).get(tenantId) as RecordRow | undefined;
     const retentionFloor = head ? safePosition(head.retention_floor) : 1;
-    if (options.afterPosition < retentionFloor - 1) {
+    if (enforceRetention && options.afterPosition < retentionFloor - 1) {
       throw new CursorExpiredError(tenantId, retentionFloor);
     }
     const rows = this.#database.prepare(`
@@ -720,6 +807,7 @@ export class SqliteStorage implements StoragePort {
       limit ?
     `).all(tenantId, options.afterPosition, options.limit) as RecordRow[];
     const events = rows.map(rowToEvent);
+    assertEventPageIntegrity(events, tenantId, options.afterPosition, options.limit, head ? safePosition(head.next_position) - 1 : 0, this.#hmacKey);
     return {
       events,
       nextPosition: events.at(-1)?.position ?? options.afterPosition,
@@ -746,8 +834,7 @@ export class SqliteStorage implements StoragePort {
         on conflict(tenant_id) do update set
           retention_floor = max(retention_floor, excluded.retention_floor)
       `).run(tenantId, floorPosition);
-      this.#database.prepare("delete from events where tenant_id = ? and position < ?")
-        .run(tenantId, floorPosition);
+      // The SSE cursor floor does not destroy authoritative facts required for rebuilding projections.
       this.#database.exec("commit");
     } catch (error) {
       this.#database.exec("rollback");
@@ -755,12 +842,52 @@ export class SqliteStorage implements StoragePort {
     }
   }
 
+  async rebuildJournalProjections(tenantId: string): Promise<{ readonly position: number; readonly count: number }> {
+    return this.#rebuildProjections(tenantId, false);
+  }
+
+  async rebuildProjections(tenantId: string): Promise<{ readonly position: number; readonly count: number }> {
+    return this.#rebuildProjections(tenantId, true);
+  }
+
+  async #rebuildProjections(tenantId: string, includeCore: boolean): Promise<{ readonly position: number; readonly count: number }> {
+    this.#assertOpen();
+    if (!this.#projectionJournal) throw new Error("Projection journal is not configured");
+    this.#database.exec("begin immediate");
+    try {
+      const head = this.#database.prepare("select next_position from tenant_heads where tenant_id = ?").get(tenantId) as RecordRow | undefined;
+      const position = head ? safePosition(head.next_position) - 1 : 0;
+      const events = (this.#database.prepare("select * from events where tenant_id = ? order by position").all(tenantId) as RecordRow[]).map(rowToEvent);
+      const plan = await prepareJournalRebuild({ ...this.#projectionJournal, tenantId, events, expectedPosition: position, hmacKey: this.#hmacKey });
+      const core = includeCore ? replayCoreProjections(events, tenantId, this.#hmacKey).records : [];
+      const namespaces = this.#database.prepare("select distinct namespace from projections where tenant_id = ?").all(tenantId) as RecordRow[];
+      for (const row of namespaces) if (isJournalNamespace(String(row.namespace), this.#projectionJournal)
+        || (includeCore && (CORE_PROJECTION_NAMESPACES as readonly string[]).includes(String(row.namespace)))) {
+        this.#database.prepare("delete from projections where tenant_id = ? and namespace = ?").run(tenantId, String(row.namespace));
+      }
+      const timestamp = this.#now().toISOString();
+      this.#writeProjections({ projections: [...plan.projections, ...core].map(row => ({ tenantId, namespace: row.namespace, key: row.id,
+        streamVersion: Number((row.value as JsonObject).streamVersion ?? 0), value: row.value as JsonObject })) }, timestamp);
+      this.#database.prepare("delete from idempotency where tenant_id = ? and json_extract(response_json, '$.format') = 'muniu.projection.reference'").run(tenantId);
+      for (const receipt of plan.idempotency) this.#database.prepare(`
+        insert into idempotency (tenant_id, idempotency_key, request_hash, response_json, created_at) values (?, ?, ?, ?, ?)
+        on conflict(tenant_id, idempotency_key) do update set request_hash = excluded.request_hash,
+        response_json = excluded.response_json, created_at = excluded.created_at
+      `).run(tenantId, `${receipt.scope}\0${receipt.key}`, receipt.requestDigest, JSON.stringify(receipt.response), receipt.createdAt);
+      this.#database.exec("commit");
+      return { position, count: plan.projections.length + core.length };
+    } catch (error) { this.#database.exec("rollback"); throw error; }
+  }
+
   async getProjection(tenantId: string, namespace: string, key: string): Promise<JsonObject | undefined> {
     const row = this.#database.prepare(`
       select value_json from projections
       where tenant_id = ? and namespace = ? and projection_key = ?
     `).get(tenantId, namespace, key) as RecordRow | undefined;
-    return row ? parseJson<JsonObject>(row.value_json) : undefined;
+    const value = row ? parseJson<JsonObject>(row.value_json) : undefined;
+    return this.#projectionJournal
+      ? await readJournalProjection(this.#projectionJournal, tenantId, namespace, key, value) as JsonObject | undefined
+      : value;
   }
 
   async listOutbox(tenantId: string, limit: number): Promise<readonly StoredOutboxMessage[]> {
@@ -1406,6 +1533,8 @@ export class SqliteStorage implements StoragePort {
       ? failureObject.code
       : "WORKER_FAILED";
     const executionStatus = String(context.execution.status);
+    const nextStatus = outcome === "completed" && value && typeof value === "object" && !Array.isArray(value)
+      && "status" in value && value.status === "paused" ? "paused" : outcome;
     if (outcome === "failed" && (executionStatus === "failed"
       || executionStatus === "completed"
       || (executionStatus === "cancelled" && failureCode === "EXECUTION_CANCELLED"))) {
@@ -1423,9 +1552,9 @@ export class SqliteStorage implements StoragePort {
     );
     const updatedExecution: JsonObject = {
       ...context.execution,
-      status: outcome,
+      status: nextStatus,
       ...(outcome === "failed" ? { failureCode } : {}),
-      finishedAt: now,
+      ...(nextStatus === "paused" ? {} : { finishedAt: now }),
       streamVersion: executionStreamVersion + 1,
       updatedAt: now
     };
@@ -1434,7 +1563,7 @@ export class SqliteStorage implements StoragePort {
       aggregateType: "execution",
       aggregateId: context.executionId,
       expectedStreamVersion: executionStreamVersion,
-      type: `execution.${outcome}`,
+      type: `execution.${nextStatus}`,
       actorId: `worker:${workerId}`,
       executionId: context.executionId,
       generation: context.generation,
@@ -1444,7 +1573,7 @@ export class SqliteStorage implements StoragePort {
 
         workspaceId: context.workspaceId,
         jobId: String(job.job_id),
-        status: outcome,
+        status: nextStatus,
         ...(outcome === "failed" ? { failureCode } : {})
       }
     }, now);

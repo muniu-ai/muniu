@@ -19,6 +19,8 @@ import {
   type WaitingApprovalRecovery,
 } from "./approval-recovery.js";
 import { PersistentInbox } from "./inbox.js";
+import { PersistentExecutionBudget, ExecutionBudgetExceededError } from "./budget.js";
+import { assertSubagentBudgetAvailable, validateModelUsage } from "./model-budget.js";
 import type { AgentScope, TurnContributions } from "./scope.js";
 import { DefaultSessionSurface, PersistentSessionLog } from "./session.js";
 import type {
@@ -32,6 +34,8 @@ import type {
   ModelToolCall,
   PreparedToolCall,
   ResourceRef,
+  RequestedSubagentAuthority,
+  RuntimeAuthority,
   RuntimeRecord,
   RuntimeStore,
   SessionSurface,
@@ -74,6 +78,13 @@ export class AgentRuntimeError extends Error {
   }
 }
 
+export class RuntimeControlError extends AgentRuntimeError {
+  constructor(readonly status: "cancelled" | "paused" | "interrupted") {
+    super(`执行已进入 ${status} 状态`);
+    this.name = "RuntimeControlError";
+  }
+}
+
 export class AgentHandle {
   readonly #executionId: string;
   readonly #scope: AgentScope;
@@ -87,8 +98,9 @@ export class AgentHandle {
   readonly #now: () => string;
   readonly #inbox: PersistentInbox;
   readonly #sessionLog: PersistentSessionLog;
-  readonly #subagentAllocator: SubagentAuthorityAllocator;
+  readonly #budget: PersistentExecutionBudget;
   readonly #pendingEnqueues = new Set<Promise<unknown>>();
+  readonly #subagents = new Map<AgentScope, AbortController>();
   #status: ExecutionStatus = "queued";
   #turn = 0;
   #drainPromise: Promise<void> | undefined;
@@ -112,12 +124,19 @@ export class AgentHandle {
       throw new Error("工具调用批准有效期必须是正整数毫秒");
     }
     this.#now = options.now ?? (() => new Date().toISOString());
+    this.#budget = new PersistentExecutionBudget({ store: this.#store, executionId: this.#executionId,
+      maxDurationMs: this.#authority.budget.maxDurationMs, now: () => Date.parse(this.#now()) });
     this.#inbox = new PersistentInbox(this.#store, this.#executionId);
     this.#sessionLog = new PersistentSessionLog(this.#store, this.#executionId);
-    this.#subagentAllocator = new SubagentAuthorityAllocator(this.#authority);
+    this.#scope.onDispose(async () => {
+      if (this.#status !== "running" && this.#status !== "waiting_approval") return;
+      await this.interrupt("执行 Scope 已关闭");
+      await this.whenIdle();
+    });
   }
 
   static async open(options: AgentHandleOptions): Promise<AgentHandle> {
+    await options.scope.ready;
     const handle = new AgentHandle(options);
     await handle.#recover();
     return handle;
@@ -127,6 +146,15 @@ export class AgentHandle {
   get status(): ExecutionStatus { return this.#status; }
   get lastError(): unknown { return this.#lastError; }
   get sessionLog(): PersistentSessionLog { return this.#sessionLog; }
+
+  async start(message: string): Promise<void> {
+    if (this.#status === "waiting_approval" || this.#status === "running") return;
+    if (this.#status !== "queued") throw new AgentRuntimeError("start 只接受尚未开始的执行；中断后请使用 resume");
+    const pending = this.#inbox.enqueueInitial(message);
+    this.#trackEnqueue(pending);
+    await pending;
+    this.#kick();
+  }
 
   async followUp(text: string): Promise<void> {
     this.#assertCanQueue("follow_up");
@@ -147,6 +175,7 @@ export class AgentHandle {
     if (TERMINAL_STATUSES.has(this.#status)) return;
     await this.#transition("cancelled", reason);
     this.#abortController?.abort(reason);
+    await this.#stopSubagents(reason);
   }
 
   async interrupt(reason = "执行已中断"): Promise<void> {
@@ -157,6 +186,7 @@ export class AgentHandle {
       await this.#transition("interrupted", reason);
     } finally {
       this.#abortController?.abort(reason);
+      await this.#stopSubagents(reason);
     }
   }
 
@@ -179,7 +209,7 @@ export class AgentHandle {
       await this.#transition("needs_reconciliation", "外部副作用结果未知，需要人工核对");
       return;
     }
-    if (hasIncompleteTurn(records) && !await this.#inbox.hasFollowUps()) {
+    if ((hasIncompleteTurn(records) || await this.#inbox.hasSteers()) && !await this.#inbox.hasResume()) {
       await this.#inbox.enqueue("resume", "继续中断前未完成的任务");
     }
     await this.#transition("queued", "恢复执行");
@@ -199,6 +229,9 @@ export class AgentHandle {
   }
 
   async spawnSubagent(request: SubagentSpawnRequest): Promise<unknown> {
+    if (!["queued", "running", "waiting_approval"].includes(this.#status)) {
+      throw new AgentRuntimeError("当前执行状态不允许创建子 Agent");
+    }
     if (this.#scope.level !== "execution" && this.#scope.level !== "subagent") {
       throw new AgentRuntimeError("只能从 execution 或 subagent Scope 创建子 Agent");
     }
@@ -207,25 +240,102 @@ export class AgentHandle {
     if (contribution === undefined) {
       throw new AgentRuntimeError(`子 Agent 贡献 ${request.contributionId} 不存在`);
     }
-    const authority = this.#subagentAllocator.allocate(request.authority);
+    const remaining = await this.#budget.remainingMilliseconds();
+    let authority: RuntimeAuthority;
+    for (;;) {
+      const records = await this.#store.readExecution(this.#executionId);
+      const reservations = records.filter(record => record.type === "subagent/reserved");
+      if (reservations.some(record => record.payload.scopeId === request.scopeId)) {
+        throw new AgentRuntimeError("子 Agent 身份已预留，不能自动重复创建；请核对原执行");
+      }
+      const allocator = new SubagentAuthorityAllocator(this.#authority);
+      for (const reservation of reservations) {
+        const restored = allocator.allocate(reservation.payload.authority as unknown as RequestedSubagentAuthority);
+        if (restored.commitment !== reservation.payload.commitment) throw new AgentRuntimeError("子 Agent 预算预留承诺不一致");
+      }
+      authority = allocator.allocate(request.authority);
+      assertSubagentBudgetAvailable(records, this.#authority.budget, authority.budget);
+      const committed = await this.#store.commit(this.#executionId, records.at(-1)?.sequence ?? 0, [{
+        executionId: this.#executionId, type: "subagent/reserved", payload: {
+          scopeId: request.scopeId, contributionId: request.contributionId, generation: contributions.generation,
+          authority: JSON.parse(JSON.stringify(request.authority)) as JsonObject, commitment: authority.commitment,
+        },
+      }]);
+      if (committed) break;
+    }
+    const lifetimeMs = Math.min(remaining, authority.budget.maxDurationMs,
+      await this.#budget.remainingMilliseconds());
+    if (lifetimeMs <= 0) throw new ExecutionBudgetExceededError("duration");
+    if (!["queued", "running", "waiting_approval"].includes(this.#status)) throw new AgentRuntimeError("父执行已停止，禁止启动子 Agent");
     const childScope = this.#scope.createChild("subagent", request.scopeId);
+    const abort = new AbortController();
+    this.#subagents.set(childScope, abort);
+    const deadlineAt = new Date(Date.parse(this.#now()) + lifetimeMs).toISOString();
+    const timer = setTimeout(() => {
+      abort.abort(new ExecutionBudgetExceededError("duration"));
+      void childScope.dispose().catch(error => { this.#lastError = error; });
+    }, lifetimeMs);
+    timer.unref();
+    childScope.onDispose(() => {
+      clearTimeout(timer);
+      abort.abort("子 Agent Scope 已关闭");
+      this.#subagents.delete(childScope);
+    });
     try {
-      return await contribution.spawn({
+      await childScope.ready;
+      abort.signal.throwIfAborted();
+      return await raceAbort(contribution.spawn({
         parentExecutionId: this.#executionId,
         generation: contributions.generation,
         authority,
         scope: childScope,
-      });
+        signal: abort.signal,
+        deadlineAt,
+      }), abort.signal);
     } catch (error: unknown) {
       await childScope.dispose();
       throw error;
     }
   }
 
+  async #stopSubagents(reason: string): Promise<void> {
+    const scopes = [...this.#subagents.keys()];
+    for (const controller of this.#subagents.values()) controller.abort(reason);
+    await Promise.all(scopes.map(scope => scope.dispose()));
+  }
+
   async #recover(): Promise<void> {
     const records = await this.#store.readExecution(this.#executionId);
     this.#turn = records.filter((record) => record.type === "turn/started").length;
     this.#status = latestStatus(records) ?? "queued";
+    if (this.#definition.jobId && (this.#status === "running" || this.#status === "waiting_approval")) {
+      const contributions = this.#scope.resolveTurn();
+      const start = records.filter(record => record.type === "job/started").at(-1);
+      const turn = records.filter(record => record.type === "turn/started").at(-1);
+      const item = records.find(record => record.type === "inbox/enqueued" && record.payload.id === turn?.payload.itemId);
+      const job = contributions.get("job", this.#definition.jobId);
+      if (!start || !turn || !item || start.payload.turn !== this.#turn
+        || start.payload.jobId !== this.#definition.jobId || start.payload.generation !== contributions.generation
+        || start.payload.authorityCommitment !== this.#authority.commitment || !job?.recover) {
+        await this.#transition("interrupted", "产品工作流缺少可恢复检查点，需要显式恢复");
+        return;
+      }
+      if (this.#status === "waiting_approval") await this.#transition("running", "恢复产品工作流审批检查点");
+      const drain = (async () => {
+        try {
+          await this.#runTurn(String(item.payload.text), item.payload.kind === "resume" ? "resume" : "follow_up",
+            this.#turn, contributions, true);
+          if (this.#status === "running") await this.#drain();
+        } catch (error) {
+          this.#lastError = error;
+          await this.#transition(error instanceof ExecutionBudgetExceededError ? "paused" : error instanceof RuntimeControlError ? error.status : "failed",
+            error instanceof Error ? error.message : "产品工作流恢复失败");
+        }
+      })();
+      this.#drainPromise = drain;
+      void drain.catch(() => {}).finally(() => { if (this.#drainPromise === drain) this.#drainPromise = undefined; });
+      return;
+    }
     if (this.#status === "waiting_approval") {
       const recovery = parseWaitingApprovalRecovery(records, this.#executionId, this.#definition);
       if (recovery.turn !== this.#turn) {
@@ -303,6 +413,8 @@ export class AgentHandle {
       if (this.#status === "running") await this.#drain();
     } catch (error: unknown) {
       this.#lastError = error;
+      if (error instanceof ExecutionBudgetExceededError) { await this.#transition("paused", error.message); return; }
+      if (error instanceof RuntimeControlError) { await this.#transition(error.status, error.message); return; }
       if (this.#status === "cancelled" || this.#status === "needs_reconciliation") return;
       await this.#transition("failed", error instanceof Error ? error.message : "执行失败");
     }
@@ -342,19 +454,23 @@ export class AgentHandle {
     try {
       if (this.#status === "queued") await this.#transition("running", "开始处理收件箱");
       while (this.#status === "running") {
-        const followUp = await this.#inbox.takeFollowUp();
+        const contributions = this.#scope.resolveTurn();
+        const followUp = await this.#inbox.beginTurn(contributions.generation);
         if (followUp === undefined) {
           if (this.#pendingEnqueues.size > 0) {
             await Promise.allSettled([...this.#pendingEnqueues]);
             continue;
           }
-          await this.#transition("completed", "收件箱已处理完成");
-          break;
+          const idleStatus = await this.#inbox.completeIfEmpty();
+          if (idleStatus) { this.#status = idleStatus; break; }
+          continue;
         }
-        await this.#runTurn(followUp.text, followUp.kind);
+        await this.#runTurn(followUp.item.text, followUp.item.kind, followUp.turn, contributions);
       }
     } catch (error: unknown) {
       this.#lastError = error;
+      if (error instanceof ExecutionBudgetExceededError) { await this.#transition("paused", error.message); return; }
+      if (error instanceof RuntimeControlError) { await this.#transition(error.status, error.message); return; }
       if (this.#status === "cancelled"
         || this.#status === "interrupted"
         || this.#status === "needs_reconciliation") return;
@@ -362,23 +478,70 @@ export class AgentHandle {
     }
   }
 
-  async #runTurn(text: string, kind: "follow_up" | "resume"): Promise<void> {
-    this.#turn += 1;
-    const turn = this.#turn;
-    const contributions = this.#scope.resolveTurn();
-    const llm = requiredContribution(contributions, "llm", this.#definition.llmId);
+  async #runTurn(text: string, kind: "follow_up" | "resume", turn: number, contributions: TurnContributions, recoveringJob = false): Promise<void> {
+    const remaining = await this.#budget.remainingMilliseconds();
+    let expired = false;
+    const timer = setTimeout(() => {
+      expired = true;
+      this.#abortController?.abort(new ExecutionBudgetExceededError("duration"));
+    }, remaining);
+    timer.unref();
+    try {
+      await this.#executeTurn(text, kind, turn, contributions, recoveringJob);
+      if (expired && this.#status === "running") throw new ExecutionBudgetExceededError("duration");
+    }
+    catch (error) {
+      if (expired && this.#status !== "needs_reconciliation") throw new ExecutionBudgetExceededError("duration");
+      throw error;
+    } finally { clearTimeout(timer); }
+  }
+
+  async #executeTurn(text: string, kind: "follow_up" | "resume", turn: number, contributions: TurnContributions, recoveringJob = false): Promise<void> {
+    this.#turn = turn;
     const availableToolIds = this.#availableToolIds(contributions);
     this.#abortController = new AbortController();
-    await this.#store.append({
-      executionId: this.#executionId,
-      type: "turn/started",
-      payload: { turn, generation: contributions.generation },
-    });
-    await this.#sessionLog.append({
-      role: kind === "resume" ? "system" : "user",
-      content: kind === "resume" ? `[resume] ${text}` : text,
-      turn,
-    });
+
+    if (this.#definition.jobId) {
+      const job = contributions.get("job", this.#definition.jobId);
+      if (!job) throw new AgentRuntimeError(`Job 贡献 ${this.#definition.jobId} 不存在`);
+      const input = { turn, generation: contributions.generation, message: text, kind,
+        executionId: this.#executionId, authorityCommitment: this.#authority.commitment };
+      if (!recoveringJob) await this.#store.append({ executionId: this.#executionId, type: "job/started",
+        payload: { jobId: job.id, turn, generation: contributions.generation, authorityCommitment: this.#authority.commitment } });
+      const prior = (await this.#store.readExecution(this.#executionId))
+        .find(record => record.type === "job/completed" && record.payload.turn === turn && record.payload.jobId === job.id);
+      const rawResult = prior?.payload.result ?? await (recoveringJob ? job.recover! : job.run)(input, this.#abortController.signal);
+      if (this.#status !== "running") return;
+      if (!rawResult || typeof rawResult !== "object" || Array.isArray(rawResult)) {
+        throw new AgentRuntimeError("产品工作流返回了无效的执行状态");
+      }
+      const result = rawResult as JsonObject;
+      if (!["completed", "paused", "needs_human_decision", "needs_reconciliation", "failed", "cancelled"].includes(String(result.status))) {
+        throw new AgentRuntimeError("产品工作流返回了无效的执行状态");
+      }
+      for (;;) {
+        const records = await this.#store.readExecution(this.#executionId);
+        if (records.some(record => record.type === "job/completed" && record.payload.turn === turn && record.payload.jobId === job.id)) break;
+        const committed = await this.#store.commit(this.#executionId, records.at(-1)?.sequence ?? 0, [
+          { executionId: this.#executionId, type: "job/completed", payload: { jobId: job.id, turn, generation: contributions.generation, result } },
+          ...(typeof result.summary === "string" && result.summary ? [{ executionId: this.#executionId, type: "session/entry" as const,
+            payload: { role: "assistant", content: result.summary, turn, modelVisible: true } }] : []),
+          ...(result.status === "completed" ? [{ executionId: this.#executionId, type: "turn/completed" as const,
+            payload: { turn, generation: contributions.generation } }] : []),
+        ]);
+        if (committed) break;
+      }
+      if (result.status !== "completed") {
+        const status = result.status === "needs_human_decision" ? "paused" : result.status as ExecutionStatus;
+        const reason = typeof result.nextStep === "string" ? result.nextStep : "产品工作流等待处理";
+        if (status === "failed") this.#lastError = new AgentRuntimeError(reason);
+        await this.#transition(status, reason);
+        return;
+      }
+      return;
+    }
+
+    const llm = requiredContribution(contributions, "llm", this.#definition.llmId);
 
     const prompts = await Promise.all(this.#definition.promptIds.map(async (id) => {
       const prompt = requiredContribution(contributions, "prompt", id);
@@ -402,6 +565,7 @@ export class AgentHandle {
   async #runModelBoundaries(runtime: TurnRuntime, firstBoundary: number): Promise<void> {
     for (let boundary = firstBoundary; boundary <= this.#maxModelBoundariesPerTurn; boundary += 1) {
       if (this.#status !== "running") return;
+      await this.#budget.remainingMilliseconds();
       await this.#appendSteersAtBoundary(runtime.turn);
       const prompts = await Promise.all(this.#definition.promptIds.map((id, index) => {
         const contribution = requiredContribution(runtime.contributions, "prompt", id);
@@ -421,10 +585,15 @@ export class AgentHandle {
       };
 
       await this.#persistModelRequest(request, boundary, prompts);
-      const response = await runtime.llm.complete(request, {
-        signal: this.#abortController?.signal ?? AbortSignal.abort("执行已结束"),
-        scope: this.#scope.identity,
-      });
+      const modelResponse = await this.#invokeModelWithinDeadline(runtime.llm, request);
+      if (modelResponse.usage) validateModelUsage(modelResponse.usage);
+      if (new Set(modelResponse.toolCalls.map(call => call.id)).size !== modelResponse.toolCalls.length) {
+        throw new AgentRuntimeError("模型响应包含重复的工具调用标识");
+      }
+      const response = { ...modelResponse, toolCalls: modelResponse.toolCalls.map(call => ({ ...call,
+        id: `tool-${digestJson({ executionId: this.#executionId, generation: runtime.generation,
+          turn: runtime.turn, boundary, providerCallId: call.id })}`,
+      })) };
       if (this.#status !== "running") return;
       await this.#store.append({
         executionId: this.#executionId,
@@ -434,6 +603,7 @@ export class AgentHandle {
           boundary,
           generation: runtime.generation,
           text: response.text,
+          ...(response.usage ? { usage: { ...response.usage } } : {}),
           toolCalls: response.toolCalls.map((call) => ({
             id: call.id,
             toolId: call.toolId,
@@ -445,6 +615,7 @@ export class AgentHandle {
       if (response.text.length > 0) {
         await this.#sessionLog.append({ role: "assistant", content: response.text, turn: runtime.turn });
       }
+      await this.#budget.remainingMilliseconds();
       if (response.toolCalls.length === 0) {
         await this.#store.append({
           executionId: this.#executionId,
@@ -471,13 +642,7 @@ export class AgentHandle {
   }
 
   async #appendSteersAtBoundary(turn: number): Promise<void> {
-    for (const steer of await this.#inbox.takeSteersAtModelBoundary()) {
-      await this.#sessionLog.append({
-        role: "system",
-        content: `[steer] ${steer.text}`,
-        turn,
-      });
-    }
+    await this.#inbox.applySteersAtModelBoundary(turn);
   }
 
   async #persistModelRequest(
@@ -509,6 +674,7 @@ export class AgentHandle {
     boundary: number,
   ): Promise<void> {
     const tool = requiredContribution(contributions, "tool", call.toolId);
+    await this.#budget.remainingMilliseconds();
     const context = {
       executionId: this.#executionId,
       generation: contributions.generation,
@@ -654,10 +820,14 @@ export class AgentHandle {
     }
 
     let result: JsonValue;
+    await this.#budget.remainingMilliseconds();
+    await this.#store.append({ executionId: this.#executionId, type: "tool/started",
+      payload: { toolCallId: call.id, toolId: currentTool.id, generation: intent.generation, turn } });
+    if (context.signal.aborted || this.#status !== "running") return;
     try {
       result = await currentTool.execute(revalidated, context);
     } catch (error: unknown) {
-      if (error instanceof UnknownToolOutcomeError && NON_REPLAYABLE_EFFECTS.has(currentTool.effectClass)) {
+      if (NON_REPLAYABLE_EFFECTS.has(currentTool.effectClass)) {
         await this.#store.append({
           executionId: this.#executionId,
           type: "tool/outcome_unknown",
@@ -666,7 +836,7 @@ export class AgentHandle {
             toolId: currentTool.id,
             effectClass: currentTool.effectClass,
             generation: intent.generation,
-            message: error.message,
+            message: "工具已开始执行，但未返回可持久化的确定结果",
           },
         });
         await this.#transition("needs_reconciliation", "外部副作用结果未知，需要人工核对");
@@ -693,6 +863,21 @@ export class AgentHandle {
     });
   }
 
+  async #invokeModelWithinDeadline(llm: LlmContribution, request: ModelRequest) {
+    const remaining = await this.#budget.remainingMilliseconds();
+    const deadline = new AbortController();
+    const timer = setTimeout(() => deadline.abort(new ExecutionBudgetExceededError("duration")), remaining);
+    timer.unref();
+    const signal = AbortSignal.any([deadline.signal, this.#abortController?.signal ?? AbortSignal.abort("执行已结束")]);
+    try {
+      signal.throwIfAborted();
+      return await raceAbort(llm.complete(request, { signal, scope: this.#scope.identity }), signal);
+    } catch (error) {
+      if (deadline.signal.aborted) throw new ExecutionBudgetExceededError("duration");
+      throw error;
+    } finally { clearTimeout(timer); }
+  }
+
   async #transition(status: ExecutionStatus, reason: string): Promise<void> {
     const previous = this.#status;
     this.#status = status;
@@ -704,6 +889,10 @@ export class AgentHandle {
       });
     } catch (error: unknown) {
       if (this.#status === status) this.#status = previous;
+      if (error instanceof RuntimeControlError && error.status !== status) {
+        await this.#transition(error.status, error.message);
+        return;
+      }
       throw error;
     }
   }
@@ -796,8 +985,8 @@ function uncertainNonReplayableIntent(records: readonly RuntimeRecord[]): {
       if (!isToolEffectClass(effectClass)) throw new AgentRuntimeError("持久化工具副作用类型无效");
       if (!NON_REPLAYABLE_EFFECTS.has(effectClass)) return false;
       return records.some((candidate) => candidate.sequence > record.sequence
-        && candidate.type === "execution/status"
-        && candidate.payload.status === "running");
+        && ((candidate.type === "execution/status" && candidate.payload.status === "running")
+          || (candidate.type === "tool/started" && candidate.payload.toolCallId === record.payload.toolCallId)));
     })
     .at(-1);
   return unresolved === undefined

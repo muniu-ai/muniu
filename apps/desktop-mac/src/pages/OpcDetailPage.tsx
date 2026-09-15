@@ -13,8 +13,9 @@ import {
   Target,
 } from "lucide-react";
 import { AgentOsApiError, type AgentOsClient } from "../api";
-import { OpcAgentPanel } from "../components/OpcAgentPanel";
+import { ThreadAgentPanel } from "../components/ThreadAgentPanel";
 import { Loading } from "../components/Status";
+import { ExportFileError, saveJsonExport } from "../export";
 import type {
   AssetSummary,
   OpcDeliverablePreview,
@@ -66,6 +67,7 @@ export function OpcDetailPage({ api, workspaceId, opportunityId, viewMode, onBac
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<OpcUiError>();
   const [notice, setNotice] = useState<string>();
+  const [lastExport, setLastExport] = useState<{ readonly opportunityId: string; readonly streamVersion: number; readonly items: Awaited<ReturnType<AgentOsClient["exportOpportunity"]>> }>();
   const feedbackRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async () => {
@@ -147,19 +149,26 @@ export function OpcDetailPage({ api, workspaceId, opportunityId, viewMode, onBac
     setError(undefined);
     setNotice(undefined);
     try {
-      const exported = await api.exportOpportunity(workspaceId, opportunity);
-      setNotice(`${exported.length} 项成果已导出`);
+      const exported = lastExport?.opportunityId === opportunity.id && lastExport.streamVersion === opportunity.streamVersion
+        ? lastExport.items : await api.exportOpportunity(workspaceId, opportunity);
+      setLastExport({ opportunityId: opportunity.id, streamVersion: opportunity.streamVersion, items: exported });
+      const saved = await saveJsonExport(`${opportunity.title}-机会成果`, {
+        schemaVersion: 1, opportunityId: opportunity.id, opportunityVersion: opportunity.streamVersion,
+        deliverables: exported,
+      });
+      setNotice(saved === "cancelled" ? "成果已生成，已取消保存文件；可再次导出"
+        : `${exported.length} 项成果已导出${saved === "saved" ? "，文件已保存" : "，文件下载已发起"}`);
       try {
         await onChanged();
       } catch (caught) {
-        setError({ title: "成果已导出，成果列表未更新", message: apiMessage(caught) });
+        setError({ title: "成果已生成，成果列表未更新", message: apiMessage(caught) });
       }
     } catch (caught) {
       if (caught instanceof AgentOsApiError && caught.status === 409) {
         await load();
         setError({ title: "档案版本已更新", message: "已读取最新档案。请核对后重新导出" });
       } else {
-        setError({ title: "成果没有导出", message: apiMessage(caught) });
+        setError({ title: "成果文件未保存", message: apiMessage(caught) });
       }
     } finally {
       setBusy(false);
@@ -199,8 +208,6 @@ export function OpcDetailPage({ api, workspaceId, opportunityId, viewMode, onBac
       {error && <InlineError title={error.title} message={error.message} onDismiss={() => setError(undefined)} />}
     </div>}
 
-    <OpcAgentPanel api={api} workspaceId={workspaceId} opportunityId={opportunity.id} />
-
     <NextTask
       opportunity={opportunity}
       pendingCommitment={pendingCommitment}
@@ -211,6 +218,7 @@ export function OpcDetailPage({ api, workspaceId, opportunityId, viewMode, onBac
       uploadAsset={uploadAsset}
       onExport={exportDeliverables}
     />
+    <ThreadAgentPanel api={api} workspaceId={workspaceId} pluginId="opc" resourceId={opportunity.id} professional={viewMode === "professional"} />
     <OpportunityLifecycle opportunity={opportunity} busy={busy} runCommand={runCommand} />
 
     <section className="opc-record-grid" aria-label="机会事实记录">
@@ -278,7 +286,7 @@ function NextTask({ opportunity, pendingCommitment, confirmedCommitment, deliver
   if (opportunity.state === "offer_ready" && !confirmedCommitment) return <CommitmentTask busy={busy} runCommand={runCommand} />;
   if (opportunity.state === "offer_ready") return <DecisionTask busy={busy} runCommand={runCommand} />;
   if (opportunity.state === "decided") return <SimpleTask
-    icon={<Download size={19} />} title="导出机会成果" detail="导出当前档案、访谈包、证据账本、反证、收费方案和决策记录。"
+    icon={<Download size={19} />} title="导出机会成果" detail="保存包含六项成果的 JSON 文件。文件含明文访谈，请妥善保管；对外分享后无法撤回。"
     button={`导出 ${deliverableCount} 项成果`} busy={busy} onClick={onExport}
   />;
   if (opportunity.state === "paused") return <SimpleTask
@@ -659,6 +667,7 @@ function evidenceLabel(level: OpportunityDetail["evidenceLevel"]) {
 }
 
 function apiMessage(error: unknown) {
+  if (error instanceof ExportFileError) return error.message;
   if (error instanceof AgentOsApiError) {
     const field = error.detail.fieldIssues?.[0]?.message;
     return [error.detail.message, field, error.detail.action].filter(Boolean).join("。 ");

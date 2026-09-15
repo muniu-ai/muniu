@@ -446,7 +446,7 @@ function assertManifest(manifest: PluginManifestV1): void {
     if (!projection || typeof projection !== "object"
       || !/^[a-z][a-z0-9_]{0,62}$/u.test(projection.namespace)
       || !isLocalManifestEntry(projection.entry)) {
-      throw policy("PLUGIN_MANIFEST_INVALID", "插件投影命名空间或入口无效", "使用独立命名空间和包内 SQL 入口");
+      throw policy("PLUGIN_MANIFEST_INVALID", "插件投影命名空间或入口无效", "使用独立命名空间和包内投影定义");
     }
   }
 }

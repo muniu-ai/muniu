@@ -3,7 +3,7 @@
 
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,6 +15,10 @@ import { seedHostFlow, verifyCommittedEvent } from "./enterprise-host-flow.mjs";
 import { SigV4S3Client } from "./lib/s3-client.mjs";
 import { createPostgresPool } from "./lib/postgres-pool.mjs";
 import { PostgresKernelStore } from "./lib/postgres-kernel-store.mjs";
+import { VaultTransitKeyProvider } from "./lib/enterprise-secrets.mjs";
+import { verifyEnterprisePluginReplay } from "./enterprise-plugin-replay.mjs";
+import { verifyEnterpriseMaintenance } from "./enterprise-maintenance-proof.mjs";
+import { verifyIdleTransactionExpiry } from "./enterprise-idle-transaction-proof.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const composeFile = join(root, "docker-compose.enterprise.yml");
@@ -87,6 +91,7 @@ async function composeFixture() {
   await compose("up", "--build", "--detach", "--wait");
   const pool = createPostgresPool({ connectionString: "postgresql://mn:mn-e2e-only@127.0.0.1:55432/mn_enterprise" });
   try {
+    await verifyIdleTransactionExpiry(pool);
     const state = await seedHostFlow();
     const tenantBTokenResponse = await fetch("http://127.0.0.1:59080/token?tenant=tenant-b&sub=owner-b@example.test", { method: "POST" });
     const tenantBTokenText = await tenantBTokenResponse.text();
@@ -119,6 +124,7 @@ async function composeFixture() {
     process.stdout.write("Host owner 丢失后，已提交事件 RPO 0\n");
 
     await verifyS3Cas();
+    await verifyVaultTransit(state);
     await verifyWorkers(pool, state.workspaceId);
 
     await compose("restart", "postgres");
@@ -156,9 +162,42 @@ async function composeFixture() {
     });
     assert.equal(expired.status, 410);
     assert.equal((await expired.json()).code, "EVENT_CURSOR_EXPIRED");
+    await verifyEnterprisePluginReplay();
+    await verifyEnterpriseMaintenance();
   } finally {
     await pool.end();
   }
+}
+
+async function verifyVaultTransit(state) {
+  const options = { address: "http://127.0.0.1:58200", token: "mn-v2-vault-fixture-only", individuallyRevocable: true };
+  const provider = new VaultTransitKeyProvider(options);
+  assert.equal(await provider.probe(), true);
+  const plaintext = randomBytes(32);
+  const erased = await provider.wrapKey(plaintext, { tenantId: state.tenantId, purpose: "fixture-erased" });
+  const retained = await provider.wrapKey(plaintext, { tenantId: state.tenantId, purpose: "fixture-retained" });
+  assert.deepEqual(await provider.unwrapKey(erased), plaintext);
+  await provider.revokeKey(erased);
+  const reopened = new VaultTransitKeyProvider(options);
+  assert.equal(await reopened.isKeyRevoked(erased), true);
+  await assert.rejects(reopened.unwrapKey(erased));
+  assert.deepEqual(await reopened.unwrapKey(retained), plaintext);
+  // Pausing preserves the disposable dev server's keys; this is not a durable Vault restart test.
+  await compose("pause", "vault");
+  try {
+    const response = await fetch("http://127.0.0.1:17319/v2/readiness", { signal: AbortSignal.timeout(5000) });
+    assert.equal(response.status, 503);
+    assert.ok((await response.json()).data.issues.some(issue => issue.code === "KMS_UNAVAILABLE"));
+    assert.equal(await reopened.probe(), false);
+    await assert.rejects(reopened.unwrapKey(retained));
+  } finally { await compose("unpause", "vault"); }
+  await waitFor(() => reopened.probe(), "Vault Transit 连接恢复");
+  assert.deepEqual(await reopened.unwrapKey(retained), plaintext);
+  assert.equal(await reopened.isKeyRevoked(erased), true);
+  await verifyCommittedEvent(state);
+  await reopened.revokeKey(retained);
+  plaintext.fill(0);
+  process.stdout.write("真实 Vault Transit：独立密钥销毁、旧 wrapped DEK 拒绝、连接中断与恢复通过\n");
 }
 
 async function verifyS3Cas() {

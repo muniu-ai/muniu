@@ -15,8 +15,9 @@ import type {
   Thread,
 } from "@mn/contracts";
 import { AgentOsKernel, type InboxItem, type KernelTransaction } from "@mn/kernel";
-import { createCodingTask, createRepository, type CodingTask } from "@mn/plugin-coding";
+import { createCodingTask, createRepository, type CodingTask, type Spec, type GovernanceSnapshot, type HarnessSnapshot } from "@mn/plugin-coding";
 import { SqliteStorage } from "@mn/storage";
+import { KernelProjectionRuntimeStore, PersistentInbox } from "@mn/agent-runtime";
 
 import {
   AgentOsWorker,
@@ -52,6 +53,9 @@ test("真实 Worker 通过受控仓库、macOS sandbox 和 Gate 持久化 Coding
     gates: transaction.listProjections<any>("coding.gate-result"),
     evidence: transaction.listProjections<any>("coding.code-evidence"),
     deliverables: transaction.listProjections<Deliverable>("deliverable"),
+    specs: transaction.listProjections<Spec>("coding.spec"),
+    governance: transaction.listProjections<GovernanceSnapshot>("coding.governance"),
+    harness: transaction.listProjections<HarnessSnapshot>("coding.harness"),
   }));
   assert.equal(state.execution?.status, "completed");
   assert.equal(state.task?.status, "completed");
@@ -63,10 +67,17 @@ test("真实 Worker 通过受控仓库、macOS sandbox 和 Gate 持久化 Coding
   assert.equal(state.gates[0].status, "passed");
   assert.equal(state.gates[0].authoritative, true);
   assert.equal(state.evidence.length, 1);
+  assert.equal(state.specs.length, 1);
+  assert.match(state.specs[0]!.body, /只修改文案，不要新增文件/u);
+  assert.equal(state.evidence[0].specDigest, state.specs[0]!.digest);
+  assert.equal(state.evidence[0].governanceDigest, state.governance[0]!.digest);
+  assert.equal(state.evidence[0].harnessDigest, state.harness[0]!.digest);
   assert.equal(state.deliverables.length, 1);
   assert.equal(state.deliverables[0]?.executionId, "execution-1");
   assert.equal((await fixture.store.getJob("job-1"))?.status, "completed");
   assert.equal(fixture.modelCalls(), 1);
+  const runtime = new KernelProjectionRuntimeStore({ tenantId: "local", store: fixture.store });
+  assert.equal((await runtime.readExecution("execution-1")).filter(record => record.type === "job/started").length, 1);
   assert.deepEqual(await readdir(fixture.sandboxRoot), []);
   const codingEvents = (await fixture.store.readEvents("local", { afterPosition: 0, limit: 200 }))
     .events.filter((event) => event.aggregateType === "coding.task");
@@ -76,7 +87,31 @@ test("真实 Worker 通过受控仓库、macOS sandbox 和 Gate 持久化 Coding
     "coding.code_evidence_recorded",
     "coding.execution_waiting_approval",
     "coding.candidate_approved",
+    "coding.task_settled",
   ]);
+});
+
+test("Coding 在同一个 AgentHandle 中按 FIFO 消费后续输入并保留各轮成果", { skip: !SANDBOX_AVAILABLE }, async t => {
+  const fixture = await codingFixture(t, [passingPatch(), passingPatch()]);
+  const runtime = new KernelProjectionRuntimeStore({ tenantId: "local", store: fixture.store });
+  await new PersistentInbox(runtime, "execution-1").enqueue("follow_up", "再检查一次文案");
+  const polling = fixture.worker.pollOnce();
+  for (let turn = 1; turn <= 2; turn += 1) {
+    const approval = await waitForApproval(fixture.store);
+    await fixture.kernel.decideApproval("local", "local-owner", `approve-turn-${turn}`, approval.id, approval.streamVersion, "approve_once");
+  }
+  assert.deepEqual(await polling, { status: "completed", jobId: "job-1" });
+  assert.equal(fixture.modelCalls(), 2);
+  const records = await runtime.readExecution("execution-1");
+  assert.deepEqual(records.filter(record => record.type === "turn/started").map(record => record.payload.turn), [1, 2]);
+  assert.deepEqual(records.filter(record => record.type === "session/entry" && record.payload.role === "user").map(record => record.payload.content),
+    ["把 message.txt 的 old value 改成 new value", "再检查一次文案"]);
+  assert.equal((await fixture.store.transact("local", tx => tx.listProjections<Deliverable>("deliverable"))).length, 2);
+  const specs = await fixture.store.transact("local", tx => tx.listProjections<Spec>("coding.spec"));
+  assert.deepEqual(specs.map(spec => spec.revision), [1, 2]);
+  assert.equal(specs[1]!.supersedesSpecId, specs[0]!.id);
+  assert.equal(specs[0]!.body, "把 message.txt 的 old value 改成 new value");
+  assert.equal(specs[1]!.body, "再检查一次文案");
 });
 
 test("Coding 结果与 Job 原子终结，不给普通取消留下矛盾窗口", {
@@ -108,6 +143,61 @@ test("Coding 结果与 Job 原子终结，不给普通取消留下矛盾窗口",
   assert.equal((await fixture.store.getJob("job-1"))?.status, "completed");
 });
 
+test("Coding 多轮共用三次修复预算，耗尽后不继续调用模型", { skip: !SANDBOX_AVAILABLE }, async t => {
+  const fixture = await codingFixture(t, [failingPatch(), failingPatch(), passingPatch(), ...Array.from({ length: 4 }, () => failingPatch())]);
+  const runtime = new KernelProjectionRuntimeStore({ tenantId: "local", store: fixture.store });
+  await new PersistentInbox(runtime, "execution-1").enqueue("follow_up", "继续核对");
+  const pending = fixture.worker.pollOnce();
+  const approval = await waitForApproval(fixture.store, 5_000);
+  await fixture.kernel.decideApproval("local", "local-owner", "approve-before-budget", approval.id, approval.streamVersion, "approve_once");
+  assert.deepEqual(await pending, { status: "completed", jobId: "job-1" });
+  assert.equal(fixture.modelCalls(), 5);
+  assert.equal((await fixture.store.transact("local", tx => tx.getProjection<Execution>("execution", "execution-1")))?.status, "paused");
+  assert.equal((await runtime.readExecution("execution-1")).filter(record => record.type === "budget/reserved").length, 3);
+});
+
+test("模型用量未知时暂停 Coding 执行和任务，保留预留且不重试", { skip: !SANDBOX_AVAILABLE }, async t => {
+  const fixture = await codingFixture(t, []);
+  assert.deepEqual(await fixture.worker.pollOnce(), { status: "completed", jobId: "job-1" });
+  const state = await fixture.store.transact("local", tx => ({ run: tx.getProjection<{ status: string }>("coding.execution", "execution-1"),
+    task: tx.getProjection<CodingTask>("coding.task", "task-1"), execution: tx.getProjection<Execution>("execution", "execution-1") }));
+  assert.equal(state.execution?.status, "paused");
+  assert.equal(state.task?.status, "needs_human_decision");
+  assert.equal(state.run?.status, "needs_human_decision");
+  const records = await new KernelProjectionRuntimeStore({ tenantId: "local", store: fixture.store }).readExecution("execution-1");
+  assert.equal(records.filter(record => record.type === "model/reserved").length, 1);
+  assert.equal(records.filter(record => record.type === "model/settled").length, 0);
+  assert.equal(fixture.modelCalls(), 1);
+});
+
+test("模型已结算但未提交规定工具调用时失败关闭，不留下运行中的 Coding 投影", { skip: !SANDBOX_AVAILABLE }, async t => {
+  const fixture = await codingFixture(t, [passingPatch()], { invalidModelResponse: true });
+  assert.deepEqual(await fixture.worker.pollOnce(), { status: "failed", jobId: "job-1" });
+  const state = await fixture.store.transact("local", tx => ({ run: tx.getProjection<{ status: string }>("coding.execution", "execution-1"),
+    task: tx.getProjection<CodingTask>("coding.task", "task-1"), execution: tx.getProjection<Execution>("execution", "execution-1") }));
+  assert.equal(state.execution?.status, "failed");
+  assert.equal(state.task?.status, "failed");
+  assert.equal(state.run?.status, "failed");
+});
+
+test("恢复前时间预算已耗尽时不启动模型，并将 CodingTask 置为人工决定", { skip: !SANDBOX_AVAILABLE }, async t => {
+  const fixture = await codingFixture(t, []);
+  await fixture.store.transact("local", tx => {
+    tx.putProjection("coding.execution", "execution-1", { executionId: "execution-1", taskId: "task-1", workspaceId: "workspace-1",
+      status: "running", streamVersion: 1, createdAt: NOW, updatedAt: NOW });
+    tx.appendEvent({ tenantId: "local", aggregateType: "coding.execution", aggregateId: "execution-1", expectedStreamVersion: 0,
+      type: "coding.execution_started", executionId: "execution-1", actorId: "agent", generation: 1, correlationId: "prepared-before-crash", publicPayload: {} });
+  });
+  const runtime = new KernelProjectionRuntimeStore({ tenantId: "local", store: fixture.store });
+  await runtime.append({ executionId: "execution-1", type: "budget/started",
+    payload: { startedAtMs: Date.parse(NOW) - 3_600_001, maxDurationMs: 3_600_000 } });
+  assert.deepEqual(await fixture.worker.pollOnce(), { status: "completed", jobId: "job-1" });
+  assert.equal(fixture.modelCalls(), 0);
+  assert.equal((await fixture.store.transact("local", tx => tx.getProjection<Execution>("execution", "execution-1")))?.status, "paused");
+  assert.equal((await fixture.store.transact("local", tx => tx.getProjection<CodingTask>("coding.task", "task-1")))?.status, "needs_human_decision");
+  assert.equal((await fixture.store.transact("local", tx => tx.getProjection<{ status: string }>("coding.execution", "execution-1")))?.status, "needs_human_decision");
+});
+
 test("真实 Worker 在 Gate 连续失败后最多修复三次并进入人工决定终态", {
   skip: !SANDBOX_AVAILABLE,
 }, async (t) => {
@@ -124,7 +214,7 @@ test("真实 Worker 在 Gate 连续失败后最多修复三次并进入人工决
     inbox: transaction.listProjections<InboxItem>("inbox"),
   }));
   assert.equal(fixture.modelCalls(), 4, "首次候选加三次修复后必须停止");
-  assert.equal(state.execution?.status, "completed");
+  assert.equal(state.execution?.status, "paused");
   assert.equal(state.task?.status, "needs_human_decision");
   assert.equal(state.candidates.length, 4);
   assert.equal(state.gates.length, 4);
@@ -178,13 +268,17 @@ test("审批等待期间重复处理同一 Job 从持久检查点恢复且不重
   assert.equal(fixture.modelCalls(), 1);
   assert.equal(persisted.candidates.length, 1);
   assert.equal(persisted.deliverables.length, 1);
+  const records = await new KernelProjectionRuntimeStore({ tenantId: "local", store: fixture.store }).readExecution("execution-1");
+  const acceptance = records.filter(record => record.type === "tool/intent" && record.payload.toolId === "coding.candidate.accept");
+  assert.equal(acceptance.length, 1, "重复恢复不能复制同一审批意图");
+  assert.equal(records.filter(record => record.type === "tool/result" && record.payload.toolCallId === acceptance[0]!.payload.toolCallId).length, 1);
   assert.equal((await fixture.store.getJob("job-1"))?.status, "completed");
 });
 
 async function codingFixture(
   t: test.TestContext,
   patches: readonly { readonly patch: string; readonly summary: string }[],
-  options: { readonly cancelAfterCodingCompletion?: boolean; readonly inputMessage?: string } = {},
+  options: { readonly cancelAfterCodingCompletion?: boolean; readonly inputMessage?: string; readonly invalidModelResponse?: boolean } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "muniu-coding-worker-"));
   t.after(async () => rm(root, { recursive: true, force: true }));
@@ -216,7 +310,8 @@ async function codingFixture(
       message.role === "user" && message.content === options.inputMessage), "Coding 模型必须收到本轮输入");
     return {
       text: item.summary,
-      toolCalls: [{
+      usage: { inputTokens: 10, cachedInputTokens: 0, outputTokens: 10 },
+      toolCalls: options.invalidModelResponse ? [] : [{
         id: `model-call-${calls}`,
         toolId: "coding.sandbox.write",
         arguments: { patch: item.patch, summary: item.summary },
@@ -255,6 +350,9 @@ async function codingFixture(
     store: workerStore,
     secretStore: { async read() { return "fixture-api-key"; } },
     modelInvoker,
+    modelQuoter: async () => ({ inputTokenLimit: 100, maxOutputTokens: 100,
+      rates: { id: "non-billable-fixture", currency: "CNY", inputNanoMinorUnitsPerToken: "0",
+        cachedInputNanoMinorUnitsPerToken: "0", outputNanoMinorUnitsPerToken: "0" } }),
     approvalKernel: kernel,
     codingSandboxRoot: join(root, "sandboxes"),
     approvalPollIntervalMs: 2,
@@ -433,8 +531,9 @@ async function seed(store: SqliteStorage, repositoryPath: string, inputMessage?:
   });
 }
 
-async function waitForApproval(store: SqliteStorage): Promise<Approval> {
-  for (let attempt = 0; attempt < 500; attempt += 1) {
+async function waitForApproval(store: SqliteStorage, timeoutMs = 5_000): Promise<Approval> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
     const approval = await store.transact("local", (transaction) =>
       transaction.listProjections<Approval>("approval").find((item) => item.status === "pending"));
     if (approval) return approval;

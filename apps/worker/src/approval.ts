@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import type { ToolApprovalPort } from "@mn/agent-runtime";
+import { RuntimeControlError, type ToolApprovalPort } from "@mn/agent-runtime";
 import type { Approval, ToolCallIntent, ToolCallCommitment } from "@mn/contracts";
 
 export interface ToolApprovalKernel {
@@ -44,6 +44,12 @@ export function createKernelToolApprovalPort(
   return {
     async authorize(intent, signal) {
       if (signal.aborted) throw new Error("工具审批等待已取消");
+      const assertNotInterrupted = async () => {
+        const control = await options.store.transact(options.tenantId, tx =>
+          tx.getProjection<{ generation: number; command: string }>("execution-control", intent.executionId));
+        if (control?.generation === intent.generation && control.command === "interrupt") throw new RuntimeControlError("interrupted");
+      };
+      await assertNotInterrupted();
       const requested = await options.kernel.requestToolApproval(
         options.tenantId,
         options.actorId,
@@ -53,6 +59,7 @@ export function createKernelToolApprovalPort(
       if (requested.mode === "auto") return requested;
       while (true) {
         if (signal.aborted) throw new Error("工具审批等待已取消");
+        await assertNotInterrupted();
         const state = await options.store.transact(options.tenantId, (transaction) => ({
           approval: transaction.getProjection<Approval>("approval", requested.approval.id),
           persistedIntent: transaction.getProjection<ToolCallCommitment>("toolIntent", intent.id),

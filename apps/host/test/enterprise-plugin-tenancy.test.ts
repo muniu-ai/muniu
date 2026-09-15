@@ -350,7 +350,7 @@ test("企业签名插件在一个 Host 排空时阻止另一 Host 接收新执�
   assert.equal(blocked.status, 422, await blocked.clone().text());
   assert.equal((await body(blocked)).code, "PLUGIN_NOT_ACTIVE");
   const readiness = await hostB.dispatch(new Request("http://host.test/v2/readiness"));
-  assert.equal(readiness.status, 503);
+  assert.equal(readiness.status, 200);
   assert.ok((await body(readiness)).data.issues.some(
     (issue: any) => issue.code === "TENANT_PLUGIN_OPERATION_IN_PROGRESS",
   ));
@@ -569,7 +569,7 @@ export default (manifest) => ({
       secretStore: secrets,
       now: () => NOW,
       ...loaded,
-      modelProbe: async () => ({ models: ["fixture-model"], defaultModel: "fixture-model" }),
+      modelProbe: async () => ({ models: ["deepseek-v4-flash"], defaultModel: "deepseek-v4-flash" }),
       identityResolver: () => ({
         tenantId: "tenant-a", principalId: "governance-a", organizationRoles: ["organization_admin", "governance_admin"],
       }),
@@ -619,15 +619,32 @@ export default (manifest) => ({
         modelCalls += 1;
         assert.match(modelRequest.messages[0]?.content ?? "", /按来源整理研究结果/u);
         assert.deepEqual(modelRequest.availableToolIds, []);
-        return { text: "研究结果已整理", toolCalls: [] };
+        return { text: "研究结果已整理", toolCalls: [], usage: { inputTokens: 10, cachedInputTokens: 0, outputTokens: 10 } };
       },
+      modelQuoter: async () => ({ inputTokenLimit: 100, maxOutputTokens: 100,
+        rates: { id: "non-billable-fixture", currency: "CNY", inputNanoMinorUnitsPerToken: "0",
+          cachedInputNanoMinorUnitsPerToken: "0", outputNanoMinorUnitsPerToken: "0" } }),
     });
     const result = await handler({ ...job, status: "leased", attempts: 1, fencingToken: 1,
       createdAt: NOW, updatedAt: NOW, leaseOwner: "worker", leaseExpiresAt: "2026-09-04T12:00:30.000Z" },
       { workerId: "worker", fencingToken: 1, leaseExpiresAt: "2026-09-04T12:00:30.000Z", signal: new AbortController().signal });
     assert.equal(modelCalls, 1);
     assert.deepEqual(result, { executionId: submitted.id, status: "completed" });
+    const { signature: _registrySignature, ...unsignedRegistry } = metadata;
+    const revokedMetadata = createSignedRegistryMetadata({ ...unsignedRegistry, sequence: metadata.sequence + 1,
+      revokedReleases: [{ pluginId: manifest.id, packageSha256: manifest.packageSha256, revokedAt: NOW, reason: "release withdrawn" }] },
+      "root-1", root.privateKey);
+    await writeFile(indexFile, JSON.stringify({ schemaVersion: 1, metadata: revokedMetadata,
+      releases: [{ manifest, packagePath: "research.mnplugin.json" }] }));
+    assert.equal((await loaded.pluginRepository.read())?.metadata.sequence, metadata.sequence + 1, "文件仓库必须读取新的签名撤销元数据");
+    const revokedList = await host.dispatch(new Request("http://host.test/v2/plugins/installations"));
+    assert.equal(revokedList.status, 200);
+    assert.equal((await revokedList.json() as any).data.find((item: any) => item.pluginId === "research").status, "revoked");
+    assert.equal((globalThis as any)[evaluationKey], 1, "处理撤销不得再次执行插件模块");
     await host.close();
+
+    await writeFile(indexFile, JSON.stringify({ schemaVersion: 1, metadata,
+      releases: [{ manifest, packagePath: "research.mnplugin.json" }] }));
 
     (globalThis as any)[evaluationKey] = 0;
     await writeFile(

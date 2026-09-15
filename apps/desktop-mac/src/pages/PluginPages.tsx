@@ -1,15 +1,22 @@
 import { AlertTriangle, ArrowLeft, ArrowRight, CheckCircle2, ChevronDown, CircleDashed, Code2, FileDiff, FlaskConical, SearchCheck, Target, UserCheck } from "lucide-react";
+import { useState } from "react";
 import type { AgentOsClient } from "../api";
 import { EmptyState, ErrorState, Loading } from "../components/Status";
-import type { CodingTaskSummary, OpportunitySummary, ViewMode } from "../types";
+import type { CodingRepositorySummary, CodingTaskSummary, OpportunitySummary, ViewMode } from "../types";
 import { PageTitle, PanelHeading } from "./CorePages";
 import { OpcDetailPage } from "./OpcDetailPage";
+import { ThreadAgentPanel } from "../components/ThreadAgentPanel";
 
 const stages = ["captured", "framed", "researching", "interviewing", "evaluating", "offer_ready", "decided"];
 const stageLabels: Record<string, string> = {
   captured: "已捕获", framed: "已界定", researching: "研究中", interviewing: "访谈中",
   evaluating: "评估中", offer_ready: "方案就绪", decided: "已决策", paused: "已暂停", abandoned: "已放弃",
 };
+const codingStatusLabels: Record<CodingTaskSummary["status"], string> = {
+  active: "进行中", waiting_approval: "待审批", completed: "已完成", needs_human_decision: "待人工决策",
+  needs_reconciliation: "待人工核对", failed: "执行失败", cancelled: "已取消",
+};
+const checkStatusLabels = { pass: "通过", fail: "未通过", pending: "待检查" } as const;
 
 export function OpcPage({ api, workspaceId, items, selectedId, onSelect, loading, error, viewMode, onRetry, onChanged }: {
   readonly api: AgentOsClient;
@@ -50,14 +57,15 @@ function EvidenceColumn({ title, tone, items }: { readonly title: string; readon
   return <section className={`evidence-column ${tone}`}><header>{tone === "support" ? <SearchCheck size={16} /> : <AlertTriangle size={16} />}<strong>{title}</strong><span>{items.length}</span></header>{items.map((item) => <article key={item.id}><p>{item.summary}</p><small>{item.source} · {new Date(item.capturedAt).toLocaleDateString("zh-CN")}{item.humanConfirmed ? " · 人工确认" : ""}</small></article>)}</section>;
 }
 
-export function CodingPage({ items, selectedId, onSelect, loading, error, viewMode, onRetry }: { readonly items: readonly CodingTaskSummary[]; readonly selectedId?: string; readonly onSelect: (id: string | undefined) => void; readonly loading: boolean; readonly error?: string; readonly viewMode: ViewMode; readonly onRetry: () => void }) {
+export function CodingPage({ api, workspaceId, repositories, onRepositoriesChanged, items, selectedId, onSelect, loading, error, viewMode, onRetry }: { readonly api: AgentOsClient; readonly workspaceId: string; readonly repositories: readonly CodingRepositorySummary[]; readonly onRepositoriesChanged: () => Promise<void>; readonly items: readonly CodingTaskSummary[]; readonly selectedId?: string; readonly onSelect: (id: string | undefined) => void; readonly loading: boolean; readonly error?: string; readonly viewMode: ViewMode; readonly onRetry: () => void }) {
   const selected = items.find((task) => task.id === selectedId);
-  if (selected) return <CodingDetailPage task={selected} viewMode={viewMode} onBack={() => onSelect(undefined)} />;
+  if (selected) return <CodingDetailPage api={api} workspaceId={workspaceId} task={selected} viewMode={viewMode} onBack={() => onSelect(undefined)} />;
   return <div className="page-stack"><PageTitle eyebrow="受治理研发" title="Coding" detail="从任务、差异和检查结果做决定，技术执行细节按需展开。" />
     {loading && <Loading label="正在读取 Coding 任务" />}{error && <ErrorState title="Coding 已降级" detail={error} action="核心页面和 OPC 不受影响" onRetry={onRetry} />}
-    {!loading && !error && items.length === 0 && <EmptyState title="还没有 Coding 任务" detail="在顶部快速捕获中描述要修改的仓库与目标" />}
+    {!error && <CodingRepositories api={api} workspaceId={workspaceId} items={repositories} onChanged={onRepositoriesChanged} />}
+    {!loading && !error && items.length === 0 && <EmptyState title="还没有 Coding 任务" detail="登记仓库后，在顶部选择仓库并描述任务目标" />}
     {!loading && !error && items.map((task) => <article className="coding-card" key={task.id}>
-      <header><span className="coding-icon"><Code2 size={19} /></span><div><span className="pill">{task.status}</span><h2>{task.title}</h2><p>{task.repository}</p></div><button className="quiet-button" onClick={() => onSelect(task.id)}>打开任务<ArrowRight size={15} /></button></header>
+      <header><span className="coding-icon"><Code2 size={19} /></span><div><span className="pill">{codingStatusLabels[task.status]}</span><h2>{task.title}</h2><p>{task.repository}</p></div><button className="quiet-button" onClick={() => onSelect(task.id)}>打开任务<ArrowRight size={15} /></button></header>
       <CodingResults task={task} />
       <footer className="next-action"><span><ArrowRight size={16} />下一步</span><strong>{task.nextAction}</strong></footer>
       {viewMode === "professional" && task.advanced && <details className="technical-details"><summary>高级执行设置<ChevronDown size={15} /></summary><dl><div><dt>Harness 摘要</dt><dd>{task.advanced.harnessDigest}</dd></div><div><dt>候选数</dt><dd>{task.advanced.candidateCount}</dd></div><div><dt>剩余预算</dt><dd>{task.advanced.remainingBudget}</dd></div></dl></details>}
@@ -65,25 +73,51 @@ export function CodingPage({ items, selectedId, onSelect, loading, error, viewMo
   </div>;
 }
 
-function CodingDetailPage({ task, viewMode, onBack }: { readonly task: CodingTaskSummary; readonly viewMode: ViewMode; readonly onBack: () => void }) {
+function CodingRepositories({ api, workspaceId, items, onChanged }: { readonly api: AgentOsClient; readonly workspaceId: string; readonly items: readonly CodingRepositorySummary[]; readonly onChanged: () => Promise<void> }) {
+  const [path, setPath] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  async function register() {
+    if (busy || !path.trim().startsWith("/")) return;
+    setBusy(true); setError(undefined);
+    try { await api.createCodingRepository(workspaceId, path.trim()); setPath(""); await onChanged(); }
+    catch (error) { setError(error instanceof Error ? error.message : "仓库登记失败，请重试"); }
+    finally { setBusy(false); }
+  }
+  return <section className="panel repository-manager" aria-label="Coding 仓库">
+    <PanelHeading title="工作区仓库" />
+    <p>登记后可重复使用。此操作只保存路径，不会读取或修改仓库；执行任务前还会检查访问权限。</p>
+    {items.length > 0 && <ul>{items.map(item => <li key={item.id}><strong>{item.name}</strong><span>{item.rootRealPath || "尚未指定路径"}</span></li>)}</ul>}
+    <form onSubmit={event => { event.preventDefault(); void register(); }}>
+      <label className="field"><span>仓库绝对路径</span><input value={path} onChange={event => setPath(event.target.value)} placeholder="/Users/你的用户名/Projects/仓库" disabled={busy} /></label>
+      <button className="quiet-button" type="submit" disabled={busy || !path.trim().startsWith("/")}>{busy ? "正在登记" : "登记仓库"}</button>
+    </form>
+    {error && <p role="alert">{error}</p>}
+  </section>;
+}
+
+function CodingDetailPage({ api, workspaceId, task, viewMode, onBack }: { readonly api: AgentOsClient; readonly workspaceId: string; readonly task: CodingTaskSummary; readonly viewMode: ViewMode; readonly onBack: () => void }) {
   return <div className="page-stack coding-detail">
     <button type="button" className="quiet-button opc-back" onClick={onBack}><ArrowLeft size={15} />返回任务列表</button>
     <header className="opc-detail-hero coding-detail-hero">
       <div><p className="eyebrow">Coding 任务</p><h1>{task.title}</h1><p>{task.repository}</p></div>
-      <span className="pill">{task.status}</span>
+      <span className="pill">{codingStatusLabels[task.status]}</span>
     </header>
     <section className="coding-detail-next" aria-label="任务下一步">
       <span><ArrowRight size={17} />下一步</span><strong>{task.nextAction}</strong>
     </section>
     <CodingResults task={task} />
+    <ThreadAgentPanel api={api} workspaceId={workspaceId} pluginId="coding" resourceId={task.id} professional={viewMode === "professional"} />
     {viewMode === "professional" && task.advanced && <dl className="opc-professional-meta" aria-label="Coding 技术信息"><div><dt>任务 ID</dt><dd>{task.id}</dd></div><div><dt>Harness 摘要</dt><dd>{task.advanced.harnessDigest}</dd></div><div><dt>候选与预算</dt><dd>{task.advanced.candidateCount} 个 · {task.advanced.remainingBudget}</dd></div></dl>}
   </div>;
 }
 
 function CodingResults({ task }: { readonly task: CodingTaskSummary }) {
   return <div className="coding-result-grid" aria-label="任务结果">
-    <section><PanelHeading title="差异" /><div className="diff-summary"><FileDiff size={20} /><p>{task.diffSummary ?? "尚未生成差异"}</p></div></section>
-    <section><PanelHeading title="检查" /><div className="check-list">{task.checks.map((check) => <p key={check.name} className={check.status}><span>{check.status === "pass" ? <CheckCircle2 size={15} /> : check.status === "fail" ? <AlertTriangle size={15} /> : <CircleDashed size={15} />}</span><strong>{check.name}</strong><small>{check.status}</small></p>)}</div></section>
+    <section><PanelHeading title="差异" /><div className="diff-summary"><FileDiff size={20} /><p>{task.diffSummary ?? "尚未生成差异"}</p></div>
+      {task.diff && <details><summary>查看完整 Diff</summary><pre className="coding-diff" aria-label="候选代码差异">{task.diff}</pre></details>}
+    </section>
+    <section><PanelHeading title="检查" /><div className="check-list">{task.checks.map((check) => <p key={check.name} className={check.status}><span>{check.status === "pass" ? <CheckCircle2 size={15} /> : check.status === "fail" ? <AlertTriangle size={15} /> : <CircleDashed size={15} />}</span><strong>{check.name}</strong><small>{checkStatusLabels[check.status]}</small></p>)}</div></section>
     <section><PanelHeading title="审批" /><div className="approval-summary"><UserCheck size={20} /><p>{task.approval ?? "等待检查完成"}</p></div></section>
   </div>;
 }

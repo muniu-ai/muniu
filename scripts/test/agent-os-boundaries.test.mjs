@@ -106,7 +106,7 @@ function maskApprovedProviderVersions(path, source) {
       "https://api.anthropic.com/v1/messages",
     ]],
     ["packages/kernel/src/models.ts", ["https://api.openai.com/v1"]],
-    ["apps/host/src/host.ts", ['preset.id === "openai" ? "" : "/v1"']],
+    ["apps/host/src/model-probe.ts", ['preset.id === "openai" ? "" : "/v1"']],
   ]);
   return (replacements.get(path) ?? []).reduce(
     (masked, approved) => masked.replaceAll(approved, "approved-provider-version"),

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { ExecutionBudgetExceededError } from "@mn/contracts";
 
 import {
   CODING_DEFAULT_LIMITS,
@@ -10,6 +11,17 @@ import {
 } from "../src/index.ts";
 
 const SHA = (character) => character.repeat(64);
+
+test("模型预算暂停向内核传播，不触发修复或未知 Runner 结果", async () => {
+  const error = new ExecutionBudgetExceededError("model_unknown");
+  const runner = fakeRunner([]);
+  runner.events = async function* () { throw error; };
+  await assert.rejects(new CodingExecutionEngine({ runners: [runner] }).execute({
+    task: task(), controlPlane: controlPlane(),
+    gateVerifier: { async verify() { throw new Error("不应执行 Gate"); } },
+  }), value => value === error);
+  assert.equal(runner.state.resumes, 0);
+});
 
 function task() {
   return createCodingTask({

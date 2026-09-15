@@ -9,10 +9,19 @@ test("PostgreSQL idle disconnect is handled without logging the error or client 
   const logs = [];
   const pool = createPostgresPool({ application_name: "host-a", max: 4 }, { Pool, log: line => logs.push(line) });
   assert.equal(pool.options.connectionTimeoutMillis, 5000);
+  assert.equal(pool.options.idle_in_transaction_session_timeout, 20000);
   assert.equal(pool.options.max, 4);
   assert.doesNotThrow(() => pool.emit("error", new Error("postgresql://user:private-password@db"),
     { password: "private-password", secretKey: "backend-key" }));
   assert.equal(logs.length, 1);
   assert.equal(JSON.parse(logs[0]).code, "POSTGRES_IDLE_CONNECTION_LOST");
   assert.doesNotMatch(logs[0], /private-password|backend-key|postgresql:/);
+});
+
+test("Host and Worker cannot disable the transaction timeout required for owner recovery", () => {
+  class Pool extends EventEmitter { constructor(options) { super(); this.options = options; } }
+  for (const value of [0, 60000, undefined]) {
+    const pool = createPostgresPool({ idle_in_transaction_session_timeout: value }, { Pool });
+    assert.equal(pool.options.idle_in_transaction_session_timeout, 20000);
+  }
 });

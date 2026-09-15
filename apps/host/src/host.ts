@@ -5,12 +5,15 @@ import { KernelProjectionRuntimeStore, type RuntimeRecord } from "@mn/agent-runt
 import { createProtectedRuntimeStore, readProtectedRuntimePayload, type RuntimeProtection } from "@mn/worker";
 import {
   apiError,
+  matchApiOperation,
+  parseApiResponse,
   createOpenApiDocument,
   type Approval,
   type Asset,
   type AssetTombstone,
   type Deliverable,
   type Execution,
+  type ExecutionAuthority,
   type JsonObject,
   type JsonValue,
   type MemoryRecord,
@@ -28,13 +31,13 @@ import {
   appendKernelEvent,
   KernelError,
   PROVIDER_PRESETS,
+  findModelPrice,
   sha256,
   StreamVersionConflictError as KernelStreamVersionConflictError,
   type InboxItem,
   type KernelStore,
   type KernelTransaction,
   type ModelConnection,
-  type ProviderPreset,
 } from "@mn/kernel";
 import {
   PluginBoundaryError,
@@ -48,10 +51,23 @@ import {
   IdempotencyConflictError,
   StreamVersionConflictError as StorageStreamVersionConflictError,
   storeProtectedJson,
+  drainKeyRevocations,
+  requestKeyRevocationRetry,
+  KEY_REVOCATION_NAMESPACE,
+  type KeyRevocation,
   type ContentAddressedStorage,
   type KeyProvider,
 } from "@mn/storage";
 import { codingPlugin } from "@mn/plugin-coding";
+import { configureProductProjectionJournal } from "./projection-journal.js";
+import { createAgentOsCompositionRoot } from "./composition.js";
+import { CordisPluginActivationLifecycle } from "./plugin-lifecycle.js";
+import { KernelPluginProjectionManager } from "./plugin-projections.js";
+import { createPluginDataPort, readPluginDomainEvent } from "./plugin-data.js";
+import { readBoundedJsonBody } from "./http-body.js";
+import { executionMetering } from "./execution-metering.js";
+import { defaultModelProbe, type ModelProbe } from "./model-probe.js";
+export type { ModelProbe, ModelProbeResult } from "./model-probe.js";
 import { createOpcPluginDefinition, exportOpportunityDeliverables, OpcService } from "@mn/plugin-opc";
 import { claudeCliPluginDefinition } from "@mn/runner-claude-cli";
 import { codexCliPluginDefinition } from "@mn/runner-codex-cli";
@@ -76,6 +92,7 @@ import {
   encodePluginWorkspace,
   exportOpcOpportunity,
   listCodingTaskSummaries,
+  listCodingRepositories,
   listOpportunitySummaries,
   runReadOnlySample,
   workspaceActivity,
@@ -126,16 +143,6 @@ const DESKTOP_ORIGINS = new Set([
   "http://127.0.0.1:4173",
   "http://localhost:4173",
 ]);
-
-export interface ModelProbeResult {
-  readonly models: readonly string[];
-  readonly defaultModel: string;
-}
-
-export type ModelProbe = (input: {
-  readonly preset: ProviderPreset;
-  readonly apiKey: string;
-}) => Promise<ModelProbeResult>;
 
 export interface TenantPluginInstallerFactoryInput {
   readonly tenantId: string;
@@ -217,11 +224,6 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function asJsonObject(value: unknown): JsonObject {
-  if (!isObject(value)) throw new KernelError("INVALID_BODY", "请求体必须是 JSON 对象", "检查请求格式");
-  return value as JsonObject;
-}
-
 function stringField(body: Record<string, unknown>, field: string, required = true): string | undefined {
   const value = body[field];
   if (value === undefined && !required) return undefined;
@@ -280,6 +282,9 @@ function safeError(error: unknown, traceId: string): Response {
     status = 422; code = error.code; message = error.message; action = error.action; retryable = false;
   } else if (error instanceof KernelError) {
     status = error.code === "STREAM_VERSION_CONFLICT" ? 409
+      : error.code === "REQUEST_BODY_TOO_LARGE" ? 413
+        : error.code === "REQUEST_BODY_TIMEOUT" ? 408
+          : error.code === "REQUEST_JSON_INVALID" ? 400
       : error.code === "AUTHENTICATION_REQUIRED" ? 401
         : error.code.endsWith("_ACCESS_DENIED") ? 403
           : error.code === "NOT_FOUND" || error.code.endsWith("_NOT_FOUND") ? 404
@@ -312,8 +317,7 @@ function notFound(traceId: string): Response {
 }
 
 async function readBody(request: Request): Promise<JsonObject> {
-  if (!request.body) return {};
-  return asJsonObject(await request.json());
+  return readBoundedJsonBody(request);
 }
 
 function requireMutationKey(request: Request, traceId: string): Response | string {
@@ -614,7 +618,10 @@ async function threadTurns(
     turns: await Promise.all(executions.map(async (execution) => {
       const runtime = protection ? createProtectedRuntimeStore({ ...protection, tenantId,
         workspaceId: execution.workspaceId, store }) : new KernelProjectionRuntimeStore({ tenantId, store });
-      const runtimeEntries = (await runtime.readExecution(execution.id))
+      const records = await runtime.readExecution(execution.id);
+      const authority = await store.transact(tenantId, tx => tx.getProjection<ExecutionAuthority>("authority", execution.authorityId));
+      const pauseReason = records.filter(record => record.type === "execution/status").at(-1)?.payload.reason;
+      const runtimeEntries = records
         .filter((record) => record.type === "session/entry")
         .map(runtimeSessionEntry)
         .filter((entry): entry is ThreadTurnSessionEntry => entry !== undefined);
@@ -633,6 +640,8 @@ async function threadTurns(
         }));
       return {
         execution,
+        ...(authority ? { metering: executionMetering(execution, authority, records) } : {}),
+        ...(execution.status === "paused" && typeof pauseReason === "string" ? { pauseReason } : {}),
         entries: [...submitted, ...runtimeEntries]
           .sort((left, right) => left.sequence - right.sequence || left.id.localeCompare(right.id)),
       };
@@ -724,6 +733,7 @@ function idempotentProjectionMutation<T>(input: {
 async function idempotentAsyncOperation<T>(input: {
   readonly store: KernelStore;
   readonly tenantId: string;
+  readonly actorId: string;
   readonly key: string;
   readonly scope: string;
   readonly request: unknown;
@@ -758,6 +768,9 @@ async function idempotentAsyncOperation<T>(input: {
         }
         return raced.response as T;
       }
+      appendKernelEvent(transaction, { tenantId: input.tenantId, aggregateType: "apiMutation",
+        aggregateId: sha256([input.scope, input.key]), expectedStreamVersion: 0, type: "api.mutation_completed",
+        actorId: input.actorId, generation: 0, correlationId: sha256([input.scope, input.key]), publicPayload: { requestDigest } });
       transaction.putIdempotency({
         tenantId: input.tenantId, scope: input.scope, key: input.key,
         requestDigest, response: result, createdAt: input.now(),
@@ -779,6 +792,8 @@ interface InFlightAsyncMutation {
 }
 
 export async function createAgentOsHost(options: AgentOsHostOptions): Promise<AgentOsHost> {
+  const protectedJournal = Boolean(options.cas && options.protectedPayloadKeyProvider
+    && configureProductProjectionJournal(options.store, options.cas, options.protectedPayloadKeyProvider));
   const profile = options.profile ?? "local";
   const trustedWorkerSupportedKinds = Object.freeze(profile === "local"
     ? [...CODING_RECONCILIATION_WORKER_JOB_KINDS]
@@ -793,11 +808,10 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
       : (reference: string) => reference.startsWith("keychain://muniu.v2/"));
   const runnerIdentityInspector = options.runnerIdentityInspector
     ?? (profile === "local" ? localCodingRunnerIdentityInspector : undefined);
-  const kernel = new AgentOsKernel(options.store, {
-    now,
-    id: nextId,
-    acceptsModelSecretReference,
+  const { context, kernel } = await createAgentOsCompositionRoot({
+    profile, store: options.store, kernelOptions: { now, id: nextId, acceptsModelSecretReference },
   });
+  try {
   if (profile === "local") await kernel.bootstrapLocal("agent-os-v2-local-bootstrap");
   if (profile === "enterprise" && options.pluginInstaller) {
     throw new Error("企业 profile 必须使用租户化插件安装器工厂，不能复用单例安装器");
@@ -830,13 +844,26 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
     readonly tenantId: string;
     readonly plugins: PluginContributionHost;
     readonly installer?: PluginInstallerPort;
+    readonly dataManager?: KernelPluginProjectionManager;
   }
   const tenantRuntimes = new Map<string, Promise<TenantPluginRuntime>>();
   const tenantRuntimeFailures = new Set<string>();
   const tenantInstallerOwners = new WeakMap<object, string>();
   const createTenantRuntime = async (tenantId: string): Promise<TenantPluginRuntime> => {
+    const tenantFiber = context.isolate("productTenant").plugin({
+      name: "agent-os.tenant", apply(scope) { scope.provide("productTenant", tenantId); },
+    });
+    await tenantFiber;
+    try {
     let installer: PluginInstallerPort | undefined;
+    const protection = options.cas && options.protectedPayloadKeyProvider
+      ? { cas: options.cas, keyProvider: options.protectedPayloadKeyProvider } : undefined;
+    const dataManager = new KernelPluginProjectionManager({ store: options.store, tenantId,
+      engine: profile === "local" ? "sqlite" : "postgresql", readEvent: event => readPluginDomainEvent(options.store, event, protection) });
     const plugins = new PluginContributionHost({
+      lifecycle: new CordisPluginActivationLifecycle(tenantFiber.ctx),
+      isExpectedCommandError: error => error instanceof KernelError || error instanceof StorageStreamVersionConflictError
+        || error instanceof IdempotencyConflictError,
       isAvailable: (pluginId) => officialPluginIds.has(pluginId)
         || Boolean(installer?.isInstalled?.(pluginId)),
     });
@@ -859,7 +886,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           : options.pluginExecutionControl ? { executionControl: options.pluginExecutionControl } : {}),
         ...(options.tenantPluginProjectionsFactory
           ? { projections: options.tenantPluginProjectionsFactory(tenantId) }
-          : options.pluginProjections ? { projections: options.pluginProjections } : {}),
+          : { projections: options.pluginProjections ?? dataManager }),
       });
     } else if (profile === "local") {
       installer = new LocalProductionPluginInstaller({
@@ -871,7 +898,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         actorId: LOCAL_ACTOR_ID,
         now,
         ...(options.pluginExecutionControl ? { executionControl: options.pluginExecutionControl } : {}),
-        ...(options.pluginProjections ? { projections: options.pluginProjections } : {}),
+        projections: options.pluginProjections ?? dataManager,
       });
     }
     if (profile === "enterprise" && installer) {
@@ -882,7 +909,8 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
       tenantInstallerOwners.set(installer, tenantId);
     }
     await installer?.initialize?.();
-    return { tenantId, plugins, ...(installer ? { installer } : {}) };
+    return { tenantId, plugins, dataManager, ...(installer ? { installer } : {}) };
+    } catch (error) { await tenantFiber.dispose(); throw error; }
   };
   const runtimeForTenant = (tenantId: string): Promise<TenantPluginRuntime> => {
     const existing = tenantRuntimes.get(tenantId);
@@ -902,6 +930,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
     ? await runtimeForTenant(LOCAL_TENANT_ID)
     : (() => {
       const corePlugins = new PluginContributionHost({
+        lifecycle: new CordisPluginActivationLifecycle(context),
         isAvailable: (pluginId) => officialPluginIds.has(pluginId),
       });
       for (const plugin of officialPlugins) corePlugins.registerOfficial(plugin);
@@ -970,18 +999,22 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
       for (const issue of result.value?.issues ?? []) issues.push(issue);
     }
     const unique = [...new Map(issues.map((issue) => [issue.code, issue])).values()];
-    return { ready: unique.length === 0, issues: unique };
+    const isolatedIssues = new Set(["TENANT_PLUGIN_OPERATION_IN_PROGRESS", "TENANT_PLUGIN_RELEASE_UNAVAILABLE"]);
+    return { ready: unique.every(issue => isolatedIssues.has(issue.code)), issues: unique };
   };
-  const context = new Context().extend(Object.freeze({
-    agentOsKernel: kernel,
-    agentOsPlugins: plugins,
-    agentOsProfile: profile,
-  }));
+  await context.plugin({ name: "agent-os.plugins", apply(scope) { scope.provide("agentOsPlugins", plugins); } });
   let server: Server | undefined;
   let closePromise: Promise<void> | undefined;
   const inFlightAsyncMutations = new Map<string, InFlightAsyncMutation>();
   const allowedOrigins = new Set([...DESKTOP_ORIGINS, ...(options.allowedOrigins ?? [])]);
   const activeEventStreams = new Set<() => void>();
+  const erasePayloadKeys = async (tenantId: string, actorId: string, purpose: string, requestId: string) => {
+    if (!protectedJournal) return;
+    const unresolved = await drainKeyRevocations({ store: options.store, tenantId, actorId, purpose,
+      requestId, now, keyProvider: options.protectedPayloadKeyProvider! });
+    if (unresolved) throw new KernelError("KEY_REVOCATION_PENDING", "数据已移除，但密钥删除尚未确认",
+      "在收件箱核对密钥删除；历史备份可能仍可解密", false);
+  };
   const ssePollIntervalMs = positiveInterval(options.ssePollIntervalMs, 250);
   const sseKeepAliveIntervalMs = positiveInterval(options.sseKeepAliveIntervalMs, 15_000);
 
@@ -1095,7 +1128,18 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
     return activeTool.id;
   };
 
+  const encodeJson = json;
   const dispatch = async (request: Request): Promise<Response> => {
+    const json: typeof encodeJson = (value, status = 200, traceId) => {
+      const operationId = matchApiOperation(request.method, new URL(request.url).pathname);
+      if (operationId && status >= 200 && status < 300) {
+        if (operationId === "downloadAsset" || operationId === "streamWorkspaceEvents") {
+          throw new Error("流式响应不能使用 JSON 信封");
+        }
+        parseApiResponse(operationId, JSON.parse(JSON.stringify({ data: value, traceId })));
+      }
+      return encodeJson(value, status, traceId);
+    };
     const traceId = request.headers.get("X-Trace-Id")?.trim() || randomUUID();
     const url = new URL(request.url);
     if (!url.pathname.startsWith("/v2")) return notFound(traceId);
@@ -1109,10 +1153,9 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         return json(createOpenApiDocument(), 200, traceId);
       }
       if (request.method === "GET" && url.pathname === "/v2/readiness") {
-        const [base, pluginState] = await Promise.all([
-          options.readiness?.() ?? { ready: true, issues: [] },
-          tenantPluginReadiness(),
-        ]);
+        const base = await (options.readiness?.() ?? { ready: true, issues: [] });
+        if (!base.ready) return json(base, 503, traceId);
+        const pluginState = await tenantPluginReadiness();
         const readiness = {
           ready: base.ready && pluginState.ready,
           issues: [...base.issues, ...pluginState.issues],
@@ -1136,6 +1179,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
       const tenantRuntime = await runtimeForTenant(TENANT_ID);
       const tenantPlugins = tenantRuntime.plugins;
       const pluginInstaller = tenantRuntime.installer;
+      await pluginInstaller?.synchronize?.();
       const pluginWorkspaceKey = (workspaceId: string) => encodePluginWorkspace(TENANT_ID, workspaceId);
       const resolveCodingNewCallRuntimeReadiness: CodingNewCallReadinessResolver = async ({
         workspaceId,
@@ -1443,7 +1487,8 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         const connections = await projectionList<ModelConnection>(options.store, TENANT_ID, "modelConnection");
         const modelConnection = requestedModel
           ? connections.find((connection) => connection.id === requestedModel && connection.status === "ready")
-          : connections.find((connection) => connection.status === "ready");
+          : connections.find((connection) => connection.status === "ready" && connection.defaultForNewExecutions)
+            ?? connections.find((connection) => connection.status === "ready");
         if (!modelConnection) {
           throw new KernelError(
             "MODEL_CONNECTION_REQUIRED",
@@ -1483,6 +1528,8 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           dataNamespaces.add("repository");
         }
         const message = stringField(body, "message")!;
+        const modelPrice = findModelPrice(modelConnection.presetId, modelConnection.defaultModel);
+        if (!modelPrice) throw new KernelError("MODEL_PRICE_UNAVAILABLE", "模型缺少参考价格", "重新探测模型连接后再提交任务");
         const preparedMessage = options.cas && options.protectedPayloadKeyProvider
           ? await storeProtectedJson({ tenantId: TENANT_ID, workspaceId, ownerType: "thread",
             ownerId: threadId, protectedPayloadRef: nextId("thread-payload"), value: { message: message.trim() },
@@ -1519,7 +1566,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
                   maxSubagents: 4,
                   maxTokens: 100_000,
                   maxCostMinorUnits: "5000",
-                  currency: "CNY",
+                  currency: modelPrice.rates.currency,
                   maxDurationMs: 3_600_000,
                 },
               },
@@ -1684,7 +1731,17 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         if (workspaceId) await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId);
         const inbox = await kernel.listInbox(TENANT_ID, workspaceId);
         const allowed = workspaceId ? undefined : await accessibleWorkspaceIds();
-        return json(allowed ? inbox.filter((item) => allowed.has(item.workspaceId)) : inbox, 200, traceId);
+        const visible = allowed ? inbox.filter((item) => allowed.has(item.workspaceId)) : inbox;
+        const linked = await options.store.transact(TENANT_ID, transaction => visible.map(item => {
+          if (!item.executionId) return item;
+          const execution = transaction.getProjection<Execution>("execution", item.executionId);
+          if (!execution || execution.tenantId !== TENANT_ID || execution.workspaceId !== item.workspaceId) return item;
+          const thread = transaction.getProjection<Thread>("thread", execution.threadId);
+          if (!thread || thread.tenantId !== TENANT_ID || thread.workspaceId !== item.workspaceId) return item;
+          return { ...item, navigation: { threadId: thread.id, pluginId: thread.pluginId,
+            ...(thread.resourceRef ? { resourceRef: thread.resourceRef } : {}) } };
+        }));
+        return json(linked, 200, traceId);
       }
       const approvalMatch = url.pathname.match(/^\/v2\/approvals\/([^/]+)\/decisions$/u);
       if (approvalMatch && request.method === "POST") {
@@ -1743,9 +1800,10 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         const workspaceId = url.searchParams.get("workspaceId");
         if (!workspaceId) throw new KernelError("INVALID_BODY", "缺少 workspaceId", "选择工作区后重试");
         await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId);
-        return json(await workspaceActivity(options.store, TENANT_ID, workspaceId), 200, traceId);
+        return json(await workspaceActivity(options.store, TENANT_ID, workspaceId,
+          options.cas && options.protectedPayloadKeyProvider ? { cas: options.cas, keyProvider: options.protectedPayloadKeyProvider } : undefined), 200, traceId);
       }
-      const assetMatch = url.pathname.match(/^\/v2\/assets\/([^/]+)$/u);
+      const assetMatch = url.pathname.match(/^\/v2\/assets\/([^/]+)(\/content)?$/u);
       if (assetMatch && request.method === "GET") {
         const asset = await projectionGet<Asset>(
           options.store,
@@ -1755,7 +1813,8 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         );
         if (!asset) return notFound(traceId);
         await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, asset.workspaceId);
-        if (url.searchParams.get("content") !== "1") return json(asset, 200, traceId);
+        if (url.searchParams.size) throw new KernelError("INVALID_BODY", "附件接口不接受查询参数", "使用附件元数据或文件下载接口");
+        if (!assetMatch[2]) return json(asset, 200, traceId);
         if (!options.cas) throw new KernelError("ASSET_STORE_UNAVAILABLE", "成果文件暂不可用", "检查对象存储连接");
         return new Response(await readAssetContent({
           store: options.store,
@@ -1773,7 +1832,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           },
         });
       }
-      if (assetMatch && request.method === "DELETE") {
+      if (assetMatch && !assetMatch[2] && request.method === "DELETE") {
         const body = await readBody(request);
         if (Object.keys(body).some((field) => !["expectedStreamVersion", "reason"].includes(field))) {
           throw new KernelError("INVALID_BODY", "附件删除请求包含不支持的字段", "删除未在 OpenAPI 中声明的字段");
@@ -1784,7 +1843,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           ?? transaction.getProjection<AssetTombstone>(ASSET_TOMBSTONE_NAMESPACE, assetId));
         if (!target) throw new KernelError("ASSET_NOT_FOUND", "附件不存在", "刷新成果列表");
         await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, target.workspaceId, "owner");
-        return json(await deleteAsset({
+        const deleted = await deleteAsset({
           store: options.store,
           tenantId: TENANT_ID,
           actorId: ACTOR_ID,
@@ -1794,7 +1853,9 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           reason: stringField(body, "reason")!,
           now,
           id: nextId,
-        }), 200, traceId);
+        });
+        await erasePayloadKeys(TENANT_ID, ACTOR_ID, `asset:${assetId}`, mutationKey as string);
+        return json(deleted, 200, traceId);
       }
       if (url.pathname === "/v2/memories" && request.method === "GET") {
         const namespace = url.searchParams.get("namespace");
@@ -1930,6 +1991,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           expectedVersion(body),
           { confidence: body.confidence, preparedPayload },
         );
+        await erasePayloadKeys(TENANT_ID, ACTOR_ID, `memory:${memoryId}`, mutationKey as string);
         return json(publicMemory(revised, body.value as JsonObject), 200, traceId);
       }
       if (memoryMatch && request.method === "DELETE") {
@@ -1940,14 +2002,33 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           ?? transaction.getProjection<MemoryTombstone>("memoryTombstone", memoryId));
         if (!memory) throw new KernelError("MEMORY_NOT_FOUND", "记忆不存在", "刷新记忆列表");
         await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, memory.workspaceId, "owner");
-        return json(await kernel.deleteMemory(
+        const deleted = await kernel.deleteMemory(
           TENANT_ID,
           ACTOR_ID,
           mutationKey as string,
           memoryId,
           expectedVersion(body),
           stringField(body, "reason")!,
-        ), 200, traceId);
+        );
+        await erasePayloadKeys(TENANT_ID, ACTOR_ID, `memory:${memoryId}`, mutationKey as string);
+        return json(deleted, 200, traceId);
+      }
+      const revocationMatch = url.pathname.match(/^\/v2\/key-revocations\/([^/]+)\/decisions$/u);
+      if (revocationMatch && request.method === "POST") {
+        const body = await readBody(request);
+        if (body.decision !== "retry" || Object.keys(body).some(key => !["decision", "expectedStreamVersion"].includes(key))) {
+          throw new KernelError("INVALID_DECISION", "密钥删除决定无效", "选择重新发起删除");
+        }
+        const revocationId = decodeURIComponent(revocationMatch[1]!);
+        const record = await projectionGet<KeyRevocation>(options.store, TENANT_ID, KEY_REVOCATION_NAMESPACE, revocationId);
+        if (!record) throw new KernelError("KEY_REVOCATION_NOT_FOUND", "密钥删除记录不存在", "刷新收件箱");
+        await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, record.workspaceId, "owner");
+        await requestKeyRevocationRetry({ store: options.store, tenantId: TENANT_ID, actorId: ACTOR_ID, revocationId,
+          expectedStreamVersion: expectedVersion(body), requestId: mutationKey as string, now });
+        await drainKeyRevocations({ store: options.store, tenantId: TENANT_ID, actorId: ACTOR_ID, revocationId,
+          keyProvider: options.protectedPayloadKeyProvider ?? {}, now });
+        const current = (await projectionGet<KeyRevocation>(options.store, TENANT_ID, KEY_REVOCATION_NAMESPACE, revocationId))!;
+        return json({ id: current.id, status: current.status, streamVersion: current.streamVersion }, 200, traceId);
       }
       if (url.pathname === "/v2/share-grants" && request.method === "GET") {
         const allowed = await accessibleWorkspaceIds();
@@ -1999,7 +2080,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         const preset = PROVIDER_PRESETS.find((candidate) => candidate.id === presetId);
         if (!preset) throw new KernelError("MODEL_PRESET_NOT_FOUND", "厂商预设不存在", "刷新厂商列表");
         const connection = await idempotentAsyncOperation<ModelConnection>({
-          store: options.store, tenantId: TENANT_ID, key: mutationKey as string,
+          store: options.store, tenantId: TENANT_ID, actorId: ACTOR_ID, key: mutationKey as string,
           scope: "http.modelConnection.create", request: body, now, inFlight: inFlightAsyncMutations,
           work: async () => {
             const apiKey = stringField(body, "apiKey")!;
@@ -2019,8 +2100,12 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         const body = await readBody(request);
         const id = decodeURIComponent(probeMatch[1]!);
         const expected = expectedVersion(body);
+        if (body.makeDefault !== undefined && typeof body.makeDefault !== "boolean") {
+          throw new KernelError("INVALID_BODY", "makeDefault 必须为布尔值", "刷新模型连接后重试");
+        }
+        if (body.makeDefault === true) requireOrganizationRole(profile, ORGANIZATION_ROLES, ["organization_admin"]);
         const connection = await idempotentAsyncOperation<ModelConnection>({
-          store: options.store, tenantId: TENANT_ID, key: mutationKey as string,
+          store: options.store, tenantId: TENANT_ID, actorId: ACTOR_ID, key: mutationKey as string,
           scope: `http.modelConnection.probe:${id}`, request: body, now, inFlight: inFlightAsyncMutations,
           work: async () => {
             const current = await projectionGet<ModelConnection>(options.store, TENANT_ID, "modelConnection", id);
@@ -2034,9 +2119,20 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
               const value = transaction.getProjection<ModelConnection>("modelConnection", id);
               if (!value) throw new KernelError("MODEL_CONNECTION_NOT_FOUND", "模型连接不存在", "刷新模型连接列表");
               if (value.streamVersion !== expected) throw new KernelStreamVersionConflictError(expected, value.streamVersion);
+              if (body.makeDefault === true) {
+                for (const previous of transaction.listProjections<ModelConnection>("modelConnection")) {
+                  if (previous.id === id || !previous.defaultForNewExecutions) continue;
+                  transaction.putProjection("modelConnection", previous.id, { ...previous, defaultForNewExecutions: false,
+                    streamVersion: previous.streamVersion + 1 });
+                  appendKernelEvent(transaction, { tenantId: TENANT_ID, aggregateType: "modelConnection", aggregateId: previous.id,
+                    expectedStreamVersion: previous.streamVersion, type: "model_connection.default_cleared", actorId: ACTOR_ID,
+                    generation: 0, correlationId: nextId("correlation"), publicPayload: { replacementId: id } });
+                }
+              }
               const next = {
                 ...value, discoveredModels: [...discovered.models], defaultModel: discovered.defaultModel,
                 status: "ready" as const, streamVersion: value.streamVersion + 1,
+                ...(body.makeDefault === true ? { defaultForNewExecutions: true } : {}),
               };
               transaction.putProjection("modelConnection", id, next);
               appendKernelEvent(transaction, {
@@ -2074,7 +2170,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         }
         const body = await readBody(request);
         const result = await idempotentAsyncOperation({
-          store: options.store, tenantId: TENANT_ID, key: mutationKey as string,
+          store: options.store, tenantId: TENANT_ID, actorId: ACTOR_ID, key: mutationKey as string,
           scope: "http.plugin.install", request: body, now, inFlight: inFlightAsyncMutations,
           work: () => pluginInstaller!.install(body, {
             idempotencyKey: mutationKey as string,
@@ -2095,7 +2191,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         const result = await idempotentAsyncOperation({
           store: options.store,
           tenantId: TENANT_ID,
-          key: mutationKey as string,
+          key: mutationKey as string, actorId: ACTOR_ID,
           scope: `http.plugin.update:${pluginId}`,
           request: body,
           now,
@@ -2120,7 +2216,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         const result = await idempotentAsyncOperation({
           store: options.store,
           tenantId: TENANT_ID,
-          key: mutationKey as string,
+          key: mutationKey as string, actorId: ACTOR_ID,
           scope,
           request: body,
           now,
@@ -2144,7 +2240,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         const result = await idempotentAsyncOperation({
           store: options.store,
           tenantId: TENANT_ID,
-          key: mutationKey as string,
+          key: mutationKey as string, actorId: ACTOR_ID,
           scope,
           request: body,
           now,
@@ -2165,7 +2261,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         const pluginId = stringField(body, "pluginId")!;
         const expected = expectedVersion(body);
         const workspace = await idempotentAsyncOperation<Workspace>({
-          store: options.store, tenantId: TENANT_ID, key: mutationKey as string,
+          store: options.store, tenantId: TENANT_ID, actorId: ACTOR_ID, key: mutationKey as string,
           scope: `http.plugin.activate:${workspaceId}`, request: body, now, inFlight: inFlightAsyncMutations,
           work: () => withPluginUse(tenantRuntime, pluginId, "activation", ACTOR_ID, async () => {
             const current = await projectionGet<Workspace>(options.store, TENANT_ID, "workspace", workspaceId);
@@ -2211,7 +2307,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         const workspace = await idempotentAsyncOperation<Workspace>({
           store: options.store,
           tenantId: TENANT_ID,
-          key: mutationKey as string,
+          key: mutationKey as string, actorId: ACTOR_ID,
           scope: `http.plugin.deactivate:${workspaceId}:${pluginId}`,
           request: body,
           now,
@@ -2271,7 +2367,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         if (!workspaceId) {
           throw new KernelError("INVALID_BODY", "缺少 workspaceId", "选择工作区后重试");
         }
-        const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId, "owner");
+        const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId, "view");
         if (!workspace.activePluginIds.includes("coding")) {
           throw new KernelError("PLUGIN_NOT_ACTIVE", "工作区尚未启用 Coding", "先启用 Coding 插件");
         }
@@ -2293,6 +2389,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         const runnerId = parseExternalCodingRunnerId(decodeURIComponent(runnerInspectionMatch[1]!));
         await requireRunnerPluginTool(TENANT_ID, workspace, runnerId);
         const identity = await idempotentAsyncOperation({
+          actorId: ACTOR_ID,
           store: options.store,
           tenantId: TENANT_ID,
           key: mutationKey as string,
@@ -2583,6 +2680,14 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           content: rendered.find((candidate) => candidate.kind === item.kind)?.content ?? item.content,
         })), 201, traceId);
       }
+      if (url.pathname === "/v2/plugins/coding/repositories" && request.method === "GET") {
+        const workspaceId = url.searchParams.get("workspaceId");
+        if (!workspaceId) throw new KernelError("INVALID_BODY", "缺少 workspaceId", "选择工作区后重试");
+        const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId);
+        if (!workspace.activePluginIds.includes("coding")) throw new KernelError("PLUGIN_NOT_ACTIVE", "工作区尚未启用 Coding", "先启用 Coding 插件");
+        await ensurePluginsActive(TENANT_ID, workspace, tenantRuntime, ACTOR_ID);
+        return json(await listCodingRepositories(options.store, TENANT_ID, workspaceId), 200, traceId);
+      }
       if (url.pathname === "/v2/plugins/coding/tasks" && request.method === "GET") {
         const workspaceId = url.searchParams.get("workspaceId");
         if (!workspaceId) throw new KernelError("INVALID_BODY", "缺少 workspaceId", "选择工作区后重试");
@@ -2592,9 +2697,15 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
       }
       const productCapture = url.pathname.match(/^\/v2\/plugins\/(opc|coding)\/(opportunities|repositories|tasks)$/u);
       if (productCapture && request.method === "POST") {
-        const body = await readBody(request);
         const pluginId = productCapture[1] as "opc" | "coding";
         const resource = productCapture[2]!;
+        if ((pluginId === "opc" && resource !== "opportunities")
+          || (pluginId === "coding" && resource === "opportunities")) return notFound(traceId);
+        const body = await readBody(request);
+        const fields = ["workspaceId", "expectedStreamVersion", "input", ...(pluginId === "coding" && resource === "tasks" ? ["repositoryId"] : [])];
+        if (Object.keys(body).some(field => !fields.includes(field))) {
+          throw new KernelError("INVALID_BODY", "请求包含未声明的字段", "仅提交当前插件接口声明的字段");
+        }
         const workspaceId = stringField(body, "workspaceId")!;
         const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId, "operate");
         await ensurePluginsActive(TENANT_ID, workspace, tenantRuntime, ACTOR_ID);
@@ -2613,7 +2724,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           ? await captureOpportunity(common)
           : resource === "repositories"
             ? await captureCodingRepository(common)
-            : await captureCodingTask(common);
+            : await captureCodingTask({ ...common, repositoryId: stringField(body, "repositoryId", false) });
         return json(result, 201, traceId);
       }
       const sampleMatch = url.pathname.match(/^\/v2\/plugins\/(opc|coding)\/samples\/read-only$/u);
@@ -2645,13 +2756,17 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         const commandInput = Object.fromEntries(Object.entries(body)
           .filter(([key]) => key !== "workspaceId")) as JsonObject;
         const result = await idempotentAsyncOperation({
-          store: options.store, tenantId: TENANT_ID, key: mutationKey as string,
+          store: options.store, tenantId: TENANT_ID, actorId: ACTOR_ID, key: mutationKey as string,
           scope: `http.plugin.command:${workspaceId}:${pluginId}:${commandId}`, request: body, now,
           inFlight: inFlightAsyncMutations,
           work: () => withPluginUse(tenantRuntime, pluginId, "execution", ACTOR_ID, async () => {
             if (!officialPluginIds.has(pluginId)) pluginInstaller?.assertCanStartExecution?.(pluginId);
             return tenantPlugins.runCommand(
               pluginWorkspaceKey(workspaceId), pluginId, commandId, commandInput, ACTOR_ID,
+              !officialPluginIds.has(pluginId) && tenantRuntime.dataManager ? createPluginDataPort({ store: options.store,
+                tenantId: TENANT_ID, workspaceId, pluginId, actorId: ACTOR_ID, commandId, idempotencyKey: mutationKey as string,
+                manager: tenantRuntime.dataManager, now, ...(options.cas && options.protectedPayloadKeyProvider
+                  ? { protection: { cas: options.cas, keyProvider: options.protectedPayloadKeyProvider } } : {}) }) : undefined,
             );
           }),
         });
@@ -2663,6 +2778,46 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
     }
   };
 
+  let revocationTimer: ReturnType<typeof setTimeout> | undefined;
+  let recoveryStopped = false;
+  let revocationRecovery = Promise.resolve();
+  const recoverRevocations = async () => {
+    const tenantIds = options.store.listTenantIds ? await options.store.listTenantIds() : [LOCAL_TENANT_ID];
+    for (const tenantId of tenantIds) {
+      if (recoveryStopped) return;
+      await drainKeyRevocations({ store: options.store, tenantId, now, keyProvider: options.protectedPayloadKeyProvider! });
+    }
+  };
+  const scheduleRevocationRecovery = () => {
+    if (recoveryStopped || !protectedJournal) return;
+    revocationTimer = setTimeout(() => {
+      revocationRecovery = recoverRevocations().catch(() => { /* A failed inspection cannot acknowledge erasure. */ })
+        .finally(scheduleRevocationRecovery);
+    }, 30_000);
+    revocationTimer.unref?.();
+  };
+  if (protectedJournal) {
+    await recoverRevocations().catch(() => { /* Core services stay available when key storage is unavailable. */ });
+    scheduleRevocationRecovery();
+  }
+
+  let pluginRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+  let pluginRefresh = Promise.resolve();
+  const schedulePluginRefresh = () => {
+    if (recoveryStopped) return;
+    pluginRefreshTimer = setTimeout(() => {
+      pluginRefresh = (async () => {
+        for (const pending of tenantRuntimes.values()) {
+          if (recoveryStopped) return;
+          const runtime = await pending.catch(() => undefined);
+          await runtime?.installer?.synchronize?.().catch(() => {});
+        }
+      })().finally(schedulePluginRefresh);
+    }, 30_000);
+    pluginRefreshTimer.unref?.();
+  };
+  schedulePluginRefresh();
+
   return {
     context,
     kernel,
@@ -2670,7 +2825,10 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
     dispatch,
     async listen({ host = "127.0.0.1", port }) {
       if (server) throw new Error("Host 已启动");
-      server = createServer(async (incoming, outgoing) => {
+      server = createServer({ requestTimeout: 60_000, headersTimeout: 10_000, keepAliveTimeout: 5000,
+        maxHeaderSize: 16 * 1024, connectionsCheckingInterval: 1000 }, async (incoming, outgoing) => {
+        outgoing.once("finish", () => { if (!incoming.complete) incoming.destroy(); });
+        try {
         const origin = typeof incoming.headers.origin === "string" ? incoming.headers.origin : undefined;
         if (origin && !allowedOrigins.has(origin)) {
           outgoing.writeHead(403, { "content-type": "application/json; charset=utf-8" });
@@ -2682,15 +2840,22 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           )));
           return;
         }
-        const chunks: Buffer[] = [];
-        for await (const chunk of incoming) chunks.push(Buffer.from(chunk));
+        const iterator = incoming.iterator({ destroyOnReturn: false });
+        const body = ["GET", "HEAD"].includes(incoming.method ?? "GET") ? undefined : new ReadableStream<Uint8Array>({
+          async pull(controller) {
+            try {
+              const next = await iterator.next();
+              if (next.done) controller.close(); else controller.enqueue(Buffer.from(next.value));
+            } catch (error) { controller.error(error); }
+          },
+          cancel() { void iterator.return?.().catch(() => undefined); },
+        });
         const address = `http://${incoming.headers.host ?? `${host}:${port}`}${incoming.url ?? "/"}`;
         const request = new Request(address, {
           method: incoming.method,
           headers: incoming.headers as HeadersInit,
-          ...(["GET", "HEAD"].includes(incoming.method ?? "GET")
-            ? {} : { body: Buffer.concat(chunks) }),
-        });
+          ...(body ? { body, duplex: "half" } : {}),
+        } as RequestInit & { duplex?: "half" });
         const response = await dispatch(request);
         const headers: Record<string, string> = Object.fromEntries(response.headers);
         if (origin) {
@@ -2701,6 +2866,13 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         }
         outgoing.writeHead(response.status, headers);
         await pipeResponseBody(response, outgoing);
+        } catch (error) {
+          if (outgoing.destroyed) return;
+          if (outgoing.headersSent) { outgoing.destroy(); return; }
+          const failure = safeError(error, randomUUID());
+          outgoing.writeHead(failure.status, Object.fromEntries(failure.headers));
+          outgoing.end(await failure.text());
+        }
       });
       await new Promise<void>((resolve, reject) => {
         server!.once("error", reject);
@@ -2711,9 +2883,14 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
     },
     async close() {
       closePromise ??= (async () => {
+        recoveryStopped = true;
+        if (revocationTimer) clearTimeout(revocationTimer);
+        if (pluginRefreshTimer) clearTimeout(pluginRefreshTimer);
+        await pluginRefresh;
+        await revocationRecovery;
         for (const closeStream of [...activeEventStreams]) closeStream();
         if (server) {
-          await new Promise<void>((resolve, reject) => server!.close((error) => error ? reject(error) : resolve()));
+          if (server.listening) await new Promise<void>((resolve, reject) => server!.close((error) => error ? reject(error) : resolve()));
           server = undefined;
         }
         await options.beforeStoreClose?.();
@@ -2724,42 +2901,10 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
       await closePromise;
     },
   };
-}
-
-async function defaultModelProbe({
-  preset,
-  apiKey,
-}: {
-  readonly preset: ProviderPreset;
-  readonly apiKey: string;
-}): Promise<ModelProbeResult> {
-  const endpoint = `${preset.endpoint.replace(/\/$/u, "")}${preset.id === "openai" ? "" : "/v1"}/models`;
-  const headers: Record<string, string> = preset.probeKind === "anthropic"
-    ? { "x-api-key": apiKey, "anthropic-version": "2023-06-01" }
-    : { authorization: `Bearer ${apiKey}` };
-  let response: Response;
-  try {
-    response = await fetch(endpoint, { headers, signal: AbortSignal.timeout(10_000) });
-  } catch {
-    throw new KernelError("MODEL_PROBE_FAILED", "无法连接模型厂商", "检查网络和 API Key 后重试", true);
+  } catch (error) {
+    await context.fiber.dispose();
+    throw error;
   }
-  if (!response.ok) {
-    throw new KernelError(
-      "MODEL_PROBE_FAILED",
-      response.status === 401 || response.status === 403 ? "模型密钥无效" : "模型厂商探测失败",
-      "检查 API Key 和厂商服务状态后重试",
-      response.status >= 500,
-    );
-  }
-  const body = await response.json() as { readonly data?: readonly { readonly id?: unknown }[] };
-  const models = (body.data ?? [])
-    .map((item) => item.id)
-    .filter((id): id is string => typeof id === "string" && Boolean(id.trim()));
-  if (models.length === 0) {
-    throw new KernelError("MODEL_PROBE_FAILED", "厂商未返回可用模型", "检查账号权限后重试");
-  }
-  const defaultModel = preset.suggestedModels.find((model) => models.includes(model)) ?? models[0]!;
-  return { models, defaultModel };
 }
 
 export type { InboxItem };

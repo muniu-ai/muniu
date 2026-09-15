@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { Activity, AlertCircle, ArrowRight, Bot, Check, Clock3, FileCheck2, KeyRound, Lightbulb, MemoryStick, ShieldCheck, Sparkles, X } from "lucide-react";
 import type { AgentOsClient } from "../api";
 import { EmptyState } from "../components/Status";
+import { RunnerConfiguration } from "../components/RunnerConfiguration";
+import { ModelConnections } from "../components/ModelConnections";
 import type { ActivitySummary, AgentCatalog, CodingReconciliationDecision, CodingReconciliationView, DeliverableSummary, HomeSummary, InboxItemSummary, MemorySummary, ViewMode, WorkspaceMemberSummary, WorkspaceSummary } from "../types";
 
 export function HomePage({ summary, onNavigate }: { readonly summary: HomeSummary; readonly onNavigate: (page: string) => void }) {
@@ -41,7 +43,7 @@ export function PanelHeading({ title, action, onAction }: { readonly title: stri
   return <header className="panel-heading"><h3>{title}</h3>{action && <button onClick={onAction}>{action}<ArrowRight size={14} /></button>}</header>;
 }
 
-export function InboxPage({ workspaceId, summary, api, onChanged }: { readonly workspaceId: string; readonly summary: HomeSummary; readonly api: AgentOsClient; readonly onChanged: () => Promise<void> | void }) {
+export function InboxPage({ workspaceId, summary, api, onChanged, onOpen }: { readonly workspaceId: string; readonly summary: HomeSummary; readonly api: AgentOsClient; readonly onChanged: () => Promise<void> | void; readonly onOpen: (item: InboxItemSummary) => void }) {
   const [items, setItems] = useState<readonly InboxItemSummary[]>([]);
   const [reconciliations, setReconciliations] = useState<Readonly<Record<string, CodingReconciliationView>>>({});
   const [detailErrors, setDetailErrors] = useState<Readonly<Record<string, string>>>({});
@@ -78,6 +80,17 @@ export function InboxPage({ workspaceId, summary, api, onChanged }: { readonly w
     await onChanged();
   }
 
+  async function retryErasure(item: InboxItemSummary) {
+    if (!item.revocationId || item.streamVersion === undefined) return;
+    setBusyId(item.id); setNotice(undefined);
+    try {
+      const result = await api.retryKeyRevocation(item.revocationId, item.streamVersion);
+      setNotice(result.status === "completed" ? "密钥已删除，旧备份中的对应数据无法再解密。" : "密钥删除结果仍未确认，请检查密钥存储后核对。");
+      await Promise.all([refreshInbox(), onChanged()]);
+    } catch (error) { setNotice(safeInboxMessage(error)); }
+    finally { setBusyId(undefined); }
+  }
+
   async function reconcile(detail: CodingReconciliationView, decision: CodingReconciliationDecision) {
     setBusyId(detail.executionId); setNotice(undefined);
     try {
@@ -108,6 +121,15 @@ export function InboxPage({ workspaceId, summary, api, onChanged }: { readonly w
       : <article className="approval-card inbox-message-card" key={item.id}>
       <header><span className="pill risk"><AlertCircle size={13} />需要处理</span></header>
       <h3>{item.title}</h3><p className="intent">{item.summary}</p>
+      {(item.navigation || item.kind === "credential") && <button className="secondary-button" onClick={() => onOpen(item)}>
+        {item.kind === "credential" ? "检查模型连接" : "打开会话处理"}<ArrowRight size={15} />
+      </button>}
+      {item.revocationId && item.streamVersion !== undefined && <>
+        <p>重新发起删除会永久销毁对应密钥，无法恢复。此操作仅限工作区所有者。</p>
+        <button className="danger-button" disabled={busyId === item.id} onClick={() => void retryErasure(item)}>
+          {busyId === item.id ? "正在核对…" : "确认重新发起密钥删除"}
+        </button>
+      </>}
       {detailErrors[item.id] && <p className="inline-error" role="alert">{detailErrors[item.id]}</p>}
     </article>)}</div>
     {detailErrors.inbox && <p className="inline-error" role="alert">{detailErrors.inbox}</p>}
@@ -246,9 +268,10 @@ export function AgentsPage({ catalog }: { readonly catalog: AgentCatalog }) {
     </section>
   </div>;
 }
-export function IntegrationsPage() {
+export function IntegrationsPage({ api, workspace, onChanged }: { readonly api: AgentOsClient; readonly workspace: WorkspaceSummary; readonly onChanged: (workspace: WorkspaceSummary) => void }) {
   return <div className="page-stack">
     <PageTitle eyebrow="受控连接" title="集成" detail="模型、外部 Runner 与产品插件分别授权，变更后重新确认。" />
+    <ModelConnections api={api} professional={workspace.viewMode === "professional"} />
     <section className="panel settings-section">
       <PanelHeading title="模型与 Runner" />
       <div className="governance-note"><ShieldCheck size={20} /><p>模型密钥只保存在 v2 Keychain。Claude 和 Codex Runner 会固定可执行文件的绝对路径、版本和摘要；文件变化后不会继续沿用原确认。</p></div>
@@ -257,6 +280,7 @@ export function IntegrationsPage() {
       <PanelHeading title="插件信任边界" />
       <div className="governance-note"><AlertCircle size={20} /><p>生产插件与 Host 同进程运行，能获得宿主进程可见的能力，不是安全沙箱。Execution Authority 只能约束 Agent 和经内核调用的工具，无法约束恶意插件直接使用进程能力。只安装来源、签名、版本、权限和摘要均已核对的插件。</p></div>
     </section>
+    {workspace.activePluginIds.includes("coding") && <RunnerConfiguration api={api} workspace={workspace} onChanged={onChanged} />}
   </div>;
 }
 

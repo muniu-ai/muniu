@@ -1,5 +1,7 @@
 import { CORE_API_ROUTES } from "./api.js";
 import type { JsonObject } from "./json.js";
+import { API_OUTPUT_COMPONENTS_V2, API_OUTPUT_SCHEMAS_V2 } from "./generated-responses.js";
+import type { ApiOutputsV2 } from "./api-outputs.js";
 
 type HttpMethod = "get" | "post" | "put" | "patch" | "delete";
 
@@ -35,11 +37,13 @@ export const API_OPERATIONS_V2 = [
   { method: "get", path: "/v2/workspaces/{workspaceId}/events", operationId: "streamWorkspaceEvents", mutation: false, versioned: false },
   { method: "post", path: "/v2/executions/{executionId}/commands", operationId: "commandExecution", mutation: true, versioned: true },
   { method: "get", path: "/v2/inbox", operationId: "listInbox", mutation: false, versioned: false },
+  { method: "post", path: "/v2/key-revocations/{revocationId}/decisions", operationId: "retryKeyRevocation", mutation: true, versioned: true },
   { method: "get", path: "/v2/activity", operationId: "listActivity", mutation: false, versioned: false },
   { method: "post", path: "/v2/approvals/{approvalId}/decisions", operationId: "decideApproval", mutation: true, versioned: true },
   { method: "get", path: "/v2/deliverables", operationId: "listDeliverables", mutation: false, versioned: false },
   { method: "post", path: "/v2/assets", operationId: "createAssets", mutation: true, versioned: true },
   { method: "get", path: "/v2/assets/{assetId}", operationId: "getAsset", mutation: false, versioned: false },
+  { method: "get", path: "/v2/assets/{assetId}/content", operationId: "downloadAsset", mutation: false, versioned: false },
   { method: "delete", path: "/v2/assets/{assetId}", operationId: "deleteAsset", mutation: true, versioned: true },
   { method: "get", path: "/v2/memories", operationId: "listMemories", mutation: false, versioned: false },
   { method: "post", path: "/v2/memories", operationId: "proposeMemory", mutation: true, versioned: false },
@@ -68,6 +72,7 @@ export const API_OPERATIONS_V2 = [
   { method: "post", path: "/v2/plugins/opc/opportunities/{opportunityId}/exports", operationId: "exportOpcDeliverables", mutation: true, versioned: true },
   { method: "post", path: "/v2/plugins/opc/samples/read-only", operationId: "runOpcReadOnlySample", mutation: true, versioned: true },
   { method: "post", path: "/v2/plugins/coding/repositories", operationId: "createCodingRepository", mutation: true, versioned: true },
+  { method: "get", path: "/v2/plugins/coding/repositories", operationId: "listCodingRepositories", mutation: false, versioned: false },
   { method: "get", path: "/v2/plugins/coding/tasks", operationId: "listCodingTasks", mutation: false, versioned: false },
   { method: "post", path: "/v2/plugins/coding/tasks", operationId: "createCodingTask", mutation: true, versioned: true },
   { method: "post", path: "/v2/plugins/coding/samples/read-only", operationId: "runCodingReadOnlySample", mutation: true, versioned: true },
@@ -97,12 +102,18 @@ function successStatus(operationId: string): "200" | "201" | "202" {
 }
 
 function successResponseSchema(operationId: string): JsonObject {
-  return operationId === "inspectCodingRunner"
-    ? { $ref: "#/components/schemas/RunnerBinaryInspectionEnvelope" }
-    : operationId === "getCodingReconciliation"
-      ? { $ref: "#/components/schemas/CodingReconciliationEnvelope" }
-    : { $ref: "#/components/schemas/ApiEnvelope" };
+  if (operationId === "inspectCodingRunner") return { $ref: "#/components/schemas/RunnerBinaryInspectionEnvelope" };
+  if (operationId === "getCodingReconciliation") return { $ref: "#/components/schemas/CodingReconciliationEnvelope" };
+  const data = API_OUTPUT_SCHEMAS_V2[operationId];
+  if (!data) throw new Error(`缺少响应契约：${operationId}`);
+  return { type: "object", additionalProperties: false, required: ["data", "traceId"],
+    properties: { data, traceId: { type: "string" } } };
 }
+
+type ContractOperation = (typeof API_OPERATIONS_V2)[number]["operationId"];
+const outputCoverage: Exclude<ContractOperation, keyof ApiOutputsV2> extends never
+  ? Exclude<keyof ApiOutputsV2, ContractOperation> extends never ? true : never : never = true;
+void outputCoverage;
 
 export function createOpenApiDocument(): JsonObject {
   const paths: Record<string, Record<string, JsonObject>> = {};
@@ -127,7 +138,7 @@ export function createOpenApiDocument(): JsonObject {
       );
     }
     if (["listInbox", "listMemories", "listDeliverables", "getHealth"].includes(operation.operationId)) parameters.push({ in: "query", name: "workspaceId", required: false, schema: { type: "string" } });
-    if (operation.operationId === "getAsset") parameters.push({ in: "query", name: "content", required: false, schema: { type: "integer", enum: [1] } });
+    if (operation.operationId === "listActivity") parameters.push({ in: "query", name: "workspaceId", required: true, schema: { type: "string" } });
     if (operation.operationId === "listMemories") parameters.push({ in: "query", name: "namespace", required: false, schema: { type: "string" } });
     if ([
       "listCodingRunners",
@@ -135,6 +146,7 @@ export function createOpenApiDocument(): JsonObject {
       "getOpcOpportunity",
       "previewOpcDeliverables",
       "listCodingTasks",
+      "listCodingRepositories",
     ].includes(operation.operationId)) {
       parameters.push({
         in: "query",
@@ -159,16 +171,26 @@ export function createOpenApiDocument(): JsonObject {
       } : {}),
       responses: {
         [successStatus(operation.operationId)]: {
-          description: "成功",
+          description: operation.operationId === "downloadAsset" ? "经授权的原始文件；Content-Type 使用 Asset.mediaType，不使用 JSON 信封" : "成功",
           content: operation.operationId === "streamWorkspaceEvents"
             ? { "text/event-stream": { schema: { type: "string" } } }
+            : operation.operationId === "downloadAsset" ? {
+              "application/octet-stream": { schema: { type: "string", format: "binary" } },
+              "*/*": { schema: { type: "string", format: "binary" } },
+            }
             : { "application/json": { schema: successResponseSchema(operation.operationId) } },
         },
         ...(operation.operationId === "decideCodingReconciliation" ? {
           "202": {
             description: "已接受标记完成意图，等待受控 Worker 执行权威 Gate",
-            content: { "application/json": { schema: { $ref: "#/components/schemas/ApiEnvelope" } } },
+            content: { "application/json": { schema: successResponseSchema(operation.operationId) } },
           },
+        } : {}),
+        ...(operation.operationId === "commandExecution" ? {
+          "202": { description: "后续输入已持久化入队", content: { "application/json": { schema: successResponseSchema(operation.operationId) } } },
+        } : {}),
+        ...(operation.operationId === "getReadiness" ? {
+          "503": { description: "尚未就绪", content: { "application/json": { schema: successResponseSchema(operation.operationId) } } },
         } : {}),
         "400": { $ref: "#/components/responses/BadRequest" },
         "401": { $ref: "#/components/responses/Unauthorized" },
@@ -185,14 +207,7 @@ export function createOpenApiDocument(): JsonObject {
     paths,
     components: {
       schemas: {
-        ApiEnvelope: {
-          type: "object",
-          required: ["data", "traceId"],
-          properties: {
-            data: {},
-            traceId: { type: "string" },
-          },
-        },
+        ...API_OUTPUT_COMPONENTS_V2,
         RunnerBinaryInspectionEnvelope: {
           type: "object",
           additionalProperties: false,
@@ -441,6 +456,16 @@ export function createOpenApiDocument(): JsonObject {
             input: { type: "string", minLength: 1 },
           },
         },
+        CreateCodingTaskMutation: {
+          type: "object", additionalProperties: false,
+          required: ["workspaceId", "expectedStreamVersion", "input"],
+          properties: {
+            workspaceId: { type: "string", minLength: 1 },
+            expectedStreamVersion: { type: "integer", const: 0 },
+            input: { type: "string", minLength: 1 },
+            repositoryId: { type: "string", minLength: 1 },
+          },
+        },
         RunReadOnlySampleMutation: {
           type: "object",
           additionalProperties: false,
@@ -475,7 +500,7 @@ function mutationSchema(operationId: string, versioned: boolean): JsonObject {
     commandExecution: object(["expectedStreamVersion", "command"], { expectedStreamVersion: version, command: { enum: ["follow_up", "steer", "cancel", "resume"] }, message: string }),
     decideApproval: object(["expectedStreamVersion", "decision"], { expectedStreamVersion: version, decision: { enum: ["approve_once", "deny"] } }),
     createModelConnection: object(["presetId", "apiKey"], { presetId: { enum: ["openai", "deepseek", "anthropic"] }, apiKey: string, displayName: string }),
-    probeModelConnection: object(["expectedStreamVersion"], { expectedStreamVersion: version }),
+    probeModelConnection: object(["expectedStreamVersion"], { expectedStreamVersion: version, makeDefault: { type: "boolean" } }),
     installPlugin: object(["pluginId", "version"], { pluginId: string, version: string }),
     updatePlugin: object(["expectedStreamVersion", "version"], { expectedStreamVersion: version, version: string }),
     activatePlugin: object(["expectedStreamVersion", "pluginId"], { expectedStreamVersion: version, pluginId: string }),
@@ -484,6 +509,7 @@ function mutationSchema(operationId: string, versioned: boolean): JsonObject {
     purgePlugin: object(["expectedStreamVersion"], { expectedStreamVersion: version }),
     runPluginCommand: object(["workspaceId", "expectedStreamVersion"], { workspaceId: string, expectedStreamVersion: version }, true),
     decideMemory: object(["expectedStreamVersion", "decision"], { expectedStreamVersion: version, decision: { enum: ["accept", "reject"] } }),
+    retryKeyRevocation: object(["expectedStreamVersion", "decision"], { expectedStreamVersion: version, decision: { const: "retry" } }),
     deleteMemory: object(["expectedStreamVersion", "reason"], { expectedStreamVersion: version, reason: string }),
     proposeMemory: object(["workspaceId", "namespace", "resourceId", "sourceEventId", "value"], {
       workspaceId: string, namespace: string, resourceId: string, sourceEventId: string,
@@ -509,7 +535,7 @@ function mutationSchema(operationId: string, versioned: boolean): JsonObject {
     decideCodingReconciliation: "DecideCodingReconciliationMutation",
     createOpcOpportunity: "CreateProductObjectMutation",
     createCodingRepository: "CreateProductObjectMutation",
-    createCodingTask: "CreateProductObjectMutation",
+    createCodingTask: "CreateCodingTaskMutation",
     runOpcReadOnlySample: "RunReadOnlySampleMutation",
     runCodingReadOnlySample: "RunReadOnlySampleMutation",
   };

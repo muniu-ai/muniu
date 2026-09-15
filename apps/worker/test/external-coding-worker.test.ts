@@ -35,6 +35,7 @@ import { createCodingTask, createRepository, type CodingTask } from "@mn/plugin-
 import { inspectRunnerBinary as inspectClaudeRunnerBinary } from "@mn/runner-claude-cli";
 import { inspectRunnerBinary as inspectCodexRunnerBinary } from "@mn/runner-codex-cli";
 import { SqliteStorage } from "@mn/storage";
+import { KernelProjectionRuntimeStore, PersistentInbox } from "@mn/agent-runtime";
 
 import {
   AgentOsWorker,
@@ -149,6 +150,29 @@ test("Worker 在可恢复候选仓库中显式执行 Claude CLI，且不调用 B
     record.type === "runner/event" || record.type === "runner/diagnostic");
   assert.ok(runnerRecords.length >= 2);
   assert.equal(JSON.stringify(runnerRecords).includes("claude-session-fixture"), false);
+});
+
+test("外部 Runner 多轮执行分别批准，延迟清理只处理对应轮次", { skip: !SANDBOX_AVAILABLE }, async t => {
+  const fixture = await externalFixture(t, "completed");
+  const runtime = new KernelProjectionRuntimeStore({ tenantId: "local", store: fixture.store });
+  await new PersistentInbox(runtime, "execution-1").enqueue("follow_up", "再生成一份相同要求的候选供审阅");
+  const polling = fixture.worker.pollOnce();
+  const ids: string[] = [];
+  for (let index = 0; index < 4; index += 1) {
+    const approval = await waitForApproval(fixture.store, ids);
+    ids.push(approval.id);
+    assert.equal(approval.effectClass, index % 2 === 0 ? "external_side_effect" : "privileged");
+    await fixture.kernel.decideApproval("local", "local-owner", `approve-multi-${index}`, approval.id, approval.streamVersion, "approve_once");
+  }
+  assert.deepEqual(await polling, { status: "completed", jobId: "job-1" });
+  const jobs = await fixture.store.transact("local", tx => tx.listProjections<Job>("job").filter(job => job.kind === "coding.sandbox.cleanup"));
+  assert.equal(jobs.length, 2);
+  await drainDeferredCleanup(fixture);
+  assert.deepEqual(await readdir(fixture.sandboxRoot), []);
+  const turns = await fixture.store.transact("local", tx => [
+    ...tx.listProjections<any>("coding.execution-turn"), tx.getProjection<any>("coding.execution", "execution-1"),
+  ]);
+  assert.deepEqual(turns.map(turn => turn.externalInvocation.cleanupStatus), ["cleaned", "cleaned"]);
 });
 
 test("Worker 通过同一生产链显式执行 Codex CLI", {
@@ -490,6 +514,57 @@ test("人工核对 Worker 拒绝已变化的 Authority、模型与 Runner 身份
   assert.equal(state.candidates.length, 0);
 });
 
+test("人工核对拒绝执行时已变更的 sandbox 配置", { skip: !SANDBOX_AVAILABLE }, async t => {
+  const fixture = await externalFixture(t, "unknown", "claude-cli", 3_600_000, "native",
+    "更新消息", { sandboxExecutable: "/usr/bin/true" });
+  const polling = fixture.worker.pollOnce();
+  const approval = await waitForApproval(fixture.store, []);
+  await fixture.kernel.decideApproval("local", "local-owner", "approve-sandbox-binding", approval.id,
+    approval.streamVersion, "approve_once");
+  assert.deepEqual(await polling, { status: "needs_reconciliation", jobId: "job-1" });
+  await enqueueReconciliationVerification(fixture.store);
+  await fixture.worker.pollOnce();
+  const state = await fixture.store.transact("local", tx => ({
+    execution: tx.getProjection<Execution>("execution", "execution-1"),
+    run: tx.getProjection<any>("coding.execution", "execution-1"),
+    gates: tx.listProjections("coding.gate-result"),
+  }));
+  assert.equal(state.execution?.status, "needs_reconciliation");
+  assert.equal(state.gates.length, 0);
+  assert.match(state.run.externalInvocation.verification.failureReason, /sandbox.*配置/);
+});
+
+for (const namespace of ["coding.spec", "coding.governance", "coding.harness", "coding.repository-index", "coding.control-plane"]) {
+  test(`人工核对拒绝被篡改的不可变快照：${namespace}`, { skip: !SANDBOX_AVAILABLE }, async t => {
+    const fixture = await externalFixture(t, "unknown");
+    const polling = fixture.worker.pollOnce();
+    const approval = await waitForApproval(fixture.store, []);
+    await fixture.kernel.decideApproval("local", "local-owner", `approve-${namespace}`, approval.id,
+      approval.streamVersion, "approve_once");
+    assert.deepEqual(await polling, { status: "needs_reconciliation", jobId: "job-1" });
+    await enqueueReconciliationVerification(fixture.store);
+    await fixture.store.transact("local", tx => {
+      const value = tx.listProjections<any>(namespace)[0];
+      assert.ok(value, "真实 Runner 执行必须持久化完整控制面快照");
+      const fields = namespace === "coding.spec" ? { body: "changed without a new digest" }
+        : namespace === "coding.governance" ? { rules: ["allow-unsafe-fallback"] }
+        : namespace === "coding.harness" ? { gateIds: ["skip-verification"] }
+        : namespace === "coding.repository-index" ? { entries: [] } : { baseRevision: "0".repeat(40) };
+      tx.putProjection(namespace, namespace === "coding.repository-index" ? value.digest
+        : namespace === "coding.control-plane" ? value.executionId : value.id, { ...value, ...fields });
+    });
+    assert.deepEqual(await fixture.worker.pollOnce(), { status: "failed", jobId: "verify-job-1" });
+    const state = await fixture.store.transact("local", tx => ({
+      execution: tx.getProjection<Execution>("execution", "execution-1"),
+      gates: tx.listProjections("coding.gate-result"), candidates: tx.listProjections("coding.candidate"),
+    }));
+    assert.equal(state.execution?.status, "needs_reconciliation");
+    assert.equal(state.gates.length, 0);
+    assert.equal(state.candidates.length, 0);
+    assert.equal((await fixture.store.getJob("job-1"))?.attempts, 1);
+  });
+}
+
 test("生产 launcher 遇到 stdin EPIPE 时失败关闭，Worker 不崩溃也不误判完成", {
   skip: !SANDBOX_AVAILABLE,
 }, async (t) => {
@@ -623,7 +698,8 @@ test("外部 Runner 审批被拒绝时记录已知失败，不进入人工核对
 test("外部 Runner 超过 Execution 时限后终止进程并保留人工核对证据", {
   skip: !SANDBOX_AVAILABLE,
 }, async (t) => {
-  const fixture = await externalFixture(t, "hang", "claude-cli", 25);
+  // The deadline includes repository inspection and sandbox preparation before launch.
+  const fixture = await externalFixture(t, "hang", "claude-cli", 10_000);
   const polling = fixture.worker.pollOnce();
   const approval = await waitForApproval(fixture.store, []);
   await fixture.kernel.decideApproval(
@@ -762,6 +838,7 @@ async function externalFixture(
   maxDurationMs = 3_600_000,
   binaryFormat: "native" | "shebang" = "native",
   taskRequest = "把 message.txt 的 old value 改成 new value",
+  reconciliationOptions: { readonly sandboxExecutable?: string } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "muniu-external-runner-"));
   t.after(async () => rm(root, { recursive: true, force: true }));
@@ -809,6 +886,7 @@ async function externalFixture(
     store,
     secretStore: { async read() { throw new Error("不应读取 BYOK 密钥"); } },
     modelInvoker,
+    modelQuoter: async () => { throw new Error("外部 Runner 不应调用 BYOK 预算预检"); },
     approvalKernel: kernel,
     codingSandboxRoot: sandboxRoot,
     approvalPollIntervalMs: 2,
@@ -824,6 +902,7 @@ async function externalFixture(
     store,
     sandboxRoot,
     now: () => NOW,
+    ...reconciliationOptions,
   });
   const worker = new AgentOsWorker({
     id: "worker-external",
@@ -1031,14 +1110,19 @@ async function waitForApproval(
   store: SqliteStorage,
   excludedIds: readonly string[],
 ): Promise<Approval> {
-  for (let attempt = 0; attempt < 1_000; attempt += 1) {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
     const approval = await store.transact("local", (transaction) =>
       transaction.listProjections<Approval>("approval")
         .find((item) => item.status === "pending" && !excludedIds.includes(item.id)));
     if (approval) return approval;
     const job = await store.getJob("job-1");
     if (job?.status === "failed") throw new Error(`Job 失败：${JSON.stringify(job.failure)}`);
-    await new Promise((resolve) => setTimeout(resolve, 2));
+    if (job?.status === "completed") {
+      const execution = await store.transact("local", tx => tx.getProjection<Execution>("execution", "execution-1"));
+      throw new Error(`等待批准时 Job 已结束：${job.status}，Execution：${execution?.status}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error("等待 Runner 批准超时");
 }

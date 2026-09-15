@@ -2,7 +2,7 @@
 
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { createAgentOsHost } from "../../host/dist/index.js";
-import { KernelProjectionRuntimeStore } from "../../../packages/agent-runtime/dist/index.js";
+import { KernelProjectionRuntimeStore, PersistentModelBudget } from "../../../packages/agent-runtime/dist/index.js";
 import { InMemoryKernelStore } from "../../../packages/kernel/dist/index.js";
 import { InMemoryKeyProvider } from "../../../packages/storage/dist/index.js";
 import { signedUiPluginFixture } from "./signed-plugin-fixture.mjs";
@@ -143,6 +143,12 @@ async function simulateOpcAgent() {
         now,
         id: (sequence) => `fixture-runtime-${execution.id}-${sequence}`,
       });
+      const authority = await store.transact("local", tx => tx.getProjection("authority", execution.authorityId));
+      const budget = new PersistentModelBudget({ store: runtime, executionId: execution.id, limits: authority.budget });
+      await budget.reserve({ id: "fixture-model", requestDigest: "a".repeat(64), inputTokenLimit: 100, maxOutputTokens: 100,
+        rates: { id: "non-billable-fixture", currency: "CNY", inputNanoMinorUnitsPerToken: "0",
+          cachedInputNanoMinorUnitsPerToken: "0", outputNanoMinorUnitsPerToken: "0" } });
+      await budget.settle("fixture-model", { inputTokens: 10, cachedInputTokens: 0, outputTokens: 10 });
       await runtime.append({
         executionId: execution.id,
         type: "session/entry",
@@ -350,6 +356,8 @@ async function seedApproval(workspaceId) {
   const authority = await store.transact("local", (transaction) =>
     transaction.getProjection("authority", execution.authorityId));
   if (!authority) throw new Error("审批 fixture 缺少执行权限");
+  await host.kernel.commandExecution("local", "worker:desktop-fixture", "seed-approval-start",
+    execution.id, execution.streamVersion, "start");
   await host.kernel.requestToolApproval("local", "agent:opc", "seed-approval", {
     id: "fixture-tool-call",
     executionId: execution.id,

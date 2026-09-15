@@ -3,8 +3,10 @@ import test from "node:test";
 
 import {
   KernelProjectionRuntimeStore,
+  InMemoryRuntimeStore,
   type RuntimeProjectionStore,
   type RuntimeProjectionTransaction,
+  type RuntimeRecordInput,
 } from "../src/index.js";
 
 class SharedProjectionStore implements RuntimeProjectionStore {
@@ -38,4 +40,19 @@ test("KernelStore 投影 RuntimeStore 跨实例恢复且保持租户隔离", asy
 
   const otherTenant = new KernelProjectionRuntimeStore({ tenantId: "tenant-b", store: backing });
   assert.deepEqual(await otherTenant.readExecution("execution-1"), []);
+});
+
+test("Runtime 原子批次拒绝过期序号，不留下部分消费或部分 turn", async () => {
+  for (const runtime of [new InMemoryRuntimeStore(), new KernelProjectionRuntimeStore({ tenantId: "tenant", store: new SharedProjectionStore() })]) {
+    const enqueued = await runtime.append({ executionId: "execution", type: "inbox/enqueued", payload: { id: "item", kind: "follow_up", text: "继续" } });
+    const inputs: readonly RuntimeRecordInput[] = [
+      { executionId: "execution", type: "inbox/consumed" as const, payload: { itemId: "item", kind: "follow_up" } },
+      { executionId: "execution", type: "turn/started" as const, payload: { turn: 1, generation: 1 } },
+    ];
+    const results = await Promise.all([runtime.commit("execution", enqueued.sequence, inputs), runtime.commit("execution", enqueued.sequence, inputs)]);
+    assert.equal(results.filter(Boolean).length, 1);
+    assert.deepEqual((await runtime.readExecution("execution")).map(record => record.type), ["inbox/enqueued", "inbox/consumed", "turn/started"]);
+    await assert.rejects(runtime.commit("execution", 3, [{ executionId: "other", type: "turn/started", payload: {} }]), /同一 execution/);
+    assert.equal((await runtime.readExecution("execution")).length, 3);
+  }
 });

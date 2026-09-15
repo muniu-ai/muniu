@@ -7,15 +7,16 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { createPostgresPool } from "./lib/postgres-pool.mjs";
-import { AgentOsKernel } from "@mn/kernel";
-import { captureCodingRepository, captureCodingTask } from "@mn/host";
-import { InMemoryKeyProvider, S3Cas } from "@mn/storage";
+import { captureCodingRepository, captureCodingTask, configureProductProjectionJournal, createAgentOsCompositionRoot } from "@mn/host";
+import { S3Cas, storeProtectedJson } from "@mn/storage";
 import { AgentOsWorker } from "@mn/worker";
 import { createHandlers, supportedKinds } from "./enterprise-worker-handlers.mjs";
 import { PostgresKernelStore } from "./lib/postgres-kernel-store.mjs";
 import { PostgresWorkerStore } from "./lib/postgres-worker-store.mjs";
 import { createEnterpriseWorkerStore } from "./lib/enterprise-worker-store.mjs";
 import { SigV4S3Client } from "./lib/s3-client.mjs";
+import { VaultTransitKeyProvider } from "./lib/enterprise-secrets.mjs";
+import { readPendingKindApproval } from "./lib/kind-coding-observer.mjs";
 
 assert.equal(process.env.MN_WORKER_FIXTURE_MODE, "false");
 const tenantId = `coding-proof-${randomUUID()}`;
@@ -25,10 +26,15 @@ const kernelStore = new PostgresKernelStore({ pool, hmacKey });
 await kernelStore.initialize();
 const jobStore = new PostgresWorkerStore({ pool, hmacKey });
 const store = createEnterpriseWorkerStore({ kernelStore, jobStore });
-const kernel = new AgentOsKernel(store, { acceptsModelSecretReference: (ref) => ref.startsWith("vault://muniu/v2/") });
 const cas = new S3Cas({ bucket: process.env.MN_S3_BUCKET, prefix: process.env.MN_S3_PREFIX,
   client: new SigV4S3Client({ endpoint: process.env.MN_S3_ENDPOINT, region: process.env.MN_S3_REGION,
     accessKeyId: process.env.MN_S3_ACCESS_KEY_ID, secretAccessKey: process.env.MN_S3_SECRET_ACCESS_KEY }) });
+const protectedPayloadKeyProvider = new VaultTransitKeyProvider({ address: process.env.MN_VAULT_ADDR,
+  token: process.env.MN_VAULT_TOKEN, mount: process.env.MN_VAULT_TRANSIT_MOUNT,
+  keyName: process.env.MN_VAULT_TRANSIT_KEY, individuallyRevocable: true });
+configureProductProjectionJournal(kernelStore, cas, protectedPayloadKeyProvider);
+const composition = await createAgentOsCompositionRoot({ profile: "enterprise", store });
+const kernel = composition.kernel;
 const fixtureRoot = await mkdtemp(join(process.env.MN_KUBERNETES_SHARED_ROOT, "production-proof-"));
 const exec = promisify(execFile);
 let workerRun;
@@ -58,6 +64,9 @@ try {
       presetId: "deepseek", secretRef: "vault://muniu/v2/models/fixture", defaultModel: "fixture-model", status: "ready" });
   });
   const execution = await kernel.submitTurn(tenantId, "fixture-owner", "turn", {
+    preparedMessage: await storeProtectedJson({ tenantId, workspaceId: workspace.id, ownerType: "thread",
+      ownerId: thread.id, protectedPayloadRef: `thread-payload-${randomUUID()}`, value: { message: task.request },
+      cas, keyProvider: protectedPayloadKeyProvider, createdAt: new Date().toISOString() }),
     workspaceId: workspace.id, threadId: thread.id, expectedStreamVersion: thread.streamVersion,
     message: task.request, agentDefinitionId: "coding.builtin", modelBindingId: "fixture-model",
     executionPrincipalId: "agent:coding", runnerId: "builtin",
@@ -69,14 +78,17 @@ try {
         currency: "CNY", maxDurationMs: 300000 } },
   });
   let modelCalls = 0;
-  const handlers = await createHandlers({ store, fixtureMode: false, cas,
-    protectedPayloadKeyProvider: new InMemoryKeyProvider(Buffer.alloc(32, 41)),
+  const handlers = await createHandlers({ store, composition, fixtureMode: false, cas,
+    protectedPayloadKeyProvider,
     secretStore: { async read() { return "fixture-only"; } },
     modelInvoker: async () => {
       modelCalls += 1;
-      return { text: "更新消息", toolCalls: [{ id: "fixture-patch", toolId: "coding.sandbox.write",
+      return { text: "更新消息", usage: { inputTokens: 10, cachedInputTokens: 0, outputTokens: 10 }, toolCalls: [{ id: "fixture-patch", toolId: "coding.sandbox.write",
         arguments: { summary: "更新消息", patch: "diff --git a/message.txt b/message.txt\n--- a/message.txt\n+++ b/message.txt\n@@ -1 +1 @@\n-old value\n+new value\n" } }] };
     },
+    modelQuoter: async () => ({ inputTokenLimit: 100, maxOutputTokens: 100,
+      rates: { id: "non-billable-fixture", currency: "CNY", inputNanoMinorUnitsPerToken: "0",
+        cachedInputNanoMinorUnitsPerToken: "0", outputNanoMinorUnitsPerToken: "0" } }),
   });
   const worker = new AgentOsWorker({ id: `proof-${randomUUID()}`, store, handlers, tenantId,
     kinds: supportedKinds,
@@ -88,8 +100,7 @@ try {
   const deadline = Date.now() + 240000;
   let approved = false;
   while (!completed && Date.now() < deadline) {
-    const approvals = await store.transact(tenantId, (tx) => tx.listProjections("approval"));
-    const pending = approvals.find((value) => value.executionId === execution.id && value.status === "pending");
+    const pending = await readPendingKindApproval(pool, tenantId, execution.id);
     if (pending) {
       assert.equal(pending.effectClass, "privileged");
       await kernel.decideApproval(tenantId, "fixture-owner", "approve", pending.id, pending.streamVersion, "approve_once");
@@ -121,6 +132,7 @@ try {
 } finally {
   abort.abort();
   await workerRun?.catch(() => {});
+  await composition.context.fiber.dispose();
   await rm(fixtureRoot, { recursive: true, force: true });
   await pool.end();
 }

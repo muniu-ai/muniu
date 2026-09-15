@@ -29,6 +29,8 @@ import {
   type WrappedDataKey
 } from "./encryption.js";
 import { canonicalJson } from "./integrity.js";
+import { FileCas } from "./cas.js";
+import { SqliteStorage } from "./sqlite.js";
 
 const BACKUP_FORMAT = "muniu-agent-os-local-backup";
 const BACKUP_PURPOSE = "local-state-backup";
@@ -93,6 +95,11 @@ export interface LocalBackupRestoreResult {
   readonly file: string;
   readonly casDirectory: string;
   readonly manifest: LocalBackupManifestV1;
+}
+
+export interface LocalStateRestoreResult extends LocalBackupRestoreResult {
+  readonly stateRoot: string;
+  readonly verified: true;
 }
 
 export interface LocalSqliteBackupOptions {
@@ -218,6 +225,7 @@ function atomicCreate(path: string, bytes: Uint8Array): void {
     closeSync(descriptor);
     descriptor = undefined;
     linkSync(temporary, path);
+    syncDirectory(directory);
   } catch (error) {
     if (nodeErrorCode(error) === "EEXIST") {
       throw new LocalBackupError("BACKUP_DESTINATION_EXISTS", "目标文件已存在");
@@ -230,6 +238,11 @@ function atomicCreate(path: string, bytes: Uint8Array): void {
       if (nodeErrorCode(error) !== "ENOENT") throw error;
     }
   }
+}
+
+function syncDirectory(path: string): void {
+  const descriptor = openSync(path, "r");
+  try { fsyncSync(descriptor); } finally { closeSync(descriptor); }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -383,7 +396,7 @@ function validateSqliteBytes(bytes: Buffer): string {
   }
 }
 
-function readCasObjects(root: string): readonly { readonly digest: string; readonly content: Buffer }[] {
+function readCasObjects(root: string, remainingBytes: number): readonly { readonly digest: string; readonly content: Buffer }[] {
   if (!exists(root)) return [];
   const rootStatus = lstatSync(root);
   if (!rootStatus.isDirectory() || rootStatus.isSymbolicLink()) {
@@ -408,7 +421,12 @@ function readCasObjects(root: string): readonly { readonly digest: string; reado
           || !/^[a-f0-9]{64}$/u.test(entry.name) || !entry.name.startsWith(prefix.name)) {
           throw new LocalBackupError("BACKUP_INTEGRITY_FAILED", "CAS 对象路径无效");
         }
-        const content = readFileSync(join(directory, entry.name));
+        const path = join(directory, entry.name);
+        const size = assertRegularFile(path, "BACKUP_SOURCE_NOT_FOUND");
+        if (size + 128 > remainingBytes) throw new LocalBackupError("BACKUP_ARCHIVE_TOO_LARGE", "备份源内容超过允许大小");
+        const content = readFileSync(path);
+        remainingBytes -= content.byteLength + 128;
+        if (remainingBytes < 0) { content.fill(0); throw new LocalBackupError("BACKUP_ARCHIVE_TOO_LARGE", "备份源内容超过允许大小"); }
         if (sha256(content) !== entry.name) {
           content.fill(0);
           throw new LocalBackupError("BACKUP_INTEGRITY_FAILED", "CAS 对象摘要不匹配");
@@ -495,8 +513,10 @@ function createRestoredCas(
   if (exists(destination)) {
     throw new LocalBackupError("BACKUP_DESTINATION_EXISTS", "目标 CAS 目录已存在");
   }
+  let created = false;
   try {
     mkdirSync(destination, { mode: 0o700 });
+    created = true;
     const shaRoot = join(destination, "sha256");
     mkdirSync(shaRoot, { mode: 0o700 });
     for (const object of objects) {
@@ -504,9 +524,15 @@ function createRestoredCas(
       mkdirSync(prefix, { recursive: true, mode: 0o700 });
       atomicCreate(join(prefix, object.digest), object.content);
     }
+    syncDirectory(shaRoot);
+    syncDirectory(destination);
+    syncDirectory(dirname(destination));
     return destination;
   } catch (error) {
-    rmSync(destination, { force: true, recursive: true });
+    if (created) rmSync(destination, { force: true, recursive: true });
+    if (nodeErrorCode(error) === "EEXIST" && !created) {
+      throw new LocalBackupError("BACKUP_DESTINATION_EXISTS", "目标 CAS 目录已被其他操作创建");
+    }
     if (error instanceof LocalBackupError) throw error;
     throw new LocalBackupError("BACKUP_IO_FAILED", "无法恢复 CAS 对象");
   }
@@ -546,6 +572,7 @@ export class LocalSqliteBackup {
     assertSourceDatabase(this.#databaseFile);
     const directory = mkdtempSync(join(tmpdir(), "mn-v2-backup-create-"));
     const snapshot = join(directory, "snapshot.sqlite");
+    const plaintextBuffers: Buffer[] = [];
     try {
       let database: DatabaseSync | undefined;
       try {
@@ -558,10 +585,16 @@ export class LocalSqliteBackup {
         database?.close();
       }
       chmodSync(snapshot, 0o600);
+      if (assertRegularFile(snapshot, "BACKUP_SOURCE_NOT_FOUND") > this.#maxArchiveBytes) {
+        throw new LocalBackupError("BACKUP_ARCHIVE_TOO_LARGE", "SQLite 快照超过允许大小");
+      }
       const sqliteSchemaVersion = sqliteMetadata(snapshot);
       const sqlite = readFileSync(snapshot);
-      const casObjects = readCasObjects(this.#casDirectory);
+      plaintextBuffers.push(sqlite);
+      const casObjects = readCasObjects(this.#casDirectory, this.#maxArchiveBytes - sqlite.byteLength);
+      plaintextBuffers.push(...casObjects.map(object => object.content));
       const payload = encodeState(sqlite, casObjects);
+      plaintextBuffers.push(payload);
       const casBytes = casObjects.reduce((total, object) => total + object.content.byteLength, 0);
       const manifest: LocalBackupManifestV1 = {
         format: BACKUP_FORMAT,
@@ -590,10 +623,6 @@ export class LocalSqliteBackup {
         envelope = await this.#cipher.encrypt(payload, context);
       } catch {
         throw new LocalBackupError("BACKUP_ENCRYPTION_FAILED", "无法加密本地状态快照");
-      } finally {
-        payload.fill(0);
-        sqlite.fill(0);
-        for (const object of casObjects) object.content.fill(0);
       }
       const archive = Buffer.from(JSON.stringify({ manifest, envelope } satisfies LocalBackupArchiveV1));
       if (archive.byteLength > this.#maxArchiveBytes) {
@@ -602,6 +631,7 @@ export class LocalSqliteBackup {
       atomicCreate(target, archive);
       return { file: target, manifest };
     } finally {
+      for (const buffer of plaintextBuffers) buffer.fill(0);
       rmSync(directory, { force: true, recursive: true });
     }
   }
@@ -638,6 +668,44 @@ export class LocalSqliteBackup {
     } finally {
       clearDecoded(decoded);
     }
+  }
+
+  async restoreState(fileName: string, destinationName: string, verification: {
+    readonly hmacKey: Uint8Array; readonly keyProvider: KeyProvider;
+  }): Promise<LocalStateRestoreResult> {
+    if (verification?.hmacKey.byteLength !== 32 || !verification.keyProvider) {
+      throw new LocalBackupError("BACKUP_INTEGRITY_FAILED", "恢复需要原事件 HMAC 密钥与数据包装密钥");
+    }
+    const source = safeLeaf(this.#backupDirectory, fileName);
+    const stateRoot = safeLeaf(this.#restoreDirectory, destinationName);
+    if (exists(stateRoot)) throw new LocalBackupError("BACKUP_DESTINATION_EXISTS", "恢复状态目录已存在");
+    const decoded = await this.#decode(source);
+    let created = false;
+    try {
+      mkdirSync(stateRoot, { mode: 0o700 });
+      created = true;
+      const pendingMarker = join(stateRoot, ".restore-pending");
+      atomicCreate(pendingMarker, Buffer.from("verification pending\n"));
+      const casDirectory = join(stateRoot, "cas");
+      const file = join(stateRoot, "state.sqlite3");
+      createRestoredCas(casDirectory, decoded.casObjects);
+      atomicCreate(file, decoded.sqlite);
+      const restored = new SqliteStorage({ databaseFile: file, hmacKey: verification.hmacKey,
+        projectionJournal: { cas: new FileCas({ rootDir: casDirectory }), keyProvider: verification.keyProvider, namespaces: ["*non-core"] } });
+      try {
+        for (const tenantId of await restored.listTenantIds()) await restored.rebuildProjections(tenantId);
+      } catch {
+        throw new LocalBackupError("BACKUP_INTEGRITY_FAILED", "事件或加密事实校验失败，未生成可启动状态目录");
+      } finally { await restored.close(); }
+      unlinkSync(pendingMarker);
+      syncDirectory(stateRoot);
+      syncDirectory(this.#restoreDirectory);
+      return { stateRoot, file, casDirectory, manifest: decoded.manifest, verified: true };
+    } catch (error) {
+      if (created) { rmSync(stateRoot, { recursive: true, force: true }); syncDirectory(this.#restoreDirectory); }
+      if (nodeErrorCode(error) === "EEXIST") throw new LocalBackupError("BACKUP_DESTINATION_EXISTS", "恢复状态目录已存在");
+      throw error;
+    } finally { clearDecoded(decoded); }
   }
 
   async #decode(file: string): Promise<DecodedBackup> {

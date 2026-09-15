@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { randomUUID } from "node:crypto";
-import type { RuntimeRecord, RuntimeStore } from "@mn/agent-runtime";
+import { assertRuntimeBatch, type RuntimeRecord, type RuntimeRecordInput, type RuntimeStore } from "@mn/agent-runtime";
 import type { Execution, JsonObject } from "@mn/contracts";
-import { PROTECTED_PAYLOAD_KEY_NAMESPACE, type KernelStore } from "@mn/kernel";
+import { PROTECTED_PAYLOAD_KEY_NAMESPACE, type KernelStore, type KernelTransaction } from "@mn/kernel";
 import {
   readProtectedJson, storeProtectedJson,
   type ContentAddressedStorage, type KeyProvider, type ProtectedJsonKeyRecordV1,
@@ -19,6 +19,7 @@ export interface ProtectedRuntimeOptions extends RuntimeProtection {
   readonly workspaceId: string;
   readonly store: KernelStore;
   readonly now?: () => string;
+  readonly onCommit?: (transaction: KernelTransaction, records: readonly RuntimeRecord[]) => void | (() => void);
 }
 
 interface StoredRecord extends RuntimeRecord {
@@ -77,7 +78,8 @@ export function createProtectedRuntimeStore(options: ProtectedRuntimeOptions): R
     const records: StoredRecord[] = [];
     let position = 0;
     for (;;) {
-      const page = await options.store.readEvents(options.tenantId, position, 500);
+      const readHistory = options.store.readEventHistory ?? options.store.readEvents;
+      const page = await readHistory.call(options.store, options.tenantId, position, 500);
       for (const event of page.events) {
         if (event.type !== "agent.runtime_recorded" || event.executionId !== executionId) continue;
         const record = event.publicPayload.record as unknown as StoredRecord;
@@ -103,45 +105,63 @@ export function createProtectedRuntimeStore(options: ProtectedRuntimeOptions): R
       ownerType: "runtime", ownerId: record.executionId, protectedPayloadRef, keyRecord }) };
   }
 
-  return {
-    async append(input) {
-      const snapshot = await restore(input.executionId);
-      const protectedPayloadRef = `runtime-payload-${randomUUID()}`;
+  async function appendBatch(executionId: string, batch: readonly RuntimeRecordInput[], expectedLastSequence?: number): Promise<readonly RuntimeRecord[] | undefined> {
+      assertRuntimeBatch(executionId, expectedLastSequence ?? 0, batch);
+      const inputs = structuredClone(batch);
+      const snapshot = await restore(executionId);
       const timestamp = now();
-      const prepared = await storeProtectedJson({ ...options,
-        ownerType: "runtime", ownerId: input.executionId, protectedPayloadRef,
-        value: input.payload, createdAt: timestamp });
-      const record = await options.store.transact(options.tenantId, (tx) => {
-        const current = tx.getProjection<RuntimeProjection>("agent-runtime", input.executionId) ?? snapshot;
-        const execution = tx.getProjection<Execution>("execution", input.executionId);
-        const value: StoredRecord = {
-          id: `runtime-${randomUUID()}`, executionId: input.executionId,
-          sequence: current.nextSequence, type: input.type, occurredAt: timestamp,
-          payload: {}, protectedPayloadRef,
-        };
-        tx.putProjection(PROTECTED_PAYLOAD_KEY_NAMESPACE, protectedPayloadRef, prepared.keyRecord);
-        tx.putProjection<RuntimeProjection>("agent-runtime", input.executionId, {
-          executionId: input.executionId, streamVersion: current.streamVersion + 1,
-          nextSequence: value.sequence + 1, records: [...current.records, value],
-        });
+      const prepared = await Promise.all(inputs.map(async input => {
+        const protectedPayloadRef = `runtime-payload-${randomUUID()}`;
+        const stored = await storeProtectedJson({ ...options,
+          ownerType: "runtime", ownerId: executionId, protectedPayloadRef,
+          value: input.payload, createdAt: timestamp });
+        return { ...stored, protectedPayloadRef };
+      }));
+      const committed = await options.store.transact(options.tenantId, (tx) => {
+        const current = tx.getProjection<RuntimeProjection>("agent-runtime", executionId) ?? snapshot;
+        if (expectedLastSequence !== undefined && (current.records.at(-1)?.sequence ?? 0) !== expectedLastSequence) return undefined;
+        const execution = tx.getProjection<Execution>("execution", executionId);
+        const values = inputs.map((input, index): StoredRecord => ({
+          id: `runtime-${randomUUID()}`, executionId,
+          sequence: current.nextSequence + index, type: input.type, occurredAt: timestamp,
+          payload: {}, protectedPayloadRef: prepared[index]!.protectedPayloadRef,
+        }));
+        for (const [index, value] of values.entries()) {
+        const protectedPayloadRef = value.protectedPayloadRef!;
+        tx.putProjection(PROTECTED_PAYLOAD_KEY_NAMESPACE, protectedPayloadRef, prepared[index]!.keyRecord);
         const { payload: _payload, protectedPayloadRef: _ref, ...metadata } = value;
         const event = tx.appendEvent({
           tenantId: options.tenantId, aggregateType: "runtimeRecord", aggregateId: value.id,
           expectedStreamVersion: 0, type: "agent.runtime_recorded",
           actorId: execution?.executionPrincipalId ?? "system:runtime",
-          executionId: input.executionId, generation: execution?.generation ?? 0,
-          correlationId: input.executionId,
+          executionId, generation: execution?.generation ?? 0,
+          correlationId: executionId,
           publicPayload: { workspaceId: options.workspaceId, record: metadata as unknown as JsonObject },
           protectedPayloadRef,
         });
         tx.putOutbox({ id: `runtime-outbox-${value.id}`, tenantId: options.tenantId,
           topic: "agent.runtime_recorded", payload: { eventId: event.id,
-            executionId: input.executionId, position: event.position }, availableAt: timestamp });
-        return value;
+            executionId, position: event.position }, availableAt: timestamp });
+        }
+        tx.putProjection<RuntimeProjection>("agent-runtime", executionId, {
+          executionId, streamVersion: current.streamVersion + values.length,
+          nextSequence: current.nextSequence + values.length, records: [...current.records, ...values],
+        });
+        const records = values.map((record, index) => {
+          const { protectedPayloadRef: _ref, ...metadata } = record;
+          return { ...metadata, payload: inputs[index]!.payload };
+        });
+        return { records, afterCommit: options.onCommit?.(tx, records) };
       });
-      const { protectedPayloadRef: _ref, ...metadata } = record;
-      return { ...metadata, payload: structuredClone(input.payload) };
+      committed?.afterCommit?.();
+      return committed?.records;
+  }
+
+  return {
+    async append(input) {
+      return (await appendBatch(input.executionId, [input]))![0]!;
     },
+    commit: (executionId, expectedLastSequence, batch) => appendBatch(executionId, batch, expectedLastSequence),
     async readExecution(executionId) {
       const projection = await restore(executionId);
       return Promise.all(projection.records.map(decode));

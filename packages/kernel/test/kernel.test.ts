@@ -295,6 +295,11 @@ test("恢复会原子失效旧 generation 的待审批项", async () => {
     "local", "local-owner", "resume-approval-interrupt",
     execution.id, waiting.streamVersion, "interrupt",
   );
+  assert.equal((await kernel.listInbox("local")).length, 0, "中断后旧审批立即退出收件箱");
+  await store.transact("local", tx => tx.putProjection("inbox", "runtime-pause:fixture", {
+    id: "runtime-pause:fixture", tenantId: "local", workspaceId: workspace.id, executionId: execution.id,
+    kind: "agent_question", title: "执行暂停", summary: "核对后继续", status: "open", createdAt: now,
+  }));
   await kernel.commandExecution(
     "local", "local-owner", "resume-approval-command",
     execution.id, interrupted.streamVersion, "resume",
@@ -395,6 +400,7 @@ test("只读工具可自动执行，高影响操作进入审批收件箱", async
     workspaceId: workspace.id, threadId: thread.id, pluginId: "opc", agentDefinitionId: "a",
     modelBindingId: "m", executionPrincipalId: "agent", authority: { ...authority("exec"), workspaceId: workspace.id },
   });
+  await kernel.commandExecution("local", "local-owner", "start-before-tools", execution.id, execution.streamVersion, "start");
   const savedAuthority = await store.transact("local", (transaction) =>
     transaction.getProjection<ExecutionAuthority>("authority", execution.authorityId));
   assert.ok(savedAuthority);
@@ -423,11 +429,11 @@ test("只读工具可自动执行，高影响操作进入审批收件箱", async
     const updatedExecution = await store.transact("local", (transaction) =>
       transaction.getProjection<Execution>("execution", execution.id));
     assert.equal(updatedExecution?.status, "running");
-    assert.equal(updatedExecution?.streamVersion, 4);
+    assert.equal(updatedExecution?.streamVersion, 5);
     const executionEvents = (await store.readEvents("local", 0, 30)).events
       .filter((event) => event.aggregateType === "execution" && event.aggregateId === execution.id);
     assert.equal(executionEvents.at(-1)?.type, "execution.approval_approved_once");
-    assert.equal(executionEvents.at(-1)?.streamVersion, 4);
+    assert.equal(executionEvents.at(-1)?.streamVersion, 5);
 
     const stale = await kernel.requestToolApproval("local", "agent", "write-stale", {
       ...base, id: "call-3", effectClass: "external_side_effect", intent: "再次发布内容",
@@ -435,7 +441,7 @@ test("只读工具可自动执行，高影响操作进入审批收件箱", async
     assert.equal(stale.mode, "approval");
     if (stale.mode === "approval") {
       const cancelled = await kernel.commandExecution(
-        "local", "local-owner", "cancel-waiting", execution.id, 5, "cancel",
+        "local", "local-owner", "cancel-waiting", execution.id, 6, "cancel",
       );
       assert.equal(cancelled.status, "cancelled");
       await assert.rejects(
@@ -447,13 +453,38 @@ test("只读工具可自动执行，高影响操作进入审批收件箱", async
       const stillCancelled = await store.transact("local", (transaction) =>
         transaction.getProjection<Execution>("execution", execution.id));
       assert.equal(stillCancelled?.status, "cancelled");
-      assert.equal(stillCancelled?.streamVersion, 6);
+      assert.equal(stillCancelled?.streamVersion, 7);
       const expiredApproval = await store.transact("local", (transaction) =>
         transaction.getProjection<Approval>("approval", stale.approval.id));
       assert.equal(expiredApproval?.status, "expired");
       assert.equal((await kernel.listInbox("local")).length, 0);
     }
   }
+});
+
+test("只有正在执行的代次可以创建新工具调用，调用标识不能复用且过期意图不写入", async () => {
+  const store = new InMemoryKernelStore(undefined, () => now);
+  const kernel = new AgentOsKernel(store, { now: () => now });
+  await kernel.bootstrapLocal("tool-state-bootstrap");
+  const workspace = await kernel.createWorkspace("local", "local-owner", "tool-state-workspace", { name: "工具状态", viewMode: "business", pluginIds: ["opc"] });
+  const thread = await kernel.createThread("local", "local-owner", "tool-state-thread", { workspaceId: workspace.id, pluginId: "opc", subject: "状态验证" });
+  const execution = await kernel.createExecution("local", "local-owner", "tool-state-exec", { workspaceId: workspace.id,
+    threadId: thread.id, pluginId: "opc", agentDefinitionId: "agent", modelBindingId: "model", executionPrincipalId: "agent",
+    authority: { ...authority("state"), workspaceId: workspace.id } });
+  const savedAuthority = await store.transact("local", tx => tx.getProjection<ExecutionAuthority>("authority", execution.authorityId)!);
+  const intent: ToolCallIntent = { id: "unique-call", executionId: execution.id, generation: 1, toolId: "web.read", toolVersion: "1.0.0",
+    effectClass: "external_read", intent: "读取证据", normalizedArguments: {}, argumentsDigest: "args", resourcesDigest: "resources",
+    resourceRefs: [{ namespace: "web", resourceId: "https://example.com" }], authorityCommitment: savedAuthority.commitment, expiresAt: "2026-09-05T00:00:00.000Z" };
+  const before = await store.readEvents("local", 0, 100);
+  for (const status of ["queued", "waiting_approval", "paused", "interrupted", "needs_reconciliation", "completed", "failed", "cancelled"] as const) {
+    await store.transact("local", tx => tx.putProjection("execution", execution.id, { ...execution, status }));
+    await assert.rejects(kernel.requestToolApproval("local", "agent", `blocked-${status}`, intent), { code: "EXECUTION_NOT_RUNNING" });
+  }
+  assert.deepEqual(await store.readEvents("local", 0, 100), before);
+  await store.transact("local", tx => tx.putProjection("execution", execution.id, { ...execution, status: "running" }));
+  await assert.rejects(kernel.requestToolApproval("local", "agent", "expired-tool", { ...intent, expiresAt: now }), { code: "TOOL_INTENT_EXPIRED" });
+  assert.equal((await kernel.requestToolApproval("local", "agent", "fresh-tool", intent)).mode, "auto");
+  await assert.rejects(kernel.requestToolApproval("local", "agent", "reused-tool", intent), { code: "TOOL_CALL_ID_REUSED" });
 });
 
 test("跨 namespace 记忆必须有未撤销授权", () => {

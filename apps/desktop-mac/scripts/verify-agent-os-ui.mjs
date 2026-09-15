@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createServer as createNetServer } from "node:net";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -21,6 +21,7 @@ const screenshotPath = join(temporaryRoot, `${mode}.png`);
 const requests = [];
 const children = [];
 let browser;
+let page;
 
 try {
   const fixture = spawn(process.execPath, [join(scriptDir, "real-host-fixture.mjs")], {
@@ -49,7 +50,7 @@ try {
   if (mode !== "onboarding") {
     await context.addInitScript(() => localStorage.setItem("muniu:v2:onboarding-complete", "1"));
   }
-  const page = await context.newPage();
+  page = await context.newPage();
   page.on("request", (request) => {
     const url = new URL(request.url());
     if (url.origin !== apiUrl || ["HEAD", "OPTIONS"].includes(request.method())) return;
@@ -98,6 +99,12 @@ try {
   await page.keyboard.press("Escape");
   await page.getByRole("dialog", { name: "命令中心" }).waitFor({ state: "hidden" });
   console.log(JSON.stringify({ ok: true, mode, screenshotPath, requestCount: requests.length }));
+} catch (error) {
+  if (page && process.env.MN_DESKTOP_E2E_KEEP_TEMP === "1") {
+    await page.screenshot({ path: screenshotPath, timeout: 5000 }).catch(() => undefined);
+    process.stderr.write(`桌面验证失败截图：${screenshotPath}\n`);
+  }
+  throw error;
 } finally {
   await browser?.close().catch(() => undefined);
   for (const child of children.reverse()) child.kill("SIGTERM");
@@ -168,11 +175,16 @@ async function verifyOpc(page, requestLog, hostUrl) {
   await page.getByRole("button", { name: "查看档案" }).click();
   await expectText(page, "界定这项机会");
   await expectText(page, "与 OPC Agent 一起推进");
+  const nextTaskBox = await page.locator(".opc-next-task").first().boundingBox();
+  const agentBox = await page.locator(".opc-agent-panel").boundingBox();
+  if (!nextTaskBox || !agentBox || nextTaskBox.y >= agentBox.y) throw new Error("机会下一步应显示在会话前面");
   await expectText(page, "请回忆最近一次遇到这个问题的具体经过。");
   await page.getByLabel("给 OPC Agent 的消息").fill("请先列出当前最需验证的三个问题");
   await page.getByRole("button", { name: "发送给 OPC Agent" }).click();
   await expectText(page, "请先列出当前最需验证的三个问题");
   await expectText(page, "已按当前机会整理三个验证问题");
+  await expectText(page, "预估模型费用：CNY 0.00");
+  await expectText(page, "费用按参考价格预估，以厂商账单为准");
   const turnRequest = requestLog.find((entry) => entry.method === "POST" && entry.path.endsWith("/turns"));
   if (!turnRequest || turnRequest.body.message !== "请先列出当前最需验证的三个问题"
     || !Number.isInteger(turnRequest.body.expectedStreamVersion)) {
@@ -317,8 +329,31 @@ async function verifyOpc(page, requestLog, hostUrl) {
   opportunity = await hostData(hostUrl, `/v2/plugins/opc/opportunities/${summary.id}?workspaceId=${encodeURIComponent(workspace.id)}`);
   if (opportunity.state !== "decided" || opportunity.decision?.choice !== "pursue") throw new Error("人工决策未写入真实 Host");
 
-  await page.getByRole("button", { name: "导出 6 项成果" }).click();
+  const [download] = await Promise.all([
+    page.waitForEvent("download"),
+    page.getByRole("button", { name: "导出 6 项成果" }).click(),
+  ]);
+  if (!download.suggestedFilename().endsWith(".json")) throw new Error("成果没有导出为结构化文件");
+  const downloaded = JSON.parse(await readFile(await download.path(), "utf8"));
+  if (downloaded.schemaVersion !== 1 || downloaded.deliverables?.length !== 6) throw new Error("成果文件缺少完整的六项交付物");
+  if (!downloaded.deliverables.find(item => item.kind === "interview_pack")?.content.interviews[0]?.rawRecord) throw new Error("成果文件缺少经授权的原始访谈");
   await expectText(page, "6 项成果已导出");
+  const exportCount = requestLog.filter(entry => entry.method === "POST" && entry.path.endsWith("/exports")).length;
+  await page.evaluate(() => {
+    window.__TAURI__ = { core: { async invoke(command, args) {
+      if (command !== "save_json_export" || !args.fileName.endsWith(".json") || JSON.parse(args.content).deliverables.length !== 6) throw new Error("原生保存契约无效");
+      return false;
+    } } };
+  });
+  await page.getByRole("button", { name: "导出 6 项成果" }).click();
+  await expectText(page, "已取消保存文件");
+  if (requestLog.filter(entry => entry.method === "POST" && entry.path.endsWith("/exports")).length !== exportCount) throw new Error("重复保存文件不应重复创建成果");
+  await page.evaluate(() => { window.__TAURI__.core.invoke = async () => { throw new Error("fixture-save-failure"); }; });
+  await page.getByRole("button", { name: "导出 6 项成果" }).click();
+  await expectText(page, "文件未保存，请选择新的 JSON 文件名并检查目录权限");
+  if ((await page.locator("body").innerText()).includes("fixture-save-failure")) throw new Error("原生保存错误泄露未脱敏详情");
+  await page.evaluate(() => { delete window.__TAURI__; });
+  await page.screenshot({ path: join(temporaryRoot, "opc-export.png") });
   const exported = await hostData(hostUrl, `/v2/deliverables?workspaceId=${encodeURIComponent(workspace.id)}`);
   if (exported.length !== 6) throw new Error(`实际导出成果数不是 6：${exported.length}`);
   await page.getByRole("button", { name: "成果", exact: true }).click();
@@ -351,8 +386,10 @@ async function verifyOpc(page, requestLog, hostUrl) {
 
   await page.getByRole("button", { name: "返回机会列表" }).click();
   await expectText(page, "已有承诺证据");
-  await page.getByTitle("技术配置").click();
-  await page.getByRole("button", { name: "设置" }).click();
+  if (!await page.getByRole("button", { name: "设置", exact: true }).isVisible()) {
+    await page.getByTitle("技术配置").click();
+  }
+  await page.getByRole("button", { name: "设置", exact: true }).click();
   await expectText(page, "目标客户重视可预测的获客节奏");
   await page.getByRole("button", { name: "修改记忆：目标客户重视可预测的获客节奏" }).click();
   await page.getByLabel("记忆内容").fill("目标客户明确重视可预测的获客节奏");
@@ -397,6 +434,14 @@ async function verifyCoding(page, requestLog) {
   await page.getByRole("button", { name: /收件箱/ }).click();
   await expectText(page, "模型凭据失效");
   await expectText(page, "重新连接模型后，等待中的任务才能继续");
+  await page.getByRole("button", { name: "检查模型连接" }).click();
+  await page.getByRole("region", { name: "模型连接管理" }).waitFor();
+  await page.getByLabel("模型厂商", { exact: true }).selectOption("deepseek");
+  await page.getByLabel("新模型密钥", { exact: true }).fill("fixture-new-key-not-a-secret");
+  await page.getByRole("button", { name: "保存并用于新任务" }).click();
+  await expectText(page, "模型已连接，新任务将使用此连接");
+  if (await page.getByLabel("新模型密钥", { exact: true }).inputValue()) throw new Error("保存后未清除输入框中的密钥");
+  await page.getByRole("button", { name: /收件箱/ }).click();
   await expectText(page, "外部 Runner 结果待核对");
   await expectText(page, "选择标记完成后，将先对保留候选运行权威 Gate；不会重放外部 Runner");
   await expectText(page, "0 个候选 · 0 次 Gate");
@@ -417,6 +462,26 @@ async function verifyCoding(page, requestLog) {
     throw new Error(`桌面人工核对没有自动提交并发版本：${JSON.stringify(reconciliationDecision)}`);
   }
   await page.getByRole("button", { name: "Coding" }).click();
+  const repositories = page.getByRole("region", { name: "Coding 仓库" });
+  await repositories.getByText("muniu", { exact: true }).waitFor();
+  await repositories.getByLabel("仓库绝对路径", { exact: true }).fill("/workspace/customer-service");
+  await repositories.getByRole("button", { name: "登记仓库", exact: true }).click();
+  await repositories.getByText("customer-service", { exact: true }).waitFor();
+  await capture.selectOption("coding");
+  const repositoryChoice = page.getByLabel("任务仓库", { exact: true });
+  await page.getByPlaceholder("描述一个 Coding 任务").fill("为第二个仓库补充错误处理");
+  if (await page.getByRole("button", { name: "捕获", exact: true }).isEnabled()) throw new Error("多个仓库时不得默认绑定第一项");
+  await repositoryChoice.selectOption({ label: "customer-service" });
+  const selectedRepository = await repositoryChoice.inputValue();
+  await page.getByRole("button", { name: "捕获", exact: true }).click();
+  await page.locator(".coding-card").filter({ hasText: "为第二个仓库补充错误处理" }).waitFor();
+  const newTaskCard = page.locator(".coding-card").filter({ hasText: "为第二个仓库补充错误处理" });
+  await newTaskCard.getByText("进行中", { exact: true }).waitFor();
+  await newTaskCard.getByText("待检查", { exact: true }).waitFor();
+  const capturedTask = requestLog.filter(entry => entry.method === "POST" && entry.path === "/v2/plugins/coding/tasks").at(-1);
+  if (capturedTask?.body.repositoryId !== selectedRepository) throw new Error("任务未绑定到用户选择的仓库");
+  await assertViewportFit(page);
+  await page.screenshot({ path: join(temporaryRoot, "coding-repositories.png") });
   await expectText(page, "统一 Agent OS API");
   await expectText(page, "差异");
   await expectText(page, "检查");
@@ -425,6 +490,24 @@ async function verifyCoding(page, requestLog) {
   await page.locator(".coding-card").filter({ hasText: "统一 Agent OS API" })
     .getByRole("button", { name: "打开任务" }).click();
   await expectText(page, "Coding 任务");
+  const runnerSelector = page.getByLabel("本轮执行方式", { exact: true });
+  await runnerSelector.waitFor({ state: "visible" });
+  if (await runnerSelector.inputValue() !== "builtin") throw new Error("Coding 必须默认使用内置 Agent");
+  await page.getByLabel("给 Coding Agent 的消息", { exact: true }).waitFor({ state: "visible" });
+  await page.getByRole("button", { name: "发送给 Coding Agent", exact: true }).waitFor({ state: "visible" });
+  await page.getByLabel("给 Coding Agent 的消息", { exact: true }).fill("按任务要求生成可审阅的变更");
+  await page.getByRole("button", { name: "发送给 Coding Agent", exact: true }).click();
+  await expectText(page, "已提交，等待执行");
+  await page.getByLabel("给 Coding Agent 的消息", { exact: true }).fill("补充检查错误处理");
+  await page.getByRole("button", { name: "发送给 Coding Agent", exact: true }).click();
+  await page.getByLabel("给 Coding Agent 的消息", { exact: true }).fill("保留现有未提交内容");
+  await page.getByRole("button", { name: "调整当前方向", exact: true }).click();
+  await page.getByRole("button", { name: "取消执行", exact: true }).click();
+  await expectText(page, "执行已取消");
+  const controls = requestLog.filter(entry => entry.method === "POST" && /\/executions\/[^/]+\/commands$/.test(entry.path));
+  if (JSON.stringify(controls.slice(-3).map(entry => entry.body.command)) !== JSON.stringify(["follow_up", "steer", "cancel"])) {
+    throw new Error("Coding 会话未使用同一 Execution 的控制接口");
+  }
   await page.getByRole("button", { name: "返回任务列表" }).click();
   await expectText(page, "统一 Agent OS API");
   await page.keyboard.press("Meta+k");
@@ -433,8 +516,10 @@ async function verifyCoding(page, requestLog) {
   await page.getByRole("button", { name: "返回任务列表" }).waitFor({ state: "visible" });
   await page.getByRole("button", { name: "返回任务列表" }).click();
   if ((await page.locator("body").innerText()).includes("Harness 摘要")) throw new Error("经营视图不应显示 Harness");
-  await page.getByTitle("技术配置").click();
-  await page.getByRole("button", { name: "设置" }).click();
+  if (!await page.getByRole("button", { name: "设置", exact: true }).isVisible()) {
+    await page.getByTitle("技术配置").click();
+  }
+  await page.getByRole("button", { name: "设置", exact: true }).click();
   await page.getByRole("button", { name: "专业视图" }).click();
   await page.getByRole("button", { name: "Coding" }).click();
   await page.getByText("正在读取 Coding 任务").waitFor({ state: "hidden" });
@@ -446,6 +531,24 @@ async function verifyCoding(page, requestLog) {
   await expectText(page, "与 Host 同进程运行");
   await expectText(page, "不是安全沙箱");
   await expectText(page, "无法约束恶意插件直接使用进程能力");
+  const runnerCard = page.getByRole("region", { name: "Codex CLI 配置", exact: true });
+  await runnerCard.getByLabel("可执行文件绝对路径", { exact: true }).fill(process.execPath);
+  await runnerCard.getByRole("button", { name: "检查文件", exact: true }).click();
+  await runnerCard.getByText("SHA-256", { exact: true }).waitFor({ state: "visible" });
+  await runnerCard.getByLabel("已核实的版本", { exact: true }).fill("0.2.0-ui-fixture");
+  await runnerCard.getByLabel("我已核对文件来源、版本和摘要", { exact: true }).check();
+  await runnerCard.getByRole("button", { name: "确认使用此文件", exact: true }).click();
+  await runnerCard.getByText("已确认", { exact: true }).waitFor({ state: "visible" });
+  await page.getByRole("button", { name: "Coding", exact: true }).click();
+  await page.locator(".coding-card").filter({ hasText: "统一 Agent OS API" }).getByRole("button", { name: "打开任务" }).click();
+  const selectedRunner = page.getByLabel("本轮执行方式", { exact: true });
+  if (await selectedRunner.inputValue() !== "builtin") throw new Error("确认外部 Runner 不得改变默认执行方式");
+  await selectedRunner.selectOption("codex-cli");
+  await page.getByLabel("给 Coding Agent 的消息", { exact: true }).fill("显式选择 Codex Runner");
+  await page.getByRole("button", { name: "发送给 Coding Agent", exact: true }).click();
+  await expectText(page, "已提交，等待执行");
+  const externalTurn = requestLog.filter(entry => entry.method === "POST" && /\/threads\/[^/]+\/turns$/.test(entry.path)).at(-1);
+  if (externalTurn?.body.runnerId !== "codex-cli") throw new Error("显式 Runner 选择未写入公共 turn 接口");
   const workspacePaths = requestLog.filter((entry) => /^\/v2\/workspaces\/[^/]+$/.test(entry.path) || entry.path === "/v2/plugins/coding/tasks");
   if (workspacePaths.length === 0) throw new Error("专业视图没有使用统一 v2 接口");
 }

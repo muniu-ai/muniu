@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+import { Context } from "@deepseek-ai/cordis";
 
 import {
   CONTRIBUTION_KINDS,
@@ -90,11 +91,16 @@ export interface ScopeRegistration {
 }
 
 export class AgentScope {
+  readonly context: Context;
+  readonly ready: Promise<void>;
+  readonly #ownsRoot: boolean;
   readonly #children = new Set<AgentScope>();
   readonly #registrations: { [K in ContributionKind]: Map<string, Registration<ContributionByKind[K]>> };
   readonly #retiredContributions: ContributionResource[] = [];
   readonly #disposeCallbacks: Array<() => void | Promise<void>> = [];
   #disposed = false;
+  #disposing = false;
+  #disposal?: Promise<void>;
 
   private constructor(
     readonly level: ScopeLevel,
@@ -102,6 +108,7 @@ export class AgentScope {
     readonly identity: ScopeIdentity,
     readonly parent: AgentScope | undefined,
     private readonly shared: SharedScopeState,
+    compositionRoot?: Context,
   ) {
     this.#registrations = {
       prompt: new Map(),
@@ -111,9 +118,21 @@ export class AgentScope {
       job: new Map(),
       subagent: new Map(),
     };
+    this.#ownsRoot = !parent && !compositionRoot;
+    const owner = parent?.context ?? compositionRoot ?? new Context();
+    const isolated = owner.isolate("session").isolate("tool").isolate("model").isolate("agentScopeContributions");
+    const fiber = isolated.plugin({
+      name: `agent-scope:${level}`,
+      apply: (context: Context) => {
+        context.provide("agentScopeContributions", this.#registrations);
+        context.effect(() => () => this.#disposeResources());
+      },
+    });
+    this.context = fiber.ctx;
+    this.ready = Promise.all([parent?.ready, Promise.resolve(fiber)]).then(() => undefined);
   }
 
-  static tenant(tenantId: string, initialGeneration = 1): AgentScope {
+  static tenant(tenantId: string, initialGeneration = 1, compositionRoot?: Context): AgentScope {
     if (tenantId.length === 0) throw new Error("tenant id 不能为空");
     if (!Number.isSafeInteger(initialGeneration) || initialGeneration < 1) {
       throw new Error("Scope 初始 generation 必须是正整数");
@@ -124,6 +143,7 @@ export class AgentScope {
       { tenantId, subagentPath: [] },
       undefined,
       { generation: initialGeneration, activated: false },
+      compositionRoot,
     );
   }
 
@@ -209,7 +229,12 @@ export class AgentScope {
     });
   }
 
-  async dispose(): Promise<void> {
+  dispose(): Promise<void> {
+    this.#disposing = true;
+    return this.#disposal ??= this.#ownsRoot ? this.context.root.fiber.dispose() : this.context.fiber.dispose();
+  }
+
+  async #disposeResources(): Promise<void> {
     if (this.#disposed) return;
     this.#disposed = true;
     const errors: unknown[] = [];
@@ -238,7 +263,7 @@ export class AgentScope {
   }
 
   #assertActive(): void {
-    if (this.#disposed) throw new ScopeDisposedError();
+    if (this.#disposed || this.#disposing || this.context.fiber.uid === null) throw new ScopeDisposedError();
   }
 }
 

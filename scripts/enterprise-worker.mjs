@@ -18,6 +18,7 @@ import { PostgresWorkerStore } from "./lib/postgres-worker-store.mjs";
 import { createEnterpriseWorkerStore } from "./lib/enterprise-worker-store.mjs";
 import { parseWorkerSupportedKinds } from "./lib/worker-handler-capabilities.mjs";
 import { VaultTransitKeyProvider } from "./lib/enterprise-secrets.mjs";
+import { configureProductProjectionJournal, createAgentOsCompositionRoot } from "../apps/host/dist/index.js";
 import { SigV4S3Client } from "./lib/s3-client.mjs";
 
 function required(name) {
@@ -82,8 +83,10 @@ if (!fixtureMode) {
     token: required("MN_VAULT_TOKEN"),
     mount: process.env.MN_VAULT_TRANSIT_MOUNT ?? "transit",
     keyName: process.env.MN_VAULT_TRANSIT_KEY ?? "muniu-v2-protected-payloads",
+    individuallyRevocable: true,
     namespace: process.env.MN_VAULT_NAMESPACE,
   });
+  configureProductProjectionJournal(kernelStore, cas, protectedPayloadKeyProvider);
 }
 
 const localEngineLock = lockDigest("MN_ENGINE_LOCK_DIGEST");
@@ -109,6 +112,7 @@ const handlerModule = process.env.MN_WORKER_HANDLER_MODULE
   ?? new URL("./enterprise-worker-handlers.mjs", import.meta.url).pathname;
 if (!handlerModule.startsWith("/")) throw new Error("MN_WORKER_HANDLER_MODULE 必须是绝对路径");
 const loaded = await import(pathToFileURL(handlerModule).href);
+const composition = await createAgentOsCompositionRoot({ profile: "enterprise", store });
 const handlers = typeof loaded.createHandlers === "function"
   ? await loaded.createHandlers(Object.freeze({
       pool,
@@ -117,6 +121,7 @@ const handlers = typeof loaded.createHandlers === "function"
       jobStore,
       workerId,
       fixtureMode,
+      composition,
       ...(cas ? { cas } : {}),
       ...(protectedPayloadKeyProvider ? { protectedPayloadKeyProvider } : {}),
     }))
@@ -149,12 +154,14 @@ if (!readiness.ready) throw new Error(readiness.issues.map((issue) => issue.mess
 
 const readyFile = process.env.MN_WORKER_READY_FILE ?? "/tmp/mn-worker-ready";
 let stopped = false;
+const stopController = new AbortController();
 for (const signal of ["SIGINT", "SIGTERM"]) {
-  process.once(signal, () => { stopped = true; });
+  process.once(signal, () => { stopped = true; stopController.abort(); });
 }
 
 const heartbeat = createReadinessHeartbeat({
   check: async () => worker.readiness().ready
+    && (!protectedPayloadKeyProvider || await protectedPayloadKeyProvider.probe())
     && await probeWorkerLocks(pool, { engine: localEngineLock, plugin: localPluginLock }),
   publish: () => writeFile(readyFile, new Date().toISOString(), { mode: 0o600 }),
   remove: () => unlink(readyFile).catch(error => { if (error.code !== "ENOENT") throw error; }),
@@ -165,7 +172,7 @@ const readinessTimer = setInterval(() => { void heartbeat.tick(); }, 1_000);
 readinessTimer.unref();
 while (!stopped) {
   try {
-    const result = await worker.pollOnce();
+    const result = await worker.pollOnce(stopController.signal);
     if (result.status !== "idle") process.stdout.write(`${JSON.stringify(result)}\n`);
   } catch {
     process.stderr.write("Worker 轮询失败；未确认的执行结果不会自动重放\n");
@@ -175,4 +182,5 @@ while (!stopped) {
 
 clearInterval(readinessTimer);
 await heartbeat.stop();
+await composition.context.fiber.dispose();
 await kernelStore.close();

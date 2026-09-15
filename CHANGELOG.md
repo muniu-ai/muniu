@@ -4,26 +4,33 @@ Notable changes to Muniu Agent OS 0.2 are recorded here. Versions follow Semanti
 
 ## 0.2.0 - Unreleased
 
-Architecture acceptance is incomplete. Product projections are not yet fully rebuildable from events, Coding does not yet consume `follow_up` through AgentHandle, and public API response types remain incomplete. Historical backups can retain deleted wrapped data keys. Do not treat this branch as the completed 0.2 release.
+This breaking upgrade uses new state and `/v2` contracts without migrating or modifying 0.1 data. Version 0.2.0 remains unreleased.
 
 ### Added
 
 - Added encrypted Memory, Thread input, Inbox, and runtime payload storage with scoped reads and revocable memory sharing.
 - Added signed plugin installation and UI/CLI/Worker contribution loading, including explicit host-process trust confirmation.
-- Added an OpenAPI-generated client operation catalog shared by Desktop and CLI.
+- Added an OpenAPI-generated client operation catalog, response types, and runtime response validation shared by Desktop and CLI.
 - Added Kubernetes candidate command execution with pinned images, runtime checks, and authoritative Coding Gate verification.
+- Added authenticated encrypted projection journals and core/product query reconstruction without replaying models, tools, or physical Jobs.
+- Added local state ownership locks, cold-start orphan CAS collection, and offline PostgreSQL/S3 verification, reconstruction, and maintenance.
+- Added shared OPC/Coding conversations, model connection presets, persistent execution budgets, and model usage reconciliation.
+- Added workspace repository selection and native OPC JSON export with explicit plaintext disclosure and non-overwriting saves.
 
 ### Fixed
 
 - Rebuilt protected runtime indexes from event references and retained same-thread model context across restarts.
 - Made Worker readiness recheck database locks; retry only PostgreSQL transactions confirmed aborted by serialization conflicts or deadlocks.
 - Removed event-head rewrites from read-only PostgreSQL queries and aligned Worker and Kernel tenant-lock ordering to prevent renewal deadlocks.
+- Bounded idle PostgreSQL transactions to 20 seconds to release tenant locks left by disconnected owners.
 - Sent complete UID preconditions when deleting Kubernetes candidate Pods and verified imported image manifests before creating digest-pinned references.
 - Applied a container-local PID limit to the dedicated Kind sandbox runtime and bounded Calico manifest downloads before applying them.
+- Kept deleted payloads unreadable through historical wrapped-key backups by revoking their independent Keychain/Vault wrapping keys.
+- Checked every S3 listing page and rejected partial or per-object deletion failures without automatic side-effect replay.
 
 ### Changed
 
-- Introduced a shared Agent OS kernel and event contract; Coding execution orchestration still requires consolidation.
+- Unified OPC and Coding under AgentHandle, Inbox, persistent budgets, Scope contributions, and the same event contract.
 - Made `apps/host` the Cordis composition root and separated persistent work into `apps/worker`.
 - Moved product behavior into the bundled OPC and Coding plugins; made Claude and Codex CLI optional Runner adapters.
 - Introduced workspace-scoped Thread, Execution, Approval, Event, Memory, Deliverable, Asset, Job, and Agent Runtime contracts.

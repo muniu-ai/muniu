@@ -6,6 +6,7 @@ import type {
 } from "@mn/contracts";
 import { PluginPolicyError } from "./errors.js";
 import { assertPluginSurfaces } from "./surfaces.js";
+import type { PluginDomainEventV1, PluginProjectionRecordV1 } from "./projection-program.js";
 
 export type PluginTrustBoundary = "process_equivalent";
 
@@ -30,6 +31,14 @@ export interface WidgetContributionV1 {
 export interface CommandContextV1 {
   readonly workspaceId: string;
   readonly principalId?: string;
+  readonly data?: PluginDataPortV1;
+}
+
+export interface PluginDataPortV1 {
+  /** A stable step key makes retrying a command return the original committed event. */
+  append(input: { readonly key: string; readonly resourceId: string; readonly eventType: string;
+    readonly payload: JsonObject; readonly expectedStreamVersion: number }): Promise<PluginDomainEventV1>;
+  get(view: string, resourceId: string): Promise<PluginProjectionRecordV1 | undefined>;
 }
 
 export interface CommandContributionV1 {
@@ -92,6 +101,12 @@ export interface PluginHealthV1 {
 
 export interface PluginActivationContextV1 {
   readonly workspaceId: string;
+  readonly onDispose?: (cleanup: () => Promise<void> | void) => void;
+}
+
+export interface PluginActivationLifecycle {
+  activate(workspaceId: string, definition: PluginDefinitionV1): Promise<void>;
+  deactivate(workspaceId: string, pluginId: string): Promise<void>;
 }
 
 export interface PluginDefinitionV1 {
@@ -119,6 +134,7 @@ export interface ProductPluginHostV1 {
     commandId: string,
     input: JsonObject,
     principalId?: string,
+    data?: PluginDataPortV1,
   ): Promise<unknown>;
 }
 

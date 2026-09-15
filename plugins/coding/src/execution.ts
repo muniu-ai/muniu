@@ -1,4 +1,4 @@
-import type { ToolEffectClass } from "@mn/contracts";
+import { ExecutionBudgetExceededError, type ToolEffectClass } from "@mn/contracts";
 import {
   assertSha256,
   createCandidate,
@@ -152,6 +152,7 @@ export interface ExecuteCodingInput {
   readonly repositoryPath?: string;
   readonly expectedRepositoryRealPath?: string;
   readonly limits?: Partial<CodingExecutionLimits>;
+  readonly beforeRepair?: (repair: number) => Promise<boolean>;
   readonly approval?: (request: ApprovalRequest) => Promise<ApprovalDecision>;
 }
 
@@ -316,6 +317,10 @@ export class CodingExecutionEngine {
         return outcome(input, runnerId, limits, candidates, gates, "needs_human_decision", undefined,
           "检查失败原因，决定修改方案或终止任务");
       }
+      if (input.beforeRepair && !await input.beforeRepair(repairsUsed + 1)) {
+        return outcome(input, runnerId, limits, candidates, gates, "needs_human_decision", undefined,
+          "本次执行的累计修复预算已耗尽，请审阅失败原因后作出决定");
+      }
       try {
         await runner.resume(session.sessionId, {
           kind: "gate_feedback",
@@ -403,7 +408,7 @@ async function verifyFailClosed(
 }
 
 function isExecutionInterruption(error: unknown): boolean {
-  return error instanceof Error && error.name === "AbortError";
+  return error instanceof ExecutionBudgetExceededError || (error instanceof Error && error.name === "AbortError");
 }
 
 function sandboxFailure(candidate: Candidate, expectedDigest: string): GateResult {

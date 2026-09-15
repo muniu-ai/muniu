@@ -12,6 +12,8 @@ import type { EventAppendRequest } from "@mn/contracts";
 
 import {
   CursorExpiredError,
+  FileCas,
+  InMemoryKeyProvider,
   SqliteStorage,
   StaleFencingTokenError,
   StreamVersionConflictError,
@@ -48,6 +50,27 @@ function appendRequest(overrides: Partial<EventAppendRequest> = {}): EventAppend
     ...overrides
   };
 }
+
+test("journal CAS preparation cannot commit a business result after its Worker lease expires", async () => {
+  let now = new Date("2026-09-04T00:00:00.000Z");
+  const databaseFile = temporaryPath("lease-journal.sqlite");
+  const storage = new SqliteStorage({ databaseFile, hmacKey: Buffer.alloc(32, 18), now: () => now });
+  try {
+    await seedAgentExecutionJob(storage);
+    const job = await storage.claimJob("worker-a", now.toISOString(), { tenantId: "tenant-a" });
+    assert.ok(job);
+    const cas = new FileCas({ rootDir: temporaryPath("cas") });
+    const put = cas.put.bind(cas);
+    cas.put = async bytes => { now = new Date(now.getTime() + 31_000); return put(bytes); };
+    storage.configureProjectionJournal({ cas, keyProvider: new InMemoryKeyProvider(Buffer.alloc(32, 19)), namespaces: ["fixture"] });
+    await assert.rejects(storage.transact("tenant-a", tx => {
+      tx.assertJobLease!({ jobId: job.id, workerId: "worker-a", fencingToken: job.fencingToken, occurredAt: now.toISOString() });
+      tx.putProjection("fixture", "result", { value: "expired result" });
+      tx.appendEvent({ ...appendRequest(), aggregateType: "fixture", aggregateId: "result", type: "fixture.finished" });
+    }), StaleFencingTokenError);
+    assert.equal(await storage.getProjection("tenant-a", "fixture", "result"), undefined);
+  } finally { await storage.close(); }
+});
 
 async function seedAgentExecutionJob(
   storage: SqliteStorage,
@@ -357,9 +380,27 @@ test("event pagination enforces the tenant retention floor", async () => {
     const page = await storage.readEvents("tenant-a", { afterPosition: 1, limit: 20 });
     assert.deepEqual(page.events.map((event) => event.position), [2]);
     assert.equal(page.retentionFloor, 2);
+    const history = await storage.readEventHistory("tenant-a", 0, 100);
+    assert.equal(history.events[0]?.position, 1);
   } finally {
     await storage.close();
   }
+});
+
+test("normal event reads reject modified payloads and deleted events without trusting query rows", async () => {
+  const databaseFile = temporaryPath("event-integrity.sqlite");
+  const storage = new SqliteStorage({ databaseFile, hmacKey: Buffer.alloc(32, 11) });
+  const raw = new DatabaseSync(databaseFile);
+  try {
+    await storage.commit({ event: appendRequest() });
+    await storage.commit({ event: appendRequest({ expectedStreamVersion: 1, type: "workspace.updated" }) });
+    const original = raw.prepare("select public_payload from events where position = 1").get()!.public_payload;
+    raw.prepare("update events set public_payload = ? where position = 1").run('{"tampered":true}');
+    await assert.rejects(storage.readEvents("tenant-a", 0, 10), /integrity/i);
+    raw.prepare("update events set public_payload = ? where position = 1").run(String(original));
+    raw.prepare("delete from events where position = 2").run();
+    await assert.rejects(storage.readEvents("tenant-a", 0, 10), /integrity/i);
+  } finally { raw.close(); await storage.close(); }
 });
 
 test("job leases last thirty seconds and fencing rejects a stale worker", async () => {
@@ -605,6 +646,20 @@ test("SQLite 在业务事务内原子终结 Agent Job、Execution 和 Job 投影
   } finally {
     await storage.close();
   }
+});
+
+test("Agent Job 完成一个等待人工决定的工作流时，Execution 保持 paused", async () => {
+  const storage = new SqliteStorage({ databaseFile: temporaryPath("state.sqlite"), hmacKey: randomBytes(32) });
+  try {
+    await seedAgentExecutionJob(storage);
+    const claimed = await storage.claimJob("worker-a", "2026-09-04T00:00:01.000Z", { kinds: ["agent.execution.run"] });
+    await storage.transact("tenant-a", tx => tx.settleJob!({ jobId: claimed!.id, workerId: "worker-a", fencingToken: claimed!.fencingToken,
+      outcome: "completed", value: { executionId: "execution-agent", status: "paused" }, occurredAt: "2026-09-04T00:00:02.000Z" }));
+    assert.equal((await storage.getJob("job-agent"))?.status, "completed");
+    assert.equal((await storage.getProjection("tenant-a", "execution", "execution-agent"))?.status, "paused");
+    assert.equal((await storage.getProjection("tenant-a", "execution", "execution-agent"))?.finishedAt, undefined);
+    assert.equal((await storage.readEvents("tenant-a", { afterPosition: 0, limit: 20 })).events.at(-1)?.type, "execution.paused");
+  } finally { await storage.close(); }
 });
 
 test("SQLite generic Job 投影版本冲突时回滚物理租约和生命周期事件", async () => {

@@ -1,27 +1,15 @@
+// SPDX-License-Identifier: Apache-2.0
+import { apiPath, matchApiOperation, parseApiResponse, type ApiPath, type JsonApiOperationIdV2, type ApiOutputsV2 } from "@mn/contracts/client";
+import type { CodingRunnerId, ExternalCodingRunnerId, ConfirmCodingRunnerMutationBodyV2 } from "@mn/contracts";
 import type {
-  AgentCatalog,
-  AgentExecutionSummary,
   AgentThreadSummary,
-  ActivitySummary,
   ApiFailure,
-  AssetSummary,
   CodingReconciliationDecision,
-  CodingReconciliationDecisionResult,
   CodingReconciliationView,
-  CodingTaskSummary,
-  DeliverableSummary,
-  HomeSummary,
-  InboxItemSummary,
-  MemorySummary,
-  OpcDeliverablePreview,
   OpcOpportunityCommand,
   OpportunityDetail,
-  OpportunitySummary,
-  PluginHealth,
   ProductPluginId,
-  ThreadTurnsView,
   ViewMode,
-  WorkspaceMemberSummary,
   WorkspaceSummary,
 } from "./types";
 
@@ -39,16 +27,23 @@ function idempotencyKey(): string {
 }
 
 export class AgentOsClient {
-  workspace(workspaceId: string) { return this.request<WorkspaceSummary>(apiPath("getWorkspace", { workspaceId: workspaceId })); }
-  pluginSurfaces(workspaceId: string) { return this.request<readonly WorkspacePluginSurfaceV1[]>(apiPath("getPluginSurfaces", { workspaceId: workspaceId })); }
-  pluginCatalog() { return this.request<readonly (Pick<PluginManifestV1, "version" | "displayName" | "description" | "permissions" | "license" | "release" | "packageSha256"> & { readonly pluginId: string })[]>(apiPath("listPluginCatalog", { })); }
-  pluginInstallations() { return this.request<readonly { readonly pluginId: string; readonly version: string; readonly streamVersion?: number; readonly status?: string }[]>(apiPath("listPluginInstallations", { })); }
-  installPlugin(pluginId: string, version: string, expectedStreamVersion?: number) { return this.request(expectedStreamVersion === undefined ? apiPath("listPluginInstallations", { }) : apiPath("updatePlugin", { pluginId: pluginId }), { method: expectedStreamVersion === undefined ? "POST" : "PATCH", body: JSON.stringify(expectedStreamVersion === undefined ? { pluginId, version } : { version, expectedStreamVersion }) }); }
+  workspace(workspaceId: string) { return this.request(apiPath("getWorkspace", { workspaceId: workspaceId })); }
+  pluginSurfaces(workspaceId: string) { return this.request(apiPath("getPluginSurfaces", { workspaceId: workspaceId })); }
+  pluginCatalog() { return this.request(apiPath("listPluginCatalog", { })); }
+  pluginInstallations() { return this.request(apiPath("listPluginInstallations", { })); }
+  codingRunners(workspaceId: string) { return this.request(apiPath("listCodingRunners", {}, { workspaceId })); }
+  inspectCodingRunner(workspaceId: string, runnerId: ExternalCodingRunnerId, binaryPath: string) {
+    return this.request(apiPath("inspectCodingRunner", { runnerId }), { method: "POST", body: JSON.stringify({ workspaceId, binaryPath }) });
+  }
+  confirmCodingRunner(runnerId: ExternalCodingRunnerId, input: ConfirmCodingRunnerMutationBodyV2) {
+    return this.request(apiPath("confirmCodingRunner", { runnerId }), { method: "POST", body: JSON.stringify(input) });
+  }
+  installPlugin(pluginId: string, version: string, expectedStreamVersion?: number) { return this.request(expectedStreamVersion === undefined ? apiPath("installPlugin", { }) : apiPath("updatePlugin", { pluginId: pluginId }), { method: expectedStreamVersion === undefined ? "POST" : "PATCH", body: JSON.stringify(expectedStreamVersion === undefined ? { pluginId, version } : { version, expectedStreamVersion }) }); }
   setPluginActivation(workspaceId: string, pluginId: string, expectedStreamVersion: number, active: boolean) { return this.request(active ? apiPath("activatePlugin", { workspaceId }) : apiPath("deactivatePlugin", { workspaceId, pluginId }), { method: active ? "POST" : "DELETE", body: JSON.stringify(active ? { pluginId, expectedStreamVersion } : { expectedStreamVersion }) }); }
   pluginCommand(workspaceId: string, pluginId: string, commandId: string, expectedStreamVersion: number, input: Readonly<Record<string, unknown>>) { return this.request(apiPath("runPluginCommand", { pluginId, commandId }), { method: "POST", body: JSON.stringify({ ...input, workspaceId, expectedStreamVersion }) }); }
   constructor(readonly baseUrl = import.meta.env.VITE_MN_API_URL ?? DEFAULT_API_URL) {}
 
-  async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  async request<K extends JsonApiOperationIdV2>(path: ApiPath<K>, init: RequestInit = {}): Promise<ApiOutputsV2[K]> {
     const headers = new Headers(init.headers);
     headers.set("accept", "application/json");
     if (init.body !== undefined) headers.set("content-type", "application/json");
@@ -61,6 +56,7 @@ export class AgentOsClient {
         code: `HTTP_${response.status}`,
         message: "请求未完成",
         action: "稍后重试，或在收件箱查看故障详情",
+        fieldIssues: [],
         traceId: response.headers.get("x-trace-id") ?? "unknown",
         retryable: response.status >= 500,
       };
@@ -68,65 +64,73 @@ export class AgentOsClient {
       try { detail = await response.json() as ApiFailure; } catch { /* 使用安全错误 */ }
       throw new AgentOsApiError(detail, response.status);
     }
-    if (response.status === 204) return undefined as T;
-    const body = await response.json() as { data?: T } | T;
-    return typeof body === "object" && body !== null && "data" in body
-      ? (body as { data: T }).data
-      : body as T;
+    const operationId = matchApiOperation(init.method ?? "GET", new URL(path, this.baseUrl).pathname);
+    if (!operationId) throw new Error("未知 API 操作");
+    try { return parseApiResponse(operationId as K, await response.json()); }
+    catch {
+      throw new AgentOsApiError({
+        code: "RESPONSE_CONTRACT_INVALID", message: "Host 响应不符合公共契约",
+        action: "确认桌面应用与 Host 均为同一 0.2 版本后重试", fieldIssues: [],
+        traceId: response.headers.get("X-Trace-Id") ?? "unknown", retryable: false,
+      }, response.status);
+    }
   }
 
   health(workspaceId?: string) {
-    return this.request<{ readonly core: { readonly status: "healthy" }; readonly plugins: readonly PluginHealth[] }>(
+    return this.request(
       apiPath("getHealth", {}, { workspaceId }),
     );
   }
 
   setup() {
-    return this.request<{ readonly tenantId: string; readonly principalId: string }>(apiPath("setup", { }), {
+    return this.request(apiPath("setup", { }), {
       method: "POST", body: JSON.stringify({}),
     });
   }
 
   connectModel(presetId: string, apiKey: string) {
-    return this.request<{ readonly id: string; readonly defaultModel: string; readonly discoveredModels: readonly string[] }>(
+    return this.request(
       apiPath("createModelConnection", { }),
       { method: "POST", body: JSON.stringify({ presetId, apiKey }) },
     );
   }
 
-  probeModel(connectionId: string, expectedStreamVersion = 1) {
-    return this.request<{ readonly defaultModel: string; readonly status: "ready" }>(
+  modelPresets() { return this.request(apiPath("listModelPresets", {})); }
+  modelConnections() { return this.request(apiPath("listModelConnections", {})); }
+
+  probeModel(connectionId: string, expectedStreamVersion = 1, makeDefault = false) {
+    return this.request(
       apiPath("probeModelConnection", { connectionId: connectionId }),
-      { method: "POST", body: JSON.stringify({ expectedStreamVersion }) },
+      { method: "POST", body: JSON.stringify({ expectedStreamVersion, ...(makeDefault ? { makeDefault: true } : {}) }) },
     );
   }
 
   createWorkspace(name: string, viewMode: ViewMode, pluginIds: readonly ProductPluginId[]) {
-    return this.request<WorkspaceSummary>(apiPath("createWorkspace", { }), {
+    return this.request(apiPath("createWorkspace", { }), {
       method: "POST", body: JSON.stringify({ name, viewMode, pluginIds }),
     });
   }
 
-  listWorkspaces() { return this.request<readonly WorkspaceSummary[]>(apiPath("listWorkspaces", { })); }
+  listWorkspaces() { return this.request(apiPath("listWorkspaces", { })); }
   workspaceMembers(workspaceId: string) {
-    return this.request<readonly WorkspaceMemberSummary[]>(
+    return this.request(
       apiPath("listWorkspaceMembers", { workspaceId: workspaceId }),
     );
   }
   agentCatalog(workspaceId: string) {
-    return this.request<AgentCatalog>(
+    return this.request(
       apiPath("getWorkspaceAgentCatalog", { workspaceId: workspaceId }),
     );
   }
 
   threads(workspaceId: string) {
-    return this.request<readonly AgentThreadSummary[]>(
+    return this.request(
       apiPath("listThreads", { workspaceId: workspaceId }),
     );
   }
 
   threadTurns(workspaceId: string, threadId: string) {
-    return this.request<ThreadTurnsView>(
+    return this.request(
       apiPath("listThreadTurns", { workspaceId: workspaceId, threadId: threadId }),
     );
   }
@@ -135,17 +139,25 @@ export class AgentOsClient {
     workspaceId: string,
     thread: Pick<AgentThreadSummary, "id" | "streamVersion">,
     message: string,
+    runnerId?: CodingRunnerId,
   ) {
-    return this.request<AgentExecutionSummary>(
+    return this.request(
       apiPath("createTurn", { workspaceId: workspaceId, threadId: thread.id }),
       {
         method: "POST",
         body: JSON.stringify({
           expectedStreamVersion: thread.streamVersion,
           message,
+          ...(runnerId ? { runnerId } : {}),
         }),
       },
     );
+  }
+
+  executionCommand(execution: { readonly id: string; readonly streamVersion: number }, command: "follow_up" | "steer" | "cancel" | "resume", message?: string) {
+    return this.request(apiPath("commandExecution", { executionId: execution.id }), {
+      method: "POST", body: JSON.stringify({ expectedStreamVersion: execution.streamVersion, command, ...(message ? { message } : {}) }),
+    });
   }
 
   watchWorkspaceEvents(workspaceId: string, onChange: () => void): () => void {
@@ -201,31 +213,37 @@ export class AgentOsClient {
   }
 
   updateViewMode(workspace: WorkspaceSummary, viewMode: ViewMode) {
-    return this.request<WorkspaceSummary>(apiPath("updateWorkspace", { workspaceId: workspace.id }), {
+    return this.request(apiPath("updateWorkspace", { workspaceId: workspace.id }), {
       method: "PATCH", body: JSON.stringify({ expectedStreamVersion: workspace.streamVersion, viewMode }),
     });
   }
 
   createFirstObject(workspaceId: string, pluginId: ProductPluginId, input: string) {
-    return this.request<unknown>(apiPath(pluginId === "opc" ? "createOpcOpportunity" : "createCodingRepository", {}), {
+    return this.request(apiPath(pluginId === "opc" ? "createOpcOpportunity" : "createCodingRepository", {}), {
       method: "POST", body: JSON.stringify({ workspaceId, expectedStreamVersion: 0, input }),
     });
   }
 
   runReadOnlySample(workspaceId: string, pluginId: ProductPluginId) {
-    return this.request<unknown>(apiPath(pluginId === "opc" ? "runOpcReadOnlySample" : "runCodingReadOnlySample", {}), {
+    return this.request(apiPath(pluginId === "opc" ? "runOpcReadOnlySample" : "runCodingReadOnlySample", {}), {
       method: "POST", body: JSON.stringify({ workspaceId, expectedStreamVersion: 0 }),
     });
   }
 
-  home(workspaceId: string) { return this.request<HomeSummary>(apiPath("getWorkspaceHome", { workspaceId: workspaceId })); }
-  inbox(workspaceId: string) { return this.request<readonly InboxItemSummary[]>(apiPath("listInbox", {}, { workspaceId })); }
-  deliverables(workspaceId: string) { return this.request<readonly DeliverableSummary[]>(apiPath("listDeliverables", {}, { workspaceId })); }
-  activity(workspaceId: string) { return this.request<readonly ActivitySummary[]>(apiPath("listActivity", {}, { workspaceId })); }
-  memories(workspaceId: string) { return this.request<readonly MemorySummary[]>(apiPath("listMemories", {}, { workspaceId })); }
-  opportunities(workspaceId: string) { return this.request<readonly OpportunitySummary[]>(apiPath("listOpcOpportunities", {}, { workspaceId })); }
+  home(workspaceId: string) { return this.request(apiPath("getWorkspaceHome", { workspaceId: workspaceId })); }
+  inbox(workspaceId: string) { return this.request(apiPath("listInbox", {}, { workspaceId })); }
+  retryKeyRevocation(revocationId: string, expectedStreamVersion: number) {
+    return this.request(
+      apiPath("retryKeyRevocation", { revocationId }), {
+        method: "POST", body: JSON.stringify({ expectedStreamVersion, decision: "retry" }),
+      });
+  }
+  deliverables(workspaceId: string) { return this.request(apiPath("listDeliverables", {}, { workspaceId })); }
+  activity(workspaceId: string) { return this.request(apiPath("listActivity", {}, { workspaceId })); }
+  memories(workspaceId: string) { return this.request(apiPath("listMemories", {}, { workspaceId })); }
+  opportunities(workspaceId: string) { return this.request(apiPath("listOpcOpportunities", {}, { workspaceId })); }
   opportunity(workspaceId: string, opportunityId: string) {
-    return this.request<OpportunityDetail>(
+    return this.request(
       apiPath("getOpcOpportunity", { opportunityId }, { workspaceId }),
     );
   }
@@ -235,7 +253,7 @@ export class AgentOsClient {
     command: OpcOpportunityCommand,
     input: Readonly<Record<string, unknown>> = {},
   ) {
-    return this.request<OpportunityDetail>(
+    return this.request(
       apiPath("commandOpcOpportunity", { opportunityId: opportunity.id }),
       {
         method: "POST",
@@ -249,12 +267,12 @@ export class AgentOsClient {
     );
   }
   opportunityDeliverables(workspaceId: string, opportunityId: string) {
-    return this.request<readonly OpcDeliverablePreview[]>(
+    return this.request(
       apiPath("previewOpcDeliverables", { opportunityId }, { workspaceId }),
     );
   }
   exportOpportunity(workspaceId: string, opportunity: Pick<OpportunityDetail, "id" | "streamVersion">) {
-    return this.request<readonly DeliverableSummary[]>(
+    return this.request(
       apiPath("exportOpcDeliverables", { opportunityId: opportunity.id }),
       {
         method: "POST",
@@ -263,7 +281,7 @@ export class AgentOsClient {
     );
   }
   async uploadAsset(workspaceId: string, file: File, protectedValue: boolean) {
-    const [asset] = await this.request<readonly AssetSummary[]>(apiPath("createAssets", { }), {
+    const [asset] = await this.request(apiPath("createAssets", { }), {
       method: "POST",
       body: JSON.stringify({
         workspaceId,
@@ -279,10 +297,16 @@ export class AgentOsClient {
     if (!asset) throw new Error("Host 没有返回已上传附件");
     return asset;
   }
-  codingTasks(workspaceId: string) { return this.request<readonly CodingTaskSummary[]>(apiPath("listCodingTasks", {}, { workspaceId })); }
+  codingTasks(workspaceId: string) { return this.request(apiPath("listCodingTasks", {}, { workspaceId })); }
+  codingRepositories(workspaceId: string) { return this.request(apiPath("listCodingRepositories", {}, { workspaceId })); }
+  createCodingRepository(workspaceId: string, input: string) {
+    return this.request(apiPath("createCodingRepository", {}), {
+      method: "POST", body: JSON.stringify({ workspaceId, expectedStreamVersion: 0, input }),
+    });
+  }
 
   codingReconciliation(executionId: string) {
-    return this.request<CodingReconciliationView>(
+    return this.request(
       apiPath("getCodingReconciliation", { executionId: executionId }),
     );
   }
@@ -291,7 +315,7 @@ export class AgentOsClient {
     reconciliation: CodingReconciliationView,
     decision: CodingReconciliationDecision,
   ) {
-    return this.request<CodingReconciliationDecisionResult>(
+    return this.request(
       apiPath("decideCodingReconciliation", { executionId: reconciliation.executionId }),
       {
         method: "POST",
@@ -305,34 +329,34 @@ export class AgentOsClient {
   }
 
   decideApproval(approvalId: string, streamVersion: number, decision: "approve_once" | "deny") {
-    return this.request<unknown>(apiPath("decideApproval", { approvalId: approvalId }), {
+    return this.request(apiPath("decideApproval", { approvalId: approvalId }), {
       method: "POST", body: JSON.stringify({ expectedStreamVersion: streamVersion, decision }),
     });
   }
 
   decideMemory(memoryId: string, streamVersion: number, decision: "accept" | "reject") {
-    return this.request<unknown>(apiPath("decideMemory", { memoryId: memoryId }), {
+    return this.request(apiPath("decideMemory", { memoryId: memoryId }), {
       method: "POST", body: JSON.stringify({ expectedStreamVersion: streamVersion, decision }),
     });
   }
 
   reviseMemory(memoryId: string, streamVersion: number, summary: string, confidence: number) {
-    return this.request<unknown>(apiPath("reviseMemoryProposal", { memoryId: memoryId }), {
+    return this.request(apiPath("reviseMemoryProposal", { memoryId: memoryId }), {
       method: "PATCH",
       body: JSON.stringify({ expectedStreamVersion: streamVersion, confidence, value: { summary } }),
     });
   }
 
   deleteMemory(memoryId: string, streamVersion: number, reason: string) {
-    return this.request<unknown>(apiPath("deleteMemory", { memoryId: memoryId }), {
+    return this.request(apiPath("deleteMemory", { memoryId: memoryId }), {
       method: "DELETE",
       body: JSON.stringify({ expectedStreamVersion: streamVersion, reason }),
     });
   }
 
-  capture(workspaceId: string, pluginId: ProductPluginId, input: string) {
-    return this.request<unknown>(apiPath(pluginId === "opc" ? "createOpcOpportunity" : "createCodingTask", {}), {
-      method: "POST", body: JSON.stringify({ workspaceId, expectedStreamVersion: 0, input }),
+  capture(workspaceId: string, pluginId: ProductPluginId, input: string, repositoryId?: string) {
+    return this.request(apiPath(pluginId === "opc" ? "createOpcOpportunity" : "createCodingTask", {}), {
+      method: "POST", body: JSON.stringify({ workspaceId, expectedStreamVersion: 0, input, ...(pluginId === "coding" && repositoryId ? { repositoryId } : {}) }),
     });
   }
 }
@@ -380,5 +404,3 @@ async function fileBase64(file: File): Promise<string> {
   }
   return btoa(chunks.join(""));
 }
-import type { WorkspacePluginSurfaceV1, PluginManifestV1 } from "@mn/contracts";
-import { apiPath } from "@mn/contracts/client";

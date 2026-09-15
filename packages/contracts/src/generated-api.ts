@@ -5,7 +5,7 @@ export interface ApiInputsV2 {
   readonly getPluginSurfaces: { readonly path: { readonly workspaceId: string; }; };
   readonly listPluginCatalog: { readonly path?: Record<string, never>; };
   readonly getOpenApi: { readonly path?: Record<string, never>; };
-  readonly getHealth: { readonly path?: Record<string, never>; };
+  readonly getHealth: { readonly path?: Record<string, never>; readonly query?: { readonly workspaceId?: string; }; };
   readonly getReadiness: { readonly path?: Record<string, never>; };
   readonly setup: { readonly path?: Record<string, never>; readonly body: {  }; };
   readonly listWorkspaces: { readonly path?: Record<string, never>; };
@@ -21,16 +21,18 @@ export interface ApiInputsV2 {
   readonly createThread: { readonly path: { readonly workspaceId: string; }; readonly body: { readonly "subject": string; readonly "pluginId": string; readonly "resourceRef"?: { readonly "namespace": string; readonly "resourceId": string; }; }; };
   readonly listThreadTurns: { readonly path: { readonly workspaceId: string; readonly threadId: string; }; };
   readonly createTurn: { readonly path: { readonly workspaceId: string; readonly threadId: string; }; readonly body: { readonly "expectedStreamVersion": number; readonly "message": string; readonly "agentDefinitionId"?: string; readonly "modelBindingId"?: string; readonly "runnerId"?: "builtin" | "claude-cli" | "codex-cli"; }; };
-  readonly streamWorkspaceEvents: { readonly path: { readonly workspaceId: string; }; };
+  readonly streamWorkspaceEvents: { readonly path: { readonly workspaceId: string; }; readonly query?: { readonly after?: number; }; };
   readonly commandExecution: { readonly path: { readonly executionId: string; }; readonly body: { readonly "expectedStreamVersion": number; readonly "command": "follow_up" | "steer" | "cancel" | "resume"; readonly "message"?: string; }; };
-  readonly listInbox: { readonly path?: Record<string, never>; };
-  readonly listActivity: { readonly path?: Record<string, never>; };
+  readonly listInbox: { readonly path?: Record<string, never>; readonly query?: { readonly workspaceId?: string; }; };
+  readonly retryKeyRevocation: { readonly path: { readonly revocationId: string; }; readonly body: { readonly "expectedStreamVersion": number; readonly "decision": "retry"; }; };
+  readonly listActivity: { readonly path?: Record<string, never>; readonly query: { readonly workspaceId: string; }; };
   readonly decideApproval: { readonly path: { readonly approvalId: string; }; readonly body: { readonly "expectedStreamVersion": number; readonly "decision": "approve_once" | "deny"; }; };
-  readonly listDeliverables: { readonly path?: Record<string, never>; };
+  readonly listDeliverables: { readonly path?: Record<string, never>; readonly query?: { readonly workspaceId?: string; }; };
   readonly createAssets: { readonly path?: Record<string, never>; readonly body: { readonly "workspaceId": string; readonly "expectedStreamVersion": 0; readonly "attachments": readonly ({ readonly "fileName": string; readonly "mediaType": "text/plain" | "text/markdown" | "application/json" | "text/csv" | "application/pdf" | "image/png" | "image/jpeg" | "image/webp"; readonly "contentBase64": string; readonly "protected"?: boolean; })[]; }; };
   readonly getAsset: { readonly path: { readonly assetId: string; }; };
   readonly deleteAsset: { readonly path: { readonly assetId: string; }; readonly body: { readonly "expectedStreamVersion": number; readonly "reason": string; }; };
-  readonly listMemories: { readonly path?: Record<string, never>; };
+  readonly downloadAsset: { readonly path: { readonly assetId: string; }; };
+  readonly listMemories: { readonly path?: Record<string, never>; readonly query?: { readonly workspaceId?: string; readonly namespace?: string; }; };
   readonly proposeMemory: { readonly path?: Record<string, never>; readonly body: { readonly "workspaceId": string; readonly "namespace": string; readonly "resourceId": string; readonly "sourceEventId": string; readonly "scopeType"?: "workspace" | "thread" | "resource" | "principal"; readonly "confidence"?: number; readonly "value": {  readonly [key: string]: unknown; }; readonly "expiresAt"?: string; readonly "derivedFromMemoryId"?: string; readonly "derivedViaShareGrantId"?: string; }; };
   readonly reviseMemoryProposal: { readonly path: { readonly memoryId: string; }; readonly body: { readonly "expectedStreamVersion": number; readonly "confidence": number; readonly "value": {  readonly [key: string]: unknown; }; }; };
   readonly deleteMemory: { readonly path: { readonly memoryId: string; }; readonly body: { readonly "expectedStreamVersion": number; readonly "reason": string; }; };
@@ -41,7 +43,7 @@ export interface ApiInputsV2 {
   readonly listModelPresets: { readonly path?: Record<string, never>; };
   readonly listModelConnections: { readonly path?: Record<string, never>; };
   readonly createModelConnection: { readonly path?: Record<string, never>; readonly body: { readonly "presetId": "openai" | "deepseek" | "anthropic"; readonly "apiKey": string; readonly "displayName"?: string; }; };
-  readonly probeModelConnection: { readonly path: { readonly connectionId: string; }; readonly body: { readonly "expectedStreamVersion": number; }; };
+  readonly probeModelConnection: { readonly path: { readonly connectionId: string; }; readonly body: { readonly "expectedStreamVersion": number; readonly "makeDefault"?: boolean; }; };
   readonly installPlugin: { readonly path?: Record<string, never>; readonly body: { readonly "pluginId": string; readonly "version": string; }; };
   readonly listPluginInstallations: { readonly path?: Record<string, never>; };
   readonly updatePlugin: { readonly path: { readonly pluginId: string; }; readonly body: { readonly "expectedStreamVersion": number; readonly "version": string; }; };
@@ -49,18 +51,19 @@ export interface ApiInputsV2 {
   readonly disablePlugin: { readonly path: { readonly pluginId: string; }; readonly body: { readonly "expectedStreamVersion": number; }; };
   readonly activatePlugin: { readonly path: { readonly workspaceId: string; }; readonly body: { readonly "expectedStreamVersion": number; readonly "pluginId": string; }; };
   readonly deactivatePlugin: { readonly path: { readonly workspaceId: string; readonly pluginId: string; }; readonly body: { readonly "expectedStreamVersion": number; }; };
-  readonly listOpcOpportunities: { readonly path?: Record<string, never>; };
+  readonly listOpcOpportunities: { readonly path?: Record<string, never>; readonly query: { readonly workspaceId: string; }; };
   readonly createOpcOpportunity: { readonly path?: Record<string, never>; readonly body: { readonly "workspaceId": string; readonly "expectedStreamVersion": 0; readonly "input": string; }; };
-  readonly getOpcOpportunity: { readonly path: { readonly opportunityId: string; }; };
+  readonly getOpcOpportunity: { readonly path: { readonly opportunityId: string; }; readonly query: { readonly workspaceId: string; }; };
   readonly commandOpcOpportunity: { readonly path: { readonly opportunityId: string; }; readonly body: (unknown) & (unknown); };
-  readonly previewOpcDeliverables: { readonly path: { readonly opportunityId: string; }; };
+  readonly previewOpcDeliverables: { readonly path: { readonly opportunityId: string; }; readonly query: { readonly workspaceId: string; }; };
   readonly exportOpcDeliverables: { readonly path: { readonly opportunityId: string; }; readonly body: { readonly "expectedStreamVersion": number; readonly [key: string]: unknown; }; };
   readonly runOpcReadOnlySample: { readonly path?: Record<string, never>; readonly body: { readonly "workspaceId": string; readonly "expectedStreamVersion": 0; }; };
   readonly createCodingRepository: { readonly path?: Record<string, never>; readonly body: { readonly "workspaceId": string; readonly "expectedStreamVersion": 0; readonly "input": string; }; };
-  readonly listCodingTasks: { readonly path?: Record<string, never>; };
-  readonly createCodingTask: { readonly path?: Record<string, never>; readonly body: { readonly "workspaceId": string; readonly "expectedStreamVersion": 0; readonly "input": string; }; };
+  readonly listCodingRepositories: { readonly path?: Record<string, never>; readonly query: { readonly workspaceId: string; }; };
+  readonly listCodingTasks: { readonly path?: Record<string, never>; readonly query: { readonly workspaceId: string; }; };
+  readonly createCodingTask: { readonly path?: Record<string, never>; readonly body: { readonly "workspaceId": string; readonly "expectedStreamVersion": 0; readonly "input": string; readonly "repositoryId"?: string; }; };
   readonly runCodingReadOnlySample: { readonly path?: Record<string, never>; readonly body: { readonly "workspaceId": string; readonly "expectedStreamVersion": 0; }; };
-  readonly listCodingRunners: { readonly path?: Record<string, never>; };
+  readonly listCodingRunners: { readonly path?: Record<string, never>; readonly query: { readonly workspaceId: string; }; };
   readonly inspectCodingRunner: { readonly path: { readonly runnerId: "claude-cli" | "codex-cli"; }; readonly body: { readonly "workspaceId": string; readonly "binaryPath": string; }; };
   readonly confirmCodingRunner: { readonly path: { readonly runnerId: "claude-cli" | "codex-cli"; }; readonly body: { readonly "workspaceId": string; readonly "expectedStreamVersion": number; readonly "binaryPath": string; readonly "version": string; readonly "sha256": string; }; };
   readonly getCodingReconciliation: { readonly path: { readonly executionId: string; }; };
@@ -430,7 +433,35 @@ export const API_INPUT_FIELDS_V2 = {
       "type": "string"
     }
   ],
-  "listActivity": [],
+  "retryKeyRevocation": [
+    {
+      "name": "revocationId",
+      "location": "path",
+      "required": true,
+      "type": "string"
+    },
+    {
+      "type": "integer",
+      "minimum": 0,
+      "name": "expectedStreamVersion",
+      "location": "body",
+      "required": true
+    },
+    {
+      "const": "retry",
+      "name": "decision",
+      "location": "body",
+      "required": true
+    }
+  ],
+  "listActivity": [
+    {
+      "name": "workspaceId",
+      "location": "query",
+      "required": true,
+      "type": "string"
+    }
+  ],
   "decideApproval": [
     {
       "name": "approvalId",
@@ -529,15 +560,6 @@ export const API_INPUT_FIELDS_V2 = {
       "location": "path",
       "required": true,
       "type": "string"
-    },
-    {
-      "name": "content",
-      "location": "query",
-      "required": false,
-      "type": "integer",
-      "enum": [
-        1
-      ]
     }
   ],
   "deleteAsset": [
@@ -560,6 +582,14 @@ export const API_INPUT_FIELDS_V2 = {
       "name": "reason",
       "location": "body",
       "required": true
+    }
+  ],
+  "downloadAsset": [
+    {
+      "name": "assetId",
+      "location": "path",
+      "required": true,
+      "type": "string"
     }
   ],
   "listMemories": [
@@ -809,6 +839,12 @@ export const API_INPUT_FIELDS_V2 = {
       "name": "expectedStreamVersion",
       "location": "body",
       "required": true
+    },
+    {
+      "type": "boolean",
+      "name": "makeDefault",
+      "location": "body",
+      "required": false
     }
   ],
   "installPlugin": [
@@ -1072,6 +1108,14 @@ export const API_INPUT_FIELDS_V2 = {
       "required": true
     }
   ],
+  "listCodingRepositories": [
+    {
+      "name": "workspaceId",
+      "location": "query",
+      "required": true,
+      "type": "string"
+    }
+  ],
   "listCodingTasks": [
     {
       "name": "workspaceId",
@@ -1101,6 +1145,13 @@ export const API_INPUT_FIELDS_V2 = {
       "name": "input",
       "location": "body",
       "required": true
+    },
+    {
+      "type": "string",
+      "minLength": 1,
+      "name": "repositoryId",
+      "location": "body",
+      "required": false
     }
   ],
   "runCodingReadOnlySample": [

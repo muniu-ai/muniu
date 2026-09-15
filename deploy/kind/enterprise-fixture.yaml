@@ -77,6 +77,68 @@ stringData:
   access-key-id: mn-kind
   secret-access-key: mn-kind-secret-only
 ---
+# Disposable integration fixture; production uses an externally managed, durable Vault.
+apiVersion: v1
+kind: Secret
+metadata: { name: muniu-vault-v2, namespace: muniu-kind }
+type: Opaque
+stringData:
+  token: mn-kind-vault-fixture-only
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: muniu-kind-vault, namespace: muniu-kind }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: muniu-kind-vault } }
+  template:
+    metadata:
+      labels: { app: muniu-kind-vault, muniu.ai/runtime-dependency: "true" }
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: vault
+          image: hashicorp/vault:1.21.4@sha256:4e33b126a59c0c333b76fb4e894722462659a6bec7c48c9ee8cea56fccfd2569
+          args: [server, -dev, -dev-root-token-id=mn-kind-vault-fixture-only, "-dev-listen-address=0.0.0.0:8200", -dev-no-store-token]
+          env:
+            - { name: SKIP_SETCAP, value: "true" }
+            - { name: VAULT_ADDR, value: "http://127.0.0.1:8200" }
+          ports: [{ name: vault, containerPort: 8200 }]
+          readinessProbe:
+            exec: { command: [vault, status] }
+            periodSeconds: 2
+---
+apiVersion: v1
+kind: Service
+metadata: { name: muniu-kind-vault, namespace: muniu-kind }
+spec:
+  selector: { app: muniu-kind-vault }
+  ports: [{ name: vault, port: 8200, targetPort: vault }]
+---
+apiVersion: batch/v1
+kind: Job
+metadata: { name: muniu-kind-vault-init, namespace: muniu-kind }
+spec:
+  backoffLimit: 5
+  template:
+    spec:
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      containers:
+        - name: vault-init
+          image: hashicorp/vault:1.21.4@sha256:4e33b126a59c0c333b76fb4e894722462659a6bec7c48c9ee8cea56fccfd2569
+          command: [/bin/sh, -ec]
+          args:
+            - |-
+              until vault status; do sleep 1; done
+              if ! vault secrets list -format=json | grep -q '"transit/"'; then
+                vault secrets enable transit
+              fi
+          env:
+            - { name: VAULT_ADDR, value: "http://muniu-kind-vault:8200" }
+            - name: VAULT_TOKEN
+              valueFrom: { secretKeyRef: { name: muniu-vault-v2, key: token } }
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata: { name: muniu-kind-postgres, namespace: muniu-kind }

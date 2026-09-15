@@ -43,6 +43,18 @@ test("enterprise compose runs two v2 Hosts and two 30-second-lease Workers", () 
   assert.doesNotMatch(compose.slice(compose.indexOf("  worker-a:"), compose.indexOf("\nvolumes:")), /mn-v2-client/);
 });
 
+test("企业加密事实 fixture 必须启用真实 Vault Transit，不能绕过生产加密路径", () => {
+  const compose = read("docker-compose.enterprise.yml");
+  assert.match(compose, /\n  vault:/u);
+  assert.match(compose, /MN_VAULT_ADDR:\s*http:\/\/vault:8200/u);
+  assert.match(compose, /vault-init:\n\s+condition: service_completed_successfully/u);
+  assert.match(compose, /secrets enable transit/u);
+  assert.doesNotMatch(compose, /DISABLE_ENCRYPTION|InMemoryKeyProvider/u);
+  assert.match(read("scripts/enterprise-host.mjs"), /KMS_UNAVAILABLE/u);
+  assert.match(read("deploy/kind/enterprise-fixture.yaml"), /muniu-kind-vault/u);
+  assert.match(read("scripts/verify-kind-sandbox.sh"), /job\/muniu-kind-vault-init/u);
+});
+
 test("企业 Host 可通过 Vault Transit 端口包装和解包受保护数据的 DEK", async () => {
   const calls = [];
   let encodedDataKey;
@@ -179,13 +191,49 @@ test("Kind keeps candidate evidence separate from the authoritative Coding Gate"
   assert.match(read("scripts/kind-production-coding.mjs"), /await captureCodingTask/u);
 });
 
+test("Kind 依赖失败时在清理集群前保留诊断和失败退出码", () => {
+  const verifier = read("scripts/verify-kind-sandbox.sh");
+  const finish = verifier.match(/finish\(\) \{([\s\S]*?)\n\}/u)?.[1] ?? "";
+  assert.match(finish, /local result="\$\?"/u);
+  assert.match(finish, /cluster_created/u);
+  assert.ok(finish.indexOf("diagnose") >= 0 && finish.indexOf("diagnose") < finish.indexOf("cleanup"));
+  assert.match(finish, /return "\$\{result\}"/u);
+  assert.match(verifier, /trap finish EXIT/u);
+});
+
 test("Kind downloads the complete pinned Calico manifest with bounded retries before applying it", () => {
   const verifier = read("scripts/verify-kind-sandbox.sh");
-  assert.match(verifier, /curl --fail --location --retry 3 --retry-all-errors/u);
+  assert.match(verifier, /curl --http1\.1 --fail/u);
+  assert.match(verifier, /kind-vault-image\.mjs/u);
+  assert.match(verifier, /curl --http1\.1 --fail --location --retry 3 --retry-all-errors/u);
   assert.match(verifier, /--connect-timeout 10 --max-time 120/u);
   assert.match(verifier, /--output "\$\{calico_manifest\}"/u);
   assert.match(verifier, /kubectl apply -f "\$\{calico_manifest\}"/u);
   assert.doesNotMatch(verifier, /kubectl apply -f "https:/u);
+});
+
+test("Kind loads Vault with a verified repository tag instead of an unnamed archive entry", () => {
+  const verifier = read("scripts/verify-kind-sandbox.sh");
+  assert.match(verifier, /vault_import_image="\$\(node scripts\/lib\/kind-vault-image\.mjs "\$\{cluster_name\}" --import-reference\)"/u);
+  assert.match(verifier, /kind load docker-image[^\n]+"\$\{vault_import_image\}"/u);
+  assert.doesNotMatch(verifier.match(/dependency_images=\(([\s\S]*?)\n\)/u)?.[1] ?? "", /hashicorp\/vault/u);
+});
+
+test("Kind production Coding uses the Host composition root and persistent Vault journal", () => {
+  const source = read("scripts/kind-production-coding.mjs");
+  assert.match(source, /await createAgentOsCompositionRoot\(\{ profile: "enterprise", store \}\)/u);
+  assert.match(source, /createHandlers\(\{ store, composition,/u);
+  assert.match(source, /await composition\.context\.fiber\.dispose\(\)/u);
+  assert.match(source, /new VaultTransitKeyProvider/u);
+  assert.match(source, /configureProductProjectionJournal\(kernelStore, cas, protectedPayloadKeyProvider\)/u);
+  assert.doesNotMatch(source, /new AgentOsKernel|InMemoryKeyProvider/u);
+});
+
+test("Kind recovery reopens the pinned Host tunnel after a container restart", () => {
+  const source = read("scripts/kind-enterprise-failover.mjs");
+  assert.match(source, /createKindPortForward/u);
+  assert.match(source, /hostBForward\.reconnect\(\)/u);
+  assert.match(source, /AbortSignal\.timeout\(5000\)/u);
 });
 
 test("PostgreSQL Host transaction commits Job and outbox with the event", () => {
@@ -222,7 +270,7 @@ test("unknown external effects become a durable event, inbox item, and non-repla
   assert.match(adapter, /status = 'failed'/u);
 });
 
-test("enterprise Worker ships a production Agent execution bootstrap", async () => {
+test("enterprise Worker ships a production Agent execution bootstrap", async (t) => {
   const worker = read("scripts/enterprise-worker.mjs");
   const builtin = read("scripts/enterprise-worker-handlers.mjs");
   const host = read("scripts/enterprise-host.mjs");
@@ -232,12 +280,17 @@ test("enterprise Worker ships a production Agent execution bootstrap", async () 
     async readEvents() { return { events: [], nextPosition: 0, retentionFloor: 1 }; },
     async claimJob() { return undefined; },
   };
+  const { createAgentOsCompositionRoot } = await import("@mn/host");
+  const composition = await createAgentOsCompositionRoot({ profile: "enterprise", store });
+  t.after(() => composition.context.fiber.dispose());
   const handlers = await module.createHandlers({
     store,
+    composition,
     cas: {}, protectedPayloadKeyProvider: {}, sandboxRoot: "/fixture/sandboxes",
     commandExecutor: { commitment: { driver: "kubernetes" }, async run() { throw new Error("unused"); } },
     secretStore: { async read() { return "fixture-key"; } },
-    modelInvoker: async () => ({ content: "fixture", finishReason: "stop", usage: {} }),
+    modelInvoker: async () => { throw new Error("该测试不应调用模型"); },
+    modelQuoter: async () => { throw new Error("该测试不应调用预算预检"); },
     opcPublicWebReader: { async read() { return { status: 200 }; } },
     fixtureMode: false,
   });

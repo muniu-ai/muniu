@@ -112,12 +112,43 @@ test("Cordis 是唯一组合根，官方插件预装但默认不启用", async (
     secretStore: secrets,
   });
   assert.equal(Context.is(host.context), true);
+  assert.equal(host.context.get("agentOsKernel"), host.kernel);
+  assert.equal(host.context.get("agentOsPlugins"), host.plugins);
+  assert.ok(host.context.registry.size > 1);
   const response = await host.dispatch(new Request("http://host.test/v2/plugins/installations"));
   const body = await responseJson(response);
   assert.deepEqual(body.data.map((entry: any) => [entry.pluginId, entry.activeByDefault]), [
     ["healthy", false], ["failing", false],
   ]);
   await host.close();
+  assert.equal(host.context.get("agentOsKernel"), undefined);
+});
+
+test("Cordis owns workspace plugin activation cleanup and isolates activation failures", async () => {
+  const calls: string[] = [];
+  const plugin = {
+    ...healthyPlugin,
+    async activate(context: { workspaceId: string; onDispose?: (cleanup: () => void) => void }) {
+      calls.push(`activate:${context.workspaceId}`);
+      assert.equal(typeof context.onDispose, "function");
+      context.onDispose!(() => { calls.push(`cleanup:${context.workspaceId}`); });
+      if (context.workspaceId === "broken") throw new Error("private activation detail");
+    },
+    async deactivate(context: { workspaceId: string }) { calls.push(`deactivate:${context.workspaceId}`); },
+  };
+  const host = await createAgentOsHost({ store: new InMemoryKernelStore(), officialPlugins: [plugin], secretStore: secrets });
+  const baseline = host.context.registry.size;
+  await host.plugins.activate("first", plugin.id);
+  await host.plugins.activate("second", plugin.id);
+  assert.ok(host.context.registry.size > baseline);
+  await assert.rejects(host.plugins.activate("broken", plugin.id));
+  assert.ok(calls.includes("cleanup:broken"));
+  await host.plugins.deactivate("first", plugin.id);
+  assert.ok(calls.includes("cleanup:first"));
+  assert.ok(!calls.includes("cleanup:second"));
+  await host.close();
+  assert.ok(calls.includes("cleanup:second"));
+  assert.equal(calls.filter(value => value === "deactivate:first").length, 1);
 });
 
 test("Agent 目录按工作区展示启用插件的职责与成果导向 Skill", async () => {
@@ -279,7 +310,7 @@ test("附件经校验和 CAS create-only 写入后才提交 Asset，幂等重放
     `http://host.test/v2/assets/${created[0].id}`,
   )));
   assert.equal(metadata.data.digest, created[0].digest);
-  const content = await host.dispatch(new Request(`http://host.test/v2/assets/${created[0].id}?content=1`));
+  const content = await host.dispatch(new Request(`http://host.test/v2/assets/${created[0].id}/content`));
   assert.equal(content.status, 200);
   assert.equal(content.headers.get("content-type"), "text/markdown");
   assert.match(content.headers.get("content-disposition") ?? "", /UTF-8''%E8%AE%BF%E8%B0%88%E8%AE%B0%E5%BD%95\.md/u);
@@ -1011,7 +1042,7 @@ test("模型连接只接受厂商预设，密钥写入 v2 Keychain 后探测默�
       probeCount += 1;
       assert.equal(preset.id, "deepseek");
       assert.equal(apiKey, "stored");
-      return { models: ["deepseek-chat", "deepseek-reasoner"], defaultModel: "deepseek-chat" };
+      return { models: ["deepseek-v4-flash", "deepseek-v4-pro"], defaultModel: "deepseek-v4-flash" };
     },
   });
   const rejected = await host.dispatch(jsonRequest("/v2/model-connections", {
@@ -1028,7 +1059,7 @@ test("模型连接只接受厂商预设，密钥写入 v2 Keychain 后探测默�
     { expectedStreamVersion: 1 },
     "model-probe",
   )));
-  assert.equal(probed.data.defaultModel, "deepseek-chat");
+  assert.equal(probed.data.defaultModel, "deepseek-v4-flash");
   assert.equal(probed.data.status, "ready");
   const replayed = await responseJson(await host.dispatch(jsonRequest(
     `/v2/model-connections/${created.data.id}/probe`,

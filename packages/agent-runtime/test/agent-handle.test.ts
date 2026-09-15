@@ -7,6 +7,8 @@ import {
   AgentHandle,
   AgentScope,
   InMemoryRuntimeStore,
+  PersistentInbox,
+  PersistentModelBudget,
   UnknownToolOutcomeError,
   type LlmContribution,
   type ModelRequest,
@@ -43,12 +45,289 @@ const approveAuthorizedTools: ToolApprovalPort = {
   },
 };
 
+test("subagents cannot allocate tokens already consumed by the parent model", async () => {
+  const scope = executionScope();
+  const store = new InMemoryRuntimeStore();
+  let spawned = 0;
+  scope.register("subagent", { id: "reviewer", async spawn() { spawned += 1; } });
+  const budget = new PersistentModelBudget({ store, executionId: "execution-a", limits: authority.budget });
+  await budget.reserve({ id: "model-1", requestDigest: "a".repeat(64), inputTokenLimit: 6000, maxOutputTokens: 1,
+    rates: { id: "test", currency: "CNY", inputNanoMinorUnitsPerToken: "0",
+      cachedInputNanoMinorUnitsPerToken: "0", outputNanoMinorUnitsPerToken: "0" } });
+  await budget.settle("model-1", { inputTokens: 6000, cachedInputTokens: 0, outputTokens: 1 });
+  const handle = await AgentHandle.open({ executionId: "execution-a", scope, store,
+    definition: { id: "agent", llmId: "unused", promptIds: [] }, authority, approval: approveAuthorizedTools });
+  await assert.rejects(handle.spawnSubagent({ contributionId: "reviewer", scopeId: "child", authority: {
+    toolIds: [], dataScopes: [], effectClasses: [], budget: { ...authority.budget, maxTokens: 5000,
+      maxSubagentDepth: 0, maxSubagents: 0, maxCostMinorUnits: "0" },
+  } }), /token/u);
+  assert.equal(spawned, 0);
+  await scope.dispose();
+});
+
 function executionScope(generation = 1): AgentScope {
   return AgentScope.tenant("tenant-a", generation)
     .createChild("workspace", "workspace-a")
     .createChild("thread", "thread-a")
     .createChild("execution", "execution-a");
 }
+
+test("子 Agent 生命周期不能超过父执行的剩余时间，取消父执行会关闭子 Scope", async () => {
+  for (const cancel of [false, true]) {
+    const scope = executionScope();
+    const store = new InMemoryRuntimeStore();
+    const timestamp = "2026-09-04T00:00:00.000Z";
+    await store.append({ executionId: "execution-a", type: "budget/started",
+      payload: { startedAtMs: Date.parse(timestamp) - 59_950, maxDurationMs: 60_000 } });
+    let child: any;
+    scope.register("subagent", { id: "reviewer", async spawn(context) { child = context; return "started"; } });
+    const handle = await AgentHandle.open({ executionId: "execution-a", scope, store, now: () => timestamp,
+      definition: { id: "agent", llmId: "unused", promptIds: [] }, authority, approval: approveAuthorizedTools });
+    await handle.spawnSubagent({ contributionId: "reviewer", scopeId: "child", authority: {
+      toolIds: [], dataScopes: [], effectClasses: [], budget: { ...authority.budget, maxTokens: 1,
+        maxSubagentDepth: 0, maxSubagents: 0, maxCostMinorUnits: "0", maxDurationMs: 1000 },
+    } });
+    assert.equal(child.deadlineAt, "2026-09-04T00:00:00.050Z");
+    if (cancel) await handle.cancel();
+    else await new Promise(resolve => setTimeout(resolve, 75));
+    assert.equal(child.signal.aborted, true);
+    assert.throws(() => child.scope.resolveTurn());
+    assert.equal((await store.readExecution("execution-a")).filter(record => record.type === "subagent/reserved").length, 1);
+    await scope.dispose();
+  }
+});
+
+test("model usage is retained with the response and duplicate calls never start tools", async () => {
+  for (const duplicate of [false, true]) {
+    const scope = executionScope();
+    const store = new InMemoryRuntimeStore();
+    let tools = 0;
+    scope.register("llm", { id: "main", async complete() { return {
+      text: "result", usage: { inputTokens: 12, cachedInputTokens: 2, outputTokens: 8 },
+      toolCalls: duplicate ? [1, 2].map(index => ({ id: "duplicate", toolId: "file.read", arguments: { index } })) : [],
+    }; } });
+    scope.register("tool", { id: "file.read", version: "1", effectClass: "local_read",
+      prepare: () => ({ normalizedArguments: {}, resourceRefs: [] }), async execute() { tools += 1; return {}; } });
+    const handle = await AgentHandle.open({ executionId: "execution-a", scope, store,
+      definition: { id: "agent", llmId: "main", promptIds: [] }, authority, approval: approveAuthorizedTools });
+    await handle.start("检查");
+    await handle.whenIdle();
+    assert.equal(tools, 0);
+    assert.equal(handle.status, duplicate ? "failed" : "completed");
+    if (!duplicate) assert.deepEqual((await store.readExecution("execution-a"))
+      .find(record => record.type === "model/response")?.payload.usage,
+    { inputTokens: 12, cachedInputTokens: 2, outputTokens: 8 });
+    await scope.dispose();
+  }
+});
+
+test("model boundaries share a persistent deadline and resume cannot reset it", async () => {
+  const scope = executionScope();
+  const store = new InMemoryRuntimeStore();
+  let clock = Date.parse("2026-09-04T00:00:00.000Z");
+  let calls = 0;
+  scope.register("llm", { id: "main", async complete() {
+    calls += 1;
+    clock += 101;
+    return { text: "", toolCalls: [{ id: "read", toolId: "file.read", arguments: {} }] };
+  } });
+  let tools = 0;
+  scope.register("tool", { id: "file.read", version: "1", effectClass: "local_read",
+    prepare: () => ({ normalizedArguments: {}, resourceRefs: [] }),
+    async execute() { tools += 1; return {}; } });
+  const options = { executionId: "execution-a", scope, store, definition: { id: "agent", llmId: "main", promptIds: [] },
+    authority: { ...authority, budget: { ...authority.budget, maxDurationMs: 100 } }, approval: approveAuthorizedTools,
+    now: () => new Date(clock).toISOString() };
+  const handle = await AgentHandle.open(options);
+  await handle.start("检查");
+  await handle.whenIdle();
+  assert.equal(handle.status, "paused");
+  assert.equal(tools, 0);
+  const reopened = await AgentHandle.open(options);
+  await reopened.resume();
+  await reopened.whenIdle();
+  assert.equal(reopened.status, "paused");
+  assert.equal(calls, 1);
+  await scope.dispose();
+});
+
+test("model deadlines settle when a trusted model adapter ignores cancellation", async () => {
+  const scope = executionScope();
+  const store = new InMemoryRuntimeStore();
+  let release!: (value: { text: string; toolCalls: [] }) => void;
+  scope.register("llm", { id: "main", complete: () => new Promise(resolve => { release = resolve; }) });
+  const handle = await AgentHandle.open({ executionId: "execution-a", scope, store,
+    definition: { id: "agent", llmId: "main", promptIds: [] }, approval: approveAuthorizedTools,
+    authority: { ...authority, budget: { ...authority.budget, maxDurationMs: 50 } } });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await handle.start("检查");
+    await Promise.race([handle.whenIdle(), new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("model adapter prevented deadline settlement")), 400);
+    })]);
+    assert.equal(handle.status, "paused");
+  } finally {
+    clearTimeout(timer);
+    release?.({ text: "late result", toolCalls: [] });
+    await handle.whenIdle();
+    await scope.dispose();
+  }
+});
+
+test("disposing an active Scope interrupts its Agent and aborts the model request", async () => {
+  const scope = executionScope();
+  const store = new InMemoryRuntimeStore();
+  let started!: () => void;
+  const waiting = new Promise<void>(resolve => { started = resolve; });
+  let modelSignal!: AbortSignal;
+  scope.register("llm", { id: "main", async complete(_request, context) {
+    modelSignal = context.signal;
+    started();
+    await new Promise((_resolve, reject) => context.signal.addEventListener("abort", () => reject(new Error("interrupted")), { once: true }));
+    return { text: "", toolCalls: [] };
+  } });
+  const handle = await AgentHandle.open({ executionId: "execution-a", scope, store,
+    definition: { id: "agent", llmId: "main", promptIds: [] }, authority, approval: approveAuthorizedTools });
+  await handle.start("检查");
+  await waiting;
+  await scope.dispose();
+  assert.equal(modelSignal.aborted, true);
+  await handle.whenIdle();
+  assert.equal(handle.status, "interrupted");
+});
+
+test("provider tool call IDs cannot reuse an approval across turns", async () => {
+  const scope = executionScope();
+  const store = new InMemoryRuntimeStore();
+  let calls = 0;
+  scope.register("llm", { id: "main", async complete() {
+    calls += 1;
+    return calls % 2 ? { text: "", toolCalls: [{ id: "provider-reused-id", toolId: "web.publish", arguments: {} }] }
+      : { text: "完成", toolCalls: [] };
+  } });
+  scope.register("tool", { id: "web.publish", version: "1", effectClass: "external_side_effect",
+    prepare: () => ({ normalizedArguments: {}, resourceRefs: [] }), async execute() { return {}; } });
+  await new PersistentInbox(store, "execution-a").enqueue("follow_up", "第二次");
+  const handle = await AgentHandle.open({ executionId: "execution-a", scope, store,
+    definition: { id: "agent", llmId: "main", promptIds: [] }, authority, approval: approveAuthorizedTools });
+  await handle.start("第一次");
+  await handle.whenIdle();
+  assert.equal(handle.status, "completed");
+  const intents = (await store.readExecution("execution-a")).filter(record => record.type === "tool/intent");
+  assert.equal(intents.length, 2);
+  assert.equal(new Set(intents.map(record => record.payload.toolCallId)).size, 2);
+  await scope.dispose();
+});
+
+test("unexpected errors after starting a non-replayable tool require reconciliation", async () => {
+  const scope = executionScope();
+  const store = new InMemoryRuntimeStore();
+  scope.register("llm", { id: "main", async complete() {
+    return { text: "", toolCalls: [{ id: "publish", toolId: "web.publish", arguments: {} }] };
+  } });
+  scope.register("tool", { id: "web.publish", version: "1", effectClass: "external_side_effect",
+    prepare: () => ({ normalizedArguments: {}, resourceRefs: [] }),
+    async execute() { throw new Error("connection lost after dispatch"); } });
+  const handle = await AgentHandle.open({ executionId: "execution-a", scope, store,
+    definition: { id: "agent", llmId: "main", promptIds: [] }, authority, approval: approveAuthorizedTools });
+  await handle.start("执行");
+  await handle.whenIdle();
+  assert.equal(handle.status, "needs_reconciliation");
+  await scope.dispose();
+});
+
+test("subagent quotas are reserved before spawning and survive parent reopening", async () => {
+  const scope = executionScope();
+  const store = new InMemoryRuntimeStore();
+  let spawned = 0;
+  scope.register("subagent", { id: "reviewer", async spawn() {
+    assert.equal((await store.readExecution("execution-a")).at(-1)?.type, "subagent/reserved");
+    spawned += 1;
+    return "done";
+  } });
+  const options = { executionId: "execution-a", scope, store,
+    definition: { id: "agent", llmId: "main", promptIds: [] }, authority, approval: approveAuthorizedTools };
+  const requested = { toolIds: ["file.read"], effectClasses: ["local_read" as const], dataScopes: [],
+    budget: { maxSubagentDepth: 1, maxSubagents: 0, maxTokens: 4000, maxCostMinorUnits: "100", currency: "CNY", maxDurationMs: 1000 } };
+  const first = await AgentHandle.open(options);
+  await first.spawnSubagent({ contributionId: "reviewer", scopeId: "first", authority: requested });
+  const reopened = await AgentHandle.open(options);
+  await reopened.spawnSubagent({ contributionId: "reviewer", scopeId: "second", authority: requested });
+  await assert.rejects(reopened.spawnSubagent({ contributionId: "reviewer", scopeId: "third", authority: requested }), /累计/u);
+  await assert.rejects(reopened.spawnSubagent({ contributionId: "reviewer", scopeId: "first", authority: requested }), /已预留/u);
+  assert.equal(spawned, 2);
+  await scope.dispose();
+});
+
+test("compiled product jobs use AgentHandle FIFO turns and pinned Scope generations", async () => {
+  const scope = executionScope();
+  const store = new InMemoryRuntimeStore();
+  let release!: () => void;
+  let started!: () => void;
+  const firstStarted = new Promise<void>(resolve => { started = resolve; });
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const messages: string[] = [];
+  scope.register("job", { id: "product.workflow", async run(input, signal) {
+    assert.equal(signal.aborted, false);
+    assert.equal(input.generation, 1);
+    const records = await store.readExecution("execution-a");
+    assert.equal(records.at(-1)?.type, "job/started");
+    messages.push(String(input.message));
+    if (input.turn === 1) { started(); await pending; }
+    return { status: "completed", summary: `done:${input.message}` };
+  } });
+  const handle = await AgentHandle.open({ executionId: "execution-a", scope, store,
+    definition: { id: "product.agent", llmId: "unused", promptIds: [], jobId: "product.workflow" },
+    authority, approval: approveAuthorizedTools });
+  await handle.followUp("first");
+  const observed = await Promise.race([firstStarted.then(() => true), handle.whenIdle().then(() => false)]);
+  assert.equal(observed, true, "the compiled product workflow must execute inside AgentHandle");
+  await handle.followUp("second");
+  release();
+  await handle.whenIdle();
+  assert.equal(handle.status, "completed");
+  assert.deepEqual(messages, ["first", "second"]);
+  assert.deepEqual((await handle.sessionLog.entries()).map(entry => entry.content), ["first", "done:first", "second", "done:second"]);
+  await scope.dispose();
+});
+
+for (const status of ["running", "waiting_approval"] as const) test(`native job recovery from ${status} reads its checkpoint without repeating run or consuming a second turn`, async () => {
+  const store = new InMemoryRuntimeStore();
+  const scope = executionScope();
+  const inbox = new PersistentInbox(store, "execution-a");
+  await inbox.enqueueInitial("original");
+  await store.append({ executionId: "execution-a", type: "execution/status", payload: { status: "running" } });
+  await inbox.beginTurn(1);
+  await store.append({ executionId: "execution-a", type: "job/started", payload: { jobId: "product.workflow", turn: 1, generation: 1, authorityCommitment: authority.commitment } });
+  if (status === "waiting_approval") await store.append({ executionId: "execution-a", type: "execution/status", payload: { status } });
+  let runs = 0;
+  let recoveries = 0;
+  scope.register("job", { id: "product.workflow",
+    async run() { runs += 1; throw new Error("must not replay"); },
+    async recover(input) {
+      assert.equal((await store.readExecution("execution-a")).filter(record => record.type === "execution/status").at(-1)?.payload.status, "running");
+      recoveries += 1;
+      assert.equal(input.message, "original");
+      assert.equal(input.turn, 1);
+      return { status: "completed", summary: "checkpoint-result" };
+    },
+  });
+  const options = { executionId: "execution-a", scope, store,
+    definition: { id: "product.agent", llmId: "unused", promptIds: [], jobId: "product.workflow" },
+    authority, approval: approveAuthorizedTools };
+  const handle = await AgentHandle.open(options);
+  await handle.whenIdle();
+  assert.equal(handle.status, "completed");
+  assert.equal(runs, 0);
+  assert.equal(recoveries, 1);
+  const records = await store.readExecution("execution-a");
+  assert.equal(records.filter(record => record.type === "turn/started").length, 1);
+  assert.equal(records.filter(record => record.type === "job/started").length, 1);
+  assert.equal(records.filter(record => record.type === "job/completed").length, 1);
+  assert.equal((await AgentHandle.open(options)).status, "completed");
+  assert.equal(recoveries, 1);
+  await scope.dispose();
+});
 
 class ObservedStore extends InMemoryRuntimeStore {
   constructor(private readonly observed: string[]) {
@@ -60,6 +339,87 @@ class ObservedStore extends InMemoryRuntimeStore {
     return super.append(input);
   }
 }
+
+test("a steer committed at completion pauses instead of silently disappearing", async () => {
+  let raced = false;
+  class RacingStore extends InMemoryRuntimeStore {
+    override async commit(executionId: string, expected: number, inputs: readonly RuntimeRecordInput[]) {
+      if (!raced && inputs.some(input => input.type === "execution/status" && input.payload.status === "completed")) {
+        raced = true;
+        await super.append({ executionId, type: "inbox/enqueued", payload: { id: "late-steer", kind: "steer", text: "尚未应用的调整" } });
+      }
+      return super.commit(executionId, expected, inputs);
+    }
+  }
+  const store = new RacingStore();
+  const scope = executionScope();
+  const requests: ModelRequest[] = [];
+  scope.register("llm", { id: "main", async complete(request) {
+    requests.push(request); return { text: "完成", toolCalls: [] };
+  } });
+  const handle = await AgentHandle.open({ executionId: "execution-a", scope, store,
+    definition: { id: "agent", llmId: "main", promptIds: [] }, authority, approval: approveAuthorizedTools });
+  await handle.start("首次要求");
+  await handle.whenIdle();
+  assert.equal(handle.status, "paused");
+  assert.equal(requests.length, 1);
+  assert.equal((await store.readExecution("execution-a")).some(record => record.type === "inbox/consumed" && record.payload.itemId === "late-steer"), false);
+  await handle.resume();
+  await handle.whenIdle();
+  assert.equal(handle.status, "completed");
+  assert.equal(requests.length, 2);
+  assert.ok(requests[1]!.messages.some(message => message.role === "system" && message.content.includes("尚未应用的调整")));
+  await scope.dispose();
+});
+
+test("消费输入、开始 turn 和原始消息在同一批次提交，终结竞争不会漏掉后续输入", async () => {
+  let raced = false;
+  let turnBatches = 0;
+  class RacingStore extends InMemoryRuntimeStore {
+    override async commit(executionId: string, expected: number, inputs: readonly RuntimeRecordInput[]) {
+      if (inputs.some(input => input.type === "turn/started")) {
+        assert.deepEqual(inputs.map(input => input.type), ["inbox/consumed", "turn/started", "session/entry"]);
+        turnBatches += 1;
+      }
+      if (!raced && inputs.some(input => input.type === "execution/status" && input.payload.status === "completed")) {
+        raced = true;
+        await super.append({ executionId, type: "inbox/enqueued", payload: { id: "concurrent", kind: "follow_up", text: "终结前已提交的输入" } });
+      }
+      return super.commit(executionId, expected, inputs);
+    }
+  }
+  const store = new RacingStore();
+  const scope = executionScope();
+  let calls = 0;
+  scope.register("llm", { id: "main", complete: async () => { calls += 1; return { text: "完成", toolCalls: [] }; } });
+  const handle = await AgentHandle.open({ executionId: "execution-a", scope, store,
+    definition: { id: "agent", llmId: "main", promptIds: [] }, authority, approval: approveAuthorizedTools });
+  await handle.followUp("首次输入");
+  await handle.whenIdle();
+  assert.equal(handle.status, "completed");
+  assert.equal(calls, 2);
+  assert.equal(turnBatches, 2);
+  assert.deepEqual((await handle.sessionLog.entries()).filter(entry => entry.role === "user").map(entry => entry.content), ["首次输入", "终结前已提交的输入"]);
+  await scope.dispose();
+});
+
+test("Worker 启动前收到的 follow_up 不会排在首次输入之前", async () => {
+  const store = new InMemoryRuntimeStore();
+  await store.append({ executionId: "execution-a", type: "inbox/enqueued", payload: { id: "early", kind: "follow_up", text: "后续要求" } });
+  const scope = executionScope();
+  const messages: string[] = [];
+  scope.register("llm", { id: "main", complete: async (request) => {
+    messages.push(request.messages.at(-1)!.content);
+    return { text: "完成", toolCalls: [] };
+  } });
+  const handle = await AgentHandle.open({ executionId: "execution-a", scope, store,
+    definition: { id: "agent", llmId: "main", promptIds: [] }, authority, approval: approveAuthorizedTools });
+  await handle.start("首次要求");
+  await handle.whenIdle();
+  assert.deepEqual(messages, ["首次要求", "后续要求"]);
+  assert.equal(handle.status, "completed");
+  await scope.dispose();
+});
 
 test("动态权限上下文在每个模型边界刷新，贡献 generation 保持固定", async () => {
   const scope = executionScope();
@@ -304,6 +664,26 @@ test("cancel 中止在途模型；resume 只接受 paused 或 interrupted", asyn
   }
 });
 
+test("resume 先恢复中断 turn，再处理已排队的后续输入", async () => {
+  const store = new InMemoryRuntimeStore();
+  const inbox = new PersistentInbox(store, "execution-a");
+  await inbox.enqueueInitial("original");
+  await inbox.beginTurn(1);
+  await store.append({ executionId: "execution-a", type: "execution/status", payload: { status: "interrupted" } });
+  await inbox.enqueue("follow_up", "next");
+  const scope = executionScope(2);
+  const requests: ModelRequest[] = [];
+  scope.register("llm", { id: "main", async complete(request) { requests.push(request); return { text: "done", toolCalls: [] }; } });
+  const handle = await AgentHandle.open({ executionId: "execution-a", scope, store,
+    definition: { id: "assistant", llmId: "main", promptIds: [] }, authority, approval: approveAuthorizedTools });
+  await handle.resume();
+  await handle.whenIdle();
+  assert.equal(requests.length, 2);
+  assert.ok(requests[0]!.messages.some(message => message.role === "system" && message.content.startsWith("[resume]")));
+  assert.equal(requests[0]!.messages.some(message => message.content === "next"), false);
+  assert.ok(requests[1]!.messages.some(message => message.content === "next"));
+});
+
 test("resume 用新 generation 继续中断 turn，不复用旧模型请求", async () => {
   const store = new InMemoryRuntimeStore();
   const firstScope = executionScope(1);
@@ -358,6 +738,25 @@ test("resume 用新 generation 继续中断 turn，不复用旧模型请求", as
   assert.deepEqual(records
     .filter((record) => record.type === "model/request")
     .map((record) => record.payload.generation), [1, 2]);
+});
+
+test("native job 的工具已开始但结果未知时，resume 不重放工作流", async () => {
+  const store = new InMemoryRuntimeStore();
+  await store.append({ executionId: "execution-a", type: "execution/status", payload: { status: "running" } });
+  await store.append({ executionId: "execution-a", type: "tool/intent", payload: {
+    toolCallId: "native-external", toolId: "web.publish", effectClass: "external_side_effect",
+  } });
+  await store.append({ executionId: "execution-a", type: "tool/started", payload: { toolCallId: "native-external" } });
+  await store.append({ executionId: "execution-a", type: "execution/status", payload: { status: "interrupted" } });
+  const scope = executionScope(2);
+  let calls = 0;
+  scope.register("job", { id: "native", async run() { calls++; return { status: "completed" }; } });
+  const handle = await AgentHandle.open({ executionId: "execution-a", scope, store,
+    definition: { id: "assistant", llmId: "unused", promptIds: [], jobId: "native" }, authority, approval: approveAuthorizedTools });
+  await handle.resume();
+  await handle.whenIdle();
+  assert.equal(handle.status, "needs_reconciliation");
+  assert.equal(calls, 0);
 });
 
 test("resume 不重放中断前结果未知的高影响工具", async () => {

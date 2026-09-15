@@ -4,6 +4,8 @@ export * from "./errors.js";
 export * from "./host.js";
 export * from "./lifecycle.js";
 export * from "./package.js";
+export * from "./projection-program.js";
+export * from "./event-schema.js";
 export * from "./registry.js";
 export * from "./resources.js";
 export * from "./surfaces.js";

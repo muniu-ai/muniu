@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createNodePublicWebReader } from "@mn/plugin-opc";
-import { AgentOsKernel } from "@mn/kernel";
 import { createEnterpriseFilePluginRepository, createSignedWorkerResolver, createOpcModelContextReader } from "@mn/host";
 import {
   createCodingReconciliationVerificationWorkerHandler,
@@ -91,7 +90,10 @@ export async function createHandlers(context) {
     runtimeClass: process.env.MN_KUBERNETES_RUNTIME_CLASS,
     serviceAccount: process.env.MN_KUBERNETES_CANDIDATE_SERVICE_ACCOUNT,
   });
-  const approvalKernel = new AgentOsKernel(context.store, { acceptsModelSecretReference: acceptsSecretReference });
+  const composition = context.composition;
+  if (!composition?.context || composition.context.get("agentOsKernel") !== composition.kernel) {
+    throw new Error("企业 Worker 必须由 Host Cordis 组合根创建 Kernel 与 Scope");
+  }
   const indexFile = process.env.MN_PLUGIN_REPOSITORY_INDEX?.trim();
   const trustedRootsFile = process.env.MN_PLUGIN_TRUSTED_ROOTS?.trim();
   const repositoryDigest = process.env.MN_PLUGIN_REPOSITORY_DIGEST?.trim();
@@ -106,7 +108,8 @@ export async function createHandlers(context) {
     store: context.store,
     secretStore,
     runtimeProtection,
-    approvalKernel,
+    approvalKernel: composition.kernel,
+    scopeContext: composition.context,
     codingSandboxRoot: `${sandboxRoot}/candidates`,
     codingCommandExecutor: executor,
     memoryReader: createEncryptedMemoryReader({
@@ -115,6 +118,7 @@ export async function createHandlers(context) {
       keyProvider: context.protectedPayloadKeyProvider,
     }),
     ...(context.modelInvoker ? { modelInvoker: context.modelInvoker } : {}),
+    ...(context.modelQuoter ? { modelQuoter: context.modelQuoter } : {}),
     opcPublicWebReader: context.opcPublicWebReader ?? createNodePublicWebReader(),
     acceptsSecretReference,
   });

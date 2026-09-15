@@ -2,6 +2,8 @@
 
 export * from "./agent.js";
 export * from "./authority.js";
+export * from "./budget.js";
+export * from "./model-budget.js";
 export * from "./inbox.js";
 export * from "./scope.js";
 export * from "./session.js";

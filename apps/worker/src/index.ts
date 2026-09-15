@@ -13,14 +13,18 @@ import {
   AgentScope,
   DefaultSessionSurface,
   KernelProjectionRuntimeStore,
+  RuntimeControlError,
+  ExecutionBudgetExceededError,
   type AgentHandleOptions,
   type Awaitable,
   type RuntimeProjectionStore,
+  type RuntimeRecord,
 } from "@mn/agent-runtime";
 import {
   AgentOsKernel,
   type KernelJobSettlementReceipt,
   type KernelStore,
+  type KernelTransaction,
 } from "@mn/kernel";
 import {
   JOB_LEASE_MILLISECONDS,
@@ -31,8 +35,11 @@ import {
 } from "@mn/storage";
 import {
   createByokModelInvoker,
+  createByokModelQuoter,
+  invokeBudgetedByokModel,
   ModelTransportError,
   type ByokModelInvoker,
+  type ByokModelQuoter,
   type ByokProviderId,
 } from "./model-invoker.js";
 import { createKernelToolApprovalPort, type ToolApprovalKernel } from "./approval.js";
@@ -44,6 +51,7 @@ import {
 import { buildAgentMemoryPrompt, type AgentMemoryReader } from "./memory.js";
 import { readThreadHistory } from "./thread-context.js";
 import { createProtectedRuntimeStore, readExecutionInput, type RuntimeProtection } from "./runtime-store.js";
+import { recordRuntimeAttention } from "./runtime-attention.js";
 export * from "./runtime-store.js";
 export * from "./kubernetes-sandbox.js";
 import type { CodingCommandExecutor } from "./kubernetes-sandbox.js";
@@ -473,7 +481,7 @@ export interface AgentTurnHandlerOptions {
   readonly resolveOptions: (
     job: StoredJob,
     context: WorkerJobContext,
-  ) => Awaitable<AgentHandleOptions>;
+  ) => Awaitable<AgentHandleOptions & { readonly disposeScope?: () => Promise<void> }>;
   readonly observeControl?: (
     handle: AgentHandle,
     job: StoredJob,
@@ -490,33 +498,36 @@ export function createAgentTurnHandler(options: AgentTurnHandlerOptions): Worker
     const message = isResume ? undefined : options.resolveMessage
       ? await options.resolveMessage(job) : requiredPayloadString(job.payload, "message");
     const handleOptions = await options.resolveOptions(job, context);
+    const disposeScope = handleOptions.disposeScope ?? (() => handleOptions.scope.dispose());
     if (handleOptions.executionId !== executionId) {
+      await disposeScope();
       throw new Error("Job 的 executionId 与 Runtime 配置不一致");
     }
-    const handle = await AgentHandle.open(handleOptions);
+    const handle = await AgentHandle.open(handleOptions).catch(async error => { await disposeScope(); throw error; });
     if (handle.status === "completed") {
-      await handleOptions.scope.dispose();
+      await disposeScope();
       return { executionId, status: "completed" };
     }
     if (handle.status === "needs_reconciliation") {
-      await handleOptions.scope.dispose();
+      await disposeScope();
       throw new UnknownExternalSideEffectError(executionId);
     }
     if (handle.status === "paused" || handle.status === "interrupted") {
       if (!isResume) {
-        await handleOptions.scope.dispose();
+        await disposeScope();
         throw new AgentExecutionInterruptedError(executionId);
       }
     } else if (isResume) {
-      await handleOptions.scope.dispose();
+      await disposeScope();
       throw new Error(`状态为 ${handle.status} 的 Agent turn 不能恢复`);
     }
-    const stopObserving = await options.observeControl?.(handle, job, context);
+    let stopObserving: (() => Awaitable<void>) | undefined;
     const interruptForWorkerStop = () => {
       void handle.interrupt("Worker 已停止").catch(() => {});
     };
     context.signal.addEventListener("abort", interruptForWorkerStop, { once: true });
     try {
+      stopObserving = await options.observeControl?.(handle, job, context);
       if (context.signal.aborted) {
         await handle.interrupt("Worker 已停止");
       } else if (handle.status === "cancelled") {
@@ -524,15 +535,14 @@ export function createAgentTurnHandler(options: AgentTurnHandlerOptions): Worker
       } else if (isResume) {
         await handle.resume();
       } else {
-        await handle.followUp(message!);
+        await handle.start(message!);
       }
       await handle.whenIdle();
     } catch (error) {
       if (handle.status !== "cancelled") throw error;
     } finally {
       context.signal.removeEventListener("abort", interruptForWorkerStop);
-      await stopObserving?.();
-      await handleOptions.scope.dispose();
+      try { await stopObserving?.(); } finally { await disposeScope(); }
     }
     const finalStatus: string = handle.status;
     if (finalStatus === "needs_reconciliation") {
@@ -576,11 +586,13 @@ export interface OpcPublicWebReader {
 export interface AgentExecutionStore extends WorkerJobStore, KernelStore {}
 
 export interface KernelAgentTurnHandlerOptions {
+  readonly scopeContext?: AgentScope["context"];
   readonly resolveThreadContext?: (thread: Thread) => Promise<string | undefined>;
   readonly resolvePluginWorker?: (execution: Execution) => Promise<PluginWorkerV1>;
   readonly store: AgentExecutionStore;
   readonly secretStore: ModelSecretReader;
   readonly modelInvoker?: ByokModelInvoker;
+  readonly modelQuoter?: ByokModelQuoter;
   readonly approvalKernel?: ToolApprovalKernel;
   readonly approvalPollIntervalMs?: number;
   readonly opcPublicWebReader?: OpcPublicWebReader;
@@ -597,7 +609,9 @@ export interface KernelAgentTurnHandlerOptions {
 export function createKernelAgentTurnHandler(
   options: KernelAgentTurnHandlerOptions,
 ): WorkerJobHandler {
+  if (options.modelInvoker && !options.modelQuoter) throw new TypeError("自定义模型适配器必须同时提供预算预检适配器");
   const invokeModel = options.modelInvoker ?? createByokModelInvoker();
+  const quoteModel = options.modelQuoter ?? createByokModelQuoter();
   const acceptsSecretReference = options.acceptsSecretReference ?? (() => true);
   const approvalKernel = options.approvalKernel ?? new AgentOsKernel(options.store, {
     ...(options.now ? { now: options.now } : {}),
@@ -649,7 +663,8 @@ export function createKernelAgentTurnHandler(
         throw new Error("模型密钥引用不属于当前运行环境");
       }
       const provider = providerId(state.model.presetId);
-      const tenantScope = AgentScope.tenant(job.tenantId, state.execution.generation);
+      const tenantScope = AgentScope.tenant(job.tenantId, state.execution.generation, options.scopeContext);
+      try {
       const executionScope = tenantScope
         .createChild("workspace", state.execution.workspaceId)
         .createChild("thread", state.thread.id)
@@ -695,15 +710,16 @@ export function createKernelAgentTurnHandler(
             throw new ModelTransportError("无法读取模型凭据");
           }
           try {
-            return await invokeModel({
+            return await invokeBudgetedByokModel({ input: {
               presetId: provider,
               model: state.model.defaultModel,
               apiKey,
               request,
               signal: context.signal,
-            });
+            }, store: agentStore, limits: state.authority.budget, invoke: invokeModel, quote: quoteModel });
           } catch (error) {
-            if (error instanceof ModelTransportError) throw error;
+            if (error instanceof ModelTransportError || error instanceof ExecutionBudgetExceededError
+              || error instanceof RuntimeControlError || error instanceof StaleFencingTokenError) throw error;
             throw new ModelTransportError("模型调用失败");
           }
         },
@@ -734,13 +750,42 @@ export function createKernelAgentTurnHandler(
         });
         toolIds.push(toolId);
       }
+      const onCommit = (transaction: KernelTransaction, records: readonly RuntimeRecord[]) => {
+        recordRuntimeAttention(transaction, state.execution, records);
+        if (records.some(record => record.type === "model/request" || record.type === "model/reserved" || record.type === "tool/started"
+          || (record.type === "execution/status" && record.payload.status === "completed"))) {
+          const current = transaction.getProjection<Execution>("execution", executionId);
+          const control = transaction.getProjection<{ generation: number; command: string }>("execution-control", executionId);
+          if (control?.generation === state.execution.generation && control.command === "interrupt") throw new RuntimeControlError("interrupted");
+          if (current?.status === "cancelled" || current?.status === "interrupted" || current?.status === "paused") throw new RuntimeControlError(current.status);
+        }
+        if (!context.acknowledgeJobSettlement) return;
+        const status = records.filter(record => record.type === "execution/status").at(-1)?.payload.status;
+        if (status !== "completed" && status !== "failed" && status !== "cancelled" && status !== "paused") return;
+        const current = transaction.getProjection<Execution>("execution", executionId);
+        if (!current || current.generation !== state.execution.generation) throw new StaleFencingTokenError(job.id);
+        if ((current.status === "cancelled" || current.status === "paused" || current.status === "interrupted")
+          && current.status !== status) throw new RuntimeControlError(current.status);
+        if (!transaction.settleJob) throw new Error("存储未实现事务内 Job 终结，Worker 已拒绝提交终态");
+        const receipt = transaction.settleJob({
+          jobId: job.id, workerId: context.workerId, fencingToken: context.fencingToken,
+          outcome: status === "completed" || status === "paused" ? "completed" : "failed",
+          value: status === "completed" || status === "paused" ? { executionId, status } : status === "cancelled"
+            ? { code: "EXECUTION_CANCELLED", message: "Agent turn 已由用户取消", retryable: false }
+            : { code: "JOB_EXECUTION_FAILED", message: "Agent turn 执行失败", retryable: true },
+          occurredAt: (options.now ?? (() => new Date().toISOString()))(),
+        });
+        return () => context.acknowledgeJobSettlement!(receipt);
+      };
       const agentStore = options.runtimeProtection ? createProtectedRuntimeStore({
           ...options.runtimeProtection, tenantId: job.tenantId,
           workspaceId: state.execution.workspaceId, store: runtimeStore,
+          onCommit,
           ...(options.now ? { now: options.now } : {}),
         }) : new KernelProjectionRuntimeStore({
           tenantId: job.tenantId,
           store: options.store,
+          onCommit: (transaction, records) => onCommit(transaction as KernelTransaction, records),
           ...(options.now ? { now: options.now } : {}),
           id: (sequence) => `${executionId}:runtime:${sequence}`,
         });
@@ -750,6 +795,7 @@ export function createKernelAgentTurnHandler(
       return {
         executionId,
         scope: executionScope,
+        disposeScope: () => tenantScope.dispose(),
         store: agentStore,
         surface: { project: (snapshot) => [
           ...(threadContext ? [{ role: "user" as const, content: threadContext }] : []),
@@ -780,13 +826,16 @@ export function createKernelAgentTurnHandler(
         }),
         ...(options.now ? { now: options.now } : {}),
       };
+      } catch (error) { await tenantScope.dispose(); throw error; }
     },
   });
   const codingHandler = options.codingSandboxRoot
     ? createCodingExecutionWorkerHandler({
+        scopeContext: options.scopeContext,
         store: options.store,
         secretStore: options.secretStore,
         modelInvoker: invokeModel,
+        modelQuoter: quoteModel,
         ...(options.memoryReader ? { memoryReader: options.memoryReader } : {}),
         ...(options.runtimeProtection ? { runtimeProtection: options.runtimeProtection } : {}),
         approvalKernel,
@@ -908,9 +957,15 @@ async function observeExecutionControl(
   let current = Promise.resolve();
   const inspect = async () => {
     if (stopped) return;
-    const status = await store.transact(tenantId, (transaction) =>
-      transaction.getProjection<Execution>("execution", handle.executionId)?.status);
-    if (status === "cancelled") await handle.cancel("用户取消");
+    const { execution, control } = await store.transact(tenantId, (transaction) => ({
+      execution: transaction.getProjection<Execution>("execution", handle.executionId),
+      control: transaction.getProjection<{ generation: number; command: string }>("execution-control", handle.executionId),
+    }));
+    if (execution?.status === "cancelled") await handle.cancel("用户取消");
+    else if (execution?.status === "interrupted" || execution?.status === "paused"
+      || (execution && control?.generation === execution.generation && control.command === "interrupt")) {
+      await handle.interrupt("执行控制要求中断");
+    }
   };
   const schedule = () => {
     current = current.then(inspect).catch(async () => {

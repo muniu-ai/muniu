@@ -106,6 +106,7 @@ const protectedPayloadKeyProvider = vaultConfigured
       token: process.env.MN_VAULT_TOKEN,
       mount: process.env.MN_VAULT_TRANSIT_MOUNT ?? "transit",
       keyName: process.env.MN_VAULT_TRANSIT_KEY ?? "muniu-v2-protected-payloads",
+      individuallyRevocable: true,
       namespace: process.env.MN_VAULT_NAMESPACE,
     })
   : new UnavailableEnterpriseKeyProvider();
@@ -148,10 +149,11 @@ const oidc = new OidcIdentityResolver({
 });
 
 const readiness = async () => {
-  const [postgresReady, s3Ready, databaseLocks] = await Promise.all([
+  const [postgresReady, s3Ready, databaseLocks, kmsReady] = await Promise.all([
     probePostgres(pool),
     s3Client.probe(bucket),
     store.runtimeLocks().catch(() => undefined),
+    protectedPayloadKeyProvider.probe(),
   ]);
   const result = enterpriseReadiness({
     retention,
@@ -163,6 +165,10 @@ const readiness = async () => {
     s3Ready,
   });
   const issues = [...result.issues];
+  if (!kmsReady) {
+    issues.push({ code: "KMS_UNAVAILABLE", message: "Vault/KMS 未配置、不可用或密钥权限不足",
+      action: "检查 Vault Transit 配置、连接和令牌权限后重试" });
+  }
   if (databaseLocks?.engineLockDigest !== engineLockDigest) {
     issues.push({
       code: "DATABASE_ENGINE_LOCK_MISMATCH",

@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 import { appendKernelEvent } from "@mn/kernel";
 
-import type { Approval, Asset, Deliverable, JsonObject, Thread, Workspace } from "@mn/contracts";
+import type { Approval, Asset, Deliverable, Execution, ExecutionAuthority, JsonObject, Thread, Workspace, CodingTaskSummaryV2 } from "@mn/contracts";
+import { KernelProjectionRuntimeStore } from "@mn/agent-runtime";
+import { createProtectedRuntimeStore, type RuntimeProtection } from "@mn/worker";
+import { executionMetering, meteringCostSummary } from "./execution-metering.js";
 import {
   KernelError,
   sha256,
@@ -11,6 +14,8 @@ import {
 } from "@mn/kernel";
 import {
   createCodingTask,
+  type CodingExecutionResult,
+  type CodingControlPlaneCommitment,
   type CodingTask,
   type Repository,
 } from "@mn/plugin-coding";
@@ -522,22 +527,33 @@ export async function captureCodingRepository(options: ProductMutationOptions): 
   ));
 }
 
-export async function captureCodingTask(options: ProductMutationOptions): Promise<CodingTask> {
+export async function listCodingRepositories(store: KernelStore, tenantId: string, workspaceId: string): Promise<readonly VersionedRepository[]> {
+  return store.transact(tenantId, tx => tx.listProjections<VersionedRepository>(CODING_REPOSITORY_PROJECTION)
+    .filter(repository => repository.workspaceId === workspaceId));
+}
+
+export async function captureCodingTask(options: ProductMutationOptions & { readonly repositoryId?: string }): Promise<CodingTask> {
   ensureVersionZero(options.expectedStreamVersion);
   return options.store.transact(options.tenantId, (transaction) => idempotentMutation(
     transaction,
     options.tenantId,
     `coding.task.capture:${options.workspaceId}`,
     options.idempotencyKey,
-    { expectedStreamVersion: options.expectedStreamVersion, input: options.input },
+    { expectedStreamVersion: options.expectedStreamVersion, input: options.input, repositoryId: options.repositoryId },
     options.now(),
     () => {
       const workspace = ensureWorkspace(transaction, options.workspaceId);
       if (!workspace.activePluginIds.includes("coding")) {
         throw new KernelError("PLUGIN_NOT_ACTIVE", "工作区尚未启用 Coding", "先在工作区启用 Coding");
       }
-      const repository = transaction.listProjections<VersionedRepository>(CODING_REPOSITORY_PROJECTION)
-        .find((item) => item.workspaceId === options.workspaceId);
+      const repositories = transaction.listProjections<VersionedRepository>(CODING_REPOSITORY_PROJECTION)
+        .filter(item => item.workspaceId === options.workspaceId);
+      const repository = options.repositoryId ? repositories.find(item => item.id === options.repositoryId)
+        : repositories.length === 1 ? repositories[0] : undefined;
+      if (!repository) {
+        if (options.repositoryId) throw new KernelError("CODING_REPOSITORY_NOT_FOUND", "所选仓库不属于当前工作区或已不可用", "刷新仓库列表后重新选择");
+        throw new KernelError("CODING_REPOSITORY_REQUIRED", repositories.length ? "工作区有多个仓库，需要选择任务仓库" : "当前工作区还没有仓库", "在 Coding 页面添加或选择仓库后再创建任务");
+      }
       const title = options.input.trim().split(/[。；;\n]/u, 1)[0]?.slice(0, 80) || "新 Coding 任务";
       const createdAt = options.now();
       const correlationId = options.id("correlation");
@@ -546,7 +562,7 @@ export async function captureCodingTask(options: ProductMutationOptions): Promis
         ...createCodingTask({
           id: resourceRef.resourceId,
           workspaceId: options.workspaceId,
-          repositoryId: repository?.id ?? "unassigned",
+          repositoryId: repository.id,
           title,
           request: options.input,
           createdAt,
@@ -598,27 +614,44 @@ export async function captureCodingTask(options: ProductMutationOptions): Promis
   ));
 }
 
-export async function listCodingTaskSummaries(store: KernelStore, tenantId: string, workspaceId: string) {
+export async function listCodingTaskSummaries(store: KernelStore, tenantId: string, workspaceId: string): Promise<readonly CodingTaskSummaryV2[]> {
   return store.transact(tenantId, (transaction) => {
+    const runs = transaction.listProjections<{ readonly executionId: string; readonly taskId: string; readonly updatedAt: string;
+      readonly controlPlane?: CodingControlPlaneCommitment; readonly result?: CodingExecutionResult }>("coding.execution");
+    const candidates = transaction.listProjections<{ readonly id: string; readonly taskId: string; readonly workspaceId: string;
+      readonly executionId: string; readonly diff: string }>("coding.candidate").filter(candidate => candidate.workspaceId === workspaceId);
     const repositories = new Map(transaction.listProjections<VersionedRepository>(CODING_REPOSITORY_PROJECTION)
       .filter((repository) => repository.workspaceId === workspaceId)
       .map((repository) => [repository.id, repository]));
     return transaction.listProjections<CodingTask>(CODING_TASK_PROJECTION)
       .filter((task) => task.workspaceId === workspaceId)
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
-      .map((task) => ({
+      .map((task): CodingTaskSummaryV2 => {
+        const run = runs.filter(run => run.taskId === task.id && (!run.result || run.result.task.workspaceId === workspaceId))
+          .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+        const lastCandidate = run?.result?.candidates.at(-1);
+        const material = candidates.find(candidate => candidate.id === lastCandidate?.id && candidate.executionId === run?.executionId);
+        const checks = run?.result?.gates.at(-1)?.checks;
+        const repairsUsed = Math.max(0, (run?.result?.candidates.length ?? 0) - 1);
+        const maxRepairs = run?.result?.limits.maxRepairAttempts ?? 3;
+        return {
         id: task.id,
         title: task.title,
         repository: repositories.get(task.repositoryId)?.name ?? "待选择仓库",
         status: task.status,
-        checks: [{ name: "只读仓库检查", status: "pending" as const }],
-        nextAction: task.repositoryId === "unassigned" ? "选择仓库并审阅任务范围" : "审阅 Spec 与影响范围",
+        ...(lastCandidate ? { diffSummary: lastCandidate.summary } : {}),
+        ...(material ? { diff: material.diff } : {}),
+        checks: checks?.length ? checks.map(check => ({ name: check.id, status: check.status === "passed" ? "pass" : "fail" }))
+          : [{ name: "只读仓库检查", status: "pending" }],
+        ...(run?.result?.approval ? { approval: run.result.approval === "approved_once" ? "已单次批准" : "已拒绝" }
+          : task.status === "waiting_approval" ? { approval: "等待人工审批" } : {}),
+        nextAction: run?.result?.nextStep ?? (task.repositoryId === "unassigned" ? "选择仓库并审阅任务范围" : "审阅 Spec 与影响范围"),
         advanced: {
-          harnessDigest: "待执行后固定",
-          candidateCount: 0,
-          remainingBudget: "3 次修复 / 3600 秒",
+          harnessDigest: run?.controlPlane?.harnessDigest ?? "待执行后固定",
+          candidateCount: candidates.filter(candidate => candidate.taskId === task.id && candidate.executionId === run?.executionId).length,
+          remainingBudget: `本轮还可修复 ${Math.max(0, maxRepairs - repairsUsed)} 次；时长上限 ${(run?.result?.limits.maxDurationMs ?? 3600000) / 1000} 秒`,
         },
-      }));
+      }; });
   });
 }
 
@@ -717,16 +750,41 @@ export function deliverableSummary(item: Deliverable) {
   };
 }
 
-export async function workspaceActivity(store: KernelStore, tenantId: string, workspaceId: string) {
-  const page = await store.readEvents(tenantId, 0, 1_000);
-  return page.events
-    .filter((event) => (event.aggregateType === "workspace" && event.aggregateId === workspaceId)
-      || event.publicPayload.workspaceId === workspaceId)
-    .map((event) => ({
+export async function workspaceActivity(store: KernelStore, tenantId: string, workspaceId: string, protection?: RuntimeProtection) {
+  const readHistory = store.readEventHistory ?? store.readEvents;
+  const recent: import("@mn/contracts").KernelEventV1[] = [];
+  let position = 0;
+  for (;;) {
+    const page = await readHistory.call(store, tenantId, position, 1000);
+    recent.push(...page.events.filter(event => (event.aggregateType === "workspace" && event.aggregateId === workspaceId)
+      || event.publicPayload.workspaceId === workspaceId));
+    if (recent.length > 1000) recent.splice(0, recent.length - 1000);
+    if (!page.events.length) break;
+    if (page.nextPosition <= position) throw new Error("活动事实游标未前进");
+    position = page.nextPosition;
+    if (page.events.length < 1000) break;
+  }
+  const costs = new Map<string, string>();
+  for (const event of recent) {
+    if (event.aggregateType !== "execution" || costs.has(event.aggregateId)) continue;
+    const state = await store.transact(tenantId, tx => {
+      const execution = tx.getProjection<Execution>("execution", event.aggregateId);
+      if (!execution || execution.workspaceId !== workspaceId) return undefined;
+      const authority = tx.getProjection<ExecutionAuthority>("authority", execution.authorityId);
+      return authority ? { execution, authority } : undefined;
+    });
+    if (!state) { costs.set(event.aggregateId, "费用未核算"); continue; }
+    const runtime = protection ? createProtectedRuntimeStore({ ...protection, store, tenantId, workspaceId })
+      : new KernelProjectionRuntimeStore({ store, tenantId });
+    costs.set(event.aggregateId, meteringCostSummary(executionMetering(state.execution, state.authority,
+      await runtime.readExecution(event.aggregateId))));
+  }
+  const latestByExecution = new Map(recent.filter(event => event.aggregateType === "execution").map(event => [event.aggregateId, event.id]));
+  return recent.map((event) => ({
       id: event.id,
       title: activityTitle(event.type),
       status: activityStatus(event.type),
-      cost: "未产生模型费用",
+      cost: latestByExecution.get(event.aggregateId) === event.id ? costs.get(event.aggregateId) ?? "费用未核算" : "—",
       occurredAt: event.occurredAt,
     }))
     .reverse();

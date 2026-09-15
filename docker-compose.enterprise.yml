@@ -18,6 +18,9 @@ x-runtime-environment: &runtime-environment
   MN_S3_PREFIX: v2/
   MN_S3_ACCESS_KEY_ID: mn-e2e
   MN_S3_SECRET_ACCESS_KEY: mn-e2e-secret-only
+  MN_VAULT_ADDR: http://vault:8200
+  MN_VAULT_TOKEN: mn-v2-vault-fixture-only
+  MN_VAULT_TRANSIT_MOUNT: transit
   MN_RETENTION_BUSINESS_DAYS: "365"
   MN_RETENTION_EXECUTION_DAYS: "90"
   MN_RETENTION_DELIVERABLE_DAYS: "365"
@@ -47,12 +50,47 @@ x-runtime-dependencies: &runtime-dependencies
     condition: service_healthy
   minio-init:
     condition: service_completed_successfully
+  vault-init:
+    condition: service_completed_successfully
   migrate:
     condition: service_completed_successfully
   jwks:
     condition: service_healthy
 
 services:
+  # Disposable integration fixture only; dev mode loses keys when restarted.
+  vault:
+    image: hashicorp/vault:1.21.4@sha256:4e33b126a59c0c333b76fb4e894722462659a6bec7c48c9ee8cea56fccfd2569
+    command: ["server", "-dev", "-dev-root-token-id=mn-v2-vault-fixture-only", "-dev-listen-address=0.0.0.0:8200", "-dev-no-store-token"]
+    environment:
+      VAULT_ADDR: http://127.0.0.1:8200
+      SKIP_SETCAP: "true"
+    ports:
+      - "127.0.0.1:58200:8200"
+    healthcheck:
+      test: ["CMD", "vault", "status"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks: [mn-v2, mn-v2-client]
+
+  vault-init:
+    image: hashicorp/vault:1.21.4@sha256:4e33b126a59c0c333b76fb4e894722462659a6bec7c48c9ee8cea56fccfd2569
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        if ! vault secrets list -format=json | grep -q '"transit/"'; then
+          vault secrets enable transit
+        fi
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: mn-v2-vault-fixture-only
+    depends_on:
+      vault:
+        condition: service_healthy
+    restart: "no"
+    networks: [mn-v2]
+
   postgres:
     image: postgres:16-alpine
     environment:

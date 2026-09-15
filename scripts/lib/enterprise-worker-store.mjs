@@ -17,6 +17,7 @@ export function createEnterpriseWorkerStore({ kernelStore, jobStore }) {
   return Object.freeze({
     transact: method(kernelStore, "transact"),
     readEvents: method(kernelStore, "readEvents"),
+    ...(typeof kernelStore?.readEventHistory === "function" ? { readEventHistory: method(kernelStore, "readEventHistory") } : {}),
     listTenantIds: typeof kernelStore?.listTenantIds === "function"
       ? method(kernelStore, "listTenantIds")
       : undefined,

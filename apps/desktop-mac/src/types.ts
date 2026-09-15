@@ -1,184 +1,32 @@
-import type {
-  Execution,
-  Thread,
-  ThreadTurnSessionEntry as ContractThreadTurnEntry,
-  ThreadTurnsView as ContractThreadTurnsView,
-  ThreadTurnView as ContractThreadTurnView,
-} from "@mn/contracts";
+// SPDX-License-Identifier: Apache-2.0
+import type * as Contracts from "@mn/contracts";
 
 export type ViewMode = "business" | "professional";
 export type ProductPluginId = "opc" | "coding";
-
-export interface WorkspaceSummary {
-  readonly id: string;
-  readonly name: string;
-  readonly viewMode: ViewMode;
-  readonly activePluginIds: readonly string[];
-  readonly streamVersion: number;
-}
-
-export interface WorkspaceMemberSummary {
-  readonly id: string;
-  readonly principalId: string;
-  readonly workspaceRole: "owner" | "operator" | "reviewer" | "viewer";
-  readonly streamVersion: number;
-}
-
-export type AgentThreadSummary = Thread;
-export type AgentExecutionStatus = Execution["status"];
-export type AgentExecutionSummary = Execution;
-export type ThreadTurnEntry = ContractThreadTurnEntry;
-export type ThreadTurnView = ContractThreadTurnView;
-export type ThreadTurnsView = ContractThreadTurnsView;
-
-export interface AgentCatalog {
-  readonly agents: readonly AgentCatalogAgent[];
-  readonly skills: readonly AgentCatalogSkill[];
-}
-
-export interface AgentCatalogAgent {
-  readonly pluginId: string;
-  readonly id: string;
-  readonly displayName: string;
-  readonly description: string;
-}
-
-export interface AgentCatalogSkill {
-  readonly pluginId: string;
-  readonly id: string;
-  readonly title: string;
-  readonly expectedOutcome: string;
-  readonly exampleInput?: string;
-  readonly source: string;
-  readonly license: string;
-  readonly version: string;
-  readonly permissionIds: readonly string[];
-  readonly installation: "active";
-}
-
-export interface HomeSummary {
-  readonly todayActions: readonly SummaryItem[];
-  readonly blockers: readonly SummaryItem[];
-  readonly approvals: readonly ApprovalSummary[];
-  readonly recentDeliverables: readonly DeliverableSummary[];
-}
-
-export interface SummaryItem {
-  readonly id: string;
-  readonly title: string;
-  readonly detail: string;
-  readonly pluginId?: ProductPluginId;
-}
-
-export interface ApprovalSummary {
-  readonly id: string;
-  readonly title: string;
-  readonly intent: string;
-  readonly resourceSummary: string;
-  readonly risk: string;
-  readonly expiresAt: string;
-  readonly streamVersion: number;
-}
-
-export interface InboxItemSummary {
-  readonly id: string;
-  readonly workspaceId: string;
-  readonly executionId?: string;
-  readonly kind: "approval" | "agent_question" | "credential" | "failure" | "reconciliation";
-  readonly title: string;
-  readonly summary: string;
-  readonly risk?: string;
-  readonly resourceSummary?: string;
-  readonly createdAt: string;
-  readonly status: "open" | "resolved";
-}
-
-export type CodingReconciliationDecision = "terminate" | "mark_completed" | "create_new_call";
-
-export interface CodingReconciliationView {
-  readonly executionId: string;
-  readonly workspaceId: string;
-  readonly taskTitle: string;
-  readonly nextStep: string;
-  readonly runnerId: "claude-cli" | "codex-cli";
-  readonly status: "needs_reconciliation";
-  readonly expectedStreamVersion: number;
-  readonly expectedCodingStreamVersion: number;
-  readonly evidence: {
-    readonly candidateCount: number;
-    readonly gateCount: number;
-    readonly markCompletedAllowed: boolean;
-    readonly codeEvidenceDigest?: string;
-    readonly summary: string;
-  };
-  readonly newCall: {
-    readonly allowed: boolean;
-    readonly summary: string;
-  };
-  readonly availableDecisions: readonly CodingReconciliationDecision[];
-}
-
-export interface CodingReconciliationDecisionResult {
-  readonly decision: CodingReconciliationDecision;
-  readonly status: "settled" | "verification_pending";
-  readonly cleanupJobId?: string;
-  readonly verificationJobId?: string;
-}
-
-export interface DeliverableSummary {
-  readonly id: string;
-  readonly pluginId: ProductPluginId;
-  readonly title: string;
-  readonly outcome: string;
-  readonly decision?: string;
-  readonly nextAction?: string;
-  readonly createdAt: string;
-}
-
-export interface ActivitySummary {
-  readonly id: string;
-  readonly title: string;
-  readonly status: string;
-  readonly cost: string;
-  readonly occurredAt: string;
-}
-
-export interface MemorySummary {
-  readonly id: string;
-  readonly namespace: string;
-  readonly resourceId: string;
-  readonly summary: string;
-  readonly source: string;
-  readonly confidence: number;
-  readonly status: "proposed" | "accepted" | "rejected" | "invalidated";
-  readonly streamVersion: number;
-}
-
-export interface OpportunitySummary {
-  readonly id: string;
-  readonly title: string;
-  readonly targetCustomer: string;
-  readonly problem: string;
-  readonly falsifiableHypothesis: string;
-  readonly status: string;
-  readonly evidenceLevel: "none" | "interest" | "commitment" | "paid";
-  readonly evidence: readonly EvidenceSummary[];
-  readonly gaps: readonly string[];
-  readonly nextAction: string;
-  readonly streamVersion: number;
-}
-
-export type OpportunityState =
-  | "captured"
-  | "framed"
-  | "researching"
-  | "interviewing"
-  | "evaluating"
-  | "offer_ready"
-  | "decided"
-  | "paused"
-  | "abandoned";
-
+export type WorkspaceSummary = Pick<Contracts.Workspace, "id" | "name" | "viewMode" | "activePluginIds" | "streamVersion">;
+export type WorkspaceMemberSummary = Contracts.WorkspaceMembership;
+export type AgentThreadSummary = Contracts.Thread;
+export type AgentExecutionStatus = Contracts.ExecutionStatus;
+export type AgentExecutionSummary = Contracts.Execution;
+export type ThreadTurnEntry = Contracts.ThreadTurnSessionEntry;
+export type ThreadTurnView = Contracts.ThreadTurnView;
+export type ThreadTurnsView = Contracts.ThreadTurnsView;
+export type AgentCatalog = Contracts.AgentCatalogV2;
+export type AgentCatalogAgent = Contracts.AgentCatalogAgentV2;
+export type AgentCatalogSkill = Contracts.AgentCatalogSkillV2;
+export type HomeSummary = Contracts.HomeV2;
+export type SummaryItem = Contracts.HomeActionV2;
+export type ApprovalSummary = Contracts.HomeApprovalV2;
+export type InboxItemSummary = Contracts.InboxItemV2;
+export type CodingReconciliationDecision = Contracts.CodingReconciliationDecisionV2;
+export type CodingRepositorySummary = Contracts.CodingRepositoryV2;
+export type CodingReconciliationView = Contracts.CodingReconciliationViewV2;
+export type CodingReconciliationDecisionResult = Contracts.CodingReconciliationResultV2;
+export type DeliverableSummary = Contracts.DeliverableSummaryV2;
+export type ActivitySummary = Contracts.ActivityV2;
+export type MemorySummary = Contracts.MemorySummaryV2;
+export type OpportunitySummary = Contracts.OpportunitySummaryV2;
+export type OpportunityState = Contracts.OpportunityState;
 export type OpcOpportunityCommand =
   | "frame"
   | "start_research"
@@ -195,156 +43,17 @@ export type OpcOpportunityCommand =
   | "pause"
   | "resume"
   | "abandon";
-
-export interface OpportunityDetail {
-  readonly id: string;
-  readonly workspaceId: string;
-  readonly title: string;
-  readonly rawCapture: string;
-  readonly state: OpportunityState;
-  readonly evidenceLevel: OpportunitySummary["evidenceLevel"];
-  readonly streamVersion: number;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-  readonly stateBeforePause?: Exclude<OpportunityState, "paused" | "abandoned">;
-  readonly pauseReason?: string;
-  readonly abandonmentReason?: string;
-  readonly hypotheses: readonly OpportunityHypothesis[];
-  readonly signals: readonly OpportunitySignal[];
-  readonly interviews: readonly OpportunityInterview[];
-  readonly experiments: readonly OpportunityExperiment[];
-  readonly commitmentEvidence: readonly OpportunityCommitmentEvidence[];
-  readonly minimumPaidOffer?: OpportunityOffer;
-  readonly decision?: OpportunityDecision;
-}
-
-export interface OpportunityHypothesis {
-  readonly id: string;
-  readonly targetCustomer: string;
-  readonly problem: string;
-  readonly statement: string;
-  readonly createdAt: string;
-}
-
-export interface OpportunitySignal {
-  readonly id: string;
-  readonly sourceKind: "public_web" | "pasted" | "file" | "manual";
-  readonly sourceUrl?: string;
-  readonly sourceAssetId?: string;
-  readonly observedAt: string;
-  readonly excerpt?: string;
-  readonly summary: string;
-  readonly relationship: "support" | "oppose" | "neutral";
-  readonly evidenceKind: "context" | "interest";
-}
-
-export interface OpportunityInterview {
-  readonly id: string;
-  readonly participantRef: string;
-  readonly occurredAt: string;
-  readonly rawRecordAssetId: string;
-  readonly rawRecord: string;
-  readonly annotations: readonly { readonly id: string; readonly text: string }[];
-}
-
-export interface AssetSummary {
-  readonly id: string;
-  readonly workspaceId: string;
-  readonly fileName: string;
-  readonly mediaType: string;
-  readonly byteLength: number;
-  readonly protected: boolean;
-  readonly streamVersion: number;
-}
-
-export interface OpportunityExperiment {
-  readonly id: string;
-  readonly question: string;
-  readonly method: string;
-  readonly successCriterion: string;
-  readonly outcome?: string;
-  readonly status: "planned" | "completed";
-}
-
-export interface OpportunityCommitmentEvidence {
-  readonly id: string;
-  readonly level: "commitment" | "paid";
-  readonly description: string;
-  readonly sourceRef: string;
-  readonly status: "proposed" | "confirmed";
-  readonly confirmedAt?: string;
-}
-
-export interface OpportunityOffer {
-  readonly id: string;
-  readonly targetCustomer: string;
-  readonly promisedOutcome: string;
-  readonly inScope: readonly string[];
-  readonly outOfScope: readonly string[];
-  readonly price: {
-    readonly amountMinor: string;
-    readonly currency: string;
-    readonly assumption: string;
-  };
-  readonly deliveryFormat: string;
-  readonly duration: string;
-  readonly acceptanceMethod: string;
-  readonly nextCustomerAction: string;
-  readonly risks: readonly string[];
-}
-
-export interface OpportunityDecision {
-  readonly id: string;
-  readonly choice: "pursue" | "revise" | "stop";
-  readonly rationale: string;
-  readonly decidedAt: string;
-}
-
-export interface OpcDeliverablePreview {
-  readonly kind: string;
-  readonly title: string;
-  readonly summary: string;
-  readonly validationStatus: string;
-  readonly nextAction: string;
-  readonly content: Readonly<Record<string, unknown>>;
-}
-
-export interface EvidenceSummary {
-  readonly id: string;
-  readonly stance: "supporting" | "opposing" | "neutral";
-  readonly summary: string;
-  readonly source: string;
-  readonly capturedAt: string;
-  readonly humanConfirmed?: boolean;
-}
-
-export interface CodingTaskSummary {
-  readonly id: string;
-  readonly title: string;
-  readonly repository: string;
-  readonly status: string;
-  readonly diffSummary?: string;
-  readonly checks: readonly { readonly name: string; readonly status: "pass" | "fail" | "pending" }[];
-  readonly approval?: string;
-  readonly nextAction: string;
-  readonly advanced?: {
-    readonly harnessDigest: string;
-    readonly candidateCount: number;
-    readonly remainingBudget: string;
-  };
-}
-
-export interface PluginHealth {
-  readonly pluginId: string;
-  readonly status: "healthy" | "degraded";
-  readonly message?: string;
-}
-
-export interface ApiFailure {
-  readonly code: string;
-  readonly message: string;
-  readonly action: string;
-  readonly traceId: string;
-  readonly retryable: boolean;
-  readonly fieldIssues?: readonly { readonly field: string; readonly message: string }[];
-}
+export type OpportunityDetail = Contracts.OpportunityViewV2;
+export type OpportunityHypothesis = Contracts.Hypothesis;
+export type OpportunitySignal = Contracts.Signal;
+export type OpportunityInterview = Contracts.OpportunityViewV2["interviews"][number];
+export type AssetSummary = Contracts.Asset;
+export type OpportunityExperiment = Contracts.Experiment;
+export type OpportunityCommitmentEvidence = Contracts.CommitmentEvidence;
+export type OpportunityOffer = Contracts.MinimumPaidOffer;
+export type OpportunityDecision = Contracts.Decision;
+export type OpcDeliverablePreview = Contracts.OpcDeliverableV2;
+export type EvidenceSummary = Contracts.OpportunityEvidenceV2;
+export type CodingTaskSummary = Contracts.CodingTaskSummaryV2;
+export type PluginHealth = Contracts.HostHealthV2["plugins"][number];
+export type ApiFailure = Contracts.ApiErrorV2;

@@ -16,6 +16,7 @@ export interface InboxItem {
 }
 
 export interface ModelConnection {
+  readonly defaultForNewExecutions?: boolean;
   readonly id: string;
   readonly tenantId: string;
   readonly presetId: string;
@@ -59,7 +60,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     secretLabel: "API Key",
     probeKind: "openai-compatible",
     endpoint: "https://api.deepseek.com",
-    suggestedModels: ["deepseek-chat"],
+    suggestedModels: ["deepseek-v4-flash"],
   },
 ] as const;
 

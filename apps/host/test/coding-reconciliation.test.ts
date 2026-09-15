@@ -252,7 +252,7 @@ async function createFixture<TStore extends KernelStore = InMemoryKernelStore>(
       tenantId: "local",
       presetId: "deepseek",
       secretRef: "keychain://muniu.v2/model-reconciliation",
-      defaultModel: "deepseek-chat",
+      defaultModel: "deepseek-v4-flash",
       status: "ready",
       streamVersion: 1,
     });
@@ -988,6 +988,7 @@ test("SQLite 把核对状态、清理 Job 与 outbox 作为一个持久事务提
     assert.equal(physicalJob?.kind, "coding.sandbox.cleanup");
     assert.deepEqual(physicalJob?.payload, {
       reconciliationExecutionId: fixture.executionId,
+      codingRunId: `${fixture.executionId}:1:1`,
     });
     assert.ok((await storage.listOutbox("local", 100)).some((message) =>
       message.topic === "job.available"

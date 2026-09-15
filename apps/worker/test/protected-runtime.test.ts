@@ -39,4 +39,17 @@ test("运行上下文加密后原子写入事件与投影，并能在重建投�
   assert.deepEqual(await recovered.readExecution("execution"), [saved]);
   const next = await recovered.append({ ...input, type: "model/response", payload: { text: "结果" } });
   assert.equal(next.sequence, 2);
+  const batch = [
+    { ...input, type: "inbox/consumed" as const, payload: { itemId: "follow-up" } },
+    { ...input, type: "turn/started" as const, payload: { itemId: "follow-up" } },
+  ];
+  const commits = await Promise.all([recovered.commit("execution", 2, batch), recovered.commit("execution", 2, batch)]);
+  assert.equal(commits.filter(Boolean).length, 1);
+  const records = await recovered.readExecution("execution");
+  assert.deepEqual(records.slice(-2).map(record => record.type), ["inbox/consumed", "turn/started"]);
+  assert.equal((await store.readEvents("local", 0, 100)).events.length, 4);
+  await store.transact("local", (tx) => tx.deleteProjection("agent-runtime", "execution"));
+  store.readEventHistory = store.readEvents.bind(store);
+  store.readEvents = async () => { throw new Error("EVENT_CURSOR_EXPIRED"); };
+  assert.deepEqual(await createProtectedRuntimeStore(options).readExecution("execution"), records);
 });

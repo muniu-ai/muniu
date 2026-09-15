@@ -82,7 +82,25 @@ export async function seedHostFlow({
   assert.match(events.text, /event: kernel/u);
   const cursor = Number([...events.text.matchAll(/^id: (\d+)$/gmu)].at(-1)?.[1]);
   assert.ok(Number.isSafeInteger(cursor) && cursor > 0);
-  return { accessToken, tenantId, workspaceId: created.body.data.id, cursor, hostA, hostB };
+  const committedEvents = parseKernelEvents(events.text).map(({ id, position, digest, hmac }) => ({ id, position, digest, hmac }));
+  assert.ok(committedEvents.length > 0);
+  return { accessToken, tenantId, workspaceId: created.body.data.id, cursor, committedEvents, hostA, hostB };
+}
+
+function parseKernelEvents(text) {
+  return text.split("\n\n").filter(frame => /^event: kernel$/mu.test(frame))
+    .map(frame => JSON.parse(frame.split("\n").find(line => line.startsWith("data: ")).slice(6)));
+}
+
+export function assertCommittedSseEvents(state, text) {
+  const received = parseKernelEvents(text);
+  for (const expected of state.committedEvents) {
+    const actual = received.find(event => event.id === expected.id);
+    assert.ok(actual, `已提交事件 ${expected.position} 缺失`);
+    assert.deepEqual({ id: actual.id, position: actual.position, digest: actual.digest, hmac: actual.hmac }, expected);
+  }
+  const cursor = Number([...text.matchAll(/^id: (\d+)$/gmu)].at(-1)?.[1]);
+  assert.ok(cursor >= state.cursor, "租户游标不得回退；游标不要求对应当前工作区可见的事件");
 }
 
 export async function verifyCommittedEvent(state) {
@@ -96,7 +114,7 @@ export async function verifyCommittedEvent(state) {
     `/v2/workspaces/${state.workspaceId}/events?after=0`,
   );
   assert.equal(events.response.status, 200, events.text);
-  assert.match(events.text, new RegExp(`id: ${state.cursor}`));
+  assertCommittedSseEvents(state, events.text);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

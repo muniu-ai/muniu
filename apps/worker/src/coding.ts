@@ -4,6 +4,7 @@ import { appendKernelEvent } from "@mn/kernel";
 import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
+import { PersistentExecutionBudget, ExecutionBudgetExceededError } from "@mn/agent-runtime";
 import {
   chmod,
   lstat,
@@ -20,6 +21,9 @@ import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  AgentHandle,
+  AgentScope,
+  RuntimeControlError,
   KernelProjectionRuntimeStore,
   PersistentSessionLog,
   PersistentInbox,
@@ -27,6 +31,7 @@ import {
   type ModelMessage,
   type ModelRequest,
   type RuntimeStore,
+  type RuntimeRecord,
   type ToolApprovalPort,
 } from "@mn/agent-runtime";
 import type {
@@ -57,6 +62,11 @@ import {
   CODING_DEFAULT_LIMITS,
   CodingExecutionEngine,
   createCodeEvidence,
+  createSpec,
+  reviseSpec,
+  createGovernanceSnapshot,
+  createHarnessSnapshot,
+  digest as codingDigest,
   decideCodingExecution,
   type Candidate,
   type CandidateDraft,
@@ -69,6 +79,9 @@ import {
   type GateVerifier,
   type Repository,
   type RepositoryIndex,
+  type Spec,
+  type GovernanceSnapshot,
+  type HarnessSnapshot,
   type RunnerEvent,
   RunnerKnownFailureError,
 } from "@mn/plugin-coding";
@@ -79,11 +92,14 @@ import { createCodexCliRunner } from "@mn/runner-codex-cli";
 import { createKernelToolApprovalPort, type ToolApprovalKernel } from "./approval.js";
 import { buildAgentMemoryPrompt, type AgentMemoryReader } from "./memory.js";
 import { createProtectedRuntimeStore, readExecutionInput, type RuntimeProtection } from "./runtime-store.js";
+import { recordRuntimeAttention } from "./runtime-attention.js";
 import { readThreadHistory } from "./thread-context.js";
 import type { CodingCommandExecutor } from "./kubernetes-sandbox.js";
 import {
   ModelTransportError,
+  invokeBudgetedByokModel,
   type ByokModelInvoker,
+  type ByokModelQuoter,
   type ByokProviderId,
 } from "./model-invoker.js";
 import {
@@ -128,6 +144,7 @@ interface StoredCandidate extends Candidate {
 }
 
 interface ExternalInvocationState {
+  readonly toolCallId?: string;
   readonly runnerId: ExternalCodingRunnerId;
   readonly attempt: number;
   readonly identityDigest: string;
@@ -163,6 +180,7 @@ interface RunnerSupervisionLease extends RunnerSupervisionCheckpoint {
 }
 
 interface StoredCodingRun {
+  readonly turn?: number;
   readonly executionId: string;
   readonly generation: number;
   readonly taskId: string;
@@ -177,6 +195,13 @@ interface StoredCodingRun {
   readonly streamVersion: number;
   readonly createdAt: string;
   readonly updatedAt: string;
+}
+
+interface CodingSnapshots {
+  readonly spec: Spec;
+  readonly governance: GovernanceSnapshot;
+  readonly harness: HarnessSnapshot;
+  readonly index: RepositoryIndex;
 }
 
 interface RepositorySnapshot {
@@ -264,6 +289,7 @@ export interface CodingWorkerJobContext {
   readonly leaseExpiresAt: string;
   readonly signal: AbortSignal;
   readonly acknowledgeJobSettlement?: (receipt: KernelJobSettlementReceipt) => void;
+  readonly runtime?: { readonly store: RuntimeStore; readonly turn: number; readonly message: string; readonly recovering: boolean };
 }
 
 export interface CodingModelSecretReader {
@@ -271,12 +297,14 @@ export interface CodingModelSecretReader {
 }
 
 export interface CodingExecutionWorkerOptions {
+  readonly scopeContext?: AgentScope["context"];
   readonly commandExecutor?: CodingCommandExecutor;
   readonly memoryReader?: AgentMemoryReader;
   readonly runtimeProtection?: RuntimeProtection;
   readonly store: KernelStore;
   readonly secretStore: CodingModelSecretReader;
   readonly modelInvoker: ByokModelInvoker;
+  readonly modelQuoter: ByokModelQuoter;
   readonly approvalKernel: ToolApprovalKernel;
   readonly sandboxRoot: string;
   readonly sandboxExecutable?: string;
@@ -336,10 +364,137 @@ export function fencedCodingStore(
     readEvents(tenantId, afterPosition, limit) {
       return store.readEvents(tenantId, afterPosition, limit);
     },
+    ...(store.readEventHistory ? { readEventHistory: (tenantId: string, afterPosition: number, limit: number) => {
+      if (tenantId !== job.tenantId) throw new Error("Coding Job 不能读取其他租户的事实历史");
+      return store.readEventHistory!(tenantId, afterPosition, limit);
+    } } : {}),
   };
 }
 
 export function createCodingExecutionWorkerHandler(options: CodingExecutionWorkerOptions) {
+  const executeTurn = createCodingTurnHandler(options);
+  const now = options.now ?? (() => new Date().toISOString());
+  return async (job: StoredJob, context: CodingWorkerJobContext): Promise<JsonValue> => {
+    const executionId = payloadString(job.payload, "executionId");
+    const store = fencedCodingStore(options.store, job, context, now);
+    const state = await loadCodingState(store, job.tenantId, executionId);
+    const onCommit = (tx: KernelTransaction, records: readonly RuntimeRecord[]) =>
+      finalizeCodingRuntime(tx, records, state, job, context, now());
+    const runtime = options.runtimeProtection ? createProtectedRuntimeStore({
+      ...options.runtimeProtection, tenantId: job.tenantId, workspaceId: state.execution.workspaceId, store, now, onCommit,
+    }) : new KernelProjectionRuntimeStore({ tenantId: job.tenantId, store, now,
+      onCommit: (tx, records) => onCommit(tx as KernelTransaction, records) });
+    const tenantScope = AgentScope.tenant(job.tenantId, state.execution.generation, options.scopeContext);
+    const scope = tenantScope.createChild("workspace", state.execution.workspaceId)
+      .createChild("thread", state.thread.id).createChild("execution", executionId);
+    const budget = new PersistentExecutionBudget({ store: runtime, executionId,
+      maxDurationMs: state.authority.budget.maxDurationMs, now: () => Date.parse(now()) });
+    const run = async (input: JsonObject, signal: AbortSignal, recovering: boolean): Promise<JsonValue> => {
+      let deadline: AbortSignal | undefined;
+      const turn = Number(input.turn);
+      if (!Number.isSafeInteger(turn) || turn < 1 || typeof input.message !== "string") throw new Error("Coding turn 输入无效");
+      if (recovering) {
+        const checkpoint = await loadCodingRun(store, job.tenantId, executionId);
+        if (!checkpoint || (!checkpoint.result && checkpoint.externalInvocation?.status !== "started")) {
+          throw new RuntimeControlError("interrupted");
+        }
+      }
+      try {
+        deadline = AbortSignal.timeout(await budget.remainingMilliseconds());
+        const result = await executeTurn(job, { ...context, signal: AbortSignal.any([signal, context.signal, deadline]),
+          runtime: { store: runtime, turn, message: input.kind === "resume" ? state.task.request : input.message, recovering } });
+        if (deadline.aborted) throw new ExecutionBudgetExceededError("duration");
+        const checkpoint = await loadCodingRun(store, job.tenantId, executionId);
+        return { ...(result as JsonObject), summary: checkpoint?.result?.deliverable?.summary ?? checkpoint?.result?.nextStep ?? "",
+          nextStep: checkpoint?.result?.nextStep ?? "" };
+      } catch (error) {
+        if (error instanceof CodingWorkerOutcomeError && error.status === "needs_reconciliation") return { status: error.status, nextStep: error.message };
+        if (deadline?.aborted) return { status: "paused", nextStep: new ExecutionBudgetExceededError("duration").message };
+        if (error instanceof ExecutionBudgetExceededError) return { status: "paused", nextStep: error.message };
+        if (error instanceof CodingWorkerOutcomeError) return { status: error.status, nextStep: error.message };
+        if (context.signal.aborted && !isUserCancellation(context.signal)) throw new RuntimeControlError("interrupted");
+        const current = await options.store.transact(job.tenantId, tx => tx.getProjection<Execution>("execution", executionId));
+        if (current?.status === "cancelled") return { status: "cancelled", nextStep: "执行已取消" };
+        if (current?.status === "paused" || current?.status === "interrupted") throw new RuntimeControlError(current.status);
+        throw error;
+      }
+    };
+    scope.register("job", { id: "coding.workflow", run: (input, signal) => run(input, signal, false),
+      recover: (input, signal) => run(input, signal, true) });
+    const handle = await AgentHandle.open({ executionId, scope, store: runtime,
+      definition: { id: state.execution.agentDefinitionId, llmId: "coding.builtin", promptIds: [], jobId: "coding.workflow" },
+      authority: { commitment: state.authority.commitment, toolIds: state.authority.toolIds,
+        dataScopes: state.authority.dataScopes, effectClasses: state.authority.autoAllowedEffects, budget: state.authority.budget },
+      approval: createKernelToolApprovalPort({ tenantId: job.tenantId, actorId: state.execution.executionPrincipalId,
+        kernel: options.approvalKernel, store, now: () => Date.parse(now()) }), now })
+      .catch(async error => { await tenantScope.dispose(); throw error; });
+    try {
+      if (job.payload.command === "resume") await handle.resume();
+      else if (handle.status === "queued") await handle.start(await readExecutionInput({
+        store, execution: state.execution, payload: job.payload,
+        ...(options.runtimeProtection ? { protection: options.runtimeProtection } : {}),
+      }));
+      await handle.whenIdle();
+    } finally { await tenantScope.dispose(); }
+    if (handle.status === "completed") return { executionId, status: "completed" };
+    if (handle.status === "paused") return { executionId, status: "needs_human_decision" };
+    if (handle.status === "interrupted") throw new RuntimeControlError("interrupted");
+    throw new CodingWorkerOutcomeError(executionId,
+      handle.status === "needs_reconciliation" ? "needs_reconciliation" : handle.status === "cancelled" ? "cancelled" : "failed",
+      handle.lastError instanceof Error ? safeMessage(handle.lastError) : "Coding 工作流未完成");
+  };
+}
+
+function finalizeCodingRuntime(tx: KernelTransaction, records: readonly RuntimeRecord[], state: CodingState,
+  job: StoredJob, context: CodingWorkerJobContext, occurredAt: string): void | (() => void) {
+  if (records.some(record => record.type === "model/request" || record.type === "model/reserved" || record.type === "tool/started"
+    || (record.type === "execution/status" && record.payload.status === "completed"))) {
+    const execution = tx.getProjection<Execution>("execution", state.execution.id);
+    if (!execution || execution.generation !== state.execution.generation) throw new StaleFencingTokenError(job.id);
+    const control = tx.getProjection<{ generation: number; command: string }>("execution-control", execution.id);
+    if (control?.generation === execution.generation && control.command === "interrupt") throw new RuntimeControlError("interrupted");
+    if (execution.status === "cancelled" || execution.status === "paused" || execution.status === "interrupted") throw new RuntimeControlError(execution.status);
+  }
+  recordRuntimeAttention(tx, state.execution, records);
+  const status = records.filter(record => record.type === "execution/status").at(-1)?.payload.status;
+  if (!["completed", "failed", "cancelled", "paused"].includes(String(status))) return;
+  const execution = tx.getProjection<Execution>("execution", state.execution.id);
+  if (!execution || execution.generation !== state.execution.generation) throw new StaleFencingTokenError(job.id);
+  if ((execution.status === "cancelled" || execution.status === "paused" || execution.status === "interrupted")
+    && execution.status !== status) throw new RuntimeControlError(execution.status);
+  const run = tx.getProjection<StoredCodingRun>("coding.execution", execution.id);
+  const task = tx.getProjection<CodingTask>("coding.task", state.task.id);
+  if (!task) throw new Error("CodingTask 不存在");
+  const domainStatus = status === "cancelled" ? "cancelled" : status === "failed" ? "failed"
+    : status === "paused" ? "needs_human_decision" : run?.result?.status;
+  if (!domainStatus) throw new Error("Coding 完成状态缺少可核验成果");
+  if (run) {
+    const nextRun: StoredCodingRun = { ...run, status: domainStatus,
+      result: status === "cancelled" && run.result ? cancelledCodingResult(run.result) : run.result,
+      streamVersion: run.streamVersion + 1, updatedAt: occurredAt };
+    tx.putProjection("coding.execution", execution.id, nextRun);
+    appendKernelEvent(tx, { tenantId: job.tenantId, aggregateType: "coding.execution", aggregateId: execution.id,
+      expectedStreamVersion: run.streamVersion, type: "coding.runtime_settled", actorId: execution.executionPrincipalId,
+      executionId: execution.id, generation: execution.generation, correlationId: execution.id,
+      publicPayload: { workspaceId: execution.workspaceId, status: domainStatus, turn: run.turn ?? 1 } });
+  }
+  tx.putProjection("coding.task", task.id, { ...task, status: domainStatus,
+    stage: domainStatus === "completed" ? "learn" : task.stage, streamVersion: task.streamVersion + 1, updatedAt: occurredAt });
+  appendKernelEvent(tx, { tenantId: job.tenantId, aggregateType: "coding.task", aggregateId: task.id,
+      expectedStreamVersion: task.streamVersion, type: "coding.task_settled", actorId: execution.executionPrincipalId,
+      executionId: execution.id, generation: execution.generation, correlationId: execution.id,
+      publicPayload: { workspaceId: execution.workspaceId, status: domainStatus } });
+  if (!context.acknowledgeJobSettlement) return;
+  if (!tx.settleJob) throw new Error("存储未实现事务内 Job 终结，Coding Worker 已拒绝提交终态");
+  const receipt = tx.settleJob({ jobId: job.id, workerId: context.workerId, fencingToken: context.fencingToken,
+    outcome: status === "completed" || status === "paused" ? "completed" : "failed",
+    value: status === "completed" || status === "paused" ? { executionId: execution.id, status }
+      : { code: status === "cancelled" ? "EXECUTION_CANCELLED" : "JOB_EXECUTION_FAILED",
+        message: status === "cancelled" ? "执行已取消" : "Coding 工作流失败", retryable: status !== "cancelled" }, occurredAt });
+  return () => context.acknowledgeJobSettlement!(receipt);
+}
+
+function createCodingTurnHandler(options: CodingExecutionWorkerOptions) {
   const now = options.now ?? (() => new Date().toISOString());
   const sandbox = new ControlledCodingSandbox({
     executor: options.commandExecutor,
@@ -354,7 +509,12 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
     }
     const store = fencedCodingStore(options.store, job, context, now);
     const effectiveOptions: CodingExecutionWorkerOptions = { ...options, store };
-    const state = await loadCodingState(store, job.tenantId, executionId);
+    const loadedState = await loadCodingState(store, job.tenantId, executionId);
+    const turn = context.runtime?.turn ?? 1;
+    const message = context.runtime?.message ?? loadedState.task.request;
+    const state: CodingState = { ...loadedState, turn,
+      task: { ...loadedState.task, request: turn > 1 || message === loadedState.task.request ? message
+        : `${loadedState.task.request}\n\n本轮约束：${message}` } };
     assertCodingState(job, state);
     const runnerId = state.execution.runnerId ?? "builtin";
     if (runnerId === "builtin"
@@ -362,7 +522,7 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
       && !options.acceptsSecretReference(state.model.secretRef)) {
       throw new Error("模型密钥引用不属于当前运行环境");
     }
-    const runtime = options.runtimeProtection ? createProtectedRuntimeStore({
+    const runtime = context.runtime?.store ?? (options.runtimeProtection ? createProtectedRuntimeStore({
       ...options.runtimeProtection, tenantId: job.tenantId,
       workspaceId: state.execution.workspaceId, store, now,
     }) : new KernelProjectionRuntimeStore({
@@ -370,7 +530,7 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
       store,
       now,
       id: (sequence) => `${executionId}:coding-runtime:${sequence}`,
-    });
+    }));
     const approval = createKernelToolApprovalPort({
       tenantId: job.tenantId,
       actorId: state.execution.executionPrincipalId,
@@ -381,9 +541,11 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
         : {}),
       now: () => Date.parse(now()),
     });
+    const budget = new PersistentExecutionBudget({ store: runtime, executionId,
+      maxDurationMs: state.authority.budget.maxDurationMs, now: () => Date.parse(now()) });
 
     const recovered = await loadCodingRun(store, job.tenantId, executionId);
-    if (recovered?.generation === state.execution.generation && recovered.result) {
+    if (recovered?.generation === state.execution.generation && (recovered.turn ?? 1) === turn && recovered.result) {
       return settlePersistedResult({
         options: effectiveOptions,
         job,
@@ -395,7 +557,7 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
         now,
       });
     }
-    if (recovered?.generation === state.execution.generation
+    if (recovered?.generation === state.execution.generation && (recovered.turn ?? 1) === turn
       && recovered.externalInvocation?.status === "started") {
       const terminationConfirmed = await sandbox.waitForRunnerStopped(
         recovered.externalInvocation.supervision,
@@ -406,6 +568,7 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
         executionId,
         type: "tool/outcome_unknown",
         payload: {
+          toolCallId: recovered.externalInvocation.toolCallId ?? `runner:${executionId}:${recovered.generation}:${recovered.turn ?? 1}:${recovered.externalInvocation.attempt}`,
           runnerId: recovered.externalInvocation.runnerId,
           attempt: recovered.externalInvocation.attempt,
           reason: "Worker 恢复时发现外部 Runner 启动检查点没有确定终态",
@@ -452,7 +615,19 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
       signal: context.signal,
       now,
     });
-    const controlPlane = await sandbox.controlPlane(snapshot, state.task, runnerId);
+    const stamp = now();
+    const snapshotId = `${executionId}:${state.execution.generation}:${turn}`;
+    const specInput = { id: `spec:${snapshotId}`, taskId: state.task.id, title: state.task.title,
+      body: state.task.request, acceptanceCriteria: ["git diff --check 通过", "由人审阅候选是否满足请求范围"], createdAt: stamp };
+    const snapshots: CodingSnapshots = {
+      spec: state.previousSpec ? reviseSpec(state.previousSpec, specInput) : createSpec(specInput),
+      governance: createGovernanceSnapshot({ id: `governance:${snapshotId}`, version: "0.2.0",
+        rules: ["preserve-user-work", "central-tool-policy", "no-unsandboxed-fallback"], createdAt: stamp }),
+      harness: createHarnessSnapshot({ id: `harness:${snapshotId}`, version: "0.2.0",
+        gateIds: ["git.diff-check"], verifierIds: ["worker-owned-no-index-v1"], createdAt: stamp }),
+      index: snapshot.index,
+    };
+    const controlPlane = await sandbox.controlPlane(snapshot, snapshots, runnerId);
     await persistRunning(
       store,
       job.tenantId,
@@ -461,6 +636,7 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
       snapshot.baseRevision,
       runnerId,
       now(),
+      snapshots,
     );
 
     const builtinRunner = new BuiltinCodingRunner({
@@ -472,9 +648,7 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
           await session.append({ role: "user", content: message, turn: 1 });
         }
         const inbox = new PersistentInbox(runtime, executionId);
-        for (const steer of await inbox.takeSteersAtModelBoundary()) {
-          await session.append({ role: "user", content: steer.text, turn: 1 });
-        }
+        await inbox.applySteersAtModelBoundary(turn);
         return [...await readThreadHistory(store, runtime, state.execution),
           ...await session.modelView(new DefaultSessionSurface())];
       },
@@ -491,10 +665,12 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
       snapshot,
       controlPlane,
       runtime,
+      turn,
       approval,
       sandbox,
       secretStore: options.secretStore,
       modelInvoker: options.modelInvoker,
+      modelQuoter: options.modelQuoter,
       signal: context.signal,
       now,
     });
@@ -509,6 +685,7 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
           snapshot,
           controlPlane,
           runtime,
+          turn,
           approval,
           sandbox,
           store,
@@ -534,9 +711,17 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
           expectedRepositoryRealPath: state.repository.rootRealPath,
           selectedRunnerId: runnerId,
           externalRunnerConfirmed: runnerId !== "builtin",
-          limits: { maxDurationMs: state.authority.budget.maxDurationMs },
+          limits: { maxDurationMs: await budget.remainingMilliseconds(),
+            maxRepairAttempts: Math.max(0, CODING_DEFAULT_LIMITS.maxRepairAttempts - await budget.counter("coding_repair")) },
+          beforeRepair: async repair => {
+            try {
+              await budget.remainingMilliseconds();
+              await budget.reserveCounter("coding_repair", `${state.execution.generation}:${turn}:${repair}`, CODING_DEFAULT_LIMITS.maxRepairAttempts);
+              return true;
+            } catch (error) { if (error instanceof ExecutionBudgetExceededError) return false; throw error; }
+          },
         });
-      if (context.signal.aborted && !isUserCancellation(context.signal)) {
+      if (context.signal.aborted && !isUserCancellation(context.signal) && engineResult.status !== "needs_reconciliation") {
         throw new Error("Coding 执行已中断");
       }
       const result = isUserCancellation(context.signal)
@@ -604,7 +789,7 @@ export function createCodingSandboxCleanupWorkerHandler(
     const executionId = payloadString(job.payload, "reconciliationExecutionId");
     const store = fencedCodingStore(options.store, job, context, now);
     const invocation = await store.transact(job.tenantId, (transaction) => {
-      const run = transaction.getProjection<StoredCodingRun>("coding.execution", executionId);
+      const { run } = cleanupRun(transaction, job, executionId);
       if (!run?.externalInvocation) throw new Error("人工核对没有可清理的外部 Runner 记录");
       return run.externalInvocation;
     });
@@ -613,7 +798,7 @@ export function createCodingSandboxCleanupWorkerHandler(
     }
     await sandbox.cleanupReconciliationArtifacts(invocation);
     await store.transact(job.tenantId, (transaction) => {
-      const current = transaction.getProjection<StoredCodingRun>("coding.execution", executionId);
+      const { run: current, namespace, id } = cleanupRun(transaction, job, executionId);
       if (!current?.externalInvocation) throw new Error("外部 Runner 清理检查点不存在");
       if (current.externalInvocation.cleanupStatus === "cleaned") return;
       if (current.externalInvocation.sandboxPath !== invocation.sandboxPath
@@ -633,12 +818,12 @@ export function createCodingSandboxCleanupWorkerHandler(
         streamVersion: current.streamVersion + 1,
         updatedAt: occurredAt,
       };
-      transaction.putProjection("coding.execution", executionId, next);
+      transaction.putProjection(namespace, id, next);
       appendKernelEvent(transaction, {
         tenantId: job.tenantId,
-        aggregateType: "coding.execution",
-        aggregateId: executionId,
-        expectedStreamVersion: current.streamVersion,
+        aggregateType: namespace === "coding.execution" ? "coding.execution" : "coding.cleanup",
+        aggregateId: namespace === "coding.execution" ? executionId : job.id,
+        expectedStreamVersion: namespace === "coding.execution" ? current.streamVersion : 0,
         type: "coding.sandbox_cleanup_completed",
         actorId: `worker:${context.workerId}`,
         executionId,
@@ -653,6 +838,21 @@ export function createCodingSandboxCleanupWorkerHandler(
     });
     return { executionId, status: "cleaned" };
   };
+}
+
+function codingRunId(run: Pick<StoredCodingRun, "executionId" | "generation" | "turn">): string {
+  return `${run.executionId}:${run.generation}:${run.turn ?? 1}`;
+}
+
+function cleanupRun(tx: KernelTransaction, job: StoredJob, executionId: string) {
+  const live = tx.getProjection<StoredCodingRun>("coding.execution", executionId);
+  const ref = job.payload.codingRunId;
+  if (ref === undefined || (live && ref === codingRunId(live))) return { run: live, namespace: "coding.execution", id: executionId };
+  if (typeof ref !== "string") throw new Error("Coding 清理轮次引用无效");
+  const run = tx.getProjection<StoredCodingRun>("coding.execution-turn", ref);
+  if (!run || run.executionId !== executionId || codingRunId(run) !== ref
+    || run.externalInvocation?.cleanupJobId !== job.id) throw new Error("Coding 清理任务与已归档轮次不一致");
+  return { run, namespace: "coding.execution-turn", id: ref };
 }
 
 export function createCodingReconciliationVerificationWorkerHandler(
@@ -698,6 +898,7 @@ export function createCodingReconciliationVerificationWorkerHandler(
             `${execution.workspaceId}:${run.runnerId}`,
           )
         : undefined;
+      if (run) assertReconciliationSnapshots(transaction, run);
       return {
         execution,
         run,
@@ -779,7 +980,13 @@ export function createCodingReconciliationVerificationWorkerHandler(
     let evidence: CodeEvidence | undefined;
     let diff: string | undefined;
     let failureReason: string | undefined;
+    const assertSandboxBinding = async () => {
+      if (await sandbox.configurationDigest(state.run!.runnerId) !== state.run!.controlPlane.sandboxDigest) {
+        throw new Error("人工核对的 sandbox 配置已变化，必须先恢复已批准的执行配置");
+      }
+    };
     try {
+      await assertSandboxBinding();
       const readIntent = createIntent({
         execution: state.execution,
         authority: state.authority!,
@@ -805,7 +1012,7 @@ export function createCodingReconciliationVerificationWorkerHandler(
       await runtime.append({
         executionId,
         type: "tool/intent",
-        payload: readIntent as unknown as JsonObject,
+        payload: { ...readIntent, toolCallId: readIntent.id } as unknown as JsonObject,
       });
       const material = await sandbox.materializeExternalCandidate(
         state.run.externalInvocation.sandboxPath,
@@ -862,10 +1069,12 @@ export function createCodingReconciliationVerificationWorkerHandler(
       await runtime.append({
         executionId,
         type: "tool/intent",
-        payload: gateIntent as unknown as JsonObject,
+        payload: { ...gateIntent, toolCallId: gateIntent.id } as unknown as JsonObject,
       });
+      await assertSandboxBinding();
       const rawGate = await sandbox.verifyCandidate(material, context.signal);
       const afterGate = await sandbox.currentCandidateDiff(material, context.signal);
+      await assertSandboxBinding();
       if (hashBytes(Buffer.from(afterGate)) !== candidate.diffDigest) {
         throw new Error("权威 Gate 执行期间保留候选已变化");
       }
@@ -959,11 +1168,8 @@ async function settlePersistedResult(input: {
   if (result.status !== "waiting_approval" || !input.run.approvalIntent) {
     throw new Error("Coding 执行结果状态无效");
   }
-  await input.runtime.append({
-    executionId: input.state.execution.id,
-    type: "tool/intent",
-    payload: input.run.approvalIntent as unknown as JsonObject,
-  });
+  await recordUniqueToolEntry(input.runtime, input.state.execution.id, "tool/intent",
+    { ...input.run.approvalIntent, toolCallId: input.run.approvalIntent.id } as unknown as JsonObject);
   let authorization: Awaited<ReturnType<ToolApprovalPort["authorize"]>>;
   try {
     authorization = await input.approval.authorize(
@@ -996,13 +1202,9 @@ async function settlePersistedResult(input: {
   }
   const decision = authorization.mode === "deny" ? "denied" : "approved_once";
   const decided = decideCodingExecution(result, decision);
-  await input.runtime.append({
-    executionId: input.state.execution.id,
-    type: "tool/result",
-    payload: {
+  await recordUniqueToolEntry(input.runtime, input.state.execution.id, "tool/result", {
       toolCallId: input.run.approvalIntent.id,
       status: decision === "approved_once" ? "completed" : "denied",
-    },
   });
   const persisted = await persistCodingDecision(
     input.options.store,
@@ -1020,6 +1222,8 @@ async function settlePersistedResult(input: {
 }
 
 interface CodingState {
+  readonly turn?: number;
+  readonly previousSpec?: Spec;
   readonly execution: Execution;
   readonly authority: ExecutionAuthority;
   readonly thread: Thread;
@@ -1047,6 +1251,8 @@ async function loadCodingState(
     }
     const task = transaction.getProjection<CodingTask>("coding.task", thread.resourceRef.resourceId);
     if (!task) throw new Error("CodingTask 不存在");
+    const previousSpec = transaction.listProjections<Spec>("coding.spec")
+      .filter(spec => spec.taskId === task.id).sort((left, right) => right.revision - left.revision)[0];
     const repository = transaction.getProjection<VersionedRepository>(
       "coding.repository",
       task.repositoryId,
@@ -1074,6 +1280,7 @@ async function loadCodingState(
       task,
       repository,
       model,
+      ...(previousSpec ? { previousSpec } : {}),
       ...(workspace ? { workspace } : {}),
       ...(runnerConfiguration ? { runnerConfiguration } : {}),
     };
@@ -1138,6 +1345,43 @@ function assertCodingState(job: StoredJob, state: CodingState): void {
     if (!state.authority.toolIds.includes(toolId)) {
       throw new Error(`Coding 执行缺少工具权限：${toolId}`);
     }
+  }
+}
+
+function assertReconciliationSnapshots(transaction: KernelTransaction, run: StoredCodingRun): void {
+  const snapshotId = `${run.executionId}:${run.generation}:${run.turn ?? 1}`;
+  const spec = transaction.getProjection<Spec>("coding.spec", `spec:${snapshotId}`);
+  const governance = transaction.getProjection<GovernanceSnapshot>("coding.governance", `governance:${snapshotId}`);
+  const harness = transaction.getProjection<HarnessSnapshot>("coding.harness", `harness:${snapshotId}`);
+  const index = transaction.getProjection<RepositoryIndex>("coding.repository-index", run.controlPlane.repositoryIndexDigest);
+  const binding = transaction.getProjection<CodingControlPlaneCommitment & {
+    executionId: string; generation: number; baseRevision: string;
+  }>("coding.control-plane", run.executionId);
+  if (!binding || binding.executionId !== run.executionId || binding.generation !== run.generation
+    || binding.baseRevision !== run.baseRevision || binding.protocol !== "coding-v2"
+    || ["specDigest", "governanceDigest", "harnessDigest", "repositoryIndexDigest", "sandboxDigest"]
+      .some(key => binding[key as keyof CodingControlPlaneCommitment] !== run.controlPlane[key as keyof CodingControlPlaneCommitment])
+    || !spec || spec.id !== `spec:${snapshotId}` || spec.taskId !== run.taskId
+    || !Number.isSafeInteger(spec.revision) || spec.revision < 1
+    || (spec.revision === 1 ? spec.supersedesSpecId !== undefined : !spec.supersedesSpecId)
+    || !governance || governance.id !== `governance:${snapshotId}`
+    || !harness || harness.id !== `harness:${snapshotId}` || !index) {
+    throw new Error("Coding 人工核对的不可变控制面快照缺失或绑定无效");
+  }
+  createSpec(spec);
+  const specDigest = codingDigest({ taskId: spec.taskId, title: spec.title, body: spec.body,
+    acceptanceCriteria: spec.acceptanceCriteria,
+    ...(spec.revision > 1 ? { revision: spec.revision, supersedesSpecId: spec.supersedesSpecId } : {}) });
+  const { digest: governanceDigest, ...governanceInput } = governance;
+  const { digest: harnessDigest, ...harnessInput } = harness;
+  if (specDigest !== spec.digest || spec.digest !== run.controlPlane.specDigest
+    || createGovernanceSnapshot(governanceInput).digest !== governanceDigest
+    || governanceDigest !== run.controlPlane.governanceDigest
+    || createHarnessSnapshot(harnessInput).digest !== harnessDigest
+    || harnessDigest !== run.controlPlane.harnessDigest
+    || buildRepositoryIndex(index.entries).digest !== index.digest
+    || index.digest !== run.controlPlane.repositoryIndexDigest) {
+    throw new Error("Coding 人工核对的不可变控制面快照内容与摘要不一致");
   }
 }
 
@@ -1359,6 +1603,7 @@ interface ManagedCodingRunner extends CodingRunnerAdapter {
 }
 
 interface ExternalCodingRunnerOptions {
+  readonly turn?: number;
   readonly runnerId: ExternalCodingRunnerId;
   readonly configuration: CodingRunnerConfigurationV1;
   readonly execution: Execution;
@@ -1472,6 +1717,8 @@ class ExternalCodingRunner implements ManagedCodingRunner {
     this.#sessionId = session.sessionId;
     this.#terminalObserved = false;
     this.#abortListener = () => {
+      if (this.#options.signal.reason instanceof ExecutionBudgetExceededError
+        || this.#options.signal.reason?.name === "TimeoutError") this.#timedOut = true;
       if (this.#sessionId) void this.#adapter?.cancel(this.#sessionId).catch(() => undefined);
     };
     this.#options.signal.addEventListener("abort", this.#abortListener, { once: true });
@@ -1550,7 +1797,7 @@ class ExternalCodingRunner implements ManagedCodingRunner {
         yield { type: "result", status: "failed", reason: "Runner 已完成，但没有生成可审阅 Diff" };
         return;
       }
-      const candidateId = `${this.#options.execution.id}:generation:${this.#options.execution.generation}:candidate:${this.#sequence}`;
+      const candidateId = `${this.#options.execution.id}:generation:${this.#options.execution.generation}:turn:${this.#options.turn ?? 1}:candidate:${this.#sequence}`;
       const diffDigest = hashBytes(Buffer.from(diff));
       this.material.set(candidateId, material);
       yield {
@@ -1692,6 +1939,7 @@ class ExternalCodingRunner implements ManagedCodingRunner {
       },
       runnerId: this.id,
       attempt: this.#sequence,
+      toolCallId: this.#intent!.id,
       identityDigest: this.#options.configuration.identityDigest,
       sandboxPath: this.#sandboxPath,
       runnerArtifactPath: this.#artifact.identity.realPath,
@@ -1938,6 +2186,8 @@ class BuiltinCodingRunner implements ManagedCodingRunner {
     try {
       yield { type: "candidate", candidate: await this.#candidate() };
     } catch (error) {
+      if (error instanceof ExecutionBudgetExceededError || error instanceof RuntimeControlError
+        || error instanceof StaleFencingTokenError) throw error;
       yield { type: "result", status: "failed", reason: safeMessage(error) };
     }
   }
@@ -2005,13 +2255,14 @@ class BuiltinCodingRunner implements ManagedCodingRunner {
     } catch {
       throw new ModelTransportError("无法读取模型凭据");
     }
-    const response = await this.#options.modelInvoker({
+    const response = await invokeBudgetedByokModel({ input: {
       presetId: providerId(this.#options.model.presetId),
       model: this.#options.model.defaultModel,
       apiKey,
       request: effectiveRequest,
       signal: this.#options.signal,
-    });
+    }, store: this.#options.runtime, limits: this.#options.authority.budget,
+      invoke: this.#options.modelInvoker, quote: this.#options.modelQuoter });
     await this.#options.runtime.append({
       executionId: this.#options.execution.id,
       type: "model/response",
@@ -2051,7 +2302,7 @@ class BuiltinCodingRunner implements ManagedCodingRunner {
       sequence,
       this.#options.signal,
     );
-    const candidateId = `${this.#options.execution.id}:generation:${this.#options.execution.generation}:candidate:${sequence}`;
+    const candidateId = `${this.#options.execution.id}:generation:${this.#options.execution.generation}:turn:${this.#options.turn ?? 1}:candidate:${sequence}`;
     await recordToolResult(this.#options.runtime, intent, {
       candidateId,
       diffDigest: applied.diffDigest,
@@ -2164,6 +2415,7 @@ class BuiltinCodingRunner implements ManagedCodingRunner {
 }
 
 interface BuiltinRunnerOptions {
+  readonly turn?: number;
   readonly sessionMessages: () => Promise<readonly ModelMessage[]>;
   readonly memoryPrompt?: () => Promise<string>;
   readonly execution: Execution;
@@ -2177,6 +2429,7 @@ interface BuiltinRunnerOptions {
   readonly sandbox: ControlledCodingSandbox;
   readonly secretStore: CodingModelSecretReader;
   readonly modelInvoker: ByokModelInvoker;
+  readonly modelQuoter: ByokModelQuoter;
   readonly signal: AbortSignal;
   readonly now: () => string;
 }
@@ -2198,19 +2451,22 @@ class ControlledCodingSandbox {
 
   async controlPlane(
     snapshot: RepositorySnapshot,
-    task: CodingTask,
+    snapshots: CodingSnapshots,
     runnerId: "builtin" | ExternalCodingRunnerId,
   ): Promise<CodingControlPlaneCommitment> {
-    const root = await this.#initialize();
     return {
       protocol: "coding-v2",
-      specDigest: sha256({ version: "coding-spec-v2", taskId: task.id, request: task.request }),
-      governanceDigest: sha256({
-        version: "coding-governance-v2",
-        rules: ["preserve-user-work", "central-tool-policy", "no-unsandboxed-fallback"],
-      }),
-      harnessDigest: sha256({ version: "coding-harness-v2", gates: ["git.diff-check"], maxRepairs: 3 }),
-      sandboxDigest: sha256(this.#executor?.commitment ?? {
+      specDigest: snapshots.spec.digest,
+      governanceDigest: snapshots.governance.digest,
+      harnessDigest: snapshots.harness.digest,
+      sandboxDigest: await this.configurationDigest(runnerId),
+      repositoryIndexDigest: snapshot.index.digest,
+    };
+  }
+
+  async configurationDigest(runnerId: "builtin" | ExternalCodingRunnerId): Promise<string> {
+    const root = await this.#initialize();
+    return sha256(this.#executor?.commitment ?? {
         version: "macos-sandbox-exec-v2",
         executable: this.#executable,
         root,
@@ -2219,9 +2475,7 @@ class ControlledCodingSandbox {
         network: runnerId === "builtin" ? "denied" : "external-runner-provider-access",
         runnerId,
         fallback: "forbidden",
-      }),
-      repositoryIndexDigest: snapshot.index.digest,
-    };
+    });
   }
 
   async applyPatch(
@@ -2910,6 +3164,10 @@ async function persistReconciliationVerification(input: {
       || thread.resourceRef.resourceId !== task.id) {
       throw new Error("Coding 人工核对验证提交时状态已变化");
     }
+    assertReconciliationSnapshots(transaction, run);
+    if (codingDigest(run.controlPlane) !== codingDigest(input.run.controlPlane) || run.baseRevision !== input.run.baseRevision) {
+      throw new Error("Coding 人工核对控制面在 Gate 期间发生变化");
+    }
     assertReconciliationBindings({
       tenantId: input.tenantId,
       execution,
@@ -3253,6 +3511,7 @@ function codingCleanupJob(
   const id = `job:coding-cleanup:${sha256({
     executionId: execution.id,
     generation: execution.generation,
+    turn: run.turn ?? 1,
     attempt: run.externalInvocation!.attempt,
   }).slice(0, 24)}`;
   return {
@@ -3260,12 +3519,12 @@ function codingCleanupJob(
     tenantId: input.tenantId,
     workspaceId: execution.workspaceId,
     kind: "coding.sandbox.cleanup",
-    payload: { reconciliationExecutionId: execution.id },
+    payload: { reconciliationExecutionId: execution.id, codingRunId: codingRunId(run) },
     status: "available",
     attempts: 0,
     availableAt: input.now,
     fencingToken: 0,
-    idempotencyKey: `coding:cleanup:${execution.id}:${execution.generation}:${run.externalInvocation!.attempt}`,
+    idempotencyKey: `coding:cleanup:${codingRunId(run)}:${run.externalInvocation!.attempt}`,
     streamVersion: 1,
     createdAt: input.now,
     updatedAt: input.now,
@@ -3326,10 +3585,11 @@ async function persistRunning(
   baseRevision: string,
   runnerId: "builtin" | ExternalCodingRunnerId,
   occurredAt: string,
+  snapshots: CodingSnapshots,
 ): Promise<void> {
   await store.transact(tenantId, (transaction) => {
     const current = transaction.getProjection<StoredCodingRun>("coding.execution", state.execution.id);
-    if (current?.generation === state.execution.generation) {
+    if (current?.generation === state.execution.generation && (current.turn ?? 1) === (state.turn ?? 1)) {
       if (current.controlPlane.repositoryIndexDigest !== controlPlane.repositoryIndexDigest
         || current.controlPlane.sandboxDigest !== controlPlane.sandboxDigest
         || current.baseRevision !== baseRevision
@@ -3339,7 +3599,18 @@ async function persistRunning(
       return;
     }
     const streamVersion = current?.streamVersion ?? 0;
+    const priorRevision = Math.max(0, ...transaction.listProjections<Spec>("coding.spec")
+      .filter(spec => spec.taskId === state.task.id).map(spec => spec.revision));
+    if (snapshots.spec.revision !== priorRevision + 1) throw new Error("Spec 已变化，拒绝执行过期任务范围");
+    for (const [namespace, value] of [["coding.spec", snapshots.spec], ["coding.governance", snapshots.governance],
+      ["coding.harness", snapshots.harness]] as const) {
+      if (transaction.getProjection(namespace, value.id)) throw new Error("控制面快照已存在，禁止覆盖");
+      transaction.putProjection(namespace, value.id, value);
+    }
+    transaction.putProjection("coding.repository-index", snapshots.index.digest, snapshots.index);
+    if (current) transaction.putProjection("coding.execution-turn", codingRunId(current), { ...current, status: current.result?.status ?? current.status });
     const next: StoredCodingRun = {
+      turn: state.turn ?? 1,
       executionId: state.execution.id,
       generation: state.execution.generation,
       taskId: state.task.id,
@@ -3388,6 +3659,7 @@ async function persistExternalInvocationStarted(input: {
   readonly state: Pick<CodingState, "execution" | "task">;
   readonly runnerId: ExternalCodingRunnerId;
   readonly attempt: number;
+  readonly toolCallId: string;
   readonly identityDigest: string;
   readonly sandboxPath: string;
   readonly runnerArtifactPath: string;
@@ -3409,6 +3681,7 @@ async function persistExternalInvocationStarted(input: {
     const next: StoredCodingRun = {
       ...current,
       externalInvocation: {
+        toolCallId: input.toolCallId,
         runnerId: input.runnerId,
         attempt: input.attempt,
         identityDigest: input.identityDigest,
@@ -3607,7 +3880,7 @@ async function persistCodingResult(input: {
     transaction.putProjection("coding.task", input.state.task.id, {
       ...input.state.task,
       stage: result.status === "waiting_approval" ? "approve" : "verify",
-      status: result.status,
+      status: input.context.runtime && ["completed", "failed", "cancelled", "needs_human_decision"].includes(result.status) ? "active" : result.status,
       streamVersion: taskVersion,
       updatedAt: input.now,
     });
@@ -3629,7 +3902,7 @@ async function persistCodingResult(input: {
     }
     const next: StoredCodingRun = {
       ...current,
-      status: result.status,
+      status: input.context.runtime && ["completed", "failed", "cancelled", "needs_human_decision"].includes(result.status) ? "running" : result.status,
       result,
       ...(current.externalInvocation ? {
         externalInvocation: {
@@ -3692,6 +3965,7 @@ function settleCodingJob(
   occurredAt: string,
 ): KernelJobSettlementReceipt | undefined {
   if (!context.acknowledgeJobSettlement
+    || context.runtime
     || result.status === "waiting_approval"
     || result.status === "needs_reconciliation") {
     return undefined;
@@ -3760,7 +4034,7 @@ async function persistCodingDecision(
     if (!task) throw new Error("CodingTask 不存在");
     let taskVersion = task.streamVersion;
     if (effectiveResult.status === "completed" && effectiveResult.deliverable) {
-      const deliverableId = `coding-deliverable:${state.execution.id}`;
+      const deliverableId = `coding-deliverable:${state.execution.id}:${state.execution.generation}:${state.turn ?? 1}`;
       const deliverable: Deliverable = {
         id: deliverableId,
         tenantId,
@@ -3816,13 +4090,13 @@ async function persistCodingDecision(
     transaction.putProjection("coding.task", task.id, {
       ...task,
       stage: effectiveResult.status === "completed" ? "learn" : "approve",
-      status: effectiveResult.status,
+      status: context.runtime ? "active" : effectiveResult.status,
       streamVersion: taskVersion,
       updatedAt: occurredAt,
     });
     const next: StoredCodingRun = {
       ...current,
-      status: effectiveResult.status,
+      status: context.runtime ? "running" : effectiveResult.status,
       result: effectiveResult,
       streamVersion: current.streamVersion + 1,
       updatedAt: occurredAt,
@@ -3894,6 +4168,7 @@ function createIntent(input: {
   const resourcesDigest = sha256(input.resourceRefs);
   return {
     id: `coding-tool:${sha256({
+      nonce: randomBytes(16).toString("hex"),
       executionId: input.execution.id,
       generation: input.execution.generation,
       toolId: input.toolId,
@@ -3924,10 +4199,24 @@ async function authorizeTool(
   await runtime.append({
     executionId: intent.executionId,
     type: "tool/intent",
-    payload: intent as unknown as JsonObject,
+    payload: { ...intent, toolCallId: intent.id } as unknown as JsonObject,
   });
   const authorization = await approval.authorize(intent, signal);
   if (authorization.mode === "deny") throw new Error(authorization.reason ?? "工具调用已拒绝");
+  await runtime.append({ executionId: intent.executionId, type: "tool/started",
+    payload: { toolCallId: intent.id, toolId: intent.toolId, generation: intent.generation } });
+}
+
+async function recordUniqueToolEntry(runtime: RuntimeStore, executionId: string, type: "tool/intent" | "tool/result", payload: JsonObject): Promise<void> {
+  for (;;) {
+    const records = await runtime.readExecution(executionId);
+    const previous = records.find(record => record.type === type && record.payload.toolCallId === payload.toolCallId);
+    if (previous) {
+      if (sha256(previous.payload) !== sha256(payload)) throw new Error("同一工具调用的记录发生冲突");
+      return;
+    }
+    if (await runtime.commit(executionId, records.at(-1)?.sequence ?? 0, [{ executionId, type, payload }])) return;
+  }
 }
 
 async function recordToolResult(

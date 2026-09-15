@@ -43,11 +43,19 @@ export interface ModelRequest {
   readonly generation: number;
   readonly messages: readonly ModelMessage[];
   readonly availableToolIds: readonly string[];
+  readonly maxOutputTokens?: number;
 }
 
 export interface ModelResponse {
   readonly text: string;
   readonly toolCalls: readonly ModelToolCall[];
+  readonly usage?: ModelUsage;
+}
+
+export interface ModelUsage {
+  readonly inputTokens: number;
+  readonly cachedInputTokens: number;
+  readonly outputTokens: number;
 }
 
 export interface ModelInvocationContext {
@@ -109,6 +117,7 @@ export interface SkillContribution extends ContributionResource {
 
 export interface JobContribution extends ContributionResource {
   readonly run: (payload: JsonObject, signal: AbortSignal) => Promise<JsonValue>;
+  readonly recover?: (payload: JsonObject, signal: AbortSignal) => Promise<JsonValue>;
 }
 
 export interface SubagentSpawnContext {
@@ -116,6 +125,8 @@ export interface SubagentSpawnContext {
   readonly generation: number;
   readonly authority: RuntimeAuthority;
   readonly scope: import("./scope.js").AgentScope;
+  readonly signal: AbortSignal;
+  readonly deadlineAt: string;
 }
 
 export interface SubagentContribution extends ContributionResource {
@@ -169,17 +180,26 @@ export interface RuntimeRecord {
 
 export type RuntimeRecordType =
   | "execution/status"
+  | "budget/started"
+  | "budget/reserved"
+  | "subagent/reserved"
   | "inbox/enqueued"
   | "inbox/consumed"
   | "session/entry"
   | "session/compaction"
   | "turn/started"
   | "turn/completed"
+  | "job/started"
+  | "job/completed"
   | "model/request"
   | "model/response"
+  | "model/budget"
+  | "model/reserved"
+  | "model/settled"
   | "runner/event"
   | "runner/diagnostic"
   | "tool/intent"
+  | "tool/started"
   | "tool/result"
   | "tool/outcome_unknown";
 
@@ -191,6 +211,7 @@ export interface RuntimeRecordInput {
 
 export interface RuntimeStore {
   append(input: RuntimeRecordInput): Promise<RuntimeRecord>;
+  commit(executionId: string, expectedLastSequence: number, inputs: readonly RuntimeRecordInput[]): Promise<readonly RuntimeRecord[] | undefined>;
   readExecution(executionId: string): Promise<readonly RuntimeRecord[]>;
 }
 
@@ -243,11 +264,14 @@ export interface InboxItem {
   readonly sequence: number;
   readonly kind: "follow_up" | "steer" | "resume";
   readonly text: string;
+  readonly initial?: true;
 }
 
 export interface RuntimeAgentDefinition {
   readonly id: string;
   readonly llmId: string;
+  /** A compiled, Scope-registered product workflow; never an executable workflow string. */
+  readonly jobId?: string;
   readonly promptIds: readonly string[];
   readonly toolIds?: readonly string[];
 }

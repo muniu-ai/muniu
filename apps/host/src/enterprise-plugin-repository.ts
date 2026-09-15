@@ -9,6 +9,7 @@ import {
   assertPluginSurfaces,
   canonicalJson,
   openVerifiedPluginPackage,
+  PluginPolicyError,
   sha256Hex,
   verifyPluginArtifact,
   verifyRegistryMetadata,
@@ -65,6 +66,36 @@ export interface EnterpriseFilePluginRepositoryResult {
 export async function createEnterpriseFilePluginRepository(
   options: EnterpriseFilePluginRepositoryOptions,
 ): Promise<EnterpriseFilePluginRepositoryResult> {
+  const initial = await loadFileRepository(options);
+  let cached = initial;
+  let refresh: Promise<typeof initial> | undefined;
+  return {
+    trustedPluginRoots: initial.trustedPluginRoots,
+    repositoryDigest: initial.repositoryDigest,
+    pluginRepository: new LocalSignedPluginRepository(async () => {
+      const indexDigest = sha256Hex(Buffer.from(canonicalJson(await readJson(options.indexFile))));
+      if (indexDigest === cached.indexDigest) return cached.snapshot;
+      refresh ??= loadFileRepository(options);
+      try {
+        const next = await refresh;
+        // Root trust changes require reconfiguration of the composition root.
+        verifyRegistryMetadata(next.snapshot.metadata, initial.trustedPluginRoots, {
+          now: (options.now ?? (() => new Date()))(), operation: "offline_start",
+          minimumSequence: cached.snapshot.metadata.sequence,
+        });
+        cached = next;
+        return next.snapshot;
+      } finally { refresh = undefined; }
+    }),
+  };
+}
+
+async function loadFileRepository(options: EnterpriseFilePluginRepositoryOptions): Promise<{
+  readonly snapshot: LocalSignedPluginRepositorySnapshot;
+  readonly trustedPluginRoots: readonly TrustedRegistryRoot[];
+  readonly repositoryDigest: string;
+  readonly indexDigest: string;
+}> {
   if (!isAbsolute(options.indexFile) || !isAbsolute(options.trustedRootsFile)) {
     throw new Error("企业插件仓库索引和受信根必须使用绝对路径");
   }
@@ -86,7 +117,8 @@ export async function createEnterpriseFilePluginRepository(
     assertPluginManifestShape(release.manifest);
     const packagePath = resolvePackagePath(baseDirectory, release.packagePath, release.manifest);
     const packageBytes = Uint8Array.from(await readFile(packagePath));
-    const artifact = verifyPluginArtifact({
+    try {
+      const artifact = verifyPluginArtifact({
       manifest: release.manifest,
       packageBytes,
       registry: offlineRegistry,
@@ -98,8 +130,14 @@ export async function createEnterpriseFilePluginRepository(
         packageSha256: release.manifest.packageSha256,
       },
       packageMetadata: release.packageMetadata,
-    });
-    openVerifiedPluginPackage({ artifact, packageBytes });
+      });
+      openVerifiedPluginPackage({ artifact, packageBytes });
+    } catch (error) {
+      if (!(error instanceof PluginPolicyError)
+        || !["PLUGIN_RELEASE_REVOKED", "RELEASE_KEY_REVOKED"].includes(error.code)) throw error;
+      // Keep revoked identities in the catalog so installers can interrupt their executions.
+      // Each entrypoint loader repeats verification and will reject before evaluating code.
+    }
     const loadEntrypoint = verifiedEntrypointLoader({
       metadata: index.metadata,
       trustedRoots,
@@ -121,7 +159,8 @@ export async function createEnterpriseFilePluginRepository(
     releases,
   };
   return {
-    pluginRepository: new LocalSignedPluginRepository(snapshot),
+    snapshot,
+    indexDigest: sha256Hex(Buffer.from(canonicalJson(indexValue))),
     trustedPluginRoots: trustedRoots,
     repositoryDigest: sha256Hex(Buffer.from(canonicalJson({
       schemaVersion: 1,

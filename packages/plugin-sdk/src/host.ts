@@ -3,6 +3,7 @@ import {
   assertPluginDefinition,
   type PluginContributionBundleV1,
   type PluginDefinitionV1,
+  type PluginActivationLifecycle,
   type PluginHealthV1,
   type ProductPluginHostV1,
 } from "./contributions.js";
@@ -29,6 +30,8 @@ export interface ContributionHostAuditEvent {
 }
 
 export interface PluginContributionHostOptions {
+  readonly lifecycle?: PluginActivationLifecycle;
+  readonly isExpectedCommandError?: (error: unknown) => boolean;
   readonly isAvailable: (pluginId: string) => boolean;
   readonly audit?: (event: ContributionHostAuditEvent) => void;
   readonly now?: () => Date;
@@ -63,12 +66,16 @@ export class PluginContributionHost implements ProductPluginHostV1 {
   readonly #isAvailable: (pluginId: string) => boolean;
   readonly #audit: (event: ContributionHostAuditEvent) => void;
   readonly #now: () => Date;
+  readonly #lifecycle?: PluginActivationLifecycle;
+  readonly #isExpectedCommandError: (error: unknown) => boolean;
   #registrationOrder = 0;
 
   constructor(options: PluginContributionHostOptions) {
     this.#isAvailable = options.isAvailable;
     this.#audit = options.audit ?? (() => undefined);
     this.#now = options.now ?? (() => new Date());
+    this.#lifecycle = options.lifecycle;
+    this.#isExpectedCommandError = options.isExpectedCommandError ?? (() => false);
   }
 
   registerOfficial(definition: PluginDefinitionV1): void {
@@ -132,6 +139,25 @@ export class PluginContributionHost implements ProductPluginHostV1 {
       .filter(([, active]) => active.has(pluginId))
       .map(([workspaceId]) => workspaceId)
       .sort();
+  }
+
+  async reloadVerified(artifact: VerifiedPluginArtifact, definition: PluginDefinitionV1): Promise<void> {
+    this.#assertVerifiedDefinition(artifact, definition);
+    const before = this.#requireDefinition(definition.id);
+    const workspaces = this.activeWorkspaceIds(definition.id);
+    for (const workspaceId of workspaces) {
+      try {
+        if (this.#lifecycle) await this.#lifecycle.deactivate(workspaceId, definition.id);
+        else await before.deactivate?.({ workspaceId });
+      } catch (error) { this.#fault(definition.id, workspaceId, "deactivate", error); }
+    }
+    this.replaceVerified(artifact, definition);
+    for (const workspaceId of workspaces) {
+      try {
+        if (this.#lifecycle) await this.#lifecycle.activate(workspaceId, definition);
+        else await definition.activate?.({ workspaceId });
+      } catch (error) { this.#fault(definition.id, workspaceId, "activate", error); }
+    }
   }
 
   unregisterVerified(pluginId: string): void {
@@ -209,7 +235,8 @@ export class PluginContributionHost implements ProductPluginHostV1 {
     if (active.has(pluginId)) return;
     this.#assertNoRouteCollisions(active, definition);
     try {
-      await definition.activate?.({ workspaceId });
+      if (this.#lifecycle) await this.#lifecycle.activate(workspaceId, definition);
+      else await definition.activate?.({ workspaceId });
     } catch (error) {
       this.#fault(pluginId, workspaceId, "activate", error);
     }
@@ -224,7 +251,8 @@ export class PluginContributionHost implements ProductPluginHostV1 {
     if (!active?.has(pluginId)) return;
     active.delete(pluginId);
     try {
-      await definition.deactivate?.({ workspaceId });
+      if (this.#lifecycle) await this.#lifecycle.deactivate(workspaceId, pluginId);
+      else await definition.deactivate?.({ workspaceId });
     } catch (error) {
       this.#fault(pluginId, workspaceId, "deactivate", error);
     }
@@ -255,6 +283,7 @@ export class PluginContributionHost implements ProductPluginHostV1 {
     commandId: string,
     input: JsonObject,
     principalId?: string,
+    data?: import("./contributions.js").PluginDataPortV1,
   ): Promise<unknown> {
     if (!this.#workspacePlugins.get(workspaceId)?.has(pluginId)) {
       throw new PluginPolicyError(
@@ -273,10 +302,11 @@ export class PluginContributionHost implements ProductPluginHostV1 {
       );
     }
     try {
-      const result = await command.run(input, { workspaceId, principalId });
+      const result = await command.run(input, { workspaceId, principalId, ...(data ? { data } : {}) });
       this.#faults.delete(pluginId);
       return result;
     } catch (error) {
+      if (this.#isExpectedCommandError(error)) throw error;
       this.#fault(pluginId, workspaceId, `command:${commandId}`, error);
     }
   }

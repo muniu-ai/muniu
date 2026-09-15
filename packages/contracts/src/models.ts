@@ -132,6 +132,20 @@ export interface ThreadTurnSessionEntry {
 export interface ThreadTurnView {
   readonly execution: Execution;
   readonly entries: readonly ThreadTurnSessionEntry[];
+  readonly metering?: ExecutionMeteringView;
+  readonly pauseReason?: string;
+}
+
+export interface ExecutionMeteringView {
+  readonly status: "not_started" | "estimated" | "pending" | "overrun" | "external_runner";
+  readonly currency: string;
+  readonly knownTokens: number;
+  readonly estimatedCostNanoMinorUnits: string;
+  readonly maxTokens: number;
+  readonly maxCostMinorUnits: string;
+  readonly pendingRequests: number;
+  readonly inputCountEstimated: boolean;
+  readonly billingGuarantee: false;
 }
 
 export interface ThreadTurnsView {
@@ -174,6 +188,15 @@ export interface ExecutionBudget {
   readonly maxCostMinorUnits: string;
   readonly currency: string;
   readonly maxDurationMs: number;
+}
+
+/** Prices are reference estimates in billionths of a currency minor unit per token. */
+export interface ModelRateCard {
+  readonly id: string;
+  readonly currency: string;
+  readonly inputNanoMinorUnitsPerToken: string;
+  readonly cachedInputNanoMinorUnitsPerToken: string;
+  readonly outputNanoMinorUnitsPerToken: string;
 }
 
 export interface ExecutionAuthority extends VersionedEntity {

@@ -287,6 +287,29 @@ test("agent-turn handler 从持久配置打开 AgentHandle 并处理消息", asy
   assert.deepEqual(result, { executionId: "execution-1", status: "completed" });
 });
 
+for (const failure of ["identity", "observer"] as const) test(`Worker ${failure} 初始化失败清理整个 Scope`, async () => {
+  const { AgentScope, InMemoryRuntimeStore } = await import("@mn/agent-runtime");
+  const scope = AgentScope.tenant("local");
+  let disposed = 0;
+  scope.onDispose(() => { disposed += 1; });
+  const handler = createAgentTurnHandler({
+    resolveOptions: () => ({
+      executionId: failure === "identity" ? "another-execution" : "execution-1", scope,
+      store: new InMemoryRuntimeStore(),
+      definition: { id: "coding.builtin", llmId: "main", promptIds: [] },
+      authority: { commitment: "authority", toolIds: [], dataScopes: [], effectClasses: [],
+        budget: { maxSubagentDepth: 0, maxSubagents: 0, maxTokens: 1000, maxCostMinorUnits: "0", currency: "CNY", maxDurationMs: 1000 } },
+      approval: { async authorize(intent) { return { mode: "auto" as const, intent }; } },
+    }),
+    observeControl() { throw new Error("observer initialization failed"); },
+  });
+  await assert.rejects(handler(job({ kind: "agent.execution.run", payload: { executionId: "execution-1", message: "开始" } }), {
+    workerId: "worker-1", fencingToken: 1,
+    leaseExpiresAt: "2026-09-04T00:00:30.000Z", signal: new AbortController().signal,
+  }));
+  assert.equal(disposed, 1);
+});
+
 test("Worker 重试已完成的 Agent turn 时不重复调用模型", async () => {
   const { AgentScope, InMemoryRuntimeStore } = await import("@mn/agent-runtime");
   const runtime = new InMemoryRuntimeStore();
@@ -508,6 +531,7 @@ test("BYOK 模型调用按三家厂商的固定协议发送且只解析文本", 
           model: "gpt-5",
           input: modelRequest.messages,
           store: false,
+          max_output_tokens: 4096,
         });
         return Response.json({
           output: [{ type: "message", content: [{ type: "output_text", text: "OpenAI 结果" }] }],
@@ -530,6 +554,7 @@ test("BYOK 模型调用按三家厂商的固定协议发送且只解析文本", 
           model: "deepseek-chat",
           messages: modelRequest.messages,
           stream: false,
+          max_tokens: 4096,
         });
         return Response.json({ choices: [{ message: { content: "DeepSeek 结果" } }] });
       },

@@ -26,6 +26,7 @@ import { transitionExecution, type ExecutionCommand } from "./execution.js";
 import type { InboxItem, ModelConnection } from "./models.js";
 import type { KernelStore, KernelTransaction } from "./store.js";
 import { appendKernelEvent } from "./projections.js";
+import { expireExecutionApprovals } from "./approvals.js";
 
 export interface KernelOptions {
   readonly now?: () => string;
@@ -633,41 +634,21 @@ export class AgentOsKernel {
         finishedAt: ["completed", "failed", "cancelled"].includes(nextStatus) ? now : execution.finishedAt,
       };
       transaction.putProjection("execution", executionId, next);
+      if (command === "resume" || command === "cancel") {
+        for (const item of transaction.listProjections<InboxItem>("inbox")) {
+          if (item.executionId === executionId && item.id.startsWith("runtime-pause:") && item.status === "open") {
+            transaction.putProjection("inbox", item.id, { ...item, status: "resolved" });
+          }
+        }
+      }
       this.append(transaction, {
         tenantId, aggregateType: "execution", aggregateId: executionId,
         expectedStreamVersion, type: `execution.${nextStatus}`, actorId, executionId,
         generation: next.generation, publicPayload: { previousStatus: execution.status, status: nextStatus },
       });
-      if (command === "resume" || command === "cancel") {
-        for (const approval of transaction.listProjections<Approval>("approval")) {
-          if (approval.executionId !== executionId || approval.status !== "pending") continue;
-          const expired: Approval = {
-            ...approval,
-            status: "expired",
-            streamVersion: approval.streamVersion + 1,
-            updatedAt: now,
-          };
-          transaction.putProjection("approval", approval.id, expired);
-          const inboxId = `approval:${approval.id}`;
-          const inbox = transaction.getProjection<InboxItem>("inbox", inboxId);
-          if (inbox) transaction.putProjection("inbox", inboxId, { ...inbox, status: "resolved" });
-          this.append(transaction, {
-            tenantId,
-            aggregateType: "approval",
-            aggregateId: approval.id,
-            expectedStreamVersion: approval.streamVersion,
-            type: "approval.expired",
-            actorId,
-            executionId,
-            generation: next.generation,
-            publicPayload: {
-              toolCallId: approval.toolCallId,
-              reason: command === "resume"
-                ? "execution_resumed_with_new_generation"
-                : "execution_cancelled",
-            },
-          });
-        }
+      if (command === "resume" || command === "cancel" || command === "pause" || command === "interrupt") {
+        expireExecutionApprovals(transaction, { tenantId, executionId, actorId, generation: next.generation,
+          occurredAt: now, reason: command === "resume" ? "execution_resumed_with_new_generation" : `execution_${nextStatus}` });
       }
       if (command === "resume") {
         const jobId = this.nextId("job");
@@ -733,6 +714,12 @@ export class AgentOsKernel {
     return this.mutation(tenantId, `tool.intent:${intent.executionId}`, idempotencyKey, intent, (transaction) => {
       const execution = transaction.getProjection<Execution>("execution", intent.executionId);
       if (!execution) throw new KernelError("EXECUTION_NOT_FOUND", "执行不存在", "刷新执行状态");
+      if (execution.status !== "running") throw new KernelError("EXECUTION_NOT_RUNNING", "当前执行不能创建工具调用", "刷新执行状态");
+      if (transaction.getProjection("toolIntent", intent.id)) throw new KernelError("TOOL_CALL_ID_REUSED", "工具调用标识已被使用", "为新调用生成独立标识");
+      const expiresAt = Date.parse(intent.expiresAt);
+      if (!Number.isFinite(expiresAt) || expiresAt <= Date.parse(this.now())) {
+        throw new KernelError("TOOL_INTENT_EXPIRED", "工具调用意图已过期", "重新准备并审阅当前操作");
+      }
       const authority = transaction.getProjection<ExecutionAuthority>("authority", execution.authorityId);
       if (!authority) throw new KernelError("AUTHORITY_NOT_FOUND", "执行权限不存在", "停止执行并检查审计记录");
       const mode = authorityAllowsIntent(authority, intent);
