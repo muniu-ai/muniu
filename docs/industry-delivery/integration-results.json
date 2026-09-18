@@ -911,6 +911,81 @@
       "path": "/tmp/muniu-industry-e2e-actual-9/worker-b.log",
       "sha256": "7ae0f5ae8e4b13c9d87aff3b870515ac39921f59af65ccf04455ffb5b47f7654",
       "byteLength": 458
+    },
+    {
+      "path": "/tmp/muniu-industry-e2e-actual-10/DEMO-48be9dad-227e-4abd-9701-8af000bbe41a.pdf",
+      "sha256": "766ba07e62bce793280f0ab7ca866014280f03bdd37854571d7e16d76288a8f6",
+      "byteLength": 233300
+    },
+    {
+      "path": "/tmp/muniu-industry-e2e-actual-10/DEMO-5c6dc960-65b5-448d-960a-4ec2c3019849.pdf",
+      "sha256": "c9ad023b8f58ffd54b4cd2a607fd79f566664c07c15c19f4ec55e1e94abde1ca",
+      "byteLength": 233642
+    },
+    {
+      "path": "/tmp/muniu-industry-e2e-actual-10/DEMO-88ec90c8-7338-4ddf-b23f-dd3c91b8fa2f.pdf",
+      "sha256": "dfdf0cd61029fbdf2120f93eeb905f1c47022e8b01a5450edf3716a8dc8c9f99",
+      "byteLength": 233026
+    },
+    {
+      "path": "/tmp/muniu-industry-e2e-actual-10/DEMO-f2590014-82d3-4538-b775-9286a2f3c3a5.pdf",
+      "sha256": "5a79e0cf16a895a424bcff4b4545b170e10ec57d1dc43430bd8075c2eccc22b0",
+      "byteLength": 233629
+    },
+    {
+      "path": "/tmp/muniu-industry-e2e-actual-10/agentOs-compiled-manifest.json",
+      "sha256": "0b63788778442036a6c52f0cb30399f6c068ce46ea8201e4a258d2b389b48476",
+      "byteLength": 85130
+    },
+    {
+      "path": "/tmp/muniu-industry-e2e-actual-10/agentOs-source-manifest.json",
+      "sha256": "0168a4047c35b5a5311fda5d7ddd41e5d55727ebbb642be4a17b400a02c959f7",
+      "byteLength": 105173
+    },
+    {
+      "path": "/tmp/muniu-industry-e2e-actual-10/compose-up.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "byteLength": 0
+    },
+    {
+      "path": "/tmp/muniu-industry-e2e-actual-10/fault-events.jsonl",
+      "sha256": "0e71ffbc6b90ac2d8f2868ebd89a9a75c8ba2faa78c2f1cb685480b26cf4e573",
+      "byteLength": 127
+    },
+    {
+      "path": "/tmp/muniu-industry-e2e-actual-10/host.log",
+      "sha256": "acec714ab088491f20b9c885bfd5cdbf351a8708d89f4519dd1a319178931133",
+      "byteLength": 550
+    },
+    {
+      "path": "/tmp/muniu-industry-e2e-actual-10/jwks.log",
+      "sha256": "a9859a8fa740ff03befcffd25fc840f4c6d618556a6cd454645e772e31b6cdab",
+      "byteLength": 32
+    },
+    {
+      "path": "/tmp/muniu-industry-e2e-actual-10/result.json",
+      "sha256": "cd474af40c17d08dd9483536491e885460e2e9f21250bfeade71de1b693db27a",
+      "byteLength": 19416
+    },
+    {
+      "path": "/tmp/muniu-industry-e2e-actual-10/sales-source-manifest.json",
+      "sha256": "831656cd2524b6c021824d014a9bbc642ecd79209754e671f0afabd58a58892b",
+      "byteLength": 28377
+    },
+    {
+      "path": "/tmp/muniu-industry-e2e-actual-10/sales.log",
+      "sha256": "6f18a906ed61efd03962fad3c4a5cf6eac50dec29fb1b81823143e64e2393440",
+      "byteLength": 22693
+    },
+    {
+      "path": "/tmp/muniu-industry-e2e-actual-10/worker-a.log",
+      "sha256": "2b8e9f28099312e077458c6fd42a9ad38c4d1a70349443ef59792959037121a8",
+      "byteLength": 611
+    },
+    {
+      "path": "/tmp/muniu-industry-e2e-actual-10/worker-b.log",
+      "sha256": "7bd951ad9498dc4d35bd50c97e6cde6ab7ea912ab68933a0fa85d2e8c9b4cdda",
+      "byteLength": 1605
     }
   ],
   "visualReview": {
@@ -931,6 +1006,19 @@
     "Focused end-to-end scenarios do not satisfy all 72 API/worker fault-matrix repetitions.",
     "Evidence files reside in local private temporary directories and are not bundled with this repository; retain them in an approved evidence store before any release review.",
     "The three repetitions use the same two fault injection points; they do not cover every API/worker subscenario in F09/F10.",
-    "The eighth run restoration failure was a harness URL pathname bug, not an accepted pass; the ninth run validated the correction."
-  ]
+    "The eighth run restoration failure was a harness URL pathname bug, not an accepted pass; the ninth run validated the correction.",
+    "The expanded tenth run failed in takeover with a 10-second authority callback timeout; concurrent host load is only a hypothesis, not a confirmed explanation or accepted pass."
+  ],
+  "followUp": {
+    "status": "not_run",
+    "reason": "User requested lightweight verification because the machine was overloaded; no further container tests were started.",
+    "plannedRepetitions": 3,
+    "plannedScenarioChecks": 36,
+    "notExecuted": [
+      "three repetitions of the expanded scenarios",
+      "restored Worker permission-revocation checks",
+      "internal evidence download and frozen-digest checks added after actual-10"
+    ],
+    "cleanup": "actual-10 disposable project and processes removed"
+  }
 }

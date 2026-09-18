@@ -178,6 +178,7 @@ async function main() {
     config.s3Endpoint = `http://127.0.0.1:${await port('minio', 9000)}`;
     config.vaultUrl = `http://127.0.0.1:${await port('vault', 8200)}`;
     const { createPostgresPool } = await import('./lib/postgres-pool.mjs');
+    const { sha256: canonicalHash } = await import('@mn/kernel');
     admin = createPostgresPool({ connectionString: config.osDatabase, max: 2 });
     await admin.query("create role mn_sales login password 'mn-sales-fixture-only' nosuperuser nobypassrls");
     await admin.query('create database mn_sales owner mn_sales');
@@ -231,7 +232,17 @@ async function main() {
       assert.ok(bytes.length > 1000); assert.equal(action.receipt.packageId, pkg.id);
       assert.equal(action.receipt.files[0].sha256, sha256(bytes));
       const name = `DEMO-${pkg.id}.pdf`; await writeFile(join(output, name), bytes);
-      return { actionId: action.id, inquiryId: inquiry.id, packageId: pkg.id, operationKey: action.operationKey, pdf: { path: name, sha256: sha256(bytes), byteLength: bytes.length }, packageCount: 1 };
+      const internalResponse = await fetch(config.salesUrl + `/api/v1/quote-packages/${pkg.id}/evidence`, { headers: { cookie } });
+      assert.equal(internalResponse.status, 200);
+      const internalBytes = Buffer.from(await internalResponse.arrayBuffer());
+      const { evidenceDigest, ...internal } = JSON.parse(internalBytes.toString());
+      assert.equal(canonicalHash(internal), evidenceDigest);
+      assert.equal(internal.fileSha256, sha256(bytes));
+      assert.equal(internal.action.operationKey, action.operationKey);
+      assert.equal(internal.businessDecision.id, action.action.businessDecision.id);
+      const internalName = `DEMO-${pkg.id}-internal.json`; await writeFile(join(output, internalName), internalBytes);
+      return { actionId: action.id, inquiryId: inquiry.id, packageId: pkg.id, operationKey: action.operationKey, pdf: { path: name, sha256: sha256(bytes), byteLength: bytes.length },
+        internalEvidence: { path: internalName, sha256: sha256(internalBytes), evidenceDigest }, packageCount: 1 };
     };
     const scope = { tenantId: TENANT, workspaceId: config.workspaceId, customerId, principalId: PRINCIPAL };
     const snapshotQuery = fixture => ({ schemaVersion: '1', scope, objectId: fixture.inquiry.id, version: fixture.inquiry.quote.contentVersion,
@@ -266,6 +277,7 @@ async function main() {
         pending = (await request('os', 'POST', `/v2/business-actions/${action.id}/reconciliation-decisions`, { expectedStreamVersion: pending.streamVersion, decision: 'mark_completed' })).data;
         assert.equal(pending.status, 'completed'); const evidence = await verifyPackage(inquiry, pending);
         assert.equal(evidence.pdf.sha256, op.file.sha256, 'reconciliation preserves originally staged PDF bytes');
+        assert.equal(evidence.internalEvidence.evidenceDigest, op.internalEvidenceDigest, 'reconciliation preserves the frozen internal evidence');
         return { ...evidence, injectedStage: stage, statusBeforeReconcile: op.status, archiveCountBeforeReconcile: before.packages.length, explicitReconciliation: true };
       });
       await run(`scope-boundary-${iteration}`, async () => {
@@ -374,6 +386,7 @@ async function main() {
       await until('restored sales', async () => (await request('sales', 'GET', '/api/v1/health')).data?.database === 'postgresql');
       const restored = await actionRead(restoreReference.action.id); assert.equal(restored.status, 'completed');
       const evidence = await verifyPackage(restoreReference.inquiry, restored); assert.equal(evidence.pdf.sha256, restoreReference.evidence.pdf.sha256);
+      assert.equal(evidence.internalEvidence.evidenceDigest, restoreReference.evidence.internalEvidence.evidenceDigest);
       assert.equal((await salesPool.query('select data from memberships where tenant_id=$1 and id=$2', [TENANT, MEMBER])).rows[0].data.active, true, 'each independent restore begins with current active personnel');
       start('worker', 'worker-a'); start('worker', 'worker-b');
       const fixture = await prepare(`恢复后撤权 ${iteration}`); const pending = await waiting(fixture.action.id);
@@ -387,6 +400,7 @@ async function main() {
     report.failure = error.message;
     if (!checks.some(x => x.status === 'failed')) checks.push({ id: 'setup', status: 'failed', error: error.message });
     report.diagnostics = {
+      databaseActivity: await admin?.query("select pid,datname,application_name,state,wait_event_type,wait_event,xact_start,pg_blocking_pids(pid) as blocking_pids from pg_stat_activity where datname like 'mn_%' and pid<>pg_backend_pid() order by pid").then(r => r.rows).catch(e => ({ unavailable: e.code ?? e.name })),
       salesOperations: await salesPool?.query("select id,status,data->'file' as file,data->'action'->>'actionId' as action_id from quote_operations").then(r => r.rows).catch(e => ({ unavailable: e.code ?? e.name })),
       osJobs: await osPool?.query('select job_id,status,result_json,failure_json from mn_v2.jobs').then(r => r.rows).catch(e => ({ unavailable: e.code ?? e.name })),
     };
