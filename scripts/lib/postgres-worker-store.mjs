@@ -175,11 +175,11 @@ async function loadExecutionContext(client, row, { requireAgentJob = true } = {}
   const workspaceId = requiredString(execution.workspaceId, "Execution workspaceId");
   const generation = safeInteger(execution.generation, "Execution generation");
   let jobProjection;
-  if (isAgentJob) {
+  if (isAgentJob || String(row.kind) === "business.action.execute") {
     jobProjection = await loadProjection(client, tenantId, "job", String(row.job_id), "Job");
     const projected = jobProjection.value;
     if (projected.tenantId !== tenantId
-      || projected.kind !== AGENT_JOB_KIND
+      || projected.kind !== String(row.kind)
       || requiredString(projected.id, "Job id") !== String(row.job_id)) {
       throw new Error("Agent Job 物理记录与查询投影不一致");
     }

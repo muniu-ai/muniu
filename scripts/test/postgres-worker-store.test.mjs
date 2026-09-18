@@ -322,6 +322,20 @@ function projection(client, namespace, id) {
   return client.projections.get(`${namespace}:${id}`);
 }
 
+test("业务出包结果未知时原子同步物理任务和查询投影，人工核对不再尝试失效已结束任务", async () => {
+  const client = new WorkerFixtureClient({ kind: "business.action.execute", projected: true });
+  const store = fixtureStore(client);
+  const claimed = await store.claimJob("worker-a", startedAt);
+  projection(client, "execution", "execution-a").status = "running";
+  await store.markNeedsReconciliation("execution-a", { jobId: claimed.id, workerId: "worker-a", fencingToken: claimed.fencingToken,
+    occurredAt: "2025-01-02T03:04:10.000Z" });
+  assert.equal(client.job.status, "failed");
+  assert.equal(projection(client, "job", "job-a").status, "failed");
+  assert.equal(projection(client, "job", "job-a").leaseOwner, undefined);
+  assert.equal(projection(client, "execution", "execution-a").status, "needs_reconciliation");
+  assert.ok(client.events.some(event => event.type === "job.failed"));
+});
+
 test("Agent Job 领取与完成原子推进 Job、Execution、HMAC 事件和 outbox", async () => {
   const client = new WorkerFixtureClient();
   const store = fixtureStore(client);
