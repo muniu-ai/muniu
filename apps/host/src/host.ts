@@ -2,12 +2,15 @@ import { randomUUID } from "node:crypto";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import { Context } from "@deepseek-ai/cordis";
 import { KernelProjectionRuntimeStore, type RuntimeRecord } from "@mn/agent-runtime";
-import { createProtectedRuntimeStore, readProtectedRuntimePayload, type RuntimeProtection } from "@mn/worker";
+import { createProtectedRuntimeStore, readProtectedRuntimePayload, type RuntimeProtection, type BusinessProviderPorts } from "@mn/worker";
 import {
   apiError,
   matchApiOperation,
   parseApiResponse,
   createOpenApiDocument,
+  parseCreateBusinessActionV2,
+  parseReconcileBusinessActionV2,
+  parseCreateBusinessCandidateV2,
   type Approval,
   type Asset,
   type AssetTombstone,
@@ -28,6 +31,8 @@ import {
 } from "@mn/contracts";
 import {
   AgentOsKernel,
+  BusinessActionLedger,
+  BusinessCandidateLedger,
   appendKernelEvent,
   KernelError,
   PROVIDER_PRESETS,
@@ -61,6 +66,8 @@ import {
 import { codingPlugin } from "@mn/plugin-coding";
 import { configureProductProjectionJournal } from "./projection-journal.js";
 import { createAgentOsCompositionRoot } from "./composition.js";
+import { businessExecutionAuthorityResponse, prepareBusinessAction, publicBusinessAction } from "./business-actions.js";
+import { businessCandidateContentResponse, createBusinessCandidate, publicBusinessCandidate } from "./business-candidates.js";
 import { CordisPluginActivationLifecycle } from "./plugin-lifecycle.js";
 import { KernelPluginProjectionManager } from "./plugin-projections.js";
 import { createPluginDataPort, readPluginDomainEvent } from "./plugin-data.js";
@@ -154,6 +161,9 @@ export type TenantPluginInstallerFactory = (
 ) => PluginInstallerPort | undefined | Promise<PluginInstallerPort | undefined>;
 
 export interface AgentOsHostOptions {
+  readonly businessProvider?: BusinessProviderPorts;
+  readonly businessWorkspaceScopes?: readonly { readonly tenantId: string; readonly workspaceId: string }[];
+  readonly businessAuthorityTokenResolver?: () => Promise<string>;
   readonly store: KernelStore;
   readonly profile?: "local" | "enterprise";
   readonly cas?: ContentAddressedStorage;
@@ -1165,6 +1175,20 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
       if (request.method === "GET" && url.pathname === "/v2/health" && !url.searchParams.has("workspaceId")) {
         return json(await plugins.health("__core__"), 200, traceId);
       }
+      const authorityQuery = url.pathname.match(/^\/v2\/business-actions\/([^/]+)\/execution-authority$/u);
+      if (authorityQuery && request.method === "GET") return json(await businessExecutionAuthorityResponse(request, decodeURIComponent(authorityQuery[1]!), {
+        store: options.store, ...(options.businessAuthorityTokenResolver ? { tokenResolver: options.businessAuthorityTokenResolver } : {}),
+        ...(options.businessWorkspaceScopes ? { allowedScopes: options.businessWorkspaceScopes } : {}), ...(options.now ? { now: options.now } : {}),
+      }), 200, traceId);
+      const candidateContent = url.pathname.match(/^\/v2\/business-candidates\/([^/]+)\/content$/u);
+      if (candidateContent && request.method === "GET") {
+        if (!options.cas || !options.protectedPayloadKeyProvider) throw new KernelError("PROTECTED_STORAGE_REQUIRED", "询价候选需要受保护存储", "配置对象存储和保护密钥");
+        return json(await businessCandidateContentResponse(request, decodeURIComponent(candidateContent[1]!), {
+          store: options.store, cas: options.cas, keyProvider: options.protectedPayloadKeyProvider,
+          ...(options.businessAuthorityTokenResolver ? { tokenResolver: options.businessAuthorityTokenResolver } : {}),
+          ...(options.businessWorkspaceScopes ? { allowedScopes: options.businessWorkspaceScopes } : {}), ...(options.now ? { now: options.now } : {}),
+        }), 200, traceId);
+      }
       const identity = options.identityResolver
         ? await options.identityResolver(request)
         : profile === "local"
@@ -1212,6 +1236,64 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           .filter((membership) => membership.principalId === ACTOR_ID && !membership.removedAt)
           .map((membership) => membership.workspaceId),
       );
+      const businessActionMatch = url.pathname.match(/^\/v2\/business-actions\/([^/]+)(\/reconciliation-decisions)?$/u);
+      const candidateMatch = url.pathname.match(/^\/v2\/business-candidates\/([^/]+)$/u);
+      if ((url.pathname === "/v2/business-candidates" && request.method === "POST") || (candidateMatch && request.method === "GET")) {
+        if (!options.businessProvider?.inquiries || !options.cas || !options.protectedPayloadKeyProvider)
+          throw new KernelError("BUSINESS_PROVIDER_DISABLED", "询价候选服务尚未启用", "配置业务资料接口和受保护存储");
+        const requireEnabled = (workspaceId: string) => {
+          if (!options.businessWorkspaceScopes?.some(scope => scope.tenantId === TENANT_ID && scope.workspaceId === workspaceId))
+            throw new KernelError("BUSINESS_PROVIDER_DISABLED", "此工作区未启用业务交付服务", "由管理员显式启用工作区");
+        };
+        if (!candidateMatch) {
+          const input = parseCreateBusinessCandidateV2(await readBody(request));
+          await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, input.workspaceId, "operate");
+          requireEnabled(input.workspaceId);
+          const state = await createBusinessCandidate(input, { tenantId: TENANT_ID, workspaceId: input.workspaceId, principalId: ACTOR_ID, customerId: input.customerId }, mutationKey as string, {
+            store: options.store, cas: options.cas, keyProvider: options.protectedPayloadKeyProvider, sourcePort: options.businessProvider.inquiries,
+            ...(options.now ? { now: options.now } : {}),
+          });
+          return json(publicBusinessCandidate(state), 201, traceId);
+        }
+        const state = await new BusinessCandidateLedger(options.store).get(TENANT_ID, decodeURIComponent(candidateMatch[1]!));
+        if (!state) throw new KernelError("BUSINESS_CANDIDATE_NOT_FOUND", "询价候选不存在", "刷新当前询价");
+        await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, state.workspaceId, "view");
+        requireEnabled(state.workspaceId);
+        return json(publicBusinessCandidate(state), 200, traceId);
+      }
+      if ((url.pathname === "/v2/business-actions" && request.method === "POST") || businessActionMatch) {
+        if (!options.businessProvider) throw new KernelError("BUSINESS_PROVIDER_DISABLED", "当前未启用业务交付服务", "配置受信业务服务后再试");
+        const ledger = new BusinessActionLedger(options.store, { ...(options.now ? { now: options.now } : {}) });
+        const actionView = async (action: Awaited<ReturnType<typeof ledger.create>>) => {
+          const approval = action.approvalId ? await projectionGet<Approval>(options.store, TENANT_ID, "approval", action.approvalId) : undefined;
+          return { ...publicBusinessAction(action), ...(approval ? { approval } : {}) };
+        };
+        const requireEnabled = (workspaceId: string) => {
+          if (!options.businessWorkspaceScopes?.some(scope => scope.tenantId === TENANT_ID && scope.workspaceId === workspaceId))
+            throw new KernelError("BUSINESS_PROVIDER_DISABLED", "此工作区未启用业务交付服务", "由管理员显式启用工作区");
+        };
+        if (!businessActionMatch) {
+          const input = parseCreateBusinessActionV2(await readBody(request));
+          await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, input.workspaceId, "operate");
+          requireEnabled(input.workspaceId);
+          const scope = { tenantId: TENANT_ID, workspaceId: input.workspaceId, principalId: ACTOR_ID, customerId: input.customerId };
+          const action = await prepareBusinessAction(input, scope, options.businessProvider, options.now?.() ?? new Date().toISOString());
+          return json(await actionView(await ledger.create(action, mutationKey as string)), 201, traceId);
+        }
+        const action = await ledger.get(TENANT_ID, decodeURIComponent(businessActionMatch[1]!));
+        if (!action) throw new KernelError("BUSINESS_ACTION_NOT_FOUND", "业务动作不存在", "刷新业务操作列表");
+        await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, action.workspaceId, request.method === "GET" ? "view" : "review");
+        requireEnabled(action.workspaceId);
+        if (request.method === "GET" && !businessActionMatch[2]) return json(await actionView(action), 200, traceId);
+        if (request.method === "POST" && businessActionMatch[2]) {
+          const input = parseReconcileBusinessActionV2(await readBody(request));
+          const receipt = await options.businessProvider.receipts.lookup({ schemaVersion: "1", scope: { ...action.action.scope, principalId: ACTOR_ID },
+            actionId: action.id, operationKey: action.operationKey });
+          return json(await actionView(await ledger.reconcile(TENANT_ID, action.id, input.expectedStreamVersion, input.decision, receipt,
+            { actorId: ACTOR_ID, idempotencyKey: mutationKey as string })), 200, traceId);
+        }
+        return notFound(traceId);
+      }
       if (request.method === "POST" && url.pathname === "/v2/setup") {
         const body = await readBody(request);
         const result = await idempotentProjectionMutation({
@@ -1603,6 +1685,9 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         const execution = await projectionGet<Execution>(options.store, TENANT_ID, "execution", executionId);
         if (!execution) throw new KernelError("EXECUTION_NOT_FOUND", "执行不存在", "刷新执行列表");
         await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, execution.workspaceId, "operate");
+        if (execution.pluginId === "industry") {
+          throw new KernelError("BUSINESS_EXECUTION_COMMAND_FORBIDDEN", "行业固定流程只能通过业务入口管理", "在业务页查看候选、批准出包或核对未知结果");
+        }
         const command = stringField(body, "command")!;
         if (command === "follow_up" || command === "steer") {
           const text = stringField(body, "message")!;

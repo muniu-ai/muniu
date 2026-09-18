@@ -756,11 +756,11 @@ export class PostgresStorage implements StoragePort {
       execution,
       executionStreamVersion: executionProjection.streamVersion
     };
-    if (!isAgentJob) return context;
+    if (!isAgentJob && String(row.kind) !== "business.action.execute") return context;
     const jobId = String(row.job_id);
     const jobProjection = await this.#loadProjectionForUpdate(client, tenantId, "job", jobId, "Job");
     if (jobProjection.value.tenantId !== tenantId
-      || jobProjection.value.kind !== AGENT_EXECUTION_JOB_KIND
+      || jobProjection.value.kind !== String(row.kind)
       || requiredString(jobProjection.value.id, "Job id") !== jobId) {
       throw new Error("Agent Job 物理记录与查询投影不一致");
     }

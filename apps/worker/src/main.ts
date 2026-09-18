@@ -2,6 +2,10 @@
 
 import { isAbsolute, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { AgentOsKernel, type KernelStore } from "@mn/kernel";
+import { createBusinessActionWorkerHandler } from "./business-actions.js";
+import { createBusinessCandidateWorkerHandler, type BusinessCandidateWorkerOptions } from "./business-candidates.js";
+import { loadBusinessProviderConfiguration } from "./business-provider.js";
 
 import {
   runWorkerMain,
@@ -10,6 +14,7 @@ import {
 
 interface WorkerBootstrapModule {
   readonly createWorkerOptions?: () => AgentOsWorkerOptions | Promise<AgentOsWorkerOptions>;
+  readonly createBusinessCandidateOptions?: () => BusinessCandidateWorkerOptions | Promise<BusinessCandidateWorkerOptions>;
 }
 
 export async function main(
@@ -30,7 +35,26 @@ export async function main(
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
   try {
-    await runWorkerMain(await loaded.createWorkerOptions(), { signal: abort.signal });
+    const configured = await loaded.createWorkerOptions();
+    const business = await loadBusinessProviderConfiguration("enterprise");
+    let workerOptions = configured;
+    if (business) {
+      const store = configured.store as typeof configured.store & KernelStore;
+      if (typeof store.transact !== "function" || typeof store.readEvents !== "function") throw new Error("业务Worker要求支持事务和事件的存储");
+      if (configured.handlers["business.action.execute"]) throw new Error("业务动作只能由一个受信Worker处理器负责");
+      const handler = createBusinessActionWorkerHandler({ store, kernel: new AgentOsKernel(store), ports: business.businessProvider });
+      workerOptions = { ...configured, handlers: { ...configured.handlers, "business.action.execute": handler },
+        kinds: [...(configured.kinds ?? Object.keys(configured.handlers)), "business.action.execute"] };
+      if (loaded.createBusinessCandidateOptions) {
+        if (workerOptions.handlers["business.candidate.extract"]) throw new Error("询价候选只能由一个受信Worker处理器负责");
+        const candidate = await loaded.createBusinessCandidateOptions();
+        if (candidate.store !== store) throw new Error("询价候选必须共用Worker事务存储");
+        if (candidate.modelMode === "test_fixture") throw new Error("生产Worker不能使用询价模型测试模式");
+        workerOptions = { ...workerOptions, handlers: { ...workerOptions.handlers, "business.candidate.extract": createBusinessCandidateWorkerHandler(candidate) },
+          kinds: [...(workerOptions.kinds ?? Object.keys(workerOptions.handlers)), "business.candidate.extract"] };
+      }
+    }
+    await runWorkerMain(workerOptions, { signal: abort.signal });
   } finally {
     process.removeListener("SIGINT", stop);
     process.removeListener("SIGTERM", stop);

@@ -2,6 +2,8 @@ export * from "./config.js";
 export * from "./composition.js";
 export * from "./enterprise-plugin-repository.js";
 export * from "./assets.js";
+export * from "./business-actions.js";
+export * from "./business-candidates.js";
 export * from "./coding-runners.js";
 export * from "./coding-reconciliation.js";
 export * from "./host.js";

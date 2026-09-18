@@ -1705,7 +1705,8 @@ export class SqliteStorage implements StoragePort {
     now: string
   ): void {
     const context = this.#jobContext(job);
-    if (!context?.execution || !context.executionId || !context.workspaceId) return;
+    if (!context || (!context.execution && String(job.kind) !== "business.action.execute")
+      || !context.executionId || !context.workspaceId) return;
     const jobStreamVersion = requiredSafeInteger(
       context.jobProjection.streamVersion,
       "Job streamVersion"

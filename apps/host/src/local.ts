@@ -9,6 +9,9 @@ import {
   createCodingSandboxCleanupWorkerHandler,
   createEncryptedMemoryReader,
   createKernelAgentTurnHandler,
+  createBusinessActionWorkerHandler,
+  createBusinessCandidateWorkerHandler,
+  loadBusinessProviderConfiguration,
   runWorkerLoop,
   type ByokModelInvoker,
   type ByokModelQuoter,
@@ -54,6 +57,11 @@ export interface StartLocalHostOptions extends Omit<
 
 export async function startLocalAgentOsHost(options: StartLocalHostOptions = {}): Promise<AgentOsHost> {
   await assertNoLegacyDaemon(options.legacyDaemonProbe);
+  const business = options.businessProvider ? {
+    businessProvider: options.businessProvider,
+    ...(options.businessWorkspaceScopes ? { businessWorkspaceScopes: options.businessWorkspaceScopes } : {}),
+    ...(options.businessAuthorityTokenResolver ? { businessAuthorityTokenResolver: options.businessAuthorityTokenResolver } : {}),
+  } : await loadBusinessProviderConfiguration("local");
   const indexFile = process.env.MN_PLUGIN_REPOSITORY_INDEX?.trim();
   const trustedRootsFile = process.env.MN_PLUGIN_TRUSTED_ROOTS?.trim();
   if (Boolean(indexFile) !== Boolean(trustedRootsFile)) throw new Error("插件仓库索引和受信根必须同时配置");
@@ -91,6 +99,7 @@ export async function startLocalAgentOsHost(options: StartLocalHostOptions = {})
     let workerFailure: unknown;
     let workerLoop = Promise.resolve();
     const host = await createAgentOsHost({
+      ...business,
       store,
       profile: "local",
       cas,
@@ -176,9 +185,21 @@ export async function startLocalAgentOsHost(options: StartLocalHostOptions = {})
         "agent.execution.run": turnHandler,
         "coding.reconciliation.verify": reconciliationVerificationHandler,
         "coding.sandbox.cleanup": sandboxCleanupHandler,
+        ...(business?.businessProvider ? { "business.action.execute": createBusinessActionWorkerHandler({
+          store, kernel: host.kernel, ports: business.businessProvider, ...(options.now ? { now: options.now } : {}),
+        }) } : {}),
+        ...(business?.businessProvider.inquiries ? { "business.candidate.extract": createBusinessCandidateWorkerHandler({
+          store, secretStore, runtimeProtection: { cas, keyProvider: protectedPayloadKeyProvider },
+          acceptsSecretReference: reference => reference.startsWith("keychain://muniu.v2/"),
+          ...(options.modelInvoker ? { modelInvoker: options.modelInvoker } : {}),
+          ...(options.modelQuoter ? { modelQuoter: options.modelQuoter } : {}),
+          ...(options.now ? { now: options.now } : {}),
+        }) } : {}),
       },
       tenantId: "local",
-      kinds: ["agent.execution.run", "coding.reconciliation.verify", "coding.sandbox.cleanup"],
+      kinds: ["agent.execution.run", "coding.reconciliation.verify", "coding.sandbox.cleanup",
+        ...(business?.businessProvider ? ["business.action.execute"] : []),
+        ...(business?.businessProvider.inquiries ? ["business.candidate.extract"] : [])],
     });
     workerLoop = runWorkerLoop(worker, {
       signal: stopWorker.signal,
