@@ -40,7 +40,7 @@ test("候选服务读取要求专用 Bearer 身份、精确客户范围和当前
   assert.equal("sourceProtectedPayloadRef" in publicBusinessCandidate(state), false);
   const worker = new AgentOsWorker({ id: "worker", store, now: () => new Date(now), lock: {
     engineLockDigest: "lock", expectedEngineLockDigest: "lock", pluginLockDigest: "lock", expectedPluginLockDigest: "lock" }, handlers: {
-    "business.candidate.extract": createBusinessCandidateWorkerHandler({ store, runtimeProtection: protection, now: () => now, modelMode: "test_fixture",
+    "business.candidate.extract": createBusinessCandidateWorkerHandler({ store, sourcePort, runtimeProtection: protection, now: () => now, modelMode: "test_fixture",
       secretStore: { read: async () => "fixture" }, modelQuoter: async () => ({ inputTokenLimit: 100, maxOutputTokens: 100,
         rates: { id: "non-billable-fixture", currency: "CNY", inputNanoMinorUnitsPerToken: "0", cachedInputNanoMinorUnitsPerToken: "0", outputNanoMinorUnitsPerToken: "0" } }),
       modelInvoker: async () => ({ text: JSON.stringify({ requirements: [{ text: "材料316L", citations: [{ sourceId: "source", pageNumber: 1, start: 0,

@@ -189,7 +189,7 @@ export async function startLocalAgentOsHost(options: StartLocalHostOptions = {})
           store, kernel: host.kernel, ports: business.businessProvider, ...(options.now ? { now: options.now } : {}),
         }) } : {}),
         ...(business?.businessProvider.inquiries ? { "business.candidate.extract": createBusinessCandidateWorkerHandler({
-          store, secretStore, runtimeProtection: { cas, keyProvider: protectedPayloadKeyProvider },
+          store, secretStore, sourcePort: business.businessProvider.inquiries, runtimeProtection: { cas, keyProvider: protectedPayloadKeyProvider },
           acceptsSecretReference: reference => reference.startsWith("keychain://muniu.v2/"),
           ...(options.modelInvoker ? { modelInvoker: options.modelInvoker } : {}),
           ...(options.modelQuoter ? { modelQuoter: options.modelQuoter } : {}),

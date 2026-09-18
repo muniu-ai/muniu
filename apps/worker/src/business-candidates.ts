@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 import { randomUUID } from "node:crypto";
 import { ExecutionBudgetExceededError, type ModelRequest, type ModelResponse } from "@mn/agent-runtime";
-import { parseRfqModelOutputV1, parseSalesInquirySnapshotV1, type JsonObject, type RfqCandidateV1 } from "@mn/contracts";
+import { parseRfqModelOutputV1, parseSalesInquirySnapshotV1, type BusinessInquirySourcePortV1, type JsonObject,
+  type RfqCandidateV1, type SalesInquirySnapshotV1 } from "@mn/contracts";
 import { BusinessCandidateLedger, KernelError, sha256, type KernelStore, type ModelConnection } from "@mn/kernel";
 import { storeProtectedJson } from "@mn/storage";
 import { fencedCodingStore } from "./coding.js";
@@ -20,6 +21,7 @@ requirements 为原文明示要求；facts 为已出现事实；suggestions 只�
 
 export interface BusinessCandidateWorkerOptions {
   readonly store: KernelStore;
+  readonly sourcePort: BusinessInquirySourcePortV1;
   readonly runtimeProtection: RuntimeProtection;
   readonly secretStore: { read(reference: string): Promise<string> };
   readonly acceptsSecretReference?: (reference: string) => boolean;
@@ -41,6 +43,23 @@ export function createBusinessCandidateWorkerHandler(options: BusinessCandidateW
     const lease = () => ({ jobId: job.id, workerId: context.workerId, fencingToken: context.fencingToken, occurredAt: now() });
     const state = await ledger.get(job.tenantId, candidateId);
     if (!state || job.payload.executionId !== state.executionId || job.workspaceId !== state.workspaceId) throw new Error("候选任务范围不一致");
+    const assertCurrentSource = async (): Promise<void> => {
+      if (typeof options.sourcePort?.read !== "function") throw new KernelError("BUSINESS_CANDIDATE_SOURCE_REQUIRED",
+        "候选任务缺少当前业务资料授权端口", "配置受信任的 Sales 资料端口");
+      let current: SalesInquirySnapshotV1;
+      try {
+        current = parseSalesInquirySnapshotV1(await options.sourcePort.read({ schemaVersion: "1", scope: state.scope,
+          objectId: state.inquiryId, revision: state.inquiryRevision }));
+      } catch {
+        throw new KernelError("BUSINESS_CANDIDATE_SOURCE_UNAVAILABLE", "无法确认当前业务资料授权",
+          "核对 Sales 当前客户归属、资料权限和询价版本");
+      }
+      if (current.inquiryId !== state.inquiryId || current.inquiryRevision !== state.inquiryRevision
+        || current.digest !== state.sourceDigest || sha256(current.scope) !== sha256(state.scope)) {
+        throw new KernelError("BUSINESS_CANDIDATE_SOURCE_CHANGED", "候选任务的业务资料范围或版本已变化",
+          "取得当前业务授权后重新创建候选任务");
+      }
+    };
     const protectedStore = fencedCodingStore(options.store, job, context, now);
     const runtime = createProtectedRuntimeStore({ ...options.runtimeProtection, tenantId: state.tenantId,
       workspaceId: state.workspaceId, store: protectedStore, now, onCommit: tx => ledger.assertActive(tx, state) });
@@ -67,6 +86,8 @@ export function createBusinessCandidateWorkerHandler(options: BusinessCandidateW
         try { apiKey = await options.secretStore.read(model.secretRef); }
         catch { throw new KernelError("MODEL_CREDENTIAL_UNAVAILABLE", "无法读取模型凭据", "重新配置模型连接"); }
         if (!apiKey.trim()) throw new KernelError("MODEL_CREDENTIAL_UNAVAILABLE", "模型凭据为空", "重新配置模型连接");
+        // Provider token-count requests can also disclose source text.
+        await assertCurrentSource();
         const request: ModelRequest = { executionId: state.executionId, agentId: "industry.rfq-candidate", generation: 1,
           messages: [{ role: "system", content: RFQ_INSTRUCTIONS }, { role: "user", content: JSON.stringify({
             inquiryId: source.inquiryId, inquiryRevision: source.inquiryRevision, pages: source.pages,
@@ -77,6 +98,8 @@ export function createBusinessCandidateWorkerHandler(options: BusinessCandidateW
           apiKey, request, signal }, store: runtime, limits: state.budget, invoke, quote });
         await runtime.append({ executionId: state.executionId, type: "model/response", payload: { response: response as unknown as JsonObject } });
       }
+      // Recovery of an existing response must pass the same current Sales authority check.
+      await assertCurrentSource();
       if (!response || !Array.isArray(response.toolCalls) || response.toolCalls.length !== 0 || typeof response.text !== "string") {
         throw new KernelError("CANDIDATE_OUTPUT_INVALID", "模型返回了不允许的工具调用或格式", "人工检查原文后重新发起候选任务");
       }

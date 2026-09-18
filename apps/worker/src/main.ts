@@ -14,7 +14,8 @@ import {
 
 interface WorkerBootstrapModule {
   readonly createWorkerOptions?: () => AgentOsWorkerOptions | Promise<AgentOsWorkerOptions>;
-  readonly createBusinessCandidateOptions?: () => BusinessCandidateWorkerOptions | Promise<BusinessCandidateWorkerOptions>;
+  readonly createBusinessCandidateOptions?: () => Omit<BusinessCandidateWorkerOptions, "sourcePort">
+    | Promise<Omit<BusinessCandidateWorkerOptions, "sourcePort">>;
 }
 
 export async function main(
@@ -37,6 +38,7 @@ export async function main(
   try {
     const configured = await loaded.createWorkerOptions();
     const business = await loadBusinessProviderConfiguration("enterprise");
+    if (loaded.createBusinessCandidateOptions && !business) throw new Error("询价候选Worker必须配置受信任的Sales资料端口");
     let workerOptions = configured;
     if (business) {
       const store = configured.store as typeof configured.store & KernelStore;
@@ -47,10 +49,13 @@ export async function main(
         kinds: [...(configured.kinds ?? Object.keys(configured.handlers)), "business.action.execute"] };
       if (loaded.createBusinessCandidateOptions) {
         if (workerOptions.handlers["business.candidate.extract"]) throw new Error("询价候选只能由一个受信Worker处理器负责");
+        if (!business.businessProvider.inquiries) throw new Error("询价候选Worker缺少当前Sales资料端口");
         const candidate = await loaded.createBusinessCandidateOptions();
         if (candidate.store !== store) throw new Error("询价候选必须共用Worker事务存储");
         if (candidate.modelMode === "test_fixture") throw new Error("生产Worker不能使用询价模型测试模式");
-        workerOptions = { ...workerOptions, handlers: { ...workerOptions.handlers, "business.candidate.extract": createBusinessCandidateWorkerHandler(candidate) },
+        workerOptions = { ...workerOptions, handlers: { ...workerOptions.handlers, "business.candidate.extract": createBusinessCandidateWorkerHandler({
+          ...candidate, sourcePort: business.businessProvider.inquiries,
+        }) },
           kinds: [...(workerOptions.kinds ?? Object.keys(workerOptions.handlers)), "business.candidate.extract"] };
       }
     }
