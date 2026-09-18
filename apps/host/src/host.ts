@@ -291,7 +291,7 @@ function safeError(error: unknown, traceId: string): Response {
   } else if (error instanceof PluginPolicyError) {
     status = 422; code = error.code; message = error.message; action = error.action; retryable = false;
   } else if (error instanceof KernelError) {
-    status = error.code === "STREAM_VERSION_CONFLICT" ? 409
+    status = ["STREAM_VERSION_CONFLICT", "BUSINESS_ACTION_CONFLICT", "IDEMPOTENCY_CONFLICT"].includes(error.code) ? 409
       : error.code === "REQUEST_BODY_TOO_LARGE" ? 413
         : error.code === "REQUEST_BODY_TIMEOUT" ? 408
           : error.code === "REQUEST_JSON_INVALID" ? 400
