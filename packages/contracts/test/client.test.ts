@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { apiPath, apiRequest, operationInputFields, parseApiResponse } from "../src/client.js";
 import { API_OPERATIONS_V2, createOpenApiDocument } from "../src/openapi.js";
+import { computeBusinessActionDigest, computeBusinessOperationKey, type IssueQuotePackageInputV1 } from "../src/business-effects.js";
 
 test("asset metadata and binary downloads have separate typed operations", () => {
   const document = createOpenApiDocument() as any;
@@ -70,4 +71,36 @@ test("客户端路径、请求和 CLI 字段来自同一 OpenAPI 契约", () => 
   assert.deepEqual(apiRequest("listCodingTasks", { query: { workspaceId: "workspace/a" } }), {
     path: "/v2/plugins/coding/tasks?workspaceId=workspace%2Fa", method: "GET", mutation: false,
   });
+});
+
+test("业务出包 API 固定精确输入，不公开执行身份或通用发送入口", () => {
+  const document = createOpenApiDocument() as any;
+  const create = document.paths["/v2/business-actions"]?.post;
+  assert.equal(create?.operationId, "createBusinessAction");
+  assert.equal(document.paths["/v2/business-actions/{actionId}"]?.get?.operationId, "getBusinessAction");
+  const body = document.components.schemas.CreateBusinessActionMutation;
+  assert.equal(body?.additionalProperties, false);
+  assert.equal(body?.properties.action.const, "issueQuotePackage");
+  assert.equal(body?.properties.expectedStreamVersion.const, 0);
+  for (const key of ["tenantId", "principalId", "workerId", "fencingToken", "operationKey", "quoteDigest"]) {
+    assert.equal(body?.properties[key], undefined);
+  }
+  assert.equal(document.paths["/v2/business-actions/{actionId}/reconciliation-decisions"]?.post?.operationId, "reconcileBusinessAction");
+  assert.deepEqual(document.components.schemas.ReconcileBusinessActionMutation.properties.decision.enum, ["mark_completed", "terminate"]);
+});
+
+test("业务 API 客户端复核摘要格式和回执语义，不把缺少回执的完成状态当成成果", () => {
+  let action: IssueQuotePackageInputV1 = { schemaVersion: "1", action: "issueQuotePackage", actionId: "action-a", operationKey: "pending",
+    scope: { tenantId: "tenant-a", workspaceId: "workspace-a", principalId: "person-a", customerId: "customer-a" },
+    quote: { id: "quote-a", version: "1", digest: "a".repeat(64) }, businessDecision: { id: "decision-a", digest: "b".repeat(64) },
+    template: { id: "template-a", version: "1", digest: "c".repeat(64) }, renderVersion: "1", exportFormat: "pdf", issueDate: "2026-09-18" };
+  action = { ...action, operationKey: computeBusinessOperationKey(action) };
+  const data = { schemaVersion: "1", id: action.actionId, tenantId: action.scope.tenantId, workspaceId: action.scope.workspaceId,
+    executionId: "execution-a", jobId: "job-a", operationKey: action.operationKey, actionDigest: computeBusinessActionDigest(action),
+    action, status: "queued", streamVersion: 1, createdAt: "2026-09-18T01:00:00.000Z", updatedAt: "2026-09-18T01:00:00.000Z" };
+  assert.deepEqual(parseApiResponse("getBusinessAction", { data, traceId: "trace" }), data);
+  for (const invalid of [{ ...data, actionDigest: "invalid" }, { ...data, status: "completed" },
+    { ...data, tenantId: "tenant-b" }, { ...data, action: { ...action, issueDate: "2026-02-30" } }]) {
+    assert.throws(() => parseApiResponse("getBusinessAction", { data: invalid, traceId: "trace" }), /公共契约/u);
+  }
 });

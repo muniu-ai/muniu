@@ -9,6 +9,7 @@ import type {
 import type { EvidenceLevel, Interview, OpportunityAggregate, OpportunityState } from "./opc.js";
 import type { PluginManifestV1 } from "./plugin.js";
 import type { WorkspacePluginSurfaceV1 } from "./plugin-surfaces.js";
+import type { BusinessActionV1 } from "./business-effects.js";
 
 export interface HostHealthV2 {
   readonly core: { readonly status: "healthy" };
@@ -254,6 +255,9 @@ export type CodingRunnerViewV2 =
 
 /** JSON extension points are explicit; every fixed Host operation has a concrete DTO. */
 export interface ApiOutputsV2 {
+  readonly createBusinessAction: BusinessActionV1;
+  readonly getBusinessAction: BusinessActionV1;
+  readonly reconcileBusinessAction: BusinessActionV1;
   readonly runPluginCommand: JsonValue;
   readonly getPluginSurfaces: readonly WorkspacePluginSurfaceV1[];
   readonly listPluginCatalog: readonly PluginCatalogItemV2[];

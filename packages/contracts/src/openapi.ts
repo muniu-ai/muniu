@@ -14,6 +14,9 @@ export interface ApiOperationV2 {
 }
 
 export const API_OPERATIONS_V2 = [
+  { method: "post", path: "/v2/business-actions", operationId: "createBusinessAction", mutation: true, versioned: true },
+  { method: "get", path: "/v2/business-actions/{actionId}", operationId: "getBusinessAction", mutation: false, versioned: false },
+  { method: "post", path: "/v2/business-actions/{actionId}/reconciliation-decisions", operationId: "reconcileBusinessAction", mutation: true, versioned: true },
   { method: "post", path: "/v2/plugins/{pluginId}/{commandId}", operationId: "runPluginCommand", mutation: true, versioned: true },
   { method: "get", path: "/v2/workspaces/{workspaceId}/plugin-surfaces", operationId: "getPluginSurfaces", mutation: false, versioned: false },
   { method: "get", path: "/v2/plugins/catalog", operationId: "listPluginCatalog", mutation: false, versioned: false },
@@ -86,6 +89,7 @@ export const API_OPERATIONS_V2 = [
 function successStatus(operationId: string): "200" | "201" | "202" {
   if (operationId === "createTurn") return "202";
   if ([
+    "createBusinessAction",
     "createWorkspace",
     "createThread",
     "createAssets",
@@ -208,6 +212,32 @@ export function createOpenApiDocument(): JsonObject {
     components: {
       schemas: {
         ...API_OUTPUT_COMPONENTS_V2,
+        CreateBusinessActionMutation: {
+          type: "object", additionalProperties: false,
+          required: ["schemaVersion", "action", "expectedStreamVersion", "workspaceId", "customerId", "quoteId", "quoteVersion", "decisionId", "templateId", "templateVersion", "renderVersion", "exportFormat", "issueDate"],
+          properties: {
+            schemaVersion: { type: "string", const: "1" },
+            action: { type: "string", const: "issueQuotePackage" },
+            expectedStreamVersion: { type: "integer", const: 0 },
+            workspaceId: { type: "string", minLength: 1 },
+            customerId: { type: "string", minLength: 1 },
+            quoteId: { type: "string", minLength: 1 },
+            quoteVersion: { type: "string", minLength: 1 },
+            decisionId: { type: "string", minLength: 1 },
+            templateId: { type: "string", minLength: 1 },
+            templateVersion: { type: "string", minLength: 1 },
+            renderVersion: { type: "string", minLength: 1 },
+            exportFormat: { type: "string", const: "pdf" },
+            issueDate: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" },
+          },
+        },
+        ReconcileBusinessActionMutation: {
+          type: "object", additionalProperties: false, required: ["expectedStreamVersion", "decision"],
+          properties: {
+            expectedStreamVersion: { type: "integer", minimum: 1 },
+            decision: { type: "string", enum: ["mark_completed", "terminate"] },
+          },
+        },
         RunnerBinaryInspectionEnvelope: {
           type: "object",
           additionalProperties: false,
@@ -488,6 +518,8 @@ export function createOpenApiDocument(): JsonObject {
 }
 
 function mutationSchema(operationId: string, versioned: boolean): JsonObject {
+  if (operationId === "createBusinessAction") return { $ref: "#/components/schemas/CreateBusinessActionMutation" };
+  if (operationId === "reconcileBusinessAction") return { $ref: "#/components/schemas/ReconcileBusinessActionMutation" };
   const string = { type: "string", minLength: 1 };
   const version = { type: "integer", minimum: 0 };
   const strings = { type: "array", items: string };

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import type { ApiOutputsV2 } from "./api-outputs.js";
 import { API_OPERATIONS_V2, createOpenApiDocument } from "./openapi.js";
+import { parseBusinessActionV1 } from "./business-effect-validation.js";
 
 type OperationId = (typeof API_OPERATIONS_V2)[number]["operationId"];
 export type JsonApiOperationIdV2 = Exclude<OperationId, "downloadAsset" | "streamWorkspaceEvents">;
@@ -80,6 +81,10 @@ export function parseApiResponse<K extends JsonApiOperationIdV2>(operationId: K,
     return Boolean(shape.anyOf || shape.oneOf || shape.allOf);
   }
   if (!schema || !matches(schema, value)) throw new ApiResponseContractError(operationId);
+  if (["createBusinessAction", "getBusinessAction", "reconcileBusinessAction"].includes(operationId)) {
+    try { parseBusinessActionV1((value as { readonly data: unknown }).data); }
+    catch { throw new ApiResponseContractError(operationId); }
+  }
   return (value as { readonly data: ApiOutputsV2[K] }).data;
 }
 

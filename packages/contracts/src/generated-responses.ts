@@ -2,6 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 import type { JsonObject } from "./json.js";
 export const API_OUTPUT_SCHEMAS_V2: Readonly<Record<string, JsonObject>> = {
+  "createBusinessAction": {
+    "$ref": "#/components/schemas/OutputBusinessActionV1"
+  },
+  "getBusinessAction": {
+    "$ref": "#/components/schemas/OutputBusinessActionV1"
+  },
+  "reconcileBusinessAction": {
+    "$ref": "#/components/schemas/OutputBusinessActionV1"
+  },
   "runPluginCommand": {
     "$ref": "#/components/schemas/OutputJsonValue"
   },
@@ -354,6 +363,446 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
       "$ref": "#/components/schemas/OutputJsonValue"
     }
   },
+  "OutputBusinessScopeV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "tenantId",
+      "workspaceId",
+      "principalId",
+      "customerId"
+    ],
+    "properties": {
+      "tenantId": {
+        "type": "string"
+      },
+      "workspaceId": {
+        "type": "string"
+      },
+      "principalId": {
+        "type": "string"
+      },
+      "customerId": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputBusinessVersionRefV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "version",
+      "digest"
+    ],
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "version": {
+        "type": "string"
+      },
+      "digest": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputIssueQuotePackageInputV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "schemaVersion",
+      "action",
+      "actionId",
+      "operationKey",
+      "scope",
+      "quote",
+      "businessDecision",
+      "template",
+      "renderVersion",
+      "exportFormat",
+      "issueDate"
+    ],
+    "properties": {
+      "schemaVersion": {
+        "type": "string",
+        "const": "1"
+      },
+      "action": {
+        "type": "string",
+        "const": "issueQuotePackage"
+      },
+      "actionId": {
+        "type": "string"
+      },
+      "operationKey": {
+        "type": "string"
+      },
+      "scope": {
+        "$ref": "#/components/schemas/OutputBusinessScopeV1"
+      },
+      "quote": {
+        "$ref": "#/components/schemas/OutputBusinessVersionRefV1"
+      },
+      "businessDecision": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "digest"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "digest": {
+            "type": "string"
+          }
+        }
+      },
+      "template": {
+        "$ref": "#/components/schemas/OutputBusinessVersionRefV1"
+      },
+      "renderVersion": {
+        "type": "string"
+      },
+      "exportFormat": {
+        "type": "string",
+        "const": "pdf"
+      },
+      "issueDate": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputToolEffectClass": {
+    "anyOf": [
+      {
+        "type": "string",
+        "const": "local_read"
+      },
+      {
+        "type": "string",
+        "const": "external_read"
+      },
+      {
+        "type": "string",
+        "const": "local_reversible_write"
+      },
+      {
+        "type": "string",
+        "const": "local_irreversible_write"
+      },
+      {
+        "type": "string",
+        "const": "external_side_effect"
+      },
+      {
+        "type": "string",
+        "const": "financial"
+      },
+      {
+        "type": "string",
+        "const": "privileged"
+      },
+      {
+        "type": "string",
+        "const": "unknown"
+      }
+    ]
+  },
+  "OutputResourceRef": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "namespace",
+      "resourceId"
+    ],
+    "properties": {
+      "namespace": {
+        "type": "string"
+      },
+      "resourceId": {
+        "type": "string"
+      },
+      "digest": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputApproval": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "workspaceId",
+      "executionId",
+      "toolCallId",
+      "effectClass",
+      "intent",
+      "resourceRefs",
+      "authorityCommitment",
+      "expiresAt",
+      "status",
+      "id",
+      "tenantId",
+      "streamVersion",
+      "createdAt",
+      "updatedAt"
+    ],
+    "properties": {
+      "workspaceId": {
+        "type": "string"
+      },
+      "executionId": {
+        "type": "string"
+      },
+      "toolCallId": {
+        "type": "string"
+      },
+      "effectClass": {
+        "$ref": "#/components/schemas/OutputToolEffectClass"
+      },
+      "intent": {
+        "type": "string"
+      },
+      "resourceRefs": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputResourceRef"
+        }
+      },
+      "authorityCommitment": {
+        "type": "string"
+      },
+      "expiresAt": {
+        "type": "string"
+      },
+      "status": {
+        "anyOf": [
+          {
+            "type": "string",
+            "const": "pending"
+          },
+          {
+            "type": "string",
+            "const": "approved_once"
+          },
+          {
+            "type": "string",
+            "const": "denied"
+          },
+          {
+            "type": "string",
+            "const": "expired"
+          }
+        ]
+      },
+      "decidedBy": {
+        "type": "string"
+      },
+      "decidedAt": {
+        "type": "string"
+      },
+      "id": {
+        "type": "string"
+      },
+      "tenantId": {
+        "type": "string"
+      },
+      "streamVersion": {
+        "type": "number"
+      },
+      "createdAt": {
+        "type": "string"
+      },
+      "updatedAt": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputEffectReceiptFileV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "name",
+      "mediaType",
+      "sha256",
+      "protectedContentRef"
+    ],
+    "properties": {
+      "name": {
+        "type": "string"
+      },
+      "mediaType": {
+        "type": "string",
+        "const": "application/pdf"
+      },
+      "sha256": {
+        "type": "string"
+      },
+      "protectedContentRef": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputEffectReceiptV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "schemaVersion",
+      "actionId",
+      "operationKey",
+      "status",
+      "files",
+      "observedAt"
+    ],
+    "properties": {
+      "schemaVersion": {
+        "type": "string",
+        "const": "1"
+      },
+      "actionId": {
+        "type": "string"
+      },
+      "operationKey": {
+        "type": "string"
+      },
+      "status": {
+        "anyOf": [
+          {
+            "type": "string",
+            "const": "completed"
+          },
+          {
+            "type": "string",
+            "const": "unknown"
+          },
+          {
+            "type": "string",
+            "const": "accepted"
+          },
+          {
+            "type": "string",
+            "const": "rejected"
+          }
+        ]
+      },
+      "packageId": {
+        "type": "string"
+      },
+      "files": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputEffectReceiptFileV1"
+        }
+      },
+      "reasonCode": {
+        "type": "string"
+      },
+      "observedAt": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputBusinessActionV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "schemaVersion",
+      "id",
+      "tenantId",
+      "workspaceId",
+      "executionId",
+      "jobId",
+      "operationKey",
+      "actionDigest",
+      "action",
+      "status",
+      "streamVersion",
+      "createdAt",
+      "updatedAt"
+    ],
+    "properties": {
+      "schemaVersion": {
+        "type": "string",
+        "const": "1"
+      },
+      "id": {
+        "type": "string"
+      },
+      "tenantId": {
+        "type": "string"
+      },
+      "workspaceId": {
+        "type": "string"
+      },
+      "executionId": {
+        "type": "string"
+      },
+      "jobId": {
+        "type": "string"
+      },
+      "operationKey": {
+        "type": "string"
+      },
+      "actionDigest": {
+        "type": "string"
+      },
+      "action": {
+        "$ref": "#/components/schemas/OutputIssueQuotePackageInputV1"
+      },
+      "status": {
+        "anyOf": [
+          {
+            "type": "string",
+            "const": "needs_reconciliation"
+          },
+          {
+            "type": "string",
+            "const": "queued"
+          },
+          {
+            "type": "string",
+            "const": "running"
+          },
+          {
+            "type": "string",
+            "const": "waiting_approval"
+          },
+          {
+            "type": "string",
+            "const": "completed"
+          },
+          {
+            "type": "string",
+            "const": "rejected"
+          },
+          {
+            "type": "string",
+            "const": "terminated"
+          }
+        ]
+      },
+      "streamVersion": {
+        "type": "number"
+      },
+      "createdAt": {
+        "type": "string"
+      },
+      "updatedAt": {
+        "type": "string"
+      },
+      "approvalId": {
+        "type": "string"
+      },
+      "approval": {
+        "$ref": "#/components/schemas/OutputApproval"
+      },
+      "receipt": {
+        "$ref": "#/components/schemas/OutputEffectReceiptV1"
+      }
+    }
+  },
   "OutputPluginInputFieldV1": {
     "type": "object",
     "additionalProperties": false,
@@ -565,42 +1014,6 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
         "$ref": "#/components/schemas/OutputPluginCliV1"
       }
     }
-  },
-  "OutputToolEffectClass": {
-    "anyOf": [
-      {
-        "type": "string",
-        "const": "local_read"
-      },
-      {
-        "type": "string",
-        "const": "external_read"
-      },
-      {
-        "type": "string",
-        "const": "local_reversible_write"
-      },
-      {
-        "type": "string",
-        "const": "local_irreversible_write"
-      },
-      {
-        "type": "string",
-        "const": "external_side_effect"
-      },
-      {
-        "type": "string",
-        "const": "financial"
-      },
-      {
-        "type": "string",
-        "const": "privileged"
-      },
-      {
-        "type": "string",
-        "const": "unknown"
-      }
-    ]
   },
   "OutputPluginPermissionV1": {
     "type": "object",
@@ -1173,25 +1586,6 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
       }
     }
   },
-  "OutputResourceRef": {
-    "type": "object",
-    "additionalProperties": false,
-    "required": [
-      "namespace",
-      "resourceId"
-    ],
-    "properties": {
-      "namespace": {
-        "type": "string"
-      },
-      "resourceId": {
-        "type": "string"
-      },
-      "digest": {
-        "type": "string"
-      }
-    }
-  },
   "OutputThread": {
     "type": "object",
     "additionalProperties": false,
@@ -1683,96 +2077,6 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
       }
     }
   },
-  "OutputApproval": {
-    "type": "object",
-    "additionalProperties": false,
-    "required": [
-      "workspaceId",
-      "executionId",
-      "toolCallId",
-      "effectClass",
-      "intent",
-      "resourceRefs",
-      "authorityCommitment",
-      "expiresAt",
-      "status",
-      "id",
-      "tenantId",
-      "streamVersion",
-      "createdAt",
-      "updatedAt"
-    ],
-    "properties": {
-      "workspaceId": {
-        "type": "string"
-      },
-      "executionId": {
-        "type": "string"
-      },
-      "toolCallId": {
-        "type": "string"
-      },
-      "effectClass": {
-        "$ref": "#/components/schemas/OutputToolEffectClass"
-      },
-      "intent": {
-        "type": "string"
-      },
-      "resourceRefs": {
-        "type": "array",
-        "items": {
-          "$ref": "#/components/schemas/OutputResourceRef"
-        }
-      },
-      "authorityCommitment": {
-        "type": "string"
-      },
-      "expiresAt": {
-        "type": "string"
-      },
-      "status": {
-        "anyOf": [
-          {
-            "type": "string",
-            "const": "pending"
-          },
-          {
-            "type": "string",
-            "const": "approved_once"
-          },
-          {
-            "type": "string",
-            "const": "denied"
-          },
-          {
-            "type": "string",
-            "const": "expired"
-          }
-        ]
-      },
-      "decidedBy": {
-        "type": "string"
-      },
-      "decidedAt": {
-        "type": "string"
-      },
-      "id": {
-        "type": "string"
-      },
-      "tenantId": {
-        "type": "string"
-      },
-      "streamVersion": {
-        "type": "number"
-      },
-      "createdAt": {
-        "type": "string"
-      },
-      "updatedAt": {
-        "type": "string"
-      }
-    }
-  },
   "OutputAsset": {
     "type": "object",
     "additionalProperties": false,
@@ -1964,22 +2268,40 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
     "additionalProperties": false,
     "required": [
       "workspaceId",
-      "status",
-      "scopeType",
-      "namespace",
-      "resourceId",
-      "sourceEventId",
-      "confidence",
-      "shareGrantIds",
       "id",
       "tenantId",
       "streamVersion",
+      "namespace",
+      "resourceId",
+      "status",
       "createdAt",
       "updatedAt",
+      "scopeType",
+      "sourceEventId",
+      "confidence",
+      "shareGrantIds",
       "value"
     ],
     "properties": {
       "workspaceId": {
+        "type": "string"
+      },
+      "id": {
+        "type": "string"
+      },
+      "tenantId": {
+        "type": "string"
+      },
+      "streamVersion": {
+        "type": "number"
+      },
+      "namespace": {
+        "type": "string"
+      },
+      "resourceId": {
+        "type": "string"
+      },
+      "expiresAt": {
         "type": "string"
       },
       "status": {
@@ -2010,6 +2332,12 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
           }
         ]
       },
+      "createdAt": {
+        "type": "string"
+      },
+      "updatedAt": {
+        "type": "string"
+      },
       "scopeType": {
         "anyOf": [
           {
@@ -2030,12 +2358,6 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
           }
         ]
       },
-      "namespace": {
-        "type": "string"
-      },
-      "resourceId": {
-        "type": "string"
-      },
       "sourceEventId": {
         "type": "string"
       },
@@ -2043,9 +2365,6 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
         "type": "number"
       },
       "confirmedAt": {
-        "type": "string"
-      },
-      "expiresAt": {
         "type": "string"
       },
       "shareGrantIds": {
@@ -2058,21 +2377,6 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
         "type": "string"
       },
       "derivedViaShareGrantId": {
-        "type": "string"
-      },
-      "id": {
-        "type": "string"
-      },
-      "tenantId": {
-        "type": "string"
-      },
-      "streamVersion": {
-        "type": "number"
-      },
-      "createdAt": {
-        "type": "string"
-      },
-      "updatedAt": {
         "type": "string"
       },
       "value": {
