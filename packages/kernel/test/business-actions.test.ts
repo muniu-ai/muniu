@@ -39,3 +39,15 @@ test("业务创建在事务中拒绝已撤销的当前成员权限", async () =>
   const ledger = new BusinessActionLedger(new InMemoryKernelStore(undefined, () => now), { now: () => now });
   await assert.rejects(ledger.create(action, "revoked"), { code: "BUSINESS_SCOPE_REVOKED" });
 });
+
+test("稳定操作号不能静默复用另一个业务批准或操作者的执行审批", async () => {
+  const store = new InMemoryKernelStore(undefined, () => now);
+  const ledger = new BusinessActionLedger(store, { now: () => now });
+  await store.transact("tenant-a", tx => {
+    tx.putProjection("membership", "workspace-a:owner", {workspaceRole:"owner"});
+    tx.putProjection("membership", "workspace-a:other", {workspaceRole:"owner"});
+  });
+  await ledger.create(action, "first");
+  await assert.rejects(ledger.create({...action, actionId:"other-decision", businessDecision:{id:"decision-b",digest:"d".repeat(64)}},"changed-decision"), {code:"BUSINESS_ACTION_CONFLICT"});
+  await assert.rejects(ledger.create({...action, actionId:"other-principal", scope:{...action.scope,principalId:"other"}},"changed-principal"), {code:"BUSINESS_ACTION_CONFLICT"});
+});

@@ -67,6 +67,8 @@ export class BusinessActionLedger {
         const { principalId: _previousPrincipal, ...previousScope } = duplicate.action.scope;
         const { principalId: _currentPrincipal, ...currentScope } = input.scope;
         if (sha256(previousScope) !== sha256(currentScope)) fail("BUSINESS_SCOPE_MISMATCH", "已有出包操作不属于当前业务范围");
+        const { actionId: _previousId, ...previousSemanticRequest } = duplicate.action;
+        if (sha256(previousSemanticRequest) !== requestDigest) fail("BUSINESS_ACTION_CONFLICT", "稳定操作号已绑定另一业务批准或操作者，请先核对原动作，不能复用旧执行审批");
         tx.putIdempotency({ tenantId: input.scope.tenantId, scope: "business-action.create", key: idempotencyKey, requestDigest, response: duplicate, createdAt: this.now() });
         return duplicate;
       }
