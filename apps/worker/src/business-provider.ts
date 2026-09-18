@@ -43,7 +43,7 @@ export function createSalesBusinessProvider(options: {
     actions: { admit: async input => parseEffectAdmissionV1(await send("actions/admit", input)),
       execute: async input => parseEffectReceiptV1(await send("actions/execute", input)) },
     receipts: { lookup: async input => { const value = await send("actions/lookup", input); return value === null ? undefined : parseEffectReceiptV1(value); },
-      reconcile: async input => { const value = await send("actions/lookup", input); return value === null ? undefined : parseEffectReceiptV1(value); } },
+      reconcile: async input => { const value = await send("actions/reconcile", input); return value === null ? undefined : parseEffectReceiptV1(value); } },
   };
 }
 

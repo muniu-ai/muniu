@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { randomUUID } from "node:crypto";
 import type {
-  Approval, BusinessActionV1, EffectReceiptV1, Execution, ExecutionAuthority,
+  Approval, BusinessActionV1, BusinessScopeV1, EffectReceiptV1, Execution, ExecutionAuthority,
   IssueQuotePackageInputV1, JsonObject, ToolCallIntent, WorkspaceMembership, WorkerExecutionIdentityV1,
 } from "@mn/contracts";
 import { computeBusinessActionDigest, parseIssueQuotePackageInputV1 } from "@mn/contracts";
@@ -32,8 +32,12 @@ export function requireBusinessLease(tx: KernelTransaction, lease: KernelJobLeas
 }
 
 export function requireBusinessMembership(tx: KernelTransaction, action: BusinessActionV1): void {
-  const member = tx.getProjection<WorkspaceMembership>("membership", `${action.workspaceId}:${action.action.scope.principalId}`);
-  if (!member || member.removedAt || !["owner", "operator"].includes(member.workspaceRole)) fail("BUSINESS_SCOPE_REVOKED", "业务执行身份的工作区权限已撤销");
+  requireBusinessScopeMembership(tx, action.action.scope);
+}
+
+function requireBusinessScopeMembership(tx: KernelTransaction, scope: BusinessScopeV1, roles: readonly string[] = ["owner", "operator"]): void {
+  const member = tx.getProjection<WorkspaceMembership>("membership", `${scope.workspaceId}:${scope.principalId}`);
+  if (!member || member.removedAt || !roles.includes(member.workspaceRole)) fail("BUSINESS_SCOPE_REVOKED", "业务执行身份的工作区权限已撤销");
 }
 
 export class BusinessActionLedger {
@@ -51,6 +55,7 @@ export class BusinessActionLedger {
     const { actionId: _id, ...semanticRequest } = input;
     const requestDigest = sha256(semanticRequest);
     return this.store.transact(input.scope.tenantId, tx => {
+      requireBusinessScopeMembership(tx, input.scope);
       const cached = tx.getIdempotency("business-action.create", idempotencyKey);
       if (cached) {
         if (cached.requestDigest !== requestDigest) fail("IDEMPOTENCY_CONFLICT", "幂等键对应的业务参数已变化");
@@ -240,6 +245,8 @@ export class BusinessActionLedger {
   async reconcile(tenantId: string, id: string, expectedStreamVersion: number, decision: "mark_completed" | "terminate", receipt?: EffectReceiptV1,
     request?: { readonly actorId: string; readonly idempotencyKey: string }): Promise<BusinessActionState> {
     return this.store.transact(tenantId, tx => {
+      const action = this.require(tx, id);
+      requireBusinessScopeMembership(tx, { ...action.action.scope, principalId: request?.actorId ?? action.action.scope.principalId }, ["owner", "operator", "reviewer"]);
       const requestDigest = sha256({ id, expectedStreamVersion, decision, actorId: request?.actorId ?? null });
       const cacheScope = `business-action.reconcile:${id}`;
       const cached = request ? tx.getIdempotency(cacheScope, request.idempotencyKey) : undefined;
@@ -247,7 +254,6 @@ export class BusinessActionLedger {
         if (cached.requestDigest !== requestDigest) fail("IDEMPOTENCY_CONFLICT", "幂等键对应的核对决定已变化");
         return cached.response as BusinessActionState;
       }
-      const action = this.require(tx, id);
       if (action.streamVersion !== expectedStreamVersion) fail("STREAM_VERSION_CONFLICT", "业务动作版本已变化");
       if (action.status !== "needs_reconciliation") fail("BUSINESS_RECONCILIATION_REQUIRED", "业务动作不处于待核对状态");
       if (decision === "mark_completed" && (!receipt || receipt.status !== "completed" || receipt.actionId !== id || receipt.operationKey !== action.operationKey))

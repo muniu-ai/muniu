@@ -19,6 +19,7 @@ const action = { ...draft, operationKey: computeBusinessOperationKey(draft) };
 test("同一出包操作只建立一个执行和任务，幂等键不能替换业务参数", async () => {
   const store = new InMemoryKernelStore(undefined, () => now);
   const ledger = new BusinessActionLedger(store, { now: () => now });
+  await store.transact("tenant-a", tx => tx.putProjection("membership", "workspace-a:owner", { workspaceRole: "owner" }));
   const first = await ledger.create(action, "request-a");
   const replay = await ledger.create(action, "request-a");
   assert.deepEqual(replay, first);
@@ -32,4 +33,9 @@ test("同一出包操作只建立一个执行和任务，幂等键不能替换�
   assert.ok(!JSON.stringify(events).includes("decision-a"));
   await ledger.record("tenant-a", first.id, { status: "rejected" });
   assert.equal((await ledger.create(action, "request-a")).status, "rejected");
+});
+
+test("业务创建在事务中拒绝已撤销的当前成员权限", async () => {
+  const ledger = new BusinessActionLedger(new InMemoryKernelStore(undefined, () => now), { now: () => now });
+  await assert.rejects(ledger.create(action, "revoked"), { code: "BUSINESS_SCOPE_REVOKED" });
 });

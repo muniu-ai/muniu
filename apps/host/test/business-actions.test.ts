@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { InMemoryKeyProvider } from "@mn/storage";
 import { InMemoryKernelStore } from "@mn/kernel";
+import type { EffectReceiptV1 } from "@mn/contracts";
 import type { BusinessProviderPorts } from "@mn/worker";
 import { createAgentOsHost, startLocalAgentOsHost, type AgentOsHost } from "../src/index.js";
 
@@ -48,13 +49,16 @@ test("业务动作创建只接受用户选择，哈希和执行身份来自Host�
   await host.close();
 });
 
-test("本地启动接通业务Worker，服务回调校验批准和当前租约", async t => {
+for (const scenario of ["completed", "unknown"] as const) {
+test(`本地启动接通业务Worker和受信回执核对：${scenario}`, async t => {
   const directory = await mkdtemp(join(tmpdir(), "muniu-business-host-"));
   const enabled: { tenantId: string; workspaceId: string }[] = [];
   let host: AgentOsHost | undefined;
   t.after(async () => { await host?.close(); await rm(directory, { recursive: true, force: true }); });
   const ports = fixturePorts(new Date().toISOString());
   let calls = 0;
+  let reconciliations = 0;
+  let receipt: EffectReceiptV1 | undefined;
   const actions: BusinessProviderPorts["actions"] = {
     async admit(input) {
       calls++;
@@ -74,14 +78,16 @@ test("本地启动接通业务Worker，服务回调校验批准和当前租约",
       return { schemaVersion: "1", actionId: input.action.actionId, operationKey: input.action.operationKey, admissionId: "admitted", status: "admitted" };
     },
     async execute(input) {
-      return { schemaVersion: "1", actionId: input.actionId, operationKey: input.operationKey, status: "completed", packageId: "package",
+      receipt = { schemaVersion: "1", actionId: input.actionId, operationKey: input.operationKey, status: "completed", packageId: "package",
         files: [{ name: "quote.pdf", mediaType: "application/pdf", sha256: "d".repeat(64), protectedContentRef: "sales://local/quote/package/file" }], observedAt: new Date().toISOString() };
+      if (scenario === "unknown") throw new Error("结果未收到");
+      return receipt;
     },
   };
   host = await startLocalAgentOsHost({ stateRoot: directory, port: 0, workerIdleDelayMs: 5,
     legacyDaemonProbe: async () => false, protectedPayloadKeyProvider: new InMemoryKeyProvider(Buffer.alloc(32, 4)),
     secretStore: { async save() { return "keychain://muniu.v2/test"; }, async read() { return "test"; }, async getOrCreateBytes() { return Buffer.alloc(32, 3); } },
-    businessProvider: { ...ports, actions }, businessWorkspaceScopes: enabled, businessAuthorityTokenResolver: async () => "authority-test-secret" });
+    businessProvider: { ...ports, actions, receipts: { async lookup() { return undefined; }, async reconcile() { reconciliations++; return receipt; } } }, businessWorkspaceScopes: enabled, businessAuthorityTokenResolver: async () => "authority-test-secret" });
   const post = (path: string, body: unknown, key: string) => host!.dispatch(new Request(`http://host.test${path}`, {
     method: "POST", headers: { "content-type": "application/json", "Idempotency-Key": key }, body: JSON.stringify(body) }));
   const workspace = (await (await post("/v2/workspaces", { name: "工业询价", viewMode: "business", pluginIds: [] }, "workspace")).json() as any).data;
@@ -99,12 +105,20 @@ test("本地启动接通业务Worker，服务回调校验批准和当前租约",
   assert.equal(calls, 0);
   const approval = await post(`/v2/approvals/${state.approval.id}/decisions`, { expectedStreamVersion: state.approval.streamVersion, decision: "approve_once" }, "approve");
   assert.equal(approval.status, 200);
-  for (let i = 0; i < 300 && state.status !== "completed"; i++) {
+  for (let i = 0; i < 300 && state.status !== (scenario === "unknown" ? "needs_reconciliation" : "completed"); i++) {
     await new Promise(resolve => setTimeout(resolve, 5));
     state = (await (await host.dispatch(new Request(`http://host.test/v2/business-actions/${created.id}`))).json() as any).data;
+  }
+  if (scenario === "unknown") {
+    const reconciled = await post(`/v2/business-actions/${state.id}/reconciliation-decisions`, { expectedStreamVersion: state.streamVersion, decision: "mark_completed" }, "reconcile");
+    const result = await reconciled.json() as any;
+    assert.equal(reconciled.status, 200, JSON.stringify(result));
+    state = result.data;
+    assert.equal(reconciliations, 1);
   }
   assert.equal(state.status, "completed", JSON.stringify(state));
   assert.equal(calls, 1);
   assert.equal(state.dispatchStartedAt, undefined);
   assert.equal(state.admissionId, undefined);
 });
+}

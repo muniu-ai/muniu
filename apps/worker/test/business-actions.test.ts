@@ -76,6 +76,11 @@ for (const scenario of ["completed", "unknown", "abandoned", "revoked", "revoked
       assert.equal((await worker.pollOnce()).status, "idle");
       assert.equal(dispatches, 1);
       await assert.rejects(ledger.reconcile("local", created.id, final.streamVersion, "terminate"), { code: "BUSINESS_ABANDONMENT_REQUIRED" });
+      const member = await store.transact("local", tx => tx.getProjection("membership", "workspace:owner"));
+      await store.transact("local", tx => tx.deleteProjection("membership", "workspace:owner"));
+      await assert.rejects(ledger.reconcile("local", created.id, final.streamVersion, "mark_completed", receipt,
+        { actorId: "owner", idempotencyKey: "revoked-reconcile" }), { code: "BUSINESS_SCOPE_REVOKED" });
+      await store.transact("local", tx => tx.putProjection("membership", "workspace:owner", member));
       const changed = { ...input, actionId: "another-action", issueDate: "2026-09-19" };
       await assert.rejects(ledger.create({ ...changed, operationKey: computeBusinessOperationKey(changed) }, "new-key"), { code: "BUSINESS_RECONCILIATION_REQUIRED" });
       const recovered = scenario === "unknown"

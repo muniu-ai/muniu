@@ -1287,8 +1287,10 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         if (request.method === "GET" && !businessActionMatch[2]) return json(await actionView(action), 200, traceId);
         if (request.method === "POST" && businessActionMatch[2]) {
           const input = parseReconcileBusinessActionV2(await readBody(request));
-          const receipt = await options.businessProvider.receipts.lookup({ schemaVersion: "1", scope: { ...action.action.scope, principalId: ACTOR_ID },
-            actionId: action.id, operationKey: action.operationKey });
+          const query = { schemaVersion: "1" as const, scope: { ...action.action.scope, principalId: ACTOR_ID },
+            actionId: action.id, operationKey: action.operationKey };
+          const receipt = input.decision === "mark_completed" ? await options.businessProvider.receipts.reconcile(query)
+            : await options.businessProvider.receipts.lookup(query);
           return json(await actionView(await ledger.reconcile(TENANT_ID, action.id, input.expectedStreamVersion, input.decision, receipt,
             { actorId: ACTOR_ID, idempotencyKey: mutationKey as string })), 200, traceId);
         }

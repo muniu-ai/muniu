@@ -368,7 +368,7 @@ export class PostgresKernelStore {
           });
           transaction.putProjection("job", input.jobId, nextJob);
 
-          if (executionId) {
+          if (executionId && projected.kind === "agent.execution.run") {
             const execution = projections.get(projectionKey("execution", executionId));
             if (!execution || !Number.isSafeInteger(execution.streamVersion)) {
               throw new Error(`Execution ${executionId} 的投影不存在或版本无效`);

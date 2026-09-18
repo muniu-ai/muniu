@@ -35,6 +35,35 @@ class FixtureClient {
   release() {}
 }
 
+for (const kind of ["business.action.execute", "business.candidate.extract", "agent.execution.run"]) {
+  test(`PostgreSQL 原子结算只为 agent job 管理执行终态：${kind}`, async () => {
+    const client = new FixtureClient();
+    const original = client.query.bind(client);
+    const time = "2026-09-18T00:00:00.000Z";
+    const execution = { id: "execution", tenantId: "tenant", workspaceId: "workspace", generation: 1,
+      status: kind === "agent.execution.run" ? "running" : "completed", streamVersion: 2 };
+    const job = { id: "job", tenantId: "tenant", workspaceId: "workspace", kind, status: "leased", payload: { executionId: "execution" },
+      leaseOwner: "worker", leaseExpiresAt: "2026-09-18T00:01:00.000Z", fencingToken: 1, streamVersion: 1 };
+    client.query = async (sql, args) => {
+      const result = await original(sql, args);
+      if (sql.includes("select aggregate_type, aggregate_id")) return { rows: [
+        { aggregate_type: "job", aggregate_id: "job", stream_version: 1 }, { aggregate_type: "execution", aggregate_id: "execution", stream_version: 2 }] };
+      if (sql.includes("select namespace, projection_key")) return { rows: [
+        { namespace: "execution", projection_key: "execution", value_json: execution }, { namespace: "job", projection_key: "job", value_json: job }] };
+      if (sql.includes("select job_id, status, lease_owner")) return { rows: [
+        { job_id: "job", status: "leased", lease_owner: "worker", lease_expires_at: job.leaseExpiresAt, fencing_token: 1 }] };
+      return result;
+    };
+    const store = new PostgresKernelStore({ pool: { query: client.query.bind(client), connect: async () => client }, hmacKey: Buffer.alloc(32, 7), now: () => time });
+    await store.transact("tenant", tx => {
+      assert.equal(tx.settleJob({ jobId: "job", workerId: "worker", fencingToken: 1, occurredAt: time, outcome: "completed", value: {} }).settled, true);
+      assert.equal(tx.getProjection("execution", "execution").status, "completed");
+      assert.equal(tx.getProjection("execution", "execution").streamVersion, kind === "agent.execution.run" ? 3 : 2);
+    });
+    assert.equal(client.queries.at(-1).sql, "commit");
+  });
+}
+
 test("PostgreSQL rebuild authenticates ciphertext and atomically replaces encrypted references", async () => {
   const root = mkdtempSync(join(tmpdir(), "mn-pg-rebuild-"));
   const hmacKey = Buffer.alloc(32, 21);
