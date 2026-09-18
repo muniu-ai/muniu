@@ -17,6 +17,10 @@ export const API_OPERATIONS_V2 = [
   { method: "post", path: "/v2/business-actions", operationId: "createBusinessAction", mutation: true, versioned: true },
   { method: "get", path: "/v2/business-actions/{actionId}", operationId: "getBusinessAction", mutation: false, versioned: false },
   { method: "post", path: "/v2/business-actions/{actionId}/reconciliation-decisions", operationId: "reconcileBusinessAction", mutation: true, versioned: true },
+  { method: "get", path: "/v2/business-actions/{actionId}/execution-authority", operationId: "getBusinessExecutionAuthority", mutation: false, versioned: false },
+  { method: "post", path: "/v2/business-candidates", operationId: "createBusinessCandidate", mutation: true, versioned: true },
+  { method: "get", path: "/v2/business-candidates/{candidateId}", operationId: "getBusinessCandidate", mutation: false, versioned: false },
+  { method: "get", path: "/v2/business-candidates/{candidateId}/content", operationId: "getBusinessCandidateContent", mutation: false, versioned: false },
   { method: "post", path: "/v2/plugins/{pluginId}/{commandId}", operationId: "runPluginCommand", mutation: true, versioned: true },
   { method: "get", path: "/v2/workspaces/{workspaceId}/plugin-surfaces", operationId: "getPluginSurfaces", mutation: false, versioned: false },
   { method: "get", path: "/v2/plugins/catalog", operationId: "listPluginCatalog", mutation: false, versioned: false },
@@ -90,6 +94,7 @@ function successStatus(operationId: string): "200" | "201" | "202" {
   if (operationId === "createTurn") return "202";
   if ([
     "createBusinessAction",
+    "createBusinessCandidate",
     "createWorkspace",
     "createThread",
     "createAssets",
@@ -140,6 +145,13 @@ export function createOpenApiDocument(): JsonObject {
         { in: "header", name: "Last-Event-ID", required: false, schema: { type: "integer", minimum: 0 } },
         { in: "query", name: "after", required: false, schema: { type: "integer", minimum: 0 } },
       );
+    }
+    if (operation.operationId === "getBusinessCandidateContent") {
+      for (const name of ["tenantId", "workspaceId", "principalId", "customerId"]) parameters.push({ in: "query", name, required: true, schema: { type: "string", minLength: 1 } });
+    }
+    if (operation.operationId === "getBusinessExecutionAuthority") {
+      for (const name of ["tenantId", "executionId", "jobId", "workerId"]) parameters.push({ in: "query", name, required: true, schema: { type: "string", minLength: 1 } });
+      for (const name of ["generation", "fencingToken"]) parameters.push({ in: "query", name, required: true, schema: { type: "integer", minimum: 1 } });
     }
     if (["listInbox", "listMemories", "listDeliverables", "getHealth"].includes(operation.operationId)) parameters.push({ in: "query", name: "workspaceId", required: false, schema: { type: "string" } });
     if (operation.operationId === "listActivity") parameters.push({ in: "query", name: "workspaceId", required: true, schema: { type: "string" } });
@@ -203,6 +215,8 @@ export function createOpenApiDocument(): JsonObject {
         "422": { $ref: "#/components/responses/Unprocessable" },
       },
       "x-muniu-versioned": operation.versioned,
+      ...(["getBusinessCandidateContent", "getBusinessExecutionAuthority"].includes(operation.operationId)
+        ? { "x-muniu-service-auth": "Dedicated business service bearer credential with explicit workspace scopes" } : {}),
     };
   }
   return {
@@ -212,6 +226,15 @@ export function createOpenApiDocument(): JsonObject {
     components: {
       schemas: {
         ...API_OUTPUT_COMPONENTS_V2,
+        CreateBusinessCandidateMutation: {
+          type: "object", additionalProperties: false,
+          required: ["expectedStreamVersion", "workspaceId", "customerId", "inquiryId", "inquiryRevision"],
+          properties: {
+            expectedStreamVersion: { type: "integer", const: 0 },
+            workspaceId: { type: "string", minLength: 1 }, customerId: { type: "string", minLength: 1 },
+            inquiryId: { type: "string", minLength: 1 }, inquiryRevision: { type: "string", minLength: 1 },
+          },
+        },
         CreateBusinessActionMutation: {
           type: "object", additionalProperties: false,
           required: ["schemaVersion", "action", "expectedStreamVersion", "workspaceId", "customerId", "quoteId", "quoteVersion", "decisionId", "templateId", "templateVersion", "renderVersion", "exportFormat", "issueDate"],
@@ -518,6 +541,7 @@ export function createOpenApiDocument(): JsonObject {
 }
 
 function mutationSchema(operationId: string, versioned: boolean): JsonObject {
+  if (operationId === "createBusinessCandidate") return { $ref: "#/components/schemas/CreateBusinessCandidateMutation" };
   if (operationId === "createBusinessAction") return { $ref: "#/components/schemas/CreateBusinessActionMutation" };
   if (operationId === "reconcileBusinessAction") return { $ref: "#/components/schemas/ReconcileBusinessActionMutation" };
   const string = { type: "string", minLength: 1 };

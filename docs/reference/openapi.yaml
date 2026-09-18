@@ -128,6 +128,240 @@ paths:
         "422":
           $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: true
+  /v2/business-actions/{actionId}/execution-authority:
+    get:
+      operationId: getBusinessExecutionAuthority
+      parameters:
+        - in: path
+          name: actionId
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: tenantId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: query
+          name: executionId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: query
+          name: jobId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: query
+          name: workerId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: query
+          name: generation
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+        - in: query
+          name: fencingToken
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    type: object
+                    additionalProperties: false
+                    required:
+                      - allowed
+                      - actionDigest
+                      - expiresAt
+                      - leaseExpiresAt
+                      - actionId
+                      - operationKey
+                    properties:
+                      allowed:
+                        type: boolean
+                        const: true
+                      actionDigest:
+                        type: string
+                      expiresAt:
+                        type: string
+                      leaseExpiresAt:
+                        type: string
+                      actionId:
+                        type: string
+                      operationKey:
+                        type: string
+                  traceId:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+      x-muniu-versioned: false
+      x-muniu-service-auth: Dedicated business service bearer credential with explicit workspace scopes
+  /v2/business-candidates:
+    post:
+      operationId: createBusinessCandidate
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBusinessCandidateMutation"
+      responses:
+        "201":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/OutputBusinessCandidateV1"
+                  traceId:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+      x-muniu-versioned: true
+  /v2/business-candidates/{candidateId}:
+    get:
+      operationId: getBusinessCandidate
+      parameters:
+        - in: path
+          name: candidateId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/OutputBusinessCandidateV1"
+                  traceId:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+      x-muniu-versioned: false
+  /v2/business-candidates/{candidateId}/content:
+    get:
+      operationId: getBusinessCandidateContent
+      parameters:
+        - in: path
+          name: candidateId
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: tenantId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: query
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: query
+          name: principalId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: query
+          name: customerId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/OutputBusinessCandidateContentV1"
+                  traceId:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+      x-muniu-versioned: false
+      x-muniu-service-auth: Dedicated business service bearer credential with explicit workspace scopes
   /v2/plugins/{pluginId}/{commandId}:
     post:
       operationId: runPluginCommand
@@ -3575,6 +3809,208 @@ components:
           $ref: "#/components/schemas/OutputApproval"
         receipt:
           $ref: "#/components/schemas/OutputEffectReceiptV1"
+    OutputBusinessCandidateV1:
+      type: object
+      additionalProperties: false
+      required:
+        - schemaVersion
+        - id
+        - tenantId
+        - workspaceId
+        - scope
+        - inquiryId
+        - inquiryRevision
+        - sourceDigest
+        - executionId
+        - jobId
+        - workflowVersion
+        - status
+        - streamVersion
+        - createdAt
+        - updatedAt
+      properties:
+        schemaVersion:
+          type: string
+          const: "1"
+        id:
+          type: string
+        tenantId:
+          type: string
+        workspaceId:
+          type: string
+        scope:
+          $ref: "#/components/schemas/OutputBusinessScopeV1"
+        inquiryId:
+          type: string
+        inquiryRevision:
+          type: string
+        sourceDigest:
+          type: string
+        executionId:
+          type: string
+        jobId:
+          type: string
+        workflowVersion:
+          type: string
+          const: "1"
+        status:
+          anyOf:
+            - type: string
+              const: needs_reconciliation
+            - type: string
+              const: queued
+            - type: string
+              const: running
+            - type: string
+              const: completed
+            - type: string
+              const: failed
+        streamVersion:
+          type: number
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+        candidateDigest:
+          type: string
+        counts:
+          type: object
+          additionalProperties: false
+          required:
+            - requirements
+            - facts
+            - suggestions
+            - unknown
+            - conflicts
+          properties:
+            requirements:
+              type: number
+            facts:
+              type: number
+            suggestions:
+              type: number
+            unknown:
+              type: number
+            conflicts:
+              type: number
+        reasonCode:
+          type: string
+    OutputRfqCitationV1:
+      type: object
+      additionalProperties: false
+      required:
+        - sourceId
+        - pageNumber
+        - start
+        - end
+        - quote
+      properties:
+        sourceId:
+          type: string
+        pageNumber:
+          type: number
+        start:
+          type: number
+        end:
+          type: number
+        quote:
+          type: string
+    OutputRfqCandidateItemV1:
+      type: object
+      additionalProperties: false
+      required:
+        - text
+        - citations
+      properties:
+        text:
+          type: string
+        citations:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutputRfqCitationV1"
+    OutputRfqCandidateV1:
+      type: object
+      additionalProperties: false
+      required:
+        - schemaVersion
+        - inquiryId
+        - inquiryRevision
+        - sourceDigest
+        - modelProvenance
+        - requirements
+        - facts
+        - suggestions
+        - unknown
+        - conflicts
+      properties:
+        schemaVersion:
+          type: string
+          const: "1"
+        inquiryId:
+          type: string
+        inquiryRevision:
+          type: string
+        sourceDigest:
+          type: string
+        modelProvenance:
+          type: object
+          additionalProperties: false
+          required:
+            - providerId
+            - modelId
+            - mode
+          properties:
+            providerId:
+              type: string
+            modelId:
+              type: string
+            mode:
+              anyOf:
+                - type: string
+                  const: live
+                - type: string
+                  const: test_fixture
+        requirements:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutputRfqCandidateItemV1"
+        facts:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutputRfqCandidateItemV1"
+        suggestions:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutputRfqCandidateItemV1"
+        unknown:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutputRfqCandidateItemV1"
+        conflicts:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutputRfqCandidateItemV1"
+    OutputBusinessCandidateContentV1:
+      type: object
+      additionalProperties: false
+      required:
+        - schemaVersion
+        - id
+        - scope
+        - digest
+        - candidate
+      properties:
+        schemaVersion:
+          type: string
+          const: "1"
+        id:
+          type: string
+        scope:
+          $ref: "#/components/schemas/OutputBusinessScopeV1"
+        digest:
+          type: string
+        candidate:
+          $ref: "#/components/schemas/OutputRfqCandidateV1"
     OutputPluginInputFieldV1:
       type: object
       additionalProperties: false
@@ -6104,11 +6540,11 @@ components:
                   - type: string
                     const: failed
                   - type: string
+                    const: missing
+                  - type: string
                     const: passed
                   - type: string
                     const: error
-                  - type: string
-                    const: missing
               summary:
                 type: string
         reason:
@@ -6317,6 +6753,31 @@ components:
           type: string
         newExecution:
           $ref: "#/components/schemas/OutputExecution"
+    CreateBusinessCandidateMutation:
+      type: object
+      additionalProperties: false
+      required:
+        - expectedStreamVersion
+        - workspaceId
+        - customerId
+        - inquiryId
+        - inquiryRevision
+      properties:
+        expectedStreamVersion:
+          type: integer
+          const: 0
+        workspaceId:
+          type: string
+          minLength: 1
+        customerId:
+          type: string
+          minLength: 1
+        inquiryId:
+          type: string
+          minLength: 1
+        inquiryRevision:
+          type: string
+          minLength: 1
     CreateBusinessActionMutation:
       type: object
       additionalProperties: false

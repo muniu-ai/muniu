@@ -4,6 +4,10 @@ export interface ApiInputsV2 {
   readonly createBusinessAction: { readonly path?: Record<string, never>; readonly body: { readonly "schemaVersion": "1"; readonly "action": "issueQuotePackage"; readonly "expectedStreamVersion": 0; readonly "workspaceId": string; readonly "customerId": string; readonly "quoteId": string; readonly "quoteVersion": string; readonly "decisionId": string; readonly "templateId": string; readonly "templateVersion": string; readonly "renderVersion": string; readonly "exportFormat": "pdf"; readonly "issueDate": string; }; };
   readonly getBusinessAction: { readonly path: { readonly actionId: string; }; };
   readonly reconcileBusinessAction: { readonly path: { readonly actionId: string; }; readonly body: { readonly "expectedStreamVersion": number; readonly "decision": "mark_completed" | "terminate"; }; };
+  readonly getBusinessExecutionAuthority: { readonly path: { readonly actionId: string; }; readonly query: { readonly tenantId: string; readonly executionId: string; readonly jobId: string; readonly workerId: string; readonly generation: number; readonly fencingToken: number; }; };
+  readonly createBusinessCandidate: { readonly path?: Record<string, never>; readonly body: { readonly "expectedStreamVersion": 0; readonly "workspaceId": string; readonly "customerId": string; readonly "inquiryId": string; readonly "inquiryRevision": string; }; };
+  readonly getBusinessCandidate: { readonly path: { readonly candidateId: string; }; };
+  readonly getBusinessCandidateContent: { readonly path: { readonly candidateId: string; }; readonly query: { readonly tenantId: string; readonly workspaceId: string; readonly principalId: string; readonly customerId: string; }; };
   readonly runPluginCommand: { readonly path: { readonly pluginId: string; readonly commandId: string; }; readonly body: { readonly "workspaceId": string; readonly "expectedStreamVersion": number; readonly [key: string]: unknown; }; };
   readonly getPluginSurfaces: { readonly path: { readonly workspaceId: string; }; };
   readonly listPluginCatalog: { readonly path?: Record<string, never>; };
@@ -197,6 +201,137 @@ export const API_INPUT_FIELDS_V2 = {
       "name": "decision",
       "location": "body",
       "required": true
+    }
+  ],
+  "getBusinessExecutionAuthority": [
+    {
+      "name": "actionId",
+      "location": "path",
+      "required": true,
+      "type": "string"
+    },
+    {
+      "name": "tenantId",
+      "location": "query",
+      "required": true,
+      "type": "string",
+      "minLength": 1
+    },
+    {
+      "name": "executionId",
+      "location": "query",
+      "required": true,
+      "type": "string",
+      "minLength": 1
+    },
+    {
+      "name": "jobId",
+      "location": "query",
+      "required": true,
+      "type": "string",
+      "minLength": 1
+    },
+    {
+      "name": "workerId",
+      "location": "query",
+      "required": true,
+      "type": "string",
+      "minLength": 1
+    },
+    {
+      "name": "generation",
+      "location": "query",
+      "required": true,
+      "type": "integer",
+      "minimum": 1
+    },
+    {
+      "name": "fencingToken",
+      "location": "query",
+      "required": true,
+      "type": "integer",
+      "minimum": 1
+    }
+  ],
+  "createBusinessCandidate": [
+    {
+      "type": "integer",
+      "const": 0,
+      "name": "expectedStreamVersion",
+      "location": "body",
+      "required": true
+    },
+    {
+      "type": "string",
+      "minLength": 1,
+      "name": "workspaceId",
+      "location": "body",
+      "required": true
+    },
+    {
+      "type": "string",
+      "minLength": 1,
+      "name": "customerId",
+      "location": "body",
+      "required": true
+    },
+    {
+      "type": "string",
+      "minLength": 1,
+      "name": "inquiryId",
+      "location": "body",
+      "required": true
+    },
+    {
+      "type": "string",
+      "minLength": 1,
+      "name": "inquiryRevision",
+      "location": "body",
+      "required": true
+    }
+  ],
+  "getBusinessCandidate": [
+    {
+      "name": "candidateId",
+      "location": "path",
+      "required": true,
+      "type": "string"
+    }
+  ],
+  "getBusinessCandidateContent": [
+    {
+      "name": "candidateId",
+      "location": "path",
+      "required": true,
+      "type": "string"
+    },
+    {
+      "name": "tenantId",
+      "location": "query",
+      "required": true,
+      "type": "string",
+      "minLength": 1
+    },
+    {
+      "name": "workspaceId",
+      "location": "query",
+      "required": true,
+      "type": "string",
+      "minLength": 1
+    },
+    {
+      "name": "principalId",
+      "location": "query",
+      "required": true,
+      "type": "string",
+      "minLength": 1
+    },
+    {
+      "name": "customerId",
+      "location": "query",
+      "required": true,
+      "type": "string",
+      "minLength": 1
     }
   ],
   "runPluginCommand": [

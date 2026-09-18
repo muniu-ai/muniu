@@ -11,6 +11,48 @@ export const API_OUTPUT_SCHEMAS_V2: Readonly<Record<string, JsonObject>> = {
   "reconcileBusinessAction": {
     "$ref": "#/components/schemas/OutputBusinessActionV1"
   },
+  "getBusinessExecutionAuthority": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "allowed",
+      "actionDigest",
+      "expiresAt",
+      "leaseExpiresAt",
+      "actionId",
+      "operationKey"
+    ],
+    "properties": {
+      "allowed": {
+        "type": "boolean",
+        "const": true
+      },
+      "actionDigest": {
+        "type": "string"
+      },
+      "expiresAt": {
+        "type": "string"
+      },
+      "leaseExpiresAt": {
+        "type": "string"
+      },
+      "actionId": {
+        "type": "string"
+      },
+      "operationKey": {
+        "type": "string"
+      }
+    }
+  },
+  "createBusinessCandidate": {
+    "$ref": "#/components/schemas/OutputBusinessCandidateV1"
+  },
+  "getBusinessCandidate": {
+    "$ref": "#/components/schemas/OutputBusinessCandidateV1"
+  },
+  "getBusinessCandidateContent": {
+    "$ref": "#/components/schemas/OutputBusinessCandidateContentV1"
+  },
   "runPluginCommand": {
     "$ref": "#/components/schemas/OutputJsonValue"
   },
@@ -800,6 +842,297 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
       },
       "receipt": {
         "$ref": "#/components/schemas/OutputEffectReceiptV1"
+      }
+    }
+  },
+  "OutputBusinessCandidateV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "schemaVersion",
+      "id",
+      "tenantId",
+      "workspaceId",
+      "scope",
+      "inquiryId",
+      "inquiryRevision",
+      "sourceDigest",
+      "executionId",
+      "jobId",
+      "workflowVersion",
+      "status",
+      "streamVersion",
+      "createdAt",
+      "updatedAt"
+    ],
+    "properties": {
+      "schemaVersion": {
+        "type": "string",
+        "const": "1"
+      },
+      "id": {
+        "type": "string"
+      },
+      "tenantId": {
+        "type": "string"
+      },
+      "workspaceId": {
+        "type": "string"
+      },
+      "scope": {
+        "$ref": "#/components/schemas/OutputBusinessScopeV1"
+      },
+      "inquiryId": {
+        "type": "string"
+      },
+      "inquiryRevision": {
+        "type": "string"
+      },
+      "sourceDigest": {
+        "type": "string"
+      },
+      "executionId": {
+        "type": "string"
+      },
+      "jobId": {
+        "type": "string"
+      },
+      "workflowVersion": {
+        "type": "string",
+        "const": "1"
+      },
+      "status": {
+        "anyOf": [
+          {
+            "type": "string",
+            "const": "needs_reconciliation"
+          },
+          {
+            "type": "string",
+            "const": "queued"
+          },
+          {
+            "type": "string",
+            "const": "running"
+          },
+          {
+            "type": "string",
+            "const": "completed"
+          },
+          {
+            "type": "string",
+            "const": "failed"
+          }
+        ]
+      },
+      "streamVersion": {
+        "type": "number"
+      },
+      "createdAt": {
+        "type": "string"
+      },
+      "updatedAt": {
+        "type": "string"
+      },
+      "candidateDigest": {
+        "type": "string"
+      },
+      "counts": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "requirements",
+          "facts",
+          "suggestions",
+          "unknown",
+          "conflicts"
+        ],
+        "properties": {
+          "requirements": {
+            "type": "number"
+          },
+          "facts": {
+            "type": "number"
+          },
+          "suggestions": {
+            "type": "number"
+          },
+          "unknown": {
+            "type": "number"
+          },
+          "conflicts": {
+            "type": "number"
+          }
+        }
+      },
+      "reasonCode": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputRfqCitationV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "sourceId",
+      "pageNumber",
+      "start",
+      "end",
+      "quote"
+    ],
+    "properties": {
+      "sourceId": {
+        "type": "string"
+      },
+      "pageNumber": {
+        "type": "number"
+      },
+      "start": {
+        "type": "number"
+      },
+      "end": {
+        "type": "number"
+      },
+      "quote": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputRfqCandidateItemV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "text",
+      "citations"
+    ],
+    "properties": {
+      "text": {
+        "type": "string"
+      },
+      "citations": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputRfqCitationV1"
+        }
+      }
+    }
+  },
+  "OutputRfqCandidateV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "schemaVersion",
+      "inquiryId",
+      "inquiryRevision",
+      "sourceDigest",
+      "modelProvenance",
+      "requirements",
+      "facts",
+      "suggestions",
+      "unknown",
+      "conflicts"
+    ],
+    "properties": {
+      "schemaVersion": {
+        "type": "string",
+        "const": "1"
+      },
+      "inquiryId": {
+        "type": "string"
+      },
+      "inquiryRevision": {
+        "type": "string"
+      },
+      "sourceDigest": {
+        "type": "string"
+      },
+      "modelProvenance": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "providerId",
+          "modelId",
+          "mode"
+        ],
+        "properties": {
+          "providerId": {
+            "type": "string"
+          },
+          "modelId": {
+            "type": "string"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "live"
+              },
+              {
+                "type": "string",
+                "const": "test_fixture"
+              }
+            ]
+          }
+        }
+      },
+      "requirements": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputRfqCandidateItemV1"
+        }
+      },
+      "facts": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputRfqCandidateItemV1"
+        }
+      },
+      "suggestions": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputRfqCandidateItemV1"
+        }
+      },
+      "unknown": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputRfqCandidateItemV1"
+        }
+      },
+      "conflicts": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputRfqCandidateItemV1"
+        }
+      }
+    }
+  },
+  "OutputBusinessCandidateContentV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "schemaVersion",
+      "id",
+      "scope",
+      "digest",
+      "candidate"
+    ],
+    "properties": {
+      "schemaVersion": {
+        "type": "string",
+        "const": "1"
+      },
+      "id": {
+        "type": "string"
+      },
+      "scope": {
+        "$ref": "#/components/schemas/OutputBusinessScopeV1"
+      },
+      "digest": {
+        "type": "string"
+      },
+      "candidate": {
+        "$ref": "#/components/schemas/OutputRfqCandidateV1"
       }
     }
   },
@@ -4602,15 +4935,15 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
                 },
                 {
                   "type": "string",
+                  "const": "missing"
+                },
+                {
+                  "type": "string",
                   "const": "passed"
                 },
                 {
                   "type": "string",
                   "const": "error"
-                },
-                {
-                  "type": "string",
-                  "const": "missing"
                 }
               ]
             },

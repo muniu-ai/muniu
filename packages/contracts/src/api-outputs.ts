@@ -10,6 +10,7 @@ import type { EvidenceLevel, Interview, OpportunityAggregate, OpportunityState }
 import type { PluginManifestV1 } from "./plugin.js";
 import type { WorkspacePluginSurfaceV1 } from "./plugin-surfaces.js";
 import type { BusinessActionV1 } from "./business-effects.js";
+import type { BusinessCandidateContentV1, BusinessCandidateV1 } from "./business-candidates.js";
 
 export interface HostHealthV2 {
   readonly core: { readonly status: "healthy" };
@@ -258,6 +259,10 @@ export interface ApiOutputsV2 {
   readonly createBusinessAction: BusinessActionV1;
   readonly getBusinessAction: BusinessActionV1;
   readonly reconcileBusinessAction: BusinessActionV1;
+  readonly getBusinessExecutionAuthority: { readonly allowed: true; readonly actionDigest: string; readonly expiresAt: string; readonly leaseExpiresAt: string; readonly actionId: string; readonly operationKey: string };
+  readonly createBusinessCandidate: BusinessCandidateV1;
+  readonly getBusinessCandidate: BusinessCandidateV1;
+  readonly getBusinessCandidateContent: BusinessCandidateContentV1;
   readonly runPluginCommand: JsonValue;
   readonly getPluginSurfaces: readonly WorkspacePluginSurfaceV1[];
   readonly listPluginCatalog: readonly PluginCatalogItemV2[];
