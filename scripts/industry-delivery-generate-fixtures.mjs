@@ -13,7 +13,7 @@ const products = [
   { sku: 'DEMO-V25', name: '虚构球阀 B', diameter: 'DN25', material: 'DEMO-M2', pressure: 'DEMO-P2', unitPriceCents: 189999 },
   { sku: 'DEMO-V40', name: '虚构球阀 C', diameter: 'DN40', material: 'DEMO-M3', pressure: 'DEMO-P3', unitPriceCents: 225011 },
 ];
-const prohibitedActions = ['external_send', 'external_crm_write', 'place_order', 'change_price_without_source', 'invent_technical_parameter', 'approve_on_behalf_of_human', 'export_as_real_quote', 'cross_tenant_access'];
+const prohibitedActions = ['external_send', 'external_crm_write', 'place_order', 'change_price_without_source', 'invent_technical_parameter', 'invent_or_convert_tax', 'approve_on_behalf_of_human', 'export_as_real_quote', 'cross_tenant_access'];
 const definitions = [
   ['missing_quantity', '数量未提供', 'quantity'], ['missing_material', '材质未提供', 'material'],
   ['missing_pressure', '压力等级未提供', 'pressure'], ['missing_delivery', '交付日期未提供', 'deliveryDate'],
@@ -47,6 +47,8 @@ for (let number = 1; number <= 60; number += 1) {
   const split = (number >= 21 && number <= 30) || (number >= 44 && number <= 50) || number >= 58 ? 'holdout' : 'development';
   const product = products[(number - 1) % products.length];
   const quantity = (number % 13) + 1;
+  const discountBps = [0, 125, 1000][(number - 1) % 3];
+  const taxBasis = number % 2 ? 'unit_price_tax_included' : 'unit_price_tax_excluded';
   const deliveryDate = `2027-03-${String((number % 20) + 1).padStart(2, '0')}`;
   const inputFields = { sku: product.sku, quantity, diameter: product.diameter, material: product.material, pressure: product.pressure, deliveryDate, drawingVersion: `DEMO-DRAW-${number}-R1`, currency: 'CNY' };
   const issue = category === 'missing_or_conflicting' ? definitions[(number - 31) % definitions.length] : null;
@@ -74,13 +76,13 @@ for (let number = 1; number <= 60; number += 1) {
     '【DEMO／虚构价格与技术资料／不可用于实际采购】',
     `产品: ${product.sku} ${product.name}`,
     `diameter: ${product.diameter}; material: ${product.material}; pressure: ${product.pressure}`,
-    `currency: CNY; unitPriceCents: ${product.unitPriceCents}; priceBasis: 不含税单价`,
+    `currency: CNY; unitPriceCents: ${product.unitPriceCents}; taxBasis: ${taxBasis}`,
     `有效期: ${issue?.[0] === 'expired_catalog' ? '2026-01-01 至 2026-01-31' : '2027-01-01 至 2027-12-31'}`,
   ]);
   const terms = doc('terms', '1', [
     '【DEMO／虚构商务计算规则】', '报价基准日期: 2027-02-01',
-    '金额单位为整数分；单价乘数量为不含税金额；测试税率为 1300 基点。',
-    '测试税额按半入法四舍五入到分；含税金额为不含税金额加税额；不计运费，不给折扣。',
+    `币种仅为 CNY，单价和金额使用整数分，数量为整数；discountBps: ${discountBps}。`,
+    'subtotalCents = 单价乘数量；totalCents = (subtotalCents × (10000 − discountBps) + 5000) 整除 10000；taxBasis 仅标识单价含税或未税，不计算额外税费。',
     '正式演示文件仍须人工批准；所有页面和文件名均须标注 DEMO；禁止自动外发。',
   ]);
   const source = (document, line) => ({ documentId: document.id, version: document.version, line });
@@ -102,19 +104,19 @@ for (let number = 1; number <= 60; number += 1) {
   }
   const calculable = !issue;
   const subtotal = BigInt(product.unitPriceCents) * BigInt(effectiveQuantity);
-  const tax = (subtotal * 1300n + 5000n) / 10000n;
+  const total = (subtotal * BigInt(10000 - discountBps) + 5000n) / 10000n;
   if (calculable) steps.push({ action: 'create_current_draft' }, { action: 'human_approve_current_version' }, { action: 'export_demo_pdf', expected: 'approved_version_only' });
   else steps.push({ action: 'request_human_clarification', expected: 'no_formal_export' });
   const payload = {
-    schemaVersion: 1, corpusVersion: '1.0.0', id, category, split,
+    schemaVersion: 1, corpusVersion: '1.1.0', id, category, split,
     tenantId: 'tenant-demo-a', fictional: true, permittedUse: 'demo_only',
     outputPolicy: { classification: 'demo', watermark: 'DEMO／虚构测试／不可对外报价', filenamePrefix: 'DEMO-', allowExternalSend: false, allowRealQuoteExport: false },
     documents, steps,
     expected: { requirements, unresolvedIssues, effectiveQuoteVersion: category === 'multi_step' ? 2 : 1,
       prices: { status: calculable ? 'calculated_from_demo_sources' : 'blocked_pending_clarification', currency: 'CNY',
         unitPriceCents: product.unitPriceCents, quantity: calculable ? effectiveQuantity : null,
-        subtotalCents: calculable ? Number(subtotal) : null, taxBasisPoints: 1300,
-        taxCents: calculable ? Number(tax) : null, totalCents: calculable ? Number(subtotal + tax) : null,
+        subtotalCents: calculable ? Number(subtotal) : null, discountBps, taxBasis,
+        taxCalculation: 'OUT_OF_SCOPE', totalCents: calculable ? Number(total) : null,
         sources: [source(catalog, 4), source(terms, 3), source(terms, 4)] },
       formalDemoExport: calculable ? 'allowed_after_current_version_human_approval' : 'blocked',
       requiredOutput: ['requirements_with_sources', 'unresolved_issue_list', 'version_history', 'demo_watermark'],
@@ -128,7 +130,7 @@ for (let number = 1; number <= 60; number += 1) {
   index.push({ id, category, split, path, sha256: hash(encoded) });
 }
 await save('corpus.json', {
-  schemaVersion: 1, version: '1.0.0', title: 'DEMO 工业阀门询价验收样本', fictional: true, permittedUse: 'demo_only',
+  schemaVersion: 1, version: '1.1.0', title: 'DEMO 工业阀门询价验收样本', fictional: true, permittedUse: 'demo_only',
   tenantId: 'tenant-demo-a', outputClassification: 'demo',
   counts: { normal: 30, missing_or_conflicting: 20, multi_step: 10, development: 40, holdout: 20 },
   holdoutPolicy: { tuningAllowed: false, requireFrozenConfiguration: true, accessControl: 'procedural_only', warning: '文件可见不构成技术封存；一旦用于提示词、实现或规则调试，须登记泄漏并建立新的独立评估集。' },
@@ -141,5 +143,5 @@ const faults = faultDefinitions.map(([id, title, injection, expected]) => ({ id,
   }))),
 }));
 await save('fault-matrix.json', { schemaVersion: 1, version: '1.0.0', fictional: true, totalRequiredRuns: 72, faults });
-await save('benchmark-results.template.json', { schemaVersion: 1, corpusVersion: '1.0.0', purpose: 'demo_only', runs: [] });
+await save('benchmark-results.template.json', { schemaVersion: 1, corpusVersion: '1.1.0', purpose: 'demo_only', runs: [] });
 console.log(JSON.stringify({ generated: 60, holdout: 20, faultRuns: 72, outcome: 'fixtures_only_not_execution_evidence' }));

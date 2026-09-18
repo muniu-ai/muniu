@@ -41,6 +41,7 @@ node scripts/industry-delivery-release-gate.mjs docs/industry-delivery/release-m
 - [发布签名与运行时准入](release-signature.md)：受信公钥、有效期、候选和产物绑定。
 - [源授权台账](source-authorization-ledger.json)：资料使用范围及真实资料准入要求。
 - [企业部署与恢复](enterprise-recovery.md)：已有命令、依赖、停止条件和恢复证据。
+- [真实依赖集成验收](integration.md)：双仓库、双 Worker、真实数据库与文件出包的运行条件及结果限制。
 
 ## 基线说明
 

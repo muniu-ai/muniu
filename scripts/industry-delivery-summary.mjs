@@ -9,7 +9,7 @@ const statuses = ['passed', 'failed', 'not_run', 'documented', 'unknown', 'block
 const sha256 = /^[a-f0-9]{64}$/;
 export function summarizeResults(input) {
   assert.equal(input.schemaVersion, 1);
-  assert.equal(input.corpusVersion, '1.0.0');
+  assert.equal(input.corpusVersion, '1.1.0');
   assert.ok(Array.isArray(input.runs));
   const adapters = Object.fromEntries(adapterNames.map(name => [name, { status: 'not_run', ...Object.fromEntries(statuses.map(status => [status, 0])) }]));
   const seen = new Set();

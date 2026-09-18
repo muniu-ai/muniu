@@ -28,7 +28,7 @@ test('development selection cannot expose holdout by default', async () => {
 });
 
 test('unexecuted adapters cannot claim a measured result', () => {
-  const input = { schemaVersion: 1, corpusVersion: '1.0.0', runs: [] };
+  const input = { schemaVersion: 1, corpusVersion: '1.1.0', runs: [] };
   const summary = summarizeResults(input);
   assert.equal(summary.productionReady, false);
   assert.equal(summary.comparativeAdvantage, 'unknown');
@@ -37,7 +37,7 @@ test('unexecuted adapters cannot claim a measured result', () => {
 });
 
 test('documented capability remains unmeasured', () => {
-  const input = { schemaVersion: 1, corpusVersion: '1.0.0', runs: [{
+  const input = { schemaVersion: 1, corpusVersion: '1.1.0', runs: [{
     adapter: 'adp', testId: 'DEMO-RFQ-001', status: 'documented',
     reason: '仅核对官方文档', sourceUrl: 'https://cloud.tencent.com/document/product/1759/128604',
   }] };
@@ -48,18 +48,18 @@ test('documented capability remains unmeasured', () => {
 });
 
 test('pass without execution identity and durable evidence is rejected', () => {
-  assert.throws(() => summarizeResults({ schemaVersion: 1, corpusVersion: '1.0.0', runs: [{
+  assert.throws(() => summarizeResults({ schemaVersion: 1, corpusVersion: '1.1.0', runs: [{
     adapter: 'muniu', testId: 'DEMO-RFQ-001', status: 'passed',
   }] }), /execution evidence/);
 });
 
 test('duplicate rows cannot inflate pass totals', () => {
   const row = { adapter: 'adp', testId: 'DEMO-RFQ-001', status: 'unknown', reason: '未知' };
-  assert.throws(() => summarizeResults({ schemaVersion: 1, corpusVersion: '1.0.0', runs: [row, row] }), /duplicate/);
+  assert.throws(() => summarizeResults({ schemaVersion: 1, corpusVersion: '1.1.0', runs: [row, row] }), /duplicate/);
 });
 
 test('a result with incomplete quality metrics cannot pass', () => {
-  assert.throws(() => summarizeResults({ schemaVersion: 1, corpusVersion: '1.0.0', runs: [{
+  assert.throws(() => summarizeResults({ schemaVersion: 1, corpusVersion: '1.1.0', runs: [{
     adapter: 'muniu', testId: 'DEMO-RFQ-001', status: 'passed', runId: 'demo-run',
     executedAt: '2026-09-18T00:00:00Z', configurationSha256: 'a'.repeat(64),
     evidence: [{ path: 'private/result.json', sha256: 'b'.repeat(64) }],
@@ -74,7 +74,7 @@ test('release template never opens real admission', async () => {
 });
 
 test('unknown case identifiers cannot count as executed coverage', () => {
-  assert.throws(() => summarizeResults({ schemaVersion: 1, corpusVersion: '1.0.0', runs: [{ adapter: 'adp', testId: 'DEMO-RFQ-999', status: 'unknown', reason: 'unknown' }] }));
+  assert.throws(() => summarizeResults({ schemaVersion: 1, corpusVersion: '1.1.0', runs: [{ adapter: 'adp', testId: 'DEMO-RFQ-999', status: 'unknown', reason: 'unknown' }] }));
 });
 
 test('release signature requires trusted key and rejects tampering', () => {

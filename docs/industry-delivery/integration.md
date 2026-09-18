@@ -1,0 +1,41 @@
+# 双仓库真实依赖验收
+
+`scripts/industry-delivery-e2e.mjs` 创建独立 Docker Compose 项目，运行真实 PostgreSQL、MinIO 和 Vault Transit。OS Host、两个 OS Worker、Sales API 与测试 OIDC 发行者在本机独立进程中执行。Sales 连接角色不拥有超级用户或绕过 RLS 的权限。全程仅使用内置演示租户与虚构资料，不调用模型、DeepSeek Harness 或 ADP。
+
+## 执行条件
+
+使用 Node.js 22.19.x、npm 11.10.1。OS 各工作区须已完成构建，Sales 须已安装锁定依赖及对应 Playwright Chromium，并准备 `templates/font-manifest.json` 固定的字体。可用 `MUNIU_PDF_FONT_FILE` 与 `MUNIU_PDF_FONT_SHA256` 显式指定字体；字体摘要必须与批准的渲染版本一致。Docker 服务须可用；`MN_COMPOSE_BIN` 可指定 Compose 可执行文件路径，默认使用 Docker Desktop 内置路径。运行期间不得并行重建 OS `dist`，否则可能读取未完成的构建产物。
+
+在 OS 工作树执行：
+
+```sh
+node scripts/industry-delivery-e2e.mjs --sales-root /absolute/path/to/muniu-ai-sales-rfq --output /absolute/path/to/private-evidence --repetitions 1
+```
+
+默认执行一轮正常出包、提交后响应失败、文件写入后响应失败。`--repetitions 3` 将这三项各执行三次；租约接管与数据库恢复各执行一次。重复执行同一注入点不等于覆盖故障矩阵的全部子场景。
+
+## 实际断言
+
+| 检查 | 注入和断言 |
+| --- | --- |
+| 正常出包 | 通过 Sales API 导入文本、确认需求和批准报价；通过 OS API 创建动作和人工工具批准；下载真实 PDF，核对文件摘要与唯一归档 |
+| Sales 提交后响应失败 | `afterCommit` 抛出错误，真实 HTTP 请求失败；OS 进入待核对；已提交业务记录保持一份，人工核对后完成 |
+| 文件写入后归档未完成 | `afterWrite` 抛出错误，S3 已写入而归档数为零；通过 OS 人工核对入口让 Sales 核对文件并补归档；文件摘要保持不变 |
+| 双 Worker 租约接管 | 暂停当前 Worker，等待实际 30 秒租约到期，由另一 Worker 接管；完成后恢复旧 Worker，核对 fencing token 增长和无重复出包 |
+| 数据库恢复 | 停止写入进程，分别执行两个真实数据库的 `pg_dump` 和 `pg_restore`；读取原动作、同一文件摘要；恢复后撤销人员权限，下载须拒绝 |
+
+服务接口、报价计算、PDF 渲染、S3 读写、业务事务、授权回调、租约和恢复均调用各仓库实现。脚本不覆盖渲染器、权限校验器或存储接口；故障只在现有写入后和提交后钩子注入。
+
+## 结果和边界
+
+私有输出目录保存 `result.json`、进程日志和带演示标记的 PDF。报告记录两个仓库的提交、当前差异摘要、锁文件摘要、Node 版本、每项实际断言和失败原因。临时服务凭据在清理时删除；脚本只删除自己创建的容器和卷。
+
+本地进程使用回环 HTTP；Sales 开发登录仅用于内置演示租户。Vault 使用一次性开发模式；数据库恢复保留原对象存储与密钥。这些条件不满足生产部署、完整联合灾备、真实租户准入或 P5 全部故障要求。报告中的 `p5`、`p7` 始终为 `blocked`，完整 72 项故障矩阵仍为 `not_run`。实际结果必须单独记录，不能把脚本存在或单元测试通过当成验收通过。
+
+## 已执行结果
+
+2026-09-18 的[执行记录](integration-results.json)保存原始报告与私有证据文件的摘要。最新一轮五项检查全部通过：正常出包、提交后响应失败的人工核对、文件写入后的人工恢复、真实租约接管、双库备份恢复。前一轮还完成正常出包及两种恢复各三次，并验证接管后旧 Worker 返回 `lost_lease`；该轮恢复步骤因验收脚本错误修改数据库用户名而失败，修正后由最新一轮重新验证。
+
+集成验收曾发现两个真实 PostgreSQL 差异：业务动作重复结算执行终态，以及未知结果仅更新物理 Job 而未同步投影。相关修复由 OS 工作包提交，最新真实环境重新验证通过。报价 PDF 另经单页渲染检查，演示标记、中文、数量与金额均可读，没有遮挡。
+
+临时证据目录包含原始报告、日志、源码与编译产物摘要清单、演示 PDF。仓库仅保存可追溯摘要；发布评审前须把原件转存到获准证据存储。当前记录不提供真实租户授权。

@@ -57,6 +57,12 @@ export async function validateBundle(directory) {
       }
     }
     const prices = item.expected.prices;
+    assert.equal(item.corpusVersion, '1.1.0');
+    assert.equal(prices.currency, 'CNY');
+    assert.ok(['unit_price_tax_included', 'unit_price_tax_excluded'].includes(prices.taxBasis));
+    assert.equal(prices.taxCalculation, 'OUT_OF_SCOPE');
+    assert.equal('taxCents' in prices, false);
+    assert.ok(Number.isInteger(prices.discountBps) && prices.discountBps >= 0 && prices.discountBps <= 10000);
     assert.ok(Number.isSafeInteger(prices.unitPriceCents) && prices.unitPriceCents > 0);
     if (item.category === 'missing_or_conflicting') {
       assert.ok(item.expected.unresolvedIssues.length > 0);
@@ -67,10 +73,9 @@ export async function validateBundle(directory) {
       assert.equal(item.expected.unresolvedIssues.length, 0);
       assert.ok(Number.isSafeInteger(prices.quantity) && prices.quantity > 0);
       const subtotal = BigInt(prices.unitPriceCents) * BigInt(prices.quantity);
-      const tax = (subtotal * BigInt(prices.taxBasisPoints) + 5000n) / 10000n;
+      const total = (subtotal * BigInt(10000 - prices.discountBps) + 5000n) / 10000n;
       assert.equal(prices.subtotalCents, Number(subtotal));
-      assert.equal(prices.taxCents, Number(tax));
-      assert.equal(prices.totalCents, Number(subtotal + tax));
+      assert.equal(prices.totalCents, Number(total));
     }
     assert.ok(item.expected.prohibitedActions.includes('external_send'));
     assert.ok(item.expected.prohibitedActions.includes('export_as_real_quote'));

@@ -19,7 +19,7 @@
     "databaseMigrationSha256": null,
     "modelConfigurationSha256": null
   },
-  "corpusVersion": "1.0.0",
+  "corpusVersion": "1.1.0",
   "p5": {
     "status": "blocked",
     "reason": "缺少联合版本、真实依赖、72次故障、备份恢复及运行时准入拒绝证据。",

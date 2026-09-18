@@ -1,0 +1,594 @@
+{
+  "schemaVersion": "1",
+  "classification": "demo",
+  "scope": "focused_real_dependency_integration",
+  "status": "passed",
+  "p5": "blocked",
+  "p7": "blocked",
+  "fullFaultMatrix": "not_run",
+  "customerData": false,
+  "liveModel": "not_run",
+  "deepseekHarness": "not_run",
+  "adp": "not_run",
+  "latestSource": {
+    "agentOs": {
+      "commit": "cf888c8a827c96d695d0c04b1b2767ac246b829e",
+      "sourceManifestSha256": "bf1ad1014ca050fdb4c01d41de475f1ee37eb820d71ac7a65510a52810d1885c",
+      "sourceManifest": "agentOs-source-manifest.json",
+      "trackedDiffSha256": "18d0f16c310ceb344ad9cdd8c9e411f7d528a806149d8023ee99460d2317fd12",
+      "clean": false,
+      "lockSha256": "bf5cf30c91e00bad229b9f3f5f29b6b065d7b9e615fca0293c13acb20e1ccfe4"
+    },
+    "sales": {
+      "commit": "8913a94c567403bd2f3021d09b0bf9474bd4102d",
+      "sourceManifestSha256": "31acecc6e6b869057700db309b9a8cf62e62169ae95d680ecded001dea689f38",
+      "sourceManifest": "sales-source-manifest.json",
+      "trackedDiffSha256": "07d03dfc37cb6d650fbbae9826ba14aac59f7dd026f4c09a3dc82d463cc802a6",
+      "clean": false,
+      "lockSha256": "bcdd3cba99b9dbb0f32875de5ad6590432a7e3b7734469104f1ee5eb0dc10d73"
+    }
+  },
+  "latestCompiledArtifacts": {
+    "manifest": "agentOs-compiled-manifest.json",
+    "sha256": "1e7a1ac5be46b4f8a1436be33932bcbd4c293d3264216deeb95943cdccb0d87e",
+    "files": 592
+  },
+  "dependencies": {
+    "postgres": "PostgreSQL 16.15 on aarch64-unknown-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit",
+    "salesRole": {
+      "rolname": "mn_sales",
+      "rolsuper": false,
+      "rolbypassrls": false
+    },
+    "workers": [
+      "worker-a",
+      "worker-b"
+    ],
+    "pdf": "real Playwright Chromium; font digest bound to renderVersion",
+    "font": {
+      "name": "Muniu Quote CJK Regular",
+      "sourceCommit": "f8d157532fbfaeda587e826d4cd5b21a49186f7c",
+      "url": "https://raw.githubusercontent.com/notofonts/noto-cjk/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf",
+      "sha256": "91b5f7cc97b8204d9cff7d558b46b8c215b903ab6e66a49a99591609708a54b3",
+      "license": "OFL-1.1",
+      "licenseUrl": "https://raw.githubusercontent.com/notofonts/noto-cjk/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/LICENSE",
+      "sourceSha256": "2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b",
+      "fileName": "MuniuQuoteCJK-Regular.otf",
+      "derivation": {
+        "fontToolsVersion": "4.60.1",
+        "script": "scripts/prepare-rfq-font.py",
+        "changes": "Remove compatibility/radical cmap aliases to preserve PDF Unicode extraction; rename family; preserve outlines and OFL notices."
+      }
+    },
+    "vault": "real Transit API in disposable dev mode",
+    "renderVersion": "playwright-1.62.1-chromium-1234-151.0.7922.34:font-91b5f7cc97b8204d9cff7d558b46b8c215b903ab6e66a49a99591609708a54b3"
+  },
+  "reports": [
+    {
+      "label": "真实 PG 结算失败的回归证据",
+      "path": "/tmp/muniu-industry-e2e-actual-5/result.json",
+      "sha256": "f4085b077f5f9e68bf00e6ea1be75738bd906a8dfd5744a24aaca565aef386db",
+      "startedAt": "2026-09-18T06:22:37.827Z",
+      "finishedAt": "2026-09-18T06:23:49.368Z",
+      "status": "failed",
+      "passed": 0,
+      "failed": 1,
+      "notRun": 4,
+      "checks": [
+        {
+          "id": "normal-1",
+          "status": "failed",
+          "durationMs": 60820,
+          "error": "action completed: timeout (observed needs_reconciliation)"
+        },
+        {
+          "id": "afterCommit-1",
+          "status": "not_run"
+        },
+        {
+          "id": "afterWrite-1",
+          "status": "not_run"
+        },
+        {
+          "id": "worker-takeover",
+          "status": "not_run"
+        },
+        {
+          "id": "database-restore",
+          "status": "not_run"
+        }
+      ]
+    },
+    {
+      "label": "真实 PG 未知结果投影不同步的回归证据",
+      "path": "/tmp/muniu-industry-e2e-actual-7/result.json",
+      "sha256": "8ae9fcdad22d192af140bdee3192f96bcd0ffa3c44abbfefa21e24c845d971be",
+      "startedAt": "2026-09-18T06:34:16.447Z",
+      "finishedAt": "2026-09-18T06:34:51.043Z",
+      "status": "failed",
+      "passed": 1,
+      "failed": 1,
+      "notRun": 3,
+      "checks": [
+        {
+          "id": "normal-1",
+          "status": "passed",
+          "durationMs": 6626,
+          "evidence": {
+            "actionId": "action-e8e6e4f5-3da0-45d9-b423-4c2083a03d0a",
+            "inquiryId": "fed866fc-4da2-4a65-8801-cf7f3be44d71",
+            "packageId": "3bb398e7-c330-48f9-b9ab-4cb682caaa9a",
+            "operationKey": "e1b628b6c5d31d703ef6ea8881ae6d1af60f447c9adc39de74bdeecfa769206a",
+            "pdf": {
+              "path": "DEMO-3bb398e7-c330-48f9-b9ab-4cb682caaa9a.pdf",
+              "sha256": "1a8918a4db3491206b324537be58a598a94451443afa381839d6a128a049c272",
+              "byteLength": 233290
+            },
+            "packageCount": 1
+          }
+        },
+        {
+          "id": "afterCommit-1",
+          "status": "failed",
+          "durationMs": 5389,
+          "error": "POST /v2/business-actions/action-941405a7-718d-4527-bfe3-8a11a6fa8a2e/reconciliation-decisions: 500 {\"code\":\"INTERNAL_ERROR\",\"message\":\"服务暂时不可用\",\"action\":\"稍后重试；若问题持续，请运行 mn doctor\",\"fieldIssues\":[],\"traceId\":\"34130b6e-b949-402b-99e3-dbbde5be2d1b\",\"retryable\":true}"
+        },
+        {
+          "id": "afterWrite-1",
+          "status": "not_run"
+        },
+        {
+          "id": "worker-takeover",
+          "status": "not_run"
+        },
+        {
+          "id": "database-restore",
+          "status": "not_run"
+        }
+      ]
+    },
+    {
+      "label": "三次重复及双 Worker 接管",
+      "path": "/tmp/muniu-industry-e2e-actual-8/result.json",
+      "sha256": "b1c5392579bb953d0e3e807da31ea8e4743a815c0ea6e17cf729f3fd7dae47d6",
+      "startedAt": "2026-09-18T06:37:01.028Z",
+      "finishedAt": "2026-09-18T06:38:37.060Z",
+      "status": "failed",
+      "passed": 10,
+      "failed": 1,
+      "notRun": 0,
+      "checks": [
+        {
+          "id": "normal-1",
+          "status": "passed",
+          "durationMs": 5256,
+          "evidence": {
+            "actionId": "action-48af9b3b-0dd5-486c-8e73-7685a38dc22c",
+            "inquiryId": "9c4c93d8-b698-4ae2-9a6c-34c842b899ad",
+            "packageId": "49375df0-269e-4257-b7f1-cff33664a533",
+            "operationKey": "87fefd58dcd9c896af30b2c1c4c41b693e7288c82cf62a21cb8f69aee38904ea",
+            "pdf": {
+              "path": "DEMO-49375df0-269e-4257-b7f1-cff33664a533.pdf",
+              "sha256": "33cbc72df2cf5c2b8b1728d0410ebf1a60bc9374961d468fd0b83db4382c7e26",
+              "byteLength": 232893
+            },
+            "packageCount": 1
+          }
+        },
+        {
+          "id": "afterCommit-1",
+          "status": "passed",
+          "durationMs": 5502,
+          "evidence": {
+            "actionId": "action-fff0c640-5b38-40e9-9944-380cdbe805bc",
+            "inquiryId": "1e8d4899-66bf-4ec1-8a35-dd2af53aeb0c",
+            "packageId": "84ab0031-fe49-42e4-a594-108399b97b02",
+            "operationKey": "46540600a2846803b26334760b7b0f4b51b577a9b543ce6ad0050930a4768228",
+            "pdf": {
+              "path": "DEMO-84ab0031-fe49-42e4-a594-108399b97b02.pdf",
+              "sha256": "1651d9fa0edfe84acb28b19aa01b90c2dbe5df7eb57861e40a698dcf2b11e8f6",
+              "byteLength": 233137
+            },
+            "packageCount": 1,
+            "injectedStage": "afterCommit",
+            "statusBeforeReconcile": "completed",
+            "archiveCountBeforeReconcile": 1,
+            "explicitReconciliation": true
+          }
+        },
+        {
+          "id": "afterWrite-1",
+          "status": "passed",
+          "durationMs": 7847,
+          "evidence": {
+            "actionId": "action-c593e29d-95e6-43bf-805e-b944ee422f6a",
+            "inquiryId": "4bc91800-832c-4c24-8e59-bf2ca0b90ca0",
+            "packageId": "84a9fa46-2195-4784-a298-4a8b76a418bc",
+            "operationKey": "24ce49daad12629eab60b3634aa9cb4df570b98907595438112e4aba7e20f6d7",
+            "pdf": {
+              "path": "DEMO-84a9fa46-2195-4784-a298-4a8b76a418bc.pdf",
+              "sha256": "0d69d90457af6f70fcc25458db76ca6babfe72fcf12d56fb98d5513161b51cce",
+              "byteLength": 232852
+            },
+            "packageCount": 1,
+            "injectedStage": "afterWrite",
+            "statusBeforeReconcile": "writing",
+            "archiveCountBeforeReconcile": 0,
+            "explicitReconciliation": true
+          }
+        },
+        {
+          "id": "normal-2",
+          "status": "passed",
+          "durationMs": 4272,
+          "evidence": {
+            "actionId": "action-5994699a-b14c-4772-af46-0a1aab32156c",
+            "inquiryId": "bb8d0839-50e2-4656-a44c-6df785355a6d",
+            "packageId": "37e5114d-fafe-4dcb-9bcb-7882bdf50015",
+            "operationKey": "c08f9c11cb72d2cd5b709f085128f7276b85ffe160a65e39b885f4a34eff0cae",
+            "pdf": {
+              "path": "DEMO-37e5114d-fafe-4dcb-9bcb-7882bdf50015.pdf",
+              "sha256": "66de15e65f6272b0dbbfdf98a17182ec08cf4640806d1707a068277407b96744",
+              "byteLength": 233138
+            },
+            "packageCount": 1
+          }
+        },
+        {
+          "id": "afterCommit-2",
+          "status": "passed",
+          "durationMs": 3249,
+          "evidence": {
+            "actionId": "action-85a30b58-9f5c-4813-8a2d-6b2ce069b81e",
+            "inquiryId": "c0c0dbcb-553b-41b8-8d3e-ee1abc97686b",
+            "packageId": "d6c088ef-60b7-46db-9f90-0b52fc5e8c55",
+            "operationKey": "2fbc3c2c5652e12fa7cb3f4a07c21f22a8aeebac2107ae470d3876d2b722ea47",
+            "pdf": {
+              "path": "DEMO-d6c088ef-60b7-46db-9f90-0b52fc5e8c55.pdf",
+              "sha256": "cc638d72e85d342b2ad62f99ea172c3c4423d0f608f018737fd0d7ed83502957",
+              "byteLength": 232894
+            },
+            "packageCount": 1,
+            "injectedStage": "afterCommit",
+            "statusBeforeReconcile": "completed",
+            "archiveCountBeforeReconcile": 1,
+            "explicitReconciliation": true
+          }
+        },
+        {
+          "id": "afterWrite-2",
+          "status": "passed",
+          "durationMs": 4201,
+          "evidence": {
+            "actionId": "action-1efa9961-7968-4f2a-9bf6-f053b4b3fb87",
+            "inquiryId": "ac226585-bb4d-4f4e-8411-8ead43f08825",
+            "packageId": "8fedb7eb-6115-45aa-a58d-d63252d3ee08",
+            "operationKey": "74651d64307f96a47489c7036aa1834776a67727775a2e1158cfd175317ce7d6",
+            "pdf": {
+              "path": "DEMO-8fedb7eb-6115-45aa-a58d-d63252d3ee08.pdf",
+              "sha256": "1081dfca203a6f6793da03cf4e5ecfb5a426b22f84add5251efb00c098a8387e",
+              "byteLength": 233126
+            },
+            "packageCount": 1,
+            "injectedStage": "afterWrite",
+            "statusBeforeReconcile": "writing",
+            "archiveCountBeforeReconcile": 0,
+            "explicitReconciliation": true
+          }
+        },
+        {
+          "id": "normal-3",
+          "status": "passed",
+          "durationMs": 6555,
+          "evidence": {
+            "actionId": "action-133e3a83-04d8-422d-9bf9-5d41cbe6e45d",
+            "inquiryId": "9d5d30a1-7aed-4c8c-9f30-ea04a6eabc86",
+            "packageId": "aba19aff-bd0b-4b19-8af1-372ef86f591c",
+            "operationKey": "6dfbbb7763c1208471af4896b4766c659105be3333111936cf0da8233b5f9e31",
+            "pdf": {
+              "path": "DEMO-aba19aff-bd0b-4b19-8af1-372ef86f591c.pdf",
+              "sha256": "6ecb98e081f5aca7bd91667bad09ceb48e6a45f13a640f2285f5dc6d0a414d8e",
+              "byteLength": 233133
+            },
+            "packageCount": 1
+          }
+        },
+        {
+          "id": "afterCommit-3",
+          "status": "passed",
+          "durationMs": 3657,
+          "evidence": {
+            "actionId": "action-b6f5fb34-bb0e-4586-8e3f-201cf4f820ba",
+            "inquiryId": "7e784d04-a049-4270-9ac6-e4090b87d028",
+            "packageId": "5c1415e9-23bc-46a4-9237-f16cb82fc619",
+            "operationKey": "31dccb4395f8366e3a84eb5ecc08b39a15aa7de5081dd68a1fef76117a7fc771",
+            "pdf": {
+              "path": "DEMO-5c1415e9-23bc-46a4-9237-f16cb82fc619.pdf",
+              "sha256": "eaa19ed4decdb970631fa6eb4593fb6a2eba34e90bed746c92f27df4dd182b4f",
+              "byteLength": 232869
+            },
+            "packageCount": 1,
+            "injectedStage": "afterCommit",
+            "statusBeforeReconcile": "completed",
+            "archiveCountBeforeReconcile": 1,
+            "explicitReconciliation": true
+          }
+        },
+        {
+          "id": "afterWrite-3",
+          "status": "passed",
+          "durationMs": 3485,
+          "evidence": {
+            "actionId": "action-9e2c430e-3d17-472c-8602-c551c3afc8e0",
+            "inquiryId": "ae2e07b9-3378-401f-b244-75359128084a",
+            "packageId": "8767ec70-a720-45c1-a81e-a4ca850c96b7",
+            "operationKey": "8b323762c4ac021821b4c68a603654eab08727036c4116fde372e6a56f0f1b76",
+            "pdf": {
+              "path": "DEMO-8767ec70-a720-45c1-a81e-a4ca850c96b7.pdf",
+              "sha256": "3155f8f3936032764890ec3edc8fe868b830e2c7ff1deaf0800eda6bf6611975",
+              "byteLength": 232586
+            },
+            "packageCount": 1,
+            "injectedStage": "afterWrite",
+            "statusBeforeReconcile": "writing",
+            "archiveCountBeforeReconcile": 0,
+            "explicitReconciliation": true
+          }
+        },
+        {
+          "id": "worker-takeover",
+          "status": "passed",
+          "durationMs": 35997,
+          "evidence": {
+            "actionId": "action-92efda82-8f93-4a48-9ad9-a1e907503b55",
+            "inquiryId": "29f5d0d8-7ed0-41a2-8555-87c43b847386",
+            "packageId": "663599c3-c832-482d-b295-4ea16d39045b",
+            "operationKey": "f27c9d5496006cfe073146d25a538ff555cb822b9a5f4d99625b1eff99b12862",
+            "pdf": {
+              "path": "DEMO-663599c3-c832-482d-b295-4ea16d39045b.pdf",
+              "sha256": "c9fa426edb6b8a85944e54f3d80c3de0a9ada57bde1cf23f18cf6e1675a1f838",
+              "byteLength": 233123
+            },
+            "packageCount": 1,
+            "original": {
+              "worker": "worker-b",
+              "token": 1
+            },
+            "takeover": {
+              "worker": "worker-a",
+              "token": 2
+            },
+            "staleWorkerResumed": true,
+            "staleWorkerOutcome": "lost_lease"
+          }
+        },
+        {
+          "id": "database-restore",
+          "status": "failed",
+          "durationMs": 3313,
+          "error": "GET /api/v1/rfqs/9d5d30a1-7aed-4c8c-9f30-ea04a6eabc86: 500 {\"error\":{\"code\":\"INTERNAL_ERROR\",\"message\":\"请求未完成，请保留请求编号后重试或联系管理员\",\"requestId\":\"fe2027f4-440a-42d3-beed-4a618eca4992\"}}"
+        }
+      ]
+    },
+    {
+      "label": "修正恢复地址后的完整局部验收",
+      "path": "/tmp/muniu-industry-e2e-actual-9/result.json",
+      "sha256": "b8848f3e208f953f9029a5604264f7e200f45807f8d9b5d65bb6468262a1f630",
+      "startedAt": "2026-09-18T06:40:04.640Z",
+      "finishedAt": "2026-09-18T06:41:04.893Z",
+      "status": "passed",
+      "passed": 5,
+      "failed": 0,
+      "notRun": 0,
+      "checks": [
+        {
+          "id": "normal-1",
+          "status": "passed",
+          "durationMs": 5466,
+          "evidence": {
+            "actionId": "action-553eb45b-6de0-441c-8a23-4243423b2937",
+            "inquiryId": "c0a43968-6b9e-4c80-b4e5-996d1a79fe8b",
+            "packageId": "4e38e423-3a43-4a1a-98b4-1e6d257589b3",
+            "operationKey": "20826c393bc92fed9295f72350a18fcd16b2fa8d370ec674a97540f91f825900",
+            "pdf": {
+              "path": "DEMO-4e38e423-3a43-4a1a-98b4-1e6d257589b3.pdf",
+              "sha256": "251079fc4bf6b38e8349da5e3b23e5b8246ede2d022b91523baffc120cd701e6",
+              "byteLength": 233143
+            },
+            "packageCount": 1
+          }
+        },
+        {
+          "id": "afterCommit-1",
+          "status": "passed",
+          "durationMs": 3027,
+          "evidence": {
+            "actionId": "action-8519fb79-5377-4fb0-a22f-f8ecc07cfcde",
+            "inquiryId": "3821dfc0-0dc0-4ba3-a03a-166e3289175c",
+            "packageId": "0004eadb-4d93-4a33-ba5c-5b02ad8cff15",
+            "operationKey": "bd40ee737f0ea81d139adb7ad9ef325b8433d0e4a4c4a11f7b9665b8771b8931",
+            "pdf": {
+              "path": "DEMO-0004eadb-4d93-4a33-ba5c-5b02ad8cff15.pdf",
+              "sha256": "7b670311878462159614dafb44d7f3129f2dc8a4ba86b95c4c6c350954b3e74e",
+              "byteLength": 233128
+            },
+            "packageCount": 1,
+            "injectedStage": "afterCommit",
+            "statusBeforeReconcile": "completed",
+            "archiveCountBeforeReconcile": 1,
+            "explicitReconciliation": true
+          }
+        },
+        {
+          "id": "afterWrite-1",
+          "status": "passed",
+          "durationMs": 3025,
+          "evidence": {
+            "actionId": "action-142988bf-2c50-461d-9be7-373604532a6f",
+            "inquiryId": "86dd4f35-067e-4715-ab0c-b1c0ba6da50c",
+            "packageId": "a1757990-7cf9-48c4-b977-bb2ac802a4f8",
+            "operationKey": "06f5c80fa89adcbbde582d00b9bfd046528bd33a535962615ac5d584c2a3483e",
+            "pdf": {
+              "path": "DEMO-a1757990-7cf9-48c4-b977-bb2ac802a4f8.pdf",
+              "sha256": "49ffc50093e6f32f3e2907a6e1bb23831cb9d2c5618a01240cec2218eb71bc9f",
+              "byteLength": 233132
+            },
+            "packageCount": 1,
+            "injectedStage": "afterWrite",
+            "statusBeforeReconcile": "writing",
+            "archiveCountBeforeReconcile": 0,
+            "explicitReconciliation": true
+          }
+        },
+        {
+          "id": "worker-takeover",
+          "status": "passed",
+          "durationMs": 35356,
+          "evidence": {
+            "actionId": "action-4c382f0c-ef98-4c12-9a0b-1bd61617c4ea",
+            "inquiryId": "e7c90330-1138-4feb-af4d-cdfc2acf946d",
+            "packageId": "44f4c634-370e-4c36-a36f-4b1a2b0c3989",
+            "operationKey": "8c1458ec30b98843554a79dfc389036f4a28626cdcfe33f4437082f66a1f6d8b",
+            "pdf": {
+              "path": "DEMO-44f4c634-370e-4c36-a36f-4b1a2b0c3989.pdf",
+              "sha256": "280ed63b221f7adeab9e1fd1c3e024cd53bc6b57f083c70cbbc6fbbdb243ce3c",
+              "byteLength": 233149
+            },
+            "packageCount": 1,
+            "original": {
+              "worker": "worker-a",
+              "token": 1
+            },
+            "takeover": {
+              "worker": "worker-b",
+              "token": 2
+            },
+            "staleWorkerResumed": true,
+            "staleWorkerOutcome": "lost_lease"
+          }
+        },
+        {
+          "id": "database-restore",
+          "status": "passed",
+          "durationMs": 3140,
+          "evidence": {
+            "actionId": "action-553eb45b-6de0-441c-8a23-4243423b2937",
+            "inquiryId": "c0a43968-6b9e-4c80-b4e5-996d1a79fe8b",
+            "packageId": "4e38e423-3a43-4a1a-98b4-1e6d257589b3",
+            "operationKey": "20826c393bc92fed9295f72350a18fcd16b2fa8d370ec674a97540f91f825900",
+            "pdf": {
+              "path": "DEMO-4e38e423-3a43-4a1a-98b4-1e6d257589b3.pdf",
+              "sha256": "251079fc4bf6b38e8349da5e3b23e5b8246ede2d022b91523baffc120cd701e6",
+              "byteLength": 233143
+            },
+            "packageCount": 1,
+            "databases": [
+              "mn_os_restored",
+              "mn_sales_restored"
+            ],
+            "preservedObjectStore": true,
+            "preservedVault": true,
+            "currentPermissionDeniedAfterRestore": 403
+          }
+        }
+      ]
+    }
+  ],
+  "privateArtifacts": [
+    {
+      "path": "/tmp/muniu-industry-e2e-actual-9/DEMO-0004eadb-4d93-4a33-ba5c-5b02ad8cff15.pdf",
+      "sha256": "7b670311878462159614dafb44d7f3129f2dc8a4ba86b95c4c6c350954b3e74e",
+      "byteLength": 233128
+    },
+    {
+      "path": "/tmp/muniu-industry-e2e-actual-9/DEMO-44f4c634-370e-4c36-a36f-4b1a2b0c3989.pdf",
+      "sha256": "280ed63b221f7adeab9e1fd1c3e024cd53bc6b57f083c70cbbc6fbbdb243ce3c",
+      "byteLength": 233149
+    },
+    {
+      "path": "/tmp/muniu-industry-e2e-actual-9/DEMO-4e38e423-3a43-4a1a-98b4-1e6d257589b3.pdf",
+      "sha256": "251079fc4bf6b38e8349da5e3b23e5b8246ede2d022b91523baffc120cd701e6",
+      "byteLength": 233143
+    },
+    {
+      "path": "/tmp/muniu-industry-e2e-actual-9/DEMO-a1757990-7cf9-48c4-b977-bb2ac802a4f8.pdf",
+      "sha256": "49ffc50093e6f32f3e2907a6e1bb23831cb9d2c5618a01240cec2218eb71bc9f",
+      "byteLength": 233132
+    },
+    {
+      "path": "/tmp/muniu-industry-e2e-actual-9/agentOs-compiled-manifest.json",
+      "sha256": "1e7a1ac5be46b4f8a1436be33932bcbd4c293d3264216deeb95943cdccb0d87e",
+      "byteLength": 84687
+    },
+    {
+      "path": "/tmp/muniu-industry-e2e-actual-9/agentOs-source-manifest.json",
+      "sha256": "bf1ad1014ca050fdb4c01d41de475f1ee37eb820d71ac7a65510a52810d1885c",
+      "byteLength": 104727
+    },
+    {
+      "path": "/tmp/muniu-industry-e2e-actual-9/compose-up.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "byteLength": 0
+    },
+    {
+      "path": "/tmp/muniu-industry-e2e-actual-9/fault-events.jsonl",
+      "sha256": "98d1d9d397af24e20070a9b25111638aa0bc381576743351fdfa310079446123",
+      "byteLength": 127
+    },
+    {
+      "path": "/tmp/muniu-industry-e2e-actual-9/host.log",
+      "sha256": "34b91ba09d20e2c0b44547234012bde000000491c67f29c52fc6007c766e7b9d",
+      "byteLength": 603
+    },
+    {
+      "path": "/tmp/muniu-industry-e2e-actual-9/jwks.log",
+      "sha256": "6f923bc197ac59a292368a2ad74fb378afb20742d016c85a12e137813af6f955",
+      "byteLength": 32
+    },
+    {
+      "path": "/tmp/muniu-industry-e2e-actual-9/result.json",
+      "sha256": "b8848f3e208f953f9029a5604264f7e200f45807f8d9b5d65bb6468262a1f630",
+      "byteLength": 7409
+    },
+    {
+      "path": "/tmp/muniu-industry-e2e-actual-9/sales-source-manifest.json",
+      "sha256": "31acecc6e6b869057700db309b9a8cf62e62169ae95d680ecded001dea689f38",
+      "byteLength": 28245
+    },
+    {
+      "path": "/tmp/muniu-industry-e2e-actual-9/sales.log",
+      "sha256": "38f94f157ab00cb1019a9a8038dc305af9c667e3979e84a8e2755d18e125abed",
+      "byteLength": 9980
+    },
+    {
+      "path": "/tmp/muniu-industry-e2e-actual-9/worker-a.log",
+      "sha256": "8de953c1e4126934ea2945d9b6d2ae6cdcef391bad66755a78c59b48089a3acc",
+      "byteLength": 533
+    },
+    {
+      "path": "/tmp/muniu-industry-e2e-actual-9/worker-b.log",
+      "sha256": "7ae0f5ae8e4b13c9d87aff3b870515ac39921f59af65ccf04455ffb5b47f7654",
+      "byteLength": 458
+    }
+  ],
+  "visualReview": {
+    "status": "passed",
+    "pdf": "/tmp/muniu-industry-e2e-actual-6/DEMO-5d49047e-147c-476a-814d-c7bc9ab02bc6.pdf",
+    "sha256": "0e110426ff40101164245d2e985e8cbae6e76b69fbdeb245959313846568ed05",
+    "checks": [
+      "演示标记清晰",
+      "中文可读",
+      "数量 2、单价 1250.37 元、合计 2500.74 元",
+      "单页无遮挡，页码 1/1"
+    ]
+  },
+  "limitations": [
+    "Synthetic data only; no customer validation, model, DSH or ADP execution.",
+    "Local Node processes, real PostgreSQL, MinIO and disposable Vault dev mode; this is not a production deployment certification.",
+    "Database restore retains object storage and Vault keys. Full coordinated object/KMS restore remains not_run.",
+    "Focused end-to-end scenarios do not satisfy all 72 API/worker fault-matrix repetitions.",
+    "Evidence files reside in local private temporary directories and are not bundled with this repository; retain them in an approved evidence store before any release review.",
+    "The three repetitions use the same two fault injection points; they do not cover every API/worker subscenario in F09/F10.",
+    "The eighth run restoration failure was a harness URL pathname bug, not an accepted pass; the ninth run validated the correction."
+  ]
+}

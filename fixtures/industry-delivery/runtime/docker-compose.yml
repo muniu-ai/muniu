@@ -1,0 +1,61 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: mn
+      POSTGRES_PASSWORD: mn-industry-fixture-only
+      POSTGRES_DB: mn_os
+    ports: ["127.0.0.1::5432"]
+    volumes: ["postgres-data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "mn", "-d", "mn_os"]
+      interval: 2s
+      timeout: 3s
+      retries: 45
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: mn-e2e
+      MINIO_ROOT_PASSWORD: mn-e2e-secret-only
+    ports: ["127.0.0.1::9000"]
+    volumes: ["minio-data:/data"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 2s
+      timeout: 3s
+      retries: 45
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    depends_on:
+      minio: {condition: service_healthy}
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - >-
+        mc alias set fixture http://minio:9000 mn-e2e mn-e2e-secret-only &&
+        mc mb --ignore-existing fixture/mn-os-artifacts fixture/mn-sales-artifacts &&
+        mc anonymous set none fixture/mn-os-artifacts &&
+        mc anonymous set none fixture/mn-sales-artifacts
+  vault:
+    image: hashicorp/vault:1.21.4@sha256:4e33b126a59c0c333b76fb4e894722462659a6bec7c48c9ee8cea56fccfd2569
+    command: ["server", "-dev", "-dev-root-token-id=mn-industry-fixture-only", "-dev-listen-address=0.0.0.0:8200", "-dev-no-store-token"]
+    environment:
+      VAULT_ADDR: http://127.0.0.1:8200
+      SKIP_SETCAP: "true"
+    ports: ["127.0.0.1::8200"]
+    healthcheck:
+      test: ["CMD", "vault", "status"]
+      interval: 2s
+      timeout: 3s
+      retries: 45
+  vault-init:
+    image: hashicorp/vault:1.21.4@sha256:4e33b126a59c0c333b76fb4e894722462659a6bec7c48c9ee8cea56fccfd2569
+    depends_on:
+      vault: {condition: service_healthy}
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: mn-industry-fixture-only
+    entrypoint: ["vault", "secrets", "enable", "transit"]
+volumes:
+  postgres-data:
+  minio-data:
