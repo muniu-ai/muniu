@@ -11,7 +11,7 @@
 | `/Users/xiaomingwang/Documents/ChatGPT/muniu-industry-delivery` | `codex/industry-delivery-os` | [OS 快速开始](../quickstart.md)、[双仓库依赖集成](integration.md)、[候选契约集成](candidate-integration.md) |
 | `/Users/xiaomingwang/Documents/ChatGPT/创业项目/muniu-ai-sales-rfq` | `codex/industry-rfq-sales` | Sales 仓库 `docs/rfq/README.md`，含工业询价操作、网页/API 启动、字体准备及两端服务映射 |
 
-两仓库独立构建，共同使用 Node.js 22.19.x 与 npm 11.10.1；OS 保留 TypeScript 5.7.2，Sales 保留 5.9.3。正式联合版本与产物摘要应以另行冻结的清单为准，本文件不生成最终提交或发布清单。
+两仓库独立构建，共同使用 Node.js 22.19.x 与 npm 11.10.1；OS 保留 TypeScript 5.7.2，Sales 保留 5.9.3。本轮代码及模板、字体、迁移摘要见[配套候选清单](paired-candidate.json)。它没有生产镜像或有效发布签名，不是正式发布授权。
 
 启动文档保留复现方法，不表示本轮仍有服务运行，也不要求现在执行其中的构建或容器命令。后续恢复重型验证须另行安排环境与资源。
 
@@ -54,3 +54,5 @@ OS 基线临时日志位于 `/tmp/muniu-os-final-*.log`；Sales 最新日志包�
 - **P7：blocked。** 没有获准真实客户资料、真实业务验收或付费证据。合成资料、演示 PDF 与已有工程测试均不能替代。
 
 后续恢复验收时，应先冻结两仓库代码与实际运行配置，保留现有失败，再分别完成候选闭环、完整故障与企业部署恢复、真实比较和客户验证。当前不继续执行重型验证，也不宣称发布就绪。
+
+本地原始日志的路径与摘要见[证据索引](local-evidence-index.json)。日志保存在忽略目录 `.mn/industry-delivery-evidence`，未把运行状态或凭据提交到仓库。P6 本地适配器另见[实现及待验边界](local-adapters.md)：9 项轻量协议替身测试通过，真实服务接线仍未执行。固定抽取组依赖木牛受控执行，仅可作内部消融。

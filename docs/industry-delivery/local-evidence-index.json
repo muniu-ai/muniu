@@ -1,0 +1,152 @@
+{
+  "schemaVersion": 1,
+  "verificationMode": "lightweight_at_user_request",
+  "engineeringComplete": false,
+  "businessValidated": false,
+  "entries": [
+    {
+      "check": "test",
+      "execution": "pre_latest_changes",
+      "evidence": {
+        "file": ".mn/industry-delivery-evidence/checks/baseline-test.log",
+        "sha256": "03c32a96fc2ed3c2d357ce3dd2bfdcc821a95e4a1b3bc1cb0f0b07cd6bf640a2"
+      }
+    },
+    {
+      "check": "typecheck",
+      "execution": "pre_latest_changes",
+      "evidence": {
+        "file": ".mn/industry-delivery-evidence/checks/baseline-typecheck.log",
+        "sha256": "c9a6740462603dde4cf7f0ff518b18fd56cf073002d1c1d1a259062b639c7f9f"
+      }
+    },
+    {
+      "check": "desktop-typecheck",
+      "execution": "pre_latest_changes",
+      "evidence": {
+        "file": ".mn/industry-delivery-evidence/checks/baseline-desktop-typecheck.log",
+        "sha256": "08c3af819ec047ace6fa8caa60498f942a5ccef772eb47880e32d46a8cd8a8eb"
+      }
+    },
+    {
+      "check": "desktop-build",
+      "execution": "pre_latest_changes",
+      "evidence": {
+        "file": ".mn/industry-delivery-evidence/checks/baseline-desktop-build.log",
+        "sha256": "cef4387abe31de147c8c64508df9aa3a56bdab572c94ab21c66b2fb712acf90b"
+      }
+    },
+    {
+      "check": "sidecar",
+      "execution": "pre_latest_changes",
+      "evidence": {
+        "file": ".mn/industry-delivery-evidence/checks/baseline-sidecar.log",
+        "sha256": "1534bc40320dc1ae931ec2b25a5038df7fc4b9a57eda0094adc6daee7a579972"
+      }
+    },
+    {
+      "check": "cargo",
+      "execution": "pre_latest_changes",
+      "evidence": {
+        "file": ".mn/industry-delivery-evidence/checks/baseline-cargo.log",
+        "sha256": "702e6864ec939ccfb87c843817ee36f2e614b030d44e6b7a95e9240b08a6fcd1"
+      }
+    },
+    {
+      "check": "enterprise",
+      "execution": "pre_latest_changes",
+      "evidence": {
+        "file": ".mn/industry-delivery-evidence/checks/baseline-enterprise.log",
+        "sha256": "4f80fddcfaf64c64e43ca4928fd5597f216218bd83429cc42f2a5c50ac2a394e"
+      }
+    },
+    {
+      "check": "contracts",
+      "execution": "pre_latest_changes",
+      "evidence": {
+        "file": ".mn/industry-delivery-evidence/checks/baseline-contracts.log",
+        "sha256": "05df56c08b7ea52ec211003cb0fc005a9a64571bd6f9be378571c76c54433657"
+      }
+    },
+    {
+      "check": "docs",
+      "execution": "pre_latest_changes",
+      "evidence": {
+        "file": ".mn/industry-delivery-evidence/checks/baseline-docs.log",
+        "sha256": "1cad105851539948620be4f0cb14a832de6bbd7a4fcbd42d985862c3caa32580"
+      }
+    },
+    {
+      "check": "docs-links",
+      "execution": "pre_latest_changes",
+      "evidence": {
+        "file": ".mn/industry-delivery-evidence/checks/baseline-docs-links.log",
+        "sha256": "fd72b3436493c97179b8b0f0d51a02d34c6653e931e58fce54c79ac6c8584086"
+      }
+    },
+    {
+      "check": "plugins",
+      "execution": "pre_latest_changes",
+      "evidence": {
+        "file": ".mn/industry-delivery-evidence/checks/baseline-plugins.log",
+        "sha256": "0ce6d37ba03fdbcea0c074eba6f79a99af0b4917ee38c6d9869d589041c92890"
+      }
+    },
+    {
+      "check": "kind",
+      "execution": "pre_latest_changes",
+      "evidence": {
+        "file": ".mn/industry-delivery-evidence/checks/baseline-kind.log",
+        "sha256": "cffe0614a2e1e5ff449987a2d92c0810db0727e2de5af0dfd498f4f7986a2747"
+      }
+    },
+    {
+      "check": "diff",
+      "execution": "pre_latest_changes",
+      "evidence": {
+        "file": ".mn/industry-delivery-evidence/checks/baseline-diff.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "check": "enterprise",
+      "execution": "interrupted_on_user_request",
+      "evidence": {
+        "file": ".mn/industry-delivery-evidence/checks/interrupted-enterprise.log",
+        "sha256": "961f92af2faef193f271daf355d1dc6c63d67a5f5d4283793b3bcc76a5af864f"
+      }
+    },
+    {
+      "check": "kind",
+      "execution": "interrupted_on_user_request",
+      "evidence": {
+        "file": ".mn/industry-delivery-evidence/checks/interrupted-kind.log",
+        "sha256": "f91f7582de9d5dc2c0aaf4655dee7987d0d65400aecda592bcf54ac31bfbbcfc"
+      }
+    },
+    {
+      "check": "actual-9",
+      "execution": "see_individual_results",
+      "evidence": {
+        "file": ".mn/industry-delivery-evidence/integration/actual-9.json",
+        "sha256": "b8848f3e208f953f9029a5604264f7e200f45807f8d9b5d65bb6468262a1f630"
+      }
+    },
+    {
+      "check": "actual-10",
+      "execution": "see_individual_results",
+      "evidence": {
+        "file": ".mn/industry-delivery-evidence/integration/actual-10.json",
+        "sha256": "cd474af40c17d08dd9483536491e885460e2e9f21250bfeade71de1b693db27a"
+      }
+    },
+    {
+      "check": "baseline-summary",
+      "execution": "pre_latest_changes",
+      "evidence": {
+        "file": ".mn/industry-delivery-evidence/checks/pre-latest-summary.json",
+        "sha256": "c1d5d0d7bce93af673412c697f69fa4c2c2dd6db95f79c0415c496f644396e68"
+      }
+    }
+  ]
+}

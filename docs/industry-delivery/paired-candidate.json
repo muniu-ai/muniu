@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "kind": "engineering_candidate_not_release",
+  "capturedAt": "2026-09-18T07:20:52.056136+00:00",
+  "engineeringComplete": false,
+  "businessValidated": false,
+  "newRealTenantsEnabled": false,
+  "demoOnly": true,
+  "signature": null,
+  "verificationMode": "lightweight_at_user_request",
+  "agentOs": {
+    "commit": "71c63395d0cb1b90db2c9b0d2719811a4f067a19",
+    "branch": "codex/industry-delivery-os",
+    "artifacts": [
+      {
+        "path": "package-lock.json",
+        "sha256": "bf5cf30c91e00bad229b9f3f5f29b6b065d7b9e615fca0293c13acb20e1ccfe4"
+      },
+      {
+        "path": "packages/storage/src/postgres.ts",
+        "sha256": "269aefc065828013035a783ff9f92b18ea34a3232bcf2655f0f9a273f7b58f04"
+      }
+    ]
+  },
+  "sales": {
+    "commit": "4dc5cceafbb5288e86698c57e9e22de5b5dd6eb9",
+    "branch": "codex/industry-rfq-sales",
+    "artifacts": [
+      {
+        "path": "package-lock.json",
+        "sha256": "bcdd3cba99b9dbb0f32875de5ad6590432a7e3b7734469104f1ee5eb0dc10d73"
+      },
+      {
+        "path": "infra/migrations/003_industry_rfq.sql",
+        "sha256": "58efec448f4374912dec3ba610fd8a703d780abba38b45cd4c5b69bdae7052fa"
+      },
+      {
+        "path": "packages/contracts/openapi.d0.3.json",
+        "sha256": "cb85b8d9c692e0a89848e433038683c1b821241a2ccebf52172821ed33b06136"
+      },
+      {
+        "path": "templates/industrial-quote-v1.html",
+        "sha256": "c0cb54c2124825871547d91533dfa87147fe2eeb2407ab59d5e9c6eecef4b68d"
+      },
+      {
+        "path": "templates/font-manifest.json",
+        "sha256": "dc96de833083059600caf977206c0ccef8876946378d20a9ede08718e5c56bd6"
+      },
+      {
+        "path": "packages/connectors/quote-pdf.ts",
+        "sha256": "032eac2e210e7da794163a39caa553ea464417ee57a7c5441addb15099b54e56"
+      }
+    ]
+  },
+  "runtime": {
+    "node": "22.19.0",
+    "npm": "11.10.1",
+    "osTypeScript": "5.7.2",
+    "salesTypeScript": "5.9.3",
+    "playwright": "1.62.1",
+    "chromiumRevision": "1234",
+    "chromiumVersion": "151.0.7922.34",
+    "fontSha256": "91b5f7cc97b8204d9cff7d558b46b8c215b903ab6e66a49a99591609708a54b3",
+    "containerImages": null,
+    "productionPluginLock": null,
+    "productionEngineLock": null
+  },
+  "missingReleaseEvidence": [
+    "最终代码全量回归及严格Lint清零",
+    "72次API/Worker异常矩阵",
+    "完整联合备份恢复与升级演练",
+    "签署的真实租户准入",
+    "真实模型与同条件替代方案实测",
+    "真实客户授权、采用、验收与付款"
+  ],
+  "statusDocument": "delivery-status.md",
+  "localEvidenceIndex": "local-evidence-index.json"
+}
