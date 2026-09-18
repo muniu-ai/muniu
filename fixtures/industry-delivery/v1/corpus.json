@@ -1,0 +1,446 @@
+{
+  "schemaVersion": 1,
+  "version": "1.0.0",
+  "title": "DEMO 工业阀门询价验收样本",
+  "fictional": true,
+  "permittedUse": "demo_only",
+  "tenantId": "tenant-demo-a",
+  "outputClassification": "demo",
+  "counts": {
+    "normal": 30,
+    "missing_or_conflicting": 20,
+    "multi_step": 10,
+    "development": 40,
+    "holdout": 20
+  },
+  "holdoutPolicy": {
+    "tuningAllowed": false,
+    "requireFrozenConfiguration": true,
+    "accessControl": "procedural_only",
+    "warning": "文件可见不构成技术封存；一旦用于提示词、实现或规则调试，须登记泄漏并建立新的独立评估集。"
+  },
+  "expertReviewStatus": "not_run",
+  "customerValidationStatus": "blocked",
+  "cases": [
+    {
+      "id": "DEMO-RFQ-001",
+      "category": "normal",
+      "split": "development",
+      "path": "cases/DEMO-RFQ-001.json",
+      "sha256": "fee8795a3e1c1deba490ae8b82d66f1d8e1ee3bc0fd867d7fefa707ef27b2c22"
+    },
+    {
+      "id": "DEMO-RFQ-002",
+      "category": "normal",
+      "split": "development",
+      "path": "cases/DEMO-RFQ-002.json",
+      "sha256": "7d2fd6aac2701c2841b5cd488d0a5dc2878e8d90d50c134eac623cf60c92b39e"
+    },
+    {
+      "id": "DEMO-RFQ-003",
+      "category": "normal",
+      "split": "development",
+      "path": "cases/DEMO-RFQ-003.json",
+      "sha256": "d276ed56d2b4b7bbd4a8cf6f3ffdc2916a8a4edf50819cc36034ce41e0295699"
+    },
+    {
+      "id": "DEMO-RFQ-004",
+      "category": "normal",
+      "split": "development",
+      "path": "cases/DEMO-RFQ-004.json",
+      "sha256": "11d578af8ba2c7193c8e04d1b1a455bf0c98e586ca15a96b2bac52e18b1e696e"
+    },
+    {
+      "id": "DEMO-RFQ-005",
+      "category": "normal",
+      "split": "development",
+      "path": "cases/DEMO-RFQ-005.json",
+      "sha256": "a991e2fc97d36ad658e0f621b5ce2741728f4f75525279765c520e9d42228721"
+    },
+    {
+      "id": "DEMO-RFQ-006",
+      "category": "normal",
+      "split": "development",
+      "path": "cases/DEMO-RFQ-006.json",
+      "sha256": "c4387402fca8e19cf2114a95af1fc36075c8da264074e1dae84d75584564e326"
+    },
+    {
+      "id": "DEMO-RFQ-007",
+      "category": "normal",
+      "split": "development",
+      "path": "cases/DEMO-RFQ-007.json",
+      "sha256": "5f2f21b00797f0ac632953be4d64899d6c0c7a45d1c1872812b68267d1560781"
+    },
+    {
+      "id": "DEMO-RFQ-008",
+      "category": "normal",
+      "split": "development",
+      "path": "cases/DEMO-RFQ-008.json",
+      "sha256": "935757b9fa3bf275bb3bbbaf132ddd95a26d70ca7694d0212c39c846ff9020dc"
+    },
+    {
+      "id": "DEMO-RFQ-009",
+      "category": "normal",
+      "split": "development",
+      "path": "cases/DEMO-RFQ-009.json",
+      "sha256": "46c6d262ca0eb005fa172c31ad1c3987f4b1d1a65bfd017d959599e306a3068a"
+    },
+    {
+      "id": "DEMO-RFQ-010",
+      "category": "normal",
+      "split": "development",
+      "path": "cases/DEMO-RFQ-010.json",
+      "sha256": "aa20d18bec4ce39b5bc4bf1a3bbb5718f68dea695ee74dead45a19a232d3438b"
+    },
+    {
+      "id": "DEMO-RFQ-011",
+      "category": "normal",
+      "split": "development",
+      "path": "cases/DEMO-RFQ-011.json",
+      "sha256": "b5030d5da9436c4483d81c332a663a923844a5fded3f9aa276bb2ddf4992bcdb"
+    },
+    {
+      "id": "DEMO-RFQ-012",
+      "category": "normal",
+      "split": "development",
+      "path": "cases/DEMO-RFQ-012.json",
+      "sha256": "53a4f0c0efeaf56fb600d7614c2f7916ddc28657c1831cb10901fc937cca72d6"
+    },
+    {
+      "id": "DEMO-RFQ-013",
+      "category": "normal",
+      "split": "development",
+      "path": "cases/DEMO-RFQ-013.json",
+      "sha256": "869fb35024b7a4a59229d9c1acf47b1ffa9250db07dfb681890eda1f526cba0e"
+    },
+    {
+      "id": "DEMO-RFQ-014",
+      "category": "normal",
+      "split": "development",
+      "path": "cases/DEMO-RFQ-014.json",
+      "sha256": "2fcce74bcca066027014975133b10b9b7d08908038a276cd11036c40d99366dc"
+    },
+    {
+      "id": "DEMO-RFQ-015",
+      "category": "normal",
+      "split": "development",
+      "path": "cases/DEMO-RFQ-015.json",
+      "sha256": "40faf2b7692ce5524739522f4bcf9caeea296f6221ee09171141bed82cd71b5b"
+    },
+    {
+      "id": "DEMO-RFQ-016",
+      "category": "normal",
+      "split": "development",
+      "path": "cases/DEMO-RFQ-016.json",
+      "sha256": "cebf03b68ad330c7b866ce098850b77bc95c345ed01d53e79a61d762e808577b"
+    },
+    {
+      "id": "DEMO-RFQ-017",
+      "category": "normal",
+      "split": "development",
+      "path": "cases/DEMO-RFQ-017.json",
+      "sha256": "38eb5020f733e246b25934768d6214d058f4016959531188f02e3136ece89a1b"
+    },
+    {
+      "id": "DEMO-RFQ-018",
+      "category": "normal",
+      "split": "development",
+      "path": "cases/DEMO-RFQ-018.json",
+      "sha256": "0c915b6dc99d7587cea77123b414db30606633f934af1466c07ef3548600fa6d"
+    },
+    {
+      "id": "DEMO-RFQ-019",
+      "category": "normal",
+      "split": "development",
+      "path": "cases/DEMO-RFQ-019.json",
+      "sha256": "a8baad05770868df559ea5657ac55bb76bd7023ff3b7ce63250109bcc7e4ee93"
+    },
+    {
+      "id": "DEMO-RFQ-020",
+      "category": "normal",
+      "split": "development",
+      "path": "cases/DEMO-RFQ-020.json",
+      "sha256": "d081b6ef507b720194286dadd603131bf14e2df8af1c10a4a42d480d07b1a179"
+    },
+    {
+      "id": "DEMO-RFQ-021",
+      "category": "normal",
+      "split": "holdout",
+      "path": "cases/DEMO-RFQ-021.json",
+      "sha256": "ca5cd7eff3c68bf5e22368fb3498b54296463b7ae05e9b254b3cb52ef35af4c1"
+    },
+    {
+      "id": "DEMO-RFQ-022",
+      "category": "normal",
+      "split": "holdout",
+      "path": "cases/DEMO-RFQ-022.json",
+      "sha256": "6d1a4a15501d7b42afa082317d6c5e270965807043fe5725a72cdb7c1264f9f4"
+    },
+    {
+      "id": "DEMO-RFQ-023",
+      "category": "normal",
+      "split": "holdout",
+      "path": "cases/DEMO-RFQ-023.json",
+      "sha256": "8e08a6a8cb3ad960bad1c370d81f611024f9b0cae63c1cfd98a6c4462691338e"
+    },
+    {
+      "id": "DEMO-RFQ-024",
+      "category": "normal",
+      "split": "holdout",
+      "path": "cases/DEMO-RFQ-024.json",
+      "sha256": "4924554c9fe7782ddb461481f29bea4113be35fb79d51b55cee95a8baeae3394"
+    },
+    {
+      "id": "DEMO-RFQ-025",
+      "category": "normal",
+      "split": "holdout",
+      "path": "cases/DEMO-RFQ-025.json",
+      "sha256": "5f253136eb2d8131e346f1b9ee9a5eae515c262939c2c4849359ec640b505239"
+    },
+    {
+      "id": "DEMO-RFQ-026",
+      "category": "normal",
+      "split": "holdout",
+      "path": "cases/DEMO-RFQ-026.json",
+      "sha256": "3046a4cb99d279bc66110268aee18e4f471f399ee4c4c35b338cd621faccad0a"
+    },
+    {
+      "id": "DEMO-RFQ-027",
+      "category": "normal",
+      "split": "holdout",
+      "path": "cases/DEMO-RFQ-027.json",
+      "sha256": "75578110b680ee088c59e9ece2abe7341ff72afb16bc6790374a6f357aea5228"
+    },
+    {
+      "id": "DEMO-RFQ-028",
+      "category": "normal",
+      "split": "holdout",
+      "path": "cases/DEMO-RFQ-028.json",
+      "sha256": "be23f25bea4d1ab1aac84722df0b93c74c2931c09dcfe3f02f8d51c1ceed24c1"
+    },
+    {
+      "id": "DEMO-RFQ-029",
+      "category": "normal",
+      "split": "holdout",
+      "path": "cases/DEMO-RFQ-029.json",
+      "sha256": "f1a520cad066bec8cfd5d01990659f936e1bcadb83a23cc1e01b5af5142ae20e"
+    },
+    {
+      "id": "DEMO-RFQ-030",
+      "category": "normal",
+      "split": "holdout",
+      "path": "cases/DEMO-RFQ-030.json",
+      "sha256": "8211443ff3c6419bef2eabec6ebb3d0ddd62f944c8f1222263ecf8e15ccd7233"
+    },
+    {
+      "id": "DEMO-RFQ-031",
+      "category": "missing_or_conflicting",
+      "split": "development",
+      "path": "cases/DEMO-RFQ-031.json",
+      "sha256": "8a6208d0854e42ac59fd30abdc0b7e3440988f5d7e24b7f3233268247e21ae50"
+    },
+    {
+      "id": "DEMO-RFQ-032",
+      "category": "missing_or_conflicting",
+      "split": "development",
+      "path": "cases/DEMO-RFQ-032.json",
+      "sha256": "95371cd5d7c3e15fd62155959ae8ae7e2788be90ac5ed321e3cd8b5d100cc124"
+    },
+    {
+      "id": "DEMO-RFQ-033",
+      "category": "missing_or_conflicting",
+      "split": "development",
+      "path": "cases/DEMO-RFQ-033.json",
+      "sha256": "b6ade6968976aa868cb4321f24c99fb3d8a7d564f325618f9e84a021c81349f0"
+    },
+    {
+      "id": "DEMO-RFQ-034",
+      "category": "missing_or_conflicting",
+      "split": "development",
+      "path": "cases/DEMO-RFQ-034.json",
+      "sha256": "f00cc744ddf5317e10dbe069db8cc24bc302b5d007d5d760a7099a7ac02be95d"
+    },
+    {
+      "id": "DEMO-RFQ-035",
+      "category": "missing_or_conflicting",
+      "split": "development",
+      "path": "cases/DEMO-RFQ-035.json",
+      "sha256": "80a82fa9e48f49cac9b6156f61c6768dbdc79b895aab9eb20c246d040e74f38a"
+    },
+    {
+      "id": "DEMO-RFQ-036",
+      "category": "missing_or_conflicting",
+      "split": "development",
+      "path": "cases/DEMO-RFQ-036.json",
+      "sha256": "26bfa46dd501011f36c07f3a85fbe42d9df03fd89453986c14854baf0ae58d84"
+    },
+    {
+      "id": "DEMO-RFQ-037",
+      "category": "missing_or_conflicting",
+      "split": "development",
+      "path": "cases/DEMO-RFQ-037.json",
+      "sha256": "8eeb27f7710d8aa7cb2f256a0433c754edfc9cf3663b55a216ac66bcfaac876f"
+    },
+    {
+      "id": "DEMO-RFQ-038",
+      "category": "missing_or_conflicting",
+      "split": "development",
+      "path": "cases/DEMO-RFQ-038.json",
+      "sha256": "2400c3f605c619907bd211a2c352f3a3a6660c955bd66fa34ebb5309dd9af2c0"
+    },
+    {
+      "id": "DEMO-RFQ-039",
+      "category": "missing_or_conflicting",
+      "split": "development",
+      "path": "cases/DEMO-RFQ-039.json",
+      "sha256": "82f5f931e645ee452415b50ee245d914242609affd944e5277f492b8911cc34c"
+    },
+    {
+      "id": "DEMO-RFQ-040",
+      "category": "missing_or_conflicting",
+      "split": "development",
+      "path": "cases/DEMO-RFQ-040.json",
+      "sha256": "1baa15337651c783126a95b264610a4fc5e6ce0e0e41b589a9053be53caec889"
+    },
+    {
+      "id": "DEMO-RFQ-041",
+      "category": "missing_or_conflicting",
+      "split": "development",
+      "path": "cases/DEMO-RFQ-041.json",
+      "sha256": "5279553463786c84de4c65da46a3cb1b0bb941094e11be6e0752faff1b1db222"
+    },
+    {
+      "id": "DEMO-RFQ-042",
+      "category": "missing_or_conflicting",
+      "split": "development",
+      "path": "cases/DEMO-RFQ-042.json",
+      "sha256": "4a534def674dac6ef57cbda07b55163edc169a913feef6e2de1d33116c32c1d6"
+    },
+    {
+      "id": "DEMO-RFQ-043",
+      "category": "missing_or_conflicting",
+      "split": "development",
+      "path": "cases/DEMO-RFQ-043.json",
+      "sha256": "3c88f490aeb9ac2bf0735dbb9fde7bbe9eddd0f99cdc354bd601b0ac07e28e56"
+    },
+    {
+      "id": "DEMO-RFQ-044",
+      "category": "missing_or_conflicting",
+      "split": "holdout",
+      "path": "cases/DEMO-RFQ-044.json",
+      "sha256": "c183c2c9c069ec547f88c48648d3250a0aa14e971068030afd842147183b32fa"
+    },
+    {
+      "id": "DEMO-RFQ-045",
+      "category": "missing_or_conflicting",
+      "split": "holdout",
+      "path": "cases/DEMO-RFQ-045.json",
+      "sha256": "96ff515837f8e6cf4d5460b829df2d0acaba257860befb60062c99c7060dbcae"
+    },
+    {
+      "id": "DEMO-RFQ-046",
+      "category": "missing_or_conflicting",
+      "split": "holdout",
+      "path": "cases/DEMO-RFQ-046.json",
+      "sha256": "d24b370658bff1deaacdea9c7f9edd2e66b0d03734b3911be93efc9302b24d9f"
+    },
+    {
+      "id": "DEMO-RFQ-047",
+      "category": "missing_or_conflicting",
+      "split": "holdout",
+      "path": "cases/DEMO-RFQ-047.json",
+      "sha256": "268dc7f6f855f275dd2592af34b85c14bf8a83e6c4ccba12856562c72cb3bdd4"
+    },
+    {
+      "id": "DEMO-RFQ-048",
+      "category": "missing_or_conflicting",
+      "split": "holdout",
+      "path": "cases/DEMO-RFQ-048.json",
+      "sha256": "42dca2ec73e51fbc75f6813621d155d0639f0d9fe016c4775fb8e11603315e5d"
+    },
+    {
+      "id": "DEMO-RFQ-049",
+      "category": "missing_or_conflicting",
+      "split": "holdout",
+      "path": "cases/DEMO-RFQ-049.json",
+      "sha256": "4845a74932c4430bb2dc82489b83ac2b8159eae524fcaf6e62c37b9e98f117c2"
+    },
+    {
+      "id": "DEMO-RFQ-050",
+      "category": "missing_or_conflicting",
+      "split": "holdout",
+      "path": "cases/DEMO-RFQ-050.json",
+      "sha256": "f5f001eda6b52118d20e265f56156827ea4aae61b3c95b472960ec8994fdf202"
+    },
+    {
+      "id": "DEMO-RFQ-051",
+      "category": "multi_step",
+      "split": "development",
+      "path": "cases/DEMO-RFQ-051.json",
+      "sha256": "8b83a9cdf7a191fca164d0ac0c981bb06b283c360093224c1b149214948aedb0"
+    },
+    {
+      "id": "DEMO-RFQ-052",
+      "category": "multi_step",
+      "split": "development",
+      "path": "cases/DEMO-RFQ-052.json",
+      "sha256": "a1da40fb1fa0aa8eb25487739fe5e7d7357bca60cfea0e7902b4ec3174c9192b"
+    },
+    {
+      "id": "DEMO-RFQ-053",
+      "category": "multi_step",
+      "split": "development",
+      "path": "cases/DEMO-RFQ-053.json",
+      "sha256": "39dcdb1e7e10bf82cd2a838606d7b1cdc172efbc97344fe3034e0a415ad9cc72"
+    },
+    {
+      "id": "DEMO-RFQ-054",
+      "category": "multi_step",
+      "split": "development",
+      "path": "cases/DEMO-RFQ-054.json",
+      "sha256": "5cb1aa09afa703d6b277a1be8970a5bc8c162d8ea06d4d97775e6cc50414157e"
+    },
+    {
+      "id": "DEMO-RFQ-055",
+      "category": "multi_step",
+      "split": "development",
+      "path": "cases/DEMO-RFQ-055.json",
+      "sha256": "876b25a4c27105b3290c63a65fdb79d76eca67b7ea5b51456b7012bd9bb50cbd"
+    },
+    {
+      "id": "DEMO-RFQ-056",
+      "category": "multi_step",
+      "split": "development",
+      "path": "cases/DEMO-RFQ-056.json",
+      "sha256": "55297fa2972ac188b8086a866736be24043c054695a55925583d4e83c5b5760a"
+    },
+    {
+      "id": "DEMO-RFQ-057",
+      "category": "multi_step",
+      "split": "development",
+      "path": "cases/DEMO-RFQ-057.json",
+      "sha256": "1fe51e719c1c465cab9ff110ccf4cdae6a999ee1fcffe092b292c25f92d30b06"
+    },
+    {
+      "id": "DEMO-RFQ-058",
+      "category": "multi_step",
+      "split": "holdout",
+      "path": "cases/DEMO-RFQ-058.json",
+      "sha256": "00f5825637f8ea4ae42c1501d62633bead56bd317a2ab378b410a43255a6c6a9"
+    },
+    {
+      "id": "DEMO-RFQ-059",
+      "category": "multi_step",
+      "split": "holdout",
+      "path": "cases/DEMO-RFQ-059.json",
+      "sha256": "107a6fe19ef146844cec191aa0c72bea40f3cc1169528a1e3b79c206b0653b32"
+    },
+    {
+      "id": "DEMO-RFQ-060",
+      "category": "multi_step",
+      "split": "holdout",
+      "path": "cases/DEMO-RFQ-060.json",
+      "sha256": "1fc49c07adb1798b28e7f5b77d8988d17d51fa511a253c905b3ba9c3583f6c5b"
+    }
+  ]
+}

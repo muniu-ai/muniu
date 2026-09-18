@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "kind": "template",
+  "releaseId": null,
+  "candidateId": null,
+  "createdAt": null,
+  "validFrom": null,
+  "expiresAt": null,
+  "allowedRealTenantIds": [],
+  "newRealTenantsEnabled": false,
+  "demoOnly": true,
+  "components": {
+    "agentOs": { "commit": null, "lockSha256": null, "imageDigest": null },
+    "sales": { "commit": null, "lockSha256": null, "imageDigest": null },
+    "web": { "commit": null, "assetSha256": null },
+    "engineLockSha256": null,
+    "pluginLockSha256": null,
+    "actionCatalogSha256": null,
+    "databaseMigrationSha256": null,
+    "modelConfigurationSha256": null
+  },
+  "corpusVersion": "1.0.0",
+  "p5": {
+    "status": "blocked",
+    "reason": "缺少联合版本、真实依赖、72次故障、备份恢复及运行时准入拒绝证据。",
+    "checks": {
+      "jointVersion": { "status": "not_run", "evidence": [] },
+      "baselineChecks": { "status": "not_run", "evidence": [] },
+      "apiWorkerFaultMatrix": { "status": "not_run", "evidence": [] },
+      "realDependencies": { "status": "not_run", "evidence": [] },
+      "backupRecovery": { "status": "not_run", "evidence": [] },
+      "runtimeAdmissionGate": { "status": "not_run", "evidence": [] },
+      "sourceAuthorization": { "status": "not_run", "evidence": [] }
+    },
+    "acceptanceOwner": null,
+    "acceptedAt": null
+  },
+  "p7": { "status": "blocked", "reason": "没有获准的真实客户样本、使用效果和付费证据。" },
+  "secrets": "references_only_never_inline",
+  "rollback": { "status": "not_run", "compatibleRestoreEvidence": [] },
+  "knownLimitations": ["合成样本不能证明行业准确率或商业可行性", "模板不构成服务运行时准入控制"],
+  "signature": { "algorithm": "Ed25519", "keyId": null, "value": null }
+}

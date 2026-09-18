@@ -1,0 +1,85 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-09-18T05:48:53.577Z",
+  "operation": "read_only_baseline_capture",
+  "toolchain": {
+    "required": {
+      "node": "22.19.x",
+      "npm": "11.10.1"
+    },
+    "actual": {
+      "node": "v22.19.0",
+      "npm": "11.10.1",
+      "nodeExecutable": "/Users/xiaomingwang/.local/share/muniu-toolchains/node-v22.19.0-darwin-arm64/bin/node"
+    },
+    "matchesOsRequirement": true
+  },
+  "components": [
+    {
+      "component": "agent_os",
+      "path": "/Users/xiaomingwang/Documents/ChatGPT/muniu-industry-delivery",
+      "baselineCommit": "89eb29591a6f9294faa3aa379debb47a6d6bbc3c",
+      "requiredTypeScript": "5.7.2",
+      "currentHead": "89eb29591a6f9294faa3aa379debb47a6d6bbc3c",
+      "baselineLockSha256": "bf5cf30c91e00bad229b9f3f5f29b6b065d7b9e615fca0293c13acb20e1ccfe4",
+      "baselineTypeScript": "5.7.2",
+      "baselineEngines": {
+        "node": ">=22.19.0 <22.20.0",
+        "npm": "11.10.1"
+      },
+      "baselinePackageManager": "npm@11.10.1",
+      "currentWorkingTree": {
+        "clean": false,
+        "statusLines": [
+          "M packages/contracts/src/index.ts",
+          " M packages/kernel/src/index.ts",
+          "?? docs/industry-delivery/",
+          "?? fixtures/",
+          "?? packages/contracts/src/business-effects.ts",
+          "?? packages/contracts/test/business-effects.test.ts",
+          "?? packages/kernel/src/business-actions.ts",
+          "?? packages/kernel/test/business-actions.test.ts",
+          "?? scripts/industry-delivery-assets.test.mjs",
+          "?? scripts/industry-delivery-baseline.mjs",
+          "?? scripts/industry-delivery-generate-fixtures.mjs",
+          "?? scripts/industry-delivery-summary.mjs",
+          "?? scripts/industry-delivery-validate.mjs"
+        ]
+      },
+      "verification": "source_identity_only_no_test_result"
+    },
+    {
+      "component": "sales",
+      "path": "/Users/xiaomingwang/Documents/ChatGPT/创业项目/muniu-ai-sales-rfq",
+      "baselineCommit": "8913a94c567403bd2f3021d09b0bf9474bd4102d",
+      "requiredTypeScript": "5.9.3",
+      "currentHead": "8913a94c567403bd2f3021d09b0bf9474bd4102d",
+      "baselineLockSha256": "63a95ca8356bc5b83ea569f2a8d2335aa959146baaee8a88a3fb62a00e2a289b",
+      "baselineTypeScript": "5.9.3",
+      "baselineEngines": {
+        "node": ">=22.13.0"
+      },
+      "baselinePackageManager": null,
+      "currentWorkingTree": {
+        "clean": false,
+        "statusLines": [
+          "M apps/api/database.ts",
+          " M package-lock.json",
+          " M package.json",
+          "?? infra/migrations/003_industry_rfq.sql",
+          "?? packages/connectors/rfq-source.ts",
+          "?? packages/domain/rfq.ts",
+          "?? tests/integration/rfq.test.ts"
+        ]
+      },
+      "verification": "source_identity_only_no_test_result"
+    }
+  ],
+  "initialWorkingTreeObservation": {
+    "phase": "before_parallel_edits",
+    "agentOsClean": true,
+    "salesClean": true,
+    "basis": "git status --short returned no output for both worktrees before this package created files",
+    "preciseObservedAt": null
+  }
+}

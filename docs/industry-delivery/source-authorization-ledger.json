@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "defaultRealSourceAdmission": "deny",
+  "entries": [
+    {
+      "sourceId": "DEMO-RFQ-CORPUS-V1",
+      "path": "fixtures/industry-delivery/v1/corpus.json",
+      "classification": "synthetic",
+      "fictional": true,
+      "rightsBasis": "本项目新编虚构测试资料；不包含客户文档或复制的上游源码",
+      "license": "Apache-2.0",
+      "authorizedPurpose": [
+        "demo",
+        "development_test",
+        "frozen_configuration_evaluation"
+      ],
+      "tenantRestriction": "tenant-demo-*",
+      "realQuoteUse": false,
+      "externalSend": false,
+      "customerValidation": "not_applicable",
+      "expertReview": "not_run",
+      "retention": "版本化测试资产；泄漏留出答案后撤销该版本的独立评估资格",
+      "deletionOwner": "repository_maintainer",
+      "contentSha256": "3dbfbab8c2765ea225f3af5061655bb20bff70d2ce41bb9dd565d6f5cfe87674"
+    }
+  ],
+  "realSourceRequiredFields": [
+    "sourceId",
+    "owner",
+    "authorizationEvidence",
+    "authorizedPurpose",
+    "tenantId",
+    "confidentiality",
+    "allowedModelProviders",
+    "retentionDeadline",
+    "deletionOwner",
+    "derivativeUsePermission",
+    "businessAcceptanceOwner"
+  ],
+  "realSourceRules": [
+    "公开可访问不等于允许复制、训练或跨客户复用",
+    "去除姓名不自动获得资料使用或派生数据复用许可",
+    "客户文件不得直接提交到公共代码仓库",
+    "缺少授权证据时维持拒绝状态，不用模拟授权补齐"
+  ]
+}

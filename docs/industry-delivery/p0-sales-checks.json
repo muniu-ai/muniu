@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "baselineCommit": "8913a94c567403bd2f3021d09b0bf9474bd4102d",
+  "evidenceLocation": "local_ephemeral_logs_not_bundled",
+  "checks": [
+    {
+      "command": "test",
+      "status": "passed",
+      "exitCode": 0,
+      "exitCodeSource": "execution_owner_report",
+      "logPath": "/tmp/muniu-sales-baseline-test.log",
+      "logSha256": "203d381c01fffef0c39f030e7e5937b1ca666374275783a6053289ac6cb2c285",
+      "summary": {
+        "tests": 43,
+        "passed": 43,
+        "failed": 0
+      }
+    },
+    {
+      "command": "typecheck",
+      "status": "passed",
+      "exitCode": 0,
+      "exitCodeSource": "execution_owner_report",
+      "logPath": "/tmp/muniu-sales-baseline-typecheck.log",
+      "logSha256": "ba8f127f78eec9073e53d30e44e0fa41e9878819f1964aaa39b5e896119228a2",
+      "summary": null
+    },
+    {
+      "command": "lint",
+      "status": "failed",
+      "exitCode": null,
+      "exitCodeSource": "not_recorded_here",
+      "logPath": "/tmp/muniu-sales-baseline-lint.log",
+      "logSha256": "78b60f31c20d2b01b543aea0c3a5080f8e9e6d33ee05781564c75c2046edaa90",
+      "summary": {
+        "diagnosticLines": 180
+      }
+    }
+  ],
+  "releaseImplication": "baseline_lint_failure_must_remain_visible_not_waived"
+}

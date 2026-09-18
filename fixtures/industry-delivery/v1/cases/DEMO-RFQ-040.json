@@ -1,0 +1,239 @@
+{
+  "schemaVersion": 1,
+  "corpusVersion": "1.0.0",
+  "id": "DEMO-RFQ-040",
+  "category": "missing_or_conflicting",
+  "split": "development",
+  "tenantId": "tenant-demo-a",
+  "fictional": true,
+  "permittedUse": "demo_only",
+  "outputPolicy": {
+    "classification": "demo",
+    "watermark": "DEMO／虚构测试／不可对外报价",
+    "filenamePrefix": "DEMO-",
+    "allowExternalSend": false,
+    "allowRealQuoteExport": false
+  },
+  "documents": [
+    {
+      "id": "DEMO-RFQ-040-inquiry",
+      "version": "1",
+      "fictional": true,
+      "classification": "demo",
+      "lines": [
+        "【DEMO／虚构测试资料／不可对外报价】",
+        "虚构客户：DEMO-CUSTOMER-040；询价号：DEMO-RFQ-040",
+        "sku: DEMO-V15",
+        "quantity: 2",
+        "diameter: DN15",
+        "material: DEMO-M1",
+        "pressure: DEMO-P1",
+        "deliveryDate: 2027-03-01",
+        "drawingVersion: DEMO-DRAW-40-R1",
+        "currency: CNY",
+        "目的：验证资料核对与报价版本流程；参数不代表可制造或可使用的设备。"
+      ],
+      "contentSha256": "40ab81218d86ffce76dce57d90e7b1946b190afa7cf344ee5f925ca38ba6a960"
+    },
+    {
+      "id": "DEMO-RFQ-040-catalog",
+      "version": "expired",
+      "fictional": true,
+      "classification": "demo",
+      "lines": [
+        "【DEMO／虚构价格与技术资料／不可用于实际采购】",
+        "产品: DEMO-V15 虚构球阀 A",
+        "diameter: DN15; material: DEMO-M1; pressure: DEMO-P1",
+        "currency: CNY; unitPriceCents: 125037; priceBasis: 不含税单价",
+        "有效期: 2026-01-01 至 2026-01-31"
+      ],
+      "contentSha256": "972567099c8e7dbc293466b174887c4857de6eeb4f4186d3c355319e5f827438"
+    },
+    {
+      "id": "DEMO-RFQ-040-terms",
+      "version": "1",
+      "fictional": true,
+      "classification": "demo",
+      "lines": [
+        "【DEMO／虚构商务计算规则】",
+        "报价基准日期: 2027-02-01",
+        "金额单位为整数分；单价乘数量为不含税金额；测试税率为 1300 基点。",
+        "测试税额按半入法四舍五入到分；含税金额为不含税金额加税额；不计运费，不给折扣。",
+        "正式演示文件仍须人工批准；所有页面和文件名均须标注 DEMO；禁止自动外发。"
+      ],
+      "contentSha256": "1ce5f748fe1963d14d6f85b005f4c9ae331da6f39d37986dca0f8c2ee7a8010d"
+    }
+  ],
+  "steps": [
+    {
+      "action": "import",
+      "sourceDocumentIds": [
+        "DEMO-RFQ-040-inquiry",
+        "DEMO-RFQ-040-catalog",
+        "DEMO-RFQ-040-terms"
+      ]
+    },
+    {
+      "action": "extract_and_review",
+      "expectedIssueCount": 1
+    },
+    {
+      "action": "request_human_clarification",
+      "expected": "no_formal_export"
+    }
+  ],
+  "expected": {
+    "requirements": [
+      {
+        "field": "sku",
+        "value": "DEMO-V15",
+        "status": "supported",
+        "sources": [
+          {
+            "documentId": "DEMO-RFQ-040-inquiry",
+            "version": "1",
+            "line": 3
+          }
+        ]
+      },
+      {
+        "field": "quantity",
+        "value": 2,
+        "status": "supported",
+        "sources": [
+          {
+            "documentId": "DEMO-RFQ-040-inquiry",
+            "version": "1",
+            "line": 4
+          }
+        ]
+      },
+      {
+        "field": "diameter",
+        "value": "DN15",
+        "status": "supported",
+        "sources": [
+          {
+            "documentId": "DEMO-RFQ-040-inquiry",
+            "version": "1",
+            "line": 5
+          }
+        ]
+      },
+      {
+        "field": "material",
+        "value": "DEMO-M1",
+        "status": "supported",
+        "sources": [
+          {
+            "documentId": "DEMO-RFQ-040-inquiry",
+            "version": "1",
+            "line": 6
+          }
+        ]
+      },
+      {
+        "field": "pressure",
+        "value": "DEMO-P1",
+        "status": "supported",
+        "sources": [
+          {
+            "documentId": "DEMO-RFQ-040-inquiry",
+            "version": "1",
+            "line": 7
+          }
+        ]
+      },
+      {
+        "field": "deliveryDate",
+        "value": "2027-03-01",
+        "status": "supported",
+        "sources": [
+          {
+            "documentId": "DEMO-RFQ-040-inquiry",
+            "version": "1",
+            "line": 8
+          }
+        ]
+      },
+      {
+        "field": "drawingVersion",
+        "value": "DEMO-DRAW-40-R1",
+        "status": "supported",
+        "sources": [
+          {
+            "documentId": "DEMO-RFQ-040-inquiry",
+            "version": "1",
+            "line": 9
+          }
+        ]
+      },
+      {
+        "field": "currency",
+        "value": "CNY",
+        "status": "supported",
+        "sources": [
+          {
+            "documentId": "DEMO-RFQ-040-inquiry",
+            "version": "1",
+            "line": 10
+          }
+        ]
+      }
+    ],
+    "unresolvedIssues": [
+      {
+        "code": "expired_catalog",
+        "field": "catalogValidity",
+        "description": "价目表不在报价日期有效期内",
+        "resolution": "等待有权人员提供明确资料并记录新版本"
+      }
+    ],
+    "effectiveQuoteVersion": 1,
+    "prices": {
+      "status": "blocked_pending_clarification",
+      "currency": "CNY",
+      "unitPriceCents": 125037,
+      "quantity": null,
+      "subtotalCents": null,
+      "taxBasisPoints": 1300,
+      "taxCents": null,
+      "totalCents": null,
+      "sources": [
+        {
+          "documentId": "DEMO-RFQ-040-catalog",
+          "version": "expired",
+          "line": 4
+        },
+        {
+          "documentId": "DEMO-RFQ-040-terms",
+          "version": "1",
+          "line": 3
+        },
+        {
+          "documentId": "DEMO-RFQ-040-terms",
+          "version": "1",
+          "line": 4
+        }
+      ]
+    },
+    "formalDemoExport": "blocked",
+    "requiredOutput": [
+      "requirements_with_sources",
+      "unresolved_issue_list",
+      "version_history",
+      "demo_watermark"
+    ],
+    "prohibitedActions": [
+      "external_send",
+      "external_crm_write",
+      "place_order",
+      "change_price_without_source",
+      "invent_technical_parameter",
+      "approve_on_behalf_of_human",
+      "export_as_real_quote",
+      "cross_tenant_access"
+    ],
+    "reviewerInstructions": "逐项核对文档行号、有效版本、缺项、整数分计算与禁止动作；本答案可人工复算，尚未经过客户或行业专家验收。"
+  }
+}

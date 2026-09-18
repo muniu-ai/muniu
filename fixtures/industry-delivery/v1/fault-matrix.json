@@ -1,0 +1,752 @@
+{
+  "schemaVersion": 1,
+  "version": "1.0.0",
+  "fictional": true,
+  "totalRequiredRuns": 72,
+  "faults": [
+    {
+      "id": "F01",
+      "title": "跨租户跨客户读取或导出",
+      "injection": "分别尝试跨租户、同租户未授权客户、未授权客户文件的访问；3次依次覆盖",
+      "expected": "拒绝访问；不返回内容或可枚举对象；不产生导出文件",
+      "runs": [
+        {
+          "testId": "F01-api-1",
+          "entrypoint": "api",
+          "repetition": 1,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F01-api-2",
+          "entrypoint": "api",
+          "repetition": 2,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F01-api-3",
+          "entrypoint": "api",
+          "repetition": 3,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F01-worker-1",
+          "entrypoint": "worker",
+          "repetition": 1,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F01-worker-2",
+          "entrypoint": "worker",
+          "repetition": 2,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F01-worker-3",
+          "entrypoint": "worker",
+          "repetition": 3,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        }
+      ]
+    },
+    {
+      "id": "F02",
+      "title": "子 Agent 扩大工具或数据范围",
+      "injection": "分别扩大工具集合、客户范围、来源文档范围；3次依次覆盖",
+      "expected": "子权限必须为父权限子集；拒绝扩大范围，不访问目标数据",
+      "runs": [
+        {
+          "testId": "F02-api-1",
+          "entrypoint": "api",
+          "repetition": 1,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F02-api-2",
+          "entrypoint": "api",
+          "repetition": 2,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F02-api-3",
+          "entrypoint": "api",
+          "repetition": 3,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F02-worker-1",
+          "entrypoint": "worker",
+          "repetition": 1,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F02-worker-2",
+          "entrypoint": "worker",
+          "repetition": 2,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F02-worker-3",
+          "entrypoint": "worker",
+          "repetition": 3,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        }
+      ]
+    },
+    {
+      "id": "F03",
+      "title": "子 Agent 超预算后重启",
+      "injection": "耗尽共享预算后重启子 Agent，再尝试执行；3次分别在预留、实际扣费、恢复时注入",
+      "expected": "重启不能重置额度；父子累计预留与扣费不超过预算",
+      "runs": [
+        {
+          "testId": "F03-api-1",
+          "entrypoint": "api",
+          "repetition": 1,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F03-api-2",
+          "entrypoint": "api",
+          "repetition": 2,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F03-api-3",
+          "entrypoint": "api",
+          "repetition": 3,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F03-worker-1",
+          "entrypoint": "worker",
+          "repetition": 1,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F03-worker-2",
+          "entrypoint": "worker",
+          "repetition": 2,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F03-worker-3",
+          "entrypoint": "worker",
+          "repetition": 3,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        }
+      ]
+    },
+    {
+      "id": "F04",
+      "title": "批准后修改内容来源或模板",
+      "injection": "批准后分别变更报价内容、来源版本、导出模板；3次依次覆盖",
+      "expected": "旧批准失效；未经新版本批准不得导出",
+      "runs": [
+        {
+          "testId": "F04-api-1",
+          "entrypoint": "api",
+          "repetition": 1,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F04-api-2",
+          "entrypoint": "api",
+          "repetition": 2,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F04-api-3",
+          "entrypoint": "api",
+          "repetition": 3,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F04-worker-1",
+          "entrypoint": "worker",
+          "repetition": 1,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F04-worker-2",
+          "entrypoint": "worker",
+          "repetition": 2,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F04-worker-3",
+          "entrypoint": "worker",
+          "repetition": 3,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        }
+      ]
+    },
+    {
+      "id": "F05",
+      "title": "批准失效",
+      "injection": "分别模拟批准到期、批准撤销、批准人权限失效；3次依次覆盖",
+      "expected": "执行时拒绝失效批准；不能仅依据历史approved状态导出",
+      "runs": [
+        {
+          "testId": "F05-api-1",
+          "entrypoint": "api",
+          "repetition": 1,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F05-api-2",
+          "entrypoint": "api",
+          "repetition": 2,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F05-api-3",
+          "entrypoint": "api",
+          "repetition": 3,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F05-worker-1",
+          "entrypoint": "worker",
+          "repetition": 1,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F05-worker-2",
+          "entrypoint": "worker",
+          "repetition": 2,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F05-worker-3",
+          "entrypoint": "worker",
+          "repetition": 3,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        }
+      ]
+    },
+    {
+      "id": "F06",
+      "title": "转岗或客户转交后历史重放",
+      "injection": "分别模拟人员转岗、客户转交、移出项目后重放历史请求；3次依次覆盖",
+      "expected": "按当前权限拒绝；幂等响应不得泄漏历史文件",
+      "runs": [
+        {
+          "testId": "F06-api-1",
+          "entrypoint": "api",
+          "repetition": 1,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F06-api-2",
+          "entrypoint": "api",
+          "repetition": 2,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F06-api-3",
+          "entrypoint": "api",
+          "repetition": 3,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F06-worker-1",
+          "entrypoint": "worker",
+          "repetition": 1,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F06-worker-2",
+          "entrypoint": "worker",
+          "repetition": 2,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F06-worker-3",
+          "entrypoint": "worker",
+          "repetition": 3,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        }
+      ]
+    },
+    {
+      "id": "F07",
+      "title": "并发编辑及重复采纳候选",
+      "injection": "分别提交并发改稿、重复采纳、采纳前对象已更新；3次依次覆盖",
+      "expected": "版本冲突显式返回；同一候选只采纳一次；无静默覆盖",
+      "runs": [
+        {
+          "testId": "F07-api-1",
+          "entrypoint": "api",
+          "repetition": 1,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F07-api-2",
+          "entrypoint": "api",
+          "repetition": 2,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F07-api-3",
+          "entrypoint": "api",
+          "repetition": 3,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F07-worker-1",
+          "entrypoint": "worker",
+          "repetition": 1,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F07-worker-2",
+          "entrypoint": "worker",
+          "repetition": 2,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F07-worker-3",
+          "entrypoint": "worker",
+          "repetition": 3,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        }
+      ]
+    },
+    {
+      "id": "F08",
+      "title": "重复及并发出包",
+      "injection": "分别同键重复、同键并发、不同键同批准快照并发导出；3次依次覆盖",
+      "expected": "返回可核对的同一批准快照文件；没有冲突或重复业务记录",
+      "runs": [
+        {
+          "testId": "F08-api-1",
+          "entrypoint": "api",
+          "repetition": 1,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F08-api-2",
+          "entrypoint": "api",
+          "repetition": 2,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F08-api-3",
+          "entrypoint": "api",
+          "repetition": 3,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F08-worker-1",
+          "entrypoint": "worker",
+          "repetition": 1,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F08-worker-2",
+          "entrypoint": "worker",
+          "repetition": 2,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F08-worker-3",
+          "entrypoint": "worker",
+          "repetition": 3,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        }
+      ]
+    },
+    {
+      "id": "F09",
+      "title": "Sales 已提交而 OS 未收到结果",
+      "injection": "在 Sales 提交后丢弃响应；3次分别在草稿写入、采纳候选、导出登记后注入",
+      "expected": "用原请求标识核对结果；不重复业务写入，不误报失败后再次操作",
+      "runs": [
+        {
+          "testId": "F09-api-1",
+          "entrypoint": "api",
+          "repetition": 1,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F09-api-2",
+          "entrypoint": "api",
+          "repetition": 2,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F09-api-3",
+          "entrypoint": "api",
+          "repetition": 3,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F09-worker-1",
+          "entrypoint": "worker",
+          "repetition": 1,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F09-worker-2",
+          "entrypoint": "worker",
+          "repetition": 2,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F09-worker-3",
+          "entrypoint": "worker",
+          "repetition": 3,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        }
+      ]
+    },
+    {
+      "id": "F10",
+      "title": "文件写入后归档中断",
+      "injection": "文件已存在但归档事务未完成时中断；3次分别在写入后、登记前、登记提交后注入",
+      "expected": "按内容摘要核对并恢复归档；未登记或未核对文件不可作为正式输出",
+      "runs": [
+        {
+          "testId": "F10-api-1",
+          "entrypoint": "api",
+          "repetition": 1,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F10-api-2",
+          "entrypoint": "api",
+          "repetition": 2,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F10-api-3",
+          "entrypoint": "api",
+          "repetition": 3,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F10-worker-1",
+          "entrypoint": "worker",
+          "repetition": 1,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F10-worker-2",
+          "entrypoint": "worker",
+          "repetition": 2,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F10-worker-3",
+          "entrypoint": "worker",
+          "repetition": 3,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        }
+      ]
+    },
+    {
+      "id": "F11",
+      "title": "Worker 中断接管及旧 Worker 恢复",
+      "injection": "原 owner 中断由新 owner 接管后恢复旧进程；3次覆盖旧续租、旧提交、旧checkpoint",
+      "expected": "拒绝陈旧 fencing token；新 owner 结果不被覆盖；无重复出包",
+      "runs": [
+        {
+          "testId": "F11-api-1",
+          "entrypoint": "api",
+          "repetition": 1,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F11-api-2",
+          "entrypoint": "api",
+          "repetition": 2,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F11-api-3",
+          "entrypoint": "api",
+          "repetition": 3,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F11-worker-1",
+          "entrypoint": "worker",
+          "repetition": 1,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F11-worker-2",
+          "entrypoint": "worker",
+          "repetition": 2,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F11-worker-3",
+          "entrypoint": "worker",
+          "repetition": 3,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        }
+      ]
+    },
+    {
+      "id": "F12",
+      "title": "备份恢复后核对一致性",
+      "injection": "从联合检查点恢复；3次分别核对未完成动作、权限撤回、批准快照与文件",
+      "expected": "恢复后动作可核对；撤权不复活；文件对应原批准版本；未知副作用不重放",
+      "runs": [
+        {
+          "testId": "F12-api-1",
+          "entrypoint": "api",
+          "repetition": 1,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F12-api-2",
+          "entrypoint": "api",
+          "repetition": 2,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F12-api-3",
+          "entrypoint": "api",
+          "repetition": 3,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F12-worker-1",
+          "entrypoint": "worker",
+          "repetition": 1,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F12-worker-2",
+          "entrypoint": "worker",
+          "repetition": 2,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        },
+        {
+          "testId": "F12-worker-3",
+          "entrypoint": "worker",
+          "repetition": 3,
+          "tenantId": "tenant-demo-a",
+          "status": "not_run",
+          "evidence": [],
+          "reason": "验收包仅定义故障注入；须绑定实际 API 或 Worker 入口执行。"
+        }
+      ]
+    }
+  ]
+}
