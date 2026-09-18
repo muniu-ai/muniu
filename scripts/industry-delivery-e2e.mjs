@@ -22,6 +22,23 @@ export function databaseUrl(connectionString, database) {
   url.pathname = `/${database}`;
   return url.toString();
 }
+export function restoreTargets(repetition) {
+  assert.ok(Number.isInteger(repetition) && repetition >= 1 && repetition <= 3);
+  return { sourceOs: 'mn_os', sourceSales: 'mn_sales', os: `mn_os_restored_${repetition}`, sales: `mn_sales_restored_${repetition}` };
+}
+export function acceptancePlan(repetitions) {
+  restoreTargets(repetitions);
+  const scenarios = [
+    ['normal', null, ['api', 'worker']], ['afterCommit', 'F09', ['worker']], ['afterWrite', 'F10', ['worker']],
+    ['scope-boundary', 'F01', ['api', 'worker']], ['quote-change', 'F04', ['api', 'worker']],
+    ['source-change', 'F04', ['api', 'worker']], ['template-version', 'F04', ['api']],
+    ['approval-revoked', 'F05', ['api', 'worker']], ['customer-transfer', 'F06', ['api', 'worker']],
+    ['concurrent-package', 'F08', ['api', 'worker']], ['worker-takeover', 'F11', ['worker']],
+    ['database-restore', 'F12', ['api', 'worker']],
+  ];
+  return Array.from({ length: repetitions }, (_, i) => scenarios.map(([scenario, faultId, paths]) =>
+    ({ id: `${scenario}-${i + 1}`, scenario, faultId, paths, repetition: i + 1, status: 'not_run' }))).flat();
+}
 export function validateFixtureConfig(config) {
   assert.equal(config.synthetic, true, 'synthetic fixture required');
   assert.equal(config.tenantId, TENANT, 'only the built-in synthetic tenant is allowed');
@@ -99,8 +116,7 @@ async function main() {
   const composeBin = process.env.MN_COMPOSE_BIN || '/Applications/Docker.app/Contents/Resources/cli-plugins/docker-compose';
   const composeArgs = ['-p', project, '-f', join(root, 'fixtures/industry-delivery/runtime/docker-compose.yml')];
   const children = new Map(); const streams = [];
-  const checks = [...Array.from({ length: repetitions }, (_, i) => ['normal', 'afterCommit', 'afterWrite'].map(x => ({ id: `${x}-${i + 1}`, status: 'not_run' }))).flat(),
-    { id: 'worker-takeover', status: 'not_run' }, { id: 'database-restore', status: 'not_run' }];
+  const checks = acceptancePlan(repetitions);
   const report = { schemaVersion: '1', fixture: 'DEMO', startedAt: new Date().toISOString(), project, repetitions, node: process.version, checks };
   const cmd = (file, args, options = {}) => new Promise((resolve, reject) => {
     const child = spawn(file, args, { cwd: root, env: { ...process.env, PATH: '/Applications/Docker.app/Contents/Resources/bin:' + process.env.PATH }, ...options });
@@ -133,15 +149,15 @@ async function main() {
   };
   let osPool, salesPool, admin;
   let accessToken, cookie;
-  const request = async (kind, method, path, body, revision, expected = [200, 201]) => {
+  const request = async (kind, method, path, body, revision, expected = [200, 201], options = {}) => {
     const base = kind === 'os' ? config.hostUrl : config.salesUrl;
     const response = await fetch(base + path, { method, signal: AbortSignal.timeout(35_000),
       headers: { ...(kind === 'os' ? { authorization: `Bearer ${accessToken}` } : kind === 'service' ? { authorization: `Bearer ${config.serviceToken}` } : { origin: config.salesUrl, ...(cookie ? { cookie } : {}) }),
-        ...(body === undefined ? {} : { 'content-type': 'application/json', 'Idempotency-Key': randomUUID() }), ...(revision ? { 'If-Match': `"${revision}"` } : {}) },
+        ...(body === undefined ? {} : { 'content-type': 'application/json', 'Idempotency-Key': options.idempotencyKey ?? randomUUID() }), ...(revision ? { 'If-Match': `"${revision}"` } : {}) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
     const text = await response.text(); let parsed; try { parsed = JSON.parse(text); } catch { /* Non-JSON failure remains diagnostic only. */ }
     assert.ok(expected.includes(response.status), `${method} ${path}: ${response.status} ${text.slice(0, 1000)}`);
-    return { data: parsed?.data, response };
+    return { data: parsed?.data, errorCode: parsed?.error?.code ?? parsed?.code, response };
   };
   const run = async (id, work) => {
     process.stdout.write(`${id}: running\n`); const began = Date.now();
@@ -184,20 +200,23 @@ async function main() {
       csv: 'id,revision,name,unitPriceCents\nDEMO-V15,1,DEMO 虚构球阀 DN15,125037',
     })).data.products[0];
     report.dependencies = { postgres: (await admin.query('select version()')).rows[0].version, salesRole: (await salesPool.query("select rolname,rolsuper,rolbypassrls from pg_roles where rolname='mn_sales'")).rows[0], workers: ['worker-a', 'worker-b'], pdf: 'real Playwright Chromium; font digest bound to renderVersion', font: JSON.parse(await readFile(join(salesRoot, 'templates/font-manifest.json'), 'utf8')), vault: 'real Transit API in disposable dev mode' };
-    const prepare = async title => {
+    const prepare = async (title, createAction = true) => {
       let inquiry = (await request('sales', 'POST', '/api/v1/rfqs', { customerId, title: `DEMO ${title}` })).data;
       const inputText = 'DEMO 虚构球阀 DN15，目录编号 DEMO-V15，数量为 2，禁止外发。';
       const added = (await request('sales', 'POST', `/api/v1/rfqs/${inquiry.id}/sources`, { name: 'DEMO-inquiry.txt', mime: 'text/plain', base64: Buffer.from(inputText).toString('base64') }, inquiry.revision)).data;
       inquiry = (await request('sales', 'PUT', `/api/v1/rfqs/${inquiry.id}/requirements`, { requirements: [{ id: 'r1', text: inputText, kind: 'fact', critical: true, confirmed: true, source: { sourceId: added.source.id, sourceRevision: added.source.revision, page: 1, start: 0, end: Array.from(inputText).length } }], conflicts: [] }, added.inquiry.revision)).data;
-      await request('sales', 'POST', `/api/v1/rfqs/${inquiry.id}/quotes`, { items: [{ catalogItemId: catalog.id, catalogRevision: catalog.revision, quantity: 2 }], discountBps: 0, taxBasis: 'unit_price_tax_included', company: { name: 'DEMO 虚构工业企业', address: '演示地址', contact: '演示联系人' }, validUntil: new Date(Date.now() + 86400_000).toISOString(), deliveryTerms: '仅为虚构演示', paymentTerms: '不产生付款义务' }, inquiry.revision);
+      const quoteBody = { items: [{ catalogItemId: catalog.id, catalogRevision: catalog.revision, quantity: 2 }], discountBps: 0, taxBasis: 'unit_price_tax_included', company: { name: 'DEMO 虚构工业企业', address: '演示地址', contact: '演示联系人' }, validUntil: new Date(Date.now() + 86400_000).toISOString(), deliveryTerms: '仅为虚构演示', paymentTerms: '不产生付款义务' };
+      await request('sales', 'POST', `/api/v1/rfqs/${inquiry.id}/quotes`, quoteBody, inquiry.revision);
       inquiry = (await request('sales', 'GET', `/api/v1/rfqs/${inquiry.id}`)).data;
       assert.equal(inquiry.quote.content.totalCents, 250074);
       assert.equal(inquiry.quote.content.demo, true);
       assert.equal(inquiry.quote.content.items[0].catalogItemId, 'DEMO-V15');
       report.dependencies.renderVersion = inquiry.renderVersion;
-      const decision = (await request('sales', 'POST', `/api/v1/rfqs/${inquiry.id}/approve`, { contentVersion: inquiry.quote.contentVersion, digest: inquiry.quote.digest }, inquiry.revision)).data;
-      const action = (await request('os', 'POST', '/v2/business-actions', { schemaVersion: '1', action: 'issueQuotePackage', expectedStreamVersion: 0, workspaceId: config.workspaceId, customerId, quoteId: inquiry.id, quoteVersion: inquiry.quote.contentVersion, decisionId: decision.id, templateId: inquiry.template.id, templateVersion: inquiry.template.version, renderVersion: inquiry.renderVersion, exportFormat: 'pdf', issueDate: new Date().toISOString().slice(0, 10) })).data;
-      return { inquiry, action };
+      const approvalReplay = { body: { contentVersion: inquiry.quote.contentVersion, digest: inquiry.quote.digest }, revision: inquiry.revision, idempotencyKey: randomUUID() };
+      const decision = (await request('sales', 'POST', `/api/v1/rfqs/${inquiry.id}/approve`, approvalReplay.body, approvalReplay.revision, [200, 201], approvalReplay)).data;
+      const actionBody = { schemaVersion: '1', action: 'issueQuotePackage', expectedStreamVersion: 0, workspaceId: config.workspaceId, customerId, quoteId: inquiry.id, quoteVersion: inquiry.quote.contentVersion, decisionId: decision.id, templateId: inquiry.template.id, templateVersion: inquiry.template.version, renderVersion: inquiry.renderVersion, exportFormat: 'pdf', issueDate: new Date().toISOString().slice(0, 10) };
+      const action = createAction ? (await request('os', 'POST', '/v2/business-actions', actionBody)).data : undefined;
+      return { inquiry, action, decision, actionBody, quoteBody, approvalReplay };
     };
     const actionRead = async id => (await request('os', 'GET', `/v2/business-actions/${id}`)).data;
     const waiting = async id => until('tool approval', async () => { const a = await actionRead(id); if (a.status === 'rejected') throw new Error('business action rejected before approval'); return a.approval ? a : undefined; });
@@ -214,9 +233,29 @@ async function main() {
       const name = `DEMO-${pkg.id}.pdf`; await writeFile(join(output, name), bytes);
       return { actionId: action.id, inquiryId: inquiry.id, packageId: pkg.id, operationKey: action.operationKey, pdf: { path: name, sha256: sha256(bytes), byteLength: bytes.length }, packageCount: 1 };
     };
-    let restoreReference;
+    const scope = { tenantId: TENANT, workspaceId: config.workspaceId, customerId, principalId: PRINCIPAL };
+    const snapshotQuery = fixture => ({ schemaVersion: '1', scope, objectId: fixture.inquiry.id, version: fixture.inquiry.quote.contentVersion,
+      templateId: fixture.inquiry.template.id, templateVersion: fixture.inquiry.template.version });
+    const denied = async (kind, method, path, body, expectedStatus, expectedCode, revision, options) => {
+      const result = await request(kind, method, path, body, revision, [expectedStatus], options);
+      assert.equal(result.errorCode, expectedCode);
+      return { path, status: result.response.status, code: result.errorCode };
+    };
+    const workerRejected = async fixture => {
+      const rejected = await final(fixture.action.id, 'rejected');
+      const job = await until('rejected physical Worker job', async () => {
+        const row = (await osPool.query('select job_id,status,fencing_token from mn_v2.jobs where tenant_id=$1 and job_id=$2', [TENANT, fixture.action.jobId])).rows[0];
+        return row?.status === 'failed' ? row : undefined;
+      });
+      assert.ok(Number(job.fencing_token) > 0, 'a real Worker must have leased the job');
+      const operations = (await salesPool.query("select count(*)::int as n from quote_operations where tenant_id=$1 and data->>'inquiryId'=$2", [TENANT, fixture.inquiry.id])).rows[0].n;
+      const packages = (await salesPool.query("select count(*)::int as n from quote_packages where tenant_id=$1 and data->>'inquiryId'=$2", [TENANT, fixture.inquiry.id])).rows[0].n;
+      assert.equal(operations, 0); assert.equal(packages, 0);
+      return { actionId: rejected.id, inquiryId: fixture.inquiry.id, actionStatus: rejected.status, physicalJob: job, operationCount: operations, packageCount: packages };
+    };
+    const restoreReferences = [];
     for (let iteration = 1; iteration <= repetitions; iteration++) {
-      await run(`normal-${iteration}`, async () => { const { inquiry, action } = await prepare('正常出包'); await approve(await waiting(action.id)); const done = await final(action.id, 'completed'); const evidence = await verifyPackage(inquiry, done); restoreReference = { inquiry, action: done, evidence }; return evidence; });
+      await run(`normal-${iteration}`, async () => { const { inquiry, action } = await prepare('正常出包'); await approve(await waiting(action.id)); const done = await final(action.id, 'completed'); const evidence = await verifyPackage(inquiry, done); restoreReferences.push({ inquiry, action: done, evidence }); return evidence; });
       for (const stage of ['afterCommit', 'afterWrite']) await run(`${stage}-${iteration}`, async () => {
         const { inquiry, action } = await prepare(stage); await writeFile(config.faultFile, JSON.stringify({ stage }), { mode: 0o600 });
         await approve(await waiting(action.id)); let pending = await final(action.id, 'needs_reconciliation');
@@ -229,8 +268,78 @@ async function main() {
         assert.equal(evidence.pdf.sha256, op.file.sha256, 'reconciliation preserves originally staged PDF bytes');
         return { ...evidence, injectedStage: stage, statusBeforeReconcile: op.status, archiveCountBeforeReconcile: before.packages.length, explicitReconciliation: true };
       });
+      await run(`scope-boundary-${iteration}`, async () => {
+        const fixture = await prepare('服务范围边界'); const pending = await waiting(fixture.action.id);
+        const query = snapshotQuery(fixture);
+        const otherCustomer = (await salesPool.query('select id from customers where tenant_id=$1 and id<>$2 order by id limit 1', [TENANT, customerId])).rows[0].id;
+        const api = [
+          await denied('service', 'POST', '/api/v1/os-business/snapshots', { ...query, scope: { ...scope, tenantId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' } }, 403, 'SERVICE_SCOPE_DENIED'),
+          await denied('service', 'POST', '/api/v1/os-business/snapshots', { ...query, scope: { ...scope, customerId: otherCustomer } }, 403, 'SCOPE_MISMATCH'),
+        ];
+        const original = await readFile(config.bindingsFile);
+        try {
+          const bindings = JSON.parse(original); bindings[0].tenantId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+          await writeFile(config.bindingsFile, JSON.stringify(bindings));
+          await approve(pending);
+          return { api, workerInjection: 'service tenant binding changed after tool approval was requested', worker: await workerRejected(fixture) };
+        } finally { await writeFile(config.bindingsFile, original); }
+      });
+      for (const change of ['quote', 'source']) await run(`${change}-change-${iteration}`, async () => {
+        const fixture = await prepare(`批准后${change}变化`); const pending = await waiting(fixture.action.id);
+        const current = (await request('sales', 'GET', `/api/v1/rfqs/${fixture.inquiry.id}`)).data;
+        if (change === 'quote') await request('sales', 'POST', `/api/v1/rfqs/${fixture.inquiry.id}/quotes`, { ...fixture.quoteBody, items: [{ ...fixture.quoteBody.items[0], quantity: 3 }] }, current.revision);
+        else await request('sales', 'POST', `/api/v1/rfqs/${fixture.inquiry.id}/sources`, { name: 'DEMO-changed.txt', mime: 'text/plain', base64: Buffer.from('DEMO 新增虚构来源，须重新核准').toString('base64') }, current.revision);
+        const api = await denied('service', 'POST', '/api/v1/os-business/snapshots', snapshotQuery(fixture), 409, 'QUOTE_CONTENT_CHANGED');
+        await approve(pending);
+        return { api, changeAfterBusinessApproval: change, worker: await workerRejected(fixture) };
+      });
+      await run(`template-version-${iteration}`, async () => {
+        const fixture = await prepare('错误模板版本', false);
+        const api = await denied('service', 'POST', '/api/v1/os-business/snapshots', { ...snapshotQuery(fixture), templateVersion: `${fixture.inquiry.template.version}-DEMO-stale` }, 409, 'TEMPLATE_CHANGED');
+        return { inquiryId: fixture.inquiry.id, api, worker: 'not_run', limitation: 'Mismatched requested version only; live template deployment changes are not exercised.' };
+      });
+      await run(`approval-revoked-${iteration}`, async () => {
+        const fixture = await prepare('批准撤销'); const pending = await waiting(fixture.action.id);
+        await request('sales', 'POST', `/api/v1/rfqs/${fixture.inquiry.id}/decisions/${fixture.decision.id}/revoke`, { reason: 'DEMO 验收撤销批准' });
+        const api = await denied('service', 'POST', '/api/v1/os-business/decisions', { schemaVersion: '1', scope, decisionId: fixture.decision.id }, 409, 'BUSINESS_APPROVAL_INVALID');
+        await approve(pending); return { api, worker: await workerRejected(fixture) };
+      });
+      await run(`customer-transfer-${iteration}`, async () => {
+        const fixture = await prepare('客户交接后历史请求'); const pending = await waiting(fixture.action.id);
+        const originalMember = (await salesPool.query('select data from memberships where tenant_id=$1 and id=$2', [TENANT, MEMBER])).rows[0].data;
+        const originalCustomer = (await salesPool.query('select data,owner_id from customers where tenant_id=$1 and id=$2', [TENANT, customerId])).rows[0];
+        const newOwner = randomUUID();
+        try {
+          await salesPool.query('insert into memberships(tenant_id,id,data) values($1,$2,$3)', [TENANT, newOwner, JSON.stringify({ ...originalMember, id: newOwner, subject: `DEMO:${newOwner}`, roles: ['sales'], teamIds: [] })]);
+          await salesPool.query('update memberships set data=$3 where tenant_id=$1 and id=$2', [TENANT, MEMBER, JSON.stringify({ ...originalMember, roles: ['sales'], teamIds: [] })]);
+          await salesPool.query('update customers set owner_id=$3,data=$4 where tenant_id=$1 and id=$2', [TENANT, customerId, newOwner, JSON.stringify({ ...originalCustomer.data, ownerId: newOwner, sharedWith: [] })]);
+          const api = [
+            await denied('sales', 'GET', `/api/v1/rfqs/${fixture.inquiry.id}`, undefined, 403, 'PERMISSION_DENIED'),
+            await denied('sales', 'POST', `/api/v1/rfqs/${fixture.inquiry.id}/approve`, fixture.approvalReplay.body, 403, 'PERMISSION_DENIED', fixture.approvalReplay.revision, fixture.approvalReplay),
+          ];
+          await approve(pending);
+          return { api, exactHistoricalIdempotencyKeyReplayed: true, fixtureInjection: 'current membership and customer ownership updated in real PostgreSQL', worker: await workerRejected(fixture) };
+        } finally {
+          await salesPool.query('update memberships set data=$3 where tenant_id=$1 and id=$2', [TENANT, MEMBER, JSON.stringify(originalMember)]);
+          await salesPool.query('update customers set owner_id=$3,data=$4 where tenant_id=$1 and id=$2', [TENANT, customerId, originalCustomer.owner_id, JSON.stringify(originalCustomer.data)]);
+          await salesPool.query('delete from memberships where tenant_id=$1 and id=$2', [TENANT, newOwner]);
+        }
+      });
+      await run(`concurrent-package-${iteration}`, async () => {
+        const fixture = await prepare('并发重复出包', false); const idempotencyKey = randomUUID();
+        const created = await Promise.all([idempotencyKey, idempotencyKey, randomUUID()].map(key => request('os', 'POST', '/v2/business-actions', fixture.actionBody, undefined, [200, 201], { idempotencyKey: key })));
+        assert.equal(new Set(created.map(x => x.data.id)).size, 1, 'same and different keys converge on the stable operation');
+        const action = created[0].data; await approve(await waiting(action.id)); const done = await final(action.id, 'completed');
+        const replay = (await request('os', 'POST', '/v2/business-actions', fixture.actionBody)).data;
+        assert.equal(replay.id, action.id); assert.equal(replay.status, 'completed');
+        const count = (await salesPool.query("select count(*)::int as n from quote_operations where tenant_id=$1 and data->>'inquiryId'=$2", [TENANT, fixture.inquiry.id])).rows[0].n;
+        assert.equal(count, 1);
+        const jobs = (await osPool.query('select job_id,status,fencing_token from mn_v2.jobs where tenant_id=$1 and job_id=$2', [TENANT, action.jobId])).rows;
+        assert.equal(jobs.length, 1); assert.equal(jobs[0].status, 'completed'); assert.ok(Number(jobs[0].fencing_token) > 0);
+        return { ...await verifyPackage(fixture.inquiry, done), concurrentRequests: 3, completedReplay: true, operationCount: count, physicalJob: jobs[0] };
+      });
     }
-    await run('worker-takeover', async () => {
+    for (let iteration = 1; iteration <= repetitions; iteration++) await run(`worker-takeover-${iteration}`, async () => {
       const { inquiry, action } = await prepare('租约接管'); await waiting(action.id);
       const original = (await osPool.query('select job_id,lease_owner,fencing_token from mn_v2.jobs where tenant_id=$1 and job_id=$2', [TENANT, action.jobId])).rows[0];
       assert.ok(original?.lease_owner); const oldWorker = children.get(original.lease_owner); assert.ok(oldWorker); oldWorker.kill('SIGSTOP');
@@ -245,24 +354,34 @@ async function main() {
         const evidence = await verifyPackage(inquiry, done); return { ...evidence, original: { worker: original.lease_owner, token: Number(original.fencing_token) }, takeover: { worker: takeover.lease_owner, token: Number(takeover.fencing_token) }, staleWorkerResumed: true, staleWorkerOutcome: 'lost_lease' };
       } finally { oldWorker.kill('SIGCONT'); }
     });
-    await run('database-restore', async () => {
+    await stop('worker-a'); await stop('worker-b'); await stop('host'); await stop('sales');
+    for (const db of ['mn_os', 'mn_sales']) await compose(['exec', '-T', 'postgres', 'pg_dump', '-U', 'mn', '-Fc', '-f', `/tmp/${db}.dump`, db]);
+    const sourceOsDatabase = config.osDatabase; const sourceSalesDatabase = config.salesDatabase;
+    for (let iteration = 1; iteration <= repetitions; iteration++) await run(`database-restore-${iteration}`, async () => {
+      const targets = restoreTargets(iteration); const restoreReference = restoreReferences[iteration - 1];
       await stop('worker-a'); await stop('worker-b'); await stop('host'); await stop('sales');
-      for (const db of ['mn_os', 'mn_sales']) {
-        await compose(['exec', '-T', 'postgres', 'pg_dump', '-U', 'mn', '-Fc', '-f', `/tmp/${db}.dump`, db]);
-        await admin.query(`create database ${db}_restored owner ${db === 'mn_sales' ? 'mn_sales' : 'mn'}`);
-        await compose(['exec', '-T', 'postgres', 'pg_restore', '-U', 'mn', '-d', `${db}_restored`, `/tmp/${db}.dump`]);
+      const previousPools = [osPool, salesPool]; osPool = undefined; salesPool = undefined;
+      await Promise.all(previousPools.map(pool => pool.end()));
+      for (const [source, target, owner] of [[targets.sourceOs, targets.os, 'mn'], [targets.sourceSales, targets.sales, 'mn_sales']]) {
+        await admin.query(`create database ${target} owner ${owner}`);
+        await compose(['exec', '-T', 'postgres', 'pg_restore', '-U', 'mn', '-d', target, `/tmp/${source}.dump`]);
       }
-      config.osDatabase = databaseUrl(config.osDatabase, 'mn_os_restored'); config.salesDatabase = databaseUrl(config.salesDatabase, 'mn_sales_restored'); config.restored = true; await saveConfig();
+      config.osDatabase = databaseUrl(sourceOsDatabase, targets.os); config.salesDatabase = databaseUrl(sourceSalesDatabase, targets.sales); config.restored = true; await saveConfig();
+      osPool = createPostgresPool({ connectionString: config.osDatabase, max: 2 });
+      salesPool = createPostgresPool({ connectionString: databaseUrl(sourceOsDatabase, targets.sales), max: 2 });
       start('sales'); start('host');
       await until('restored host', async () => (await request('os', 'GET', '/v2/readiness')).data?.ready === true);
       await until('restored sales', async () => (await request('sales', 'GET', '/api/v1/health')).data?.database === 'postgresql');
       const restored = await actionRead(restoreReference.action.id); assert.equal(restored.status, 'completed');
       const evidence = await verifyPackage(restoreReference.inquiry, restored); assert.equal(evidence.pdf.sha256, restoreReference.evidence.pdf.sha256);
-      const restoredSales = createPostgresPool({ connectionString: databaseUrl(config.osDatabase, 'mn_sales_restored'), max: 1 });
-      try { await restoredSales.query("update memberships set data=jsonb_set(data,'{active}','false') where tenant_id=$1 and id=$2", [TENANT, MEMBER]); }
-      finally { await restoredSales.end(); }
+      assert.equal((await salesPool.query('select data from memberships where tenant_id=$1 and id=$2', [TENANT, MEMBER])).rows[0].data.active, true, 'each independent restore begins with current active personnel');
+      start('worker', 'worker-a'); start('worker', 'worker-b');
+      const fixture = await prepare(`恢复后撤权 ${iteration}`); const pending = await waiting(fixture.action.id);
+      await salesPool.query("update memberships set data=jsonb_set(data,'{active}','false') where tenant_id=$1 and id=$2", [TENANT, MEMBER]);
       const forbidden = await fetch(config.salesUrl + `/api/v1/quote-packages/${evidence.packageId}/pdf`, { headers: { cookie } }); assert.ok([401, 403].includes(forbidden.status));
-      return { ...evidence, databases: ['mn_os_restored', 'mn_sales_restored'], preservedObjectStore: true, preservedVault: true, currentPermissionDeniedAfterRestore: forbidden.status };
+      await approve(pending); const rejected = await workerRejected(fixture);
+      return { ...evidence, databases: [targets.os, targets.sales], originalSnapshotSources: [targets.sourceOs, targets.sourceSales], initiallyActiveMember: true,
+        preservedObjectStore: true, preservedVault: true, currentPermissionDeniedAfterRestore: forbidden.status, restoredWorkerRechecksRevokedPermission: rejected };
     });
   } catch (error) {
     report.failure = error.message;

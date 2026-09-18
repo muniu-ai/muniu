@@ -1,7 +1,25 @@
 // SPDX-License-Identifier: Apache-2.0
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fixtureProject, validateFixtureConfig, acceptanceSummary, databaseUrl } from './industry-delivery-e2e.mjs';
+import { fixtureProject, validateFixtureConfig, acceptanceSummary, databaseUrl, acceptancePlan, restoreTargets } from './industry-delivery-e2e.mjs';
+
+test('every planned scenario repeats and template API checks never claim a Worker execution', () => {
+  const plan = acceptancePlan(3);
+  assert.equal(new Set(plan.map(x => x.id)).size, plan.length);
+  for (const name of ['worker-takeover', 'database-restore', 'customer-transfer', 'concurrent-package'])
+    assert.deepEqual(plan.filter(x => x.scenario === name).map(x => x.repetition), [1, 2, 3]);
+  assert.deepEqual(plan.find(x => x.scenario === 'template-version').paths, ['api']);
+  assert.ok(plan.every(x => x.status === 'not_run'));
+  assert.throws(() => acceptancePlan(0));
+  assert.throws(() => acceptancePlan(4));
+});
+
+test('each restore uses a fresh target pair while source databases remain fixed', () => {
+  const targets = [1, 2, 3].map(restoreTargets);
+  assert.equal(new Set(targets.flatMap(x => [x.os, x.sales])).size, 6);
+  assert.ok(targets.every(x => x.sourceOs === 'mn_os' && x.sourceSales === 'mn_sales'));
+  assert.throws(() => restoreTargets('1;drop database mn_os'));
+});
 
 test('restoring a database changes only the database path, preserving the login role', () => {
   const value = new URL(databaseUrl('postgres://mn_sales:fixture@127.0.0.1:55432/mn_sales', 'mn_sales_restored'));
