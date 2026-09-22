@@ -57,7 +57,7 @@ spec:
               command:
                 - node
                 - -e
-                - const s=require('node:fs').statSync('/tmp/mn-worker-ready');process.exit(Date.now()-s.mtimeMs<15000?0:1)
+                - const s=require('node:fs').statSync('/tmp/mn-worker-live');process.exit(Date.now()-s.mtimeMs<15000?0:1)
             periodSeconds: 10
             failureThreshold: 3
           volumeMounts:

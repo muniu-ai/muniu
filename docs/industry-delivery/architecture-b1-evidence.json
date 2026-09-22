@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "kind": "local_engineering_evidence_not_release",
+  "baseCommit": "d2cbae2",
+  "productionAdmission": false,
+  "results": [
+    {
+      "check": "test",
+      "exitCode": 0
+    },
+    {
+      "check": "typecheck",
+      "exitCode": 0
+    },
+    {
+      "check": "desktop-typecheck",
+      "exitCode": 0
+    },
+    {
+      "check": "desktop-build",
+      "exitCode": 0
+    },
+    {
+      "check": "enterprise-static",
+      "exitCode": 0
+    }
+  ],
+  "logs": [
+    {
+      "path": ".mn/architecture-b1-evidence/muniu-architecture-b1-desktop-build.log",
+      "sha256": "065dde4027b68a561f7c606f4eb8809bf4b0c34f8c5003cb0b7c43970204963e"
+    },
+    {
+      "path": ".mn/architecture-b1-evidence/muniu-architecture-b1-desktop-typecheck.log",
+      "sha256": "08c3af819ec047ace6fa8caa60498f942a5ccef772eb47880e32d46a8cd8a8eb"
+    },
+    {
+      "path": ".mn/architecture-b1-evidence/muniu-architecture-b1-enterprise-static.log",
+      "sha256": "1e01779d780a7c547df5e4725c7f33a873897a1b3899948740772f767c569e5a"
+    },
+    {
+      "path": ".mn/architecture-b1-evidence/muniu-architecture-b1-install.log",
+      "sha256": "5cc82421adb335a1afef36e1f13c8c5188c336f3d79d3a8db8ac6fb756208838"
+    },
+    {
+      "path": ".mn/architecture-b1-evidence/muniu-architecture-b1-test.log",
+      "sha256": "f6fc3a1c5c99a2d142ecd031bc488b97292bc61046f6f2c4d5c1144335002027"
+    },
+    {
+      "path": ".mn/architecture-b1-evidence/muniu-architecture-b1-typecheck.log",
+      "sha256": "c9a6740462603dde4cf7f0ff518b18fd56cf073002d1c1d1a259062b639c7f9f"
+    }
+  ]
+}

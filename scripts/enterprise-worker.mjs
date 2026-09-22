@@ -11,7 +11,7 @@ import {
 } from "@mn/worker";
 import { S3Cas } from "@mn/storage";
 import { createPostgresPool } from "./lib/postgres-pool.mjs";
-import { createReadinessHeartbeat, probeWorkerLocks } from "./lib/worker-readiness.mjs";
+import { createReadinessHeartbeat, pollReadyWorker, probeWorkerLocks } from "./lib/worker-readiness.mjs";
 
 import { PostgresKernelStore } from "./lib/postgres-kernel-store.mjs";
 import { PostgresWorkerStore } from "./lib/postgres-worker-store.mjs";
@@ -166,6 +166,8 @@ const readiness = worker.readiness();
 if (!readiness.ready) throw new Error(readiness.issues.map((issue) => issue.message).join("；"));
 
 const readyFile = process.env.MN_WORKER_READY_FILE ?? "/tmp/mn-worker-ready";
+const liveFile = process.env.MN_WORKER_LIVE_FILE ?? "/tmp/mn-worker-live";
+if (readyFile === liveFile) throw new Error("Worker 活性与就绪文件必须分开");
 let stopped = false;
 const stopController = new AbortController();
 for (const signal of ["SIGINT", "SIGTERM"]) {
@@ -179,14 +181,22 @@ const heartbeat = createReadinessHeartbeat({
   publish: () => writeFile(readyFile, new Date().toISOString(), { mode: 0o600 }),
   remove: () => unlink(readyFile).catch(error => { if (error.code !== "ENOENT") throw error; }),
 });
+const liveness = createReadinessHeartbeat({
+  check: async () => !stopped,
+  publish: () => writeFile(liveFile, new Date().toISOString(), { mode: 0o600 }),
+  remove: () => unlink(liveFile).catch(error => { if (error.code !== "ENOENT") throw error; }),
+});
+await liveness.tick();
 await heartbeat.tick();
 process.stdout.write(`mn-worker ${workerId} 已启动，lease=30000ms\n`);
 const readinessTimer = setInterval(() => { void heartbeat.tick(); }, 1_000);
 readinessTimer.unref();
+const livenessTimer = setInterval(() => { void liveness.tick(); }, 1_000);
+livenessTimer.unref();
 while (!stopped) {
   try {
-    const result = await worker.pollOnce(stopController.signal);
-    if (result.status !== "idle") process.stdout.write(`${JSON.stringify(result)}\n`);
+    const result = await pollReadyWorker(worker, heartbeat, stopController.signal);
+    if (result.status !== "idle" && result.status !== "unready") process.stdout.write(`${JSON.stringify(result)}\n`);
   } catch {
     process.stderr.write("Worker 轮询失败；未确认的执行结果不会自动重放\n");
   }
@@ -194,6 +204,8 @@ while (!stopped) {
 }
 
 clearInterval(readinessTimer);
+clearInterval(livenessTimer);
 await heartbeat.stop();
+await liveness.stop();
 await composition.context.fiber.dispose();
 await kernelStore.close();

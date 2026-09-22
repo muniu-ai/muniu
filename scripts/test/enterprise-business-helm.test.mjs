@@ -59,3 +59,13 @@ test("disabled industrial integration adds no credentials or Sales endpoint", ()
   assert.equal(result.status, 0, result.stderr);
   assert.doesNotMatch(result.stdout, /MUNIU_SALES_URL|business-credentials|business-scopes/u);
 });
+
+test("Worker liveness does not depend on the database and KMS readiness file", () => {
+  const result = render({});
+  assert.equal(result.status, 0, result.stderr);
+  const docs = parseAllDocuments(result.stdout).map(doc => doc.toJSON());
+  const worker = docs.find(doc => doc.kind === "Deployment" && doc.metadata.name === "muniu-worker").spec.template.spec.containers[0];
+  assert.match(worker.livenessProbe.exec.command.join(" "), /mn-worker-live/u);
+  assert.match(worker.readinessProbe.exec.command.join(" "), /mn-worker-ready/u);
+  assert.doesNotMatch(worker.livenessProbe.exec.command.join(" "), /mn-worker-ready/u);
+});

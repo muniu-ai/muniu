@@ -16,6 +16,8 @@
 
 缺少保留策略、密钥、存储或 lock 一致性时，readiness 必须失败。
 
+Worker 的 `/tmp/mn-worker-live` 仅记录进程事件循环活性；`/tmp/mn-worker-ready` 记录 KMS、数据库版本 lock 与处理器就绪状态。依赖检查失败时，Worker 停止下一次领取，Kubernetes 不因该依赖故障判定进程失活。在途任务仍按原有租约和取消协议处理，未知结果进入核对。收到停止信号后不再领取新任务；事件循环停止响应或进程退出仍会使活性检查失败。
+
 ## 身份与隔离
 
 本地隐式身份不能用于企业 profile。认证层应把组织身份解析为 `Tenant`、`Principal` 与 `WorkspaceMembership`。内核角色包括组织管理员、治理管理员、审计员，以及工作区 owner、operator、reviewer、viewer。
