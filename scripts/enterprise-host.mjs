@@ -21,6 +21,7 @@ import {
 import { OidcIdentityResolver } from "./lib/oidc-identity.mjs";
 import { SigV4S3Client } from "./lib/s3-client.mjs";
 import { parseWorkerSupportedKinds } from "./lib/worker-handler-capabilities.mjs";
+import { loadEnterpriseBusinessConfiguration } from "./lib/enterprise-business.mjs";
 
 function required(name) {
   const value = process.env[name]?.trim();
@@ -66,6 +67,11 @@ function assertV2Configuration() {
 }
 
 assertV2Configuration();
+const configuredWorkerSupportedKinds = parseWorkerSupportedKinds(process.env.MN_WORKER_SUPPORTED_KINDS);
+const workerEnabled = boolean("MN_WORKER_ENABLED");
+const business = await loadEnterpriseBusinessConfiguration({
+  kinds: configuredWorkerSupportedKinds, workerEnabled, fixtureMode: process.env.MN_WORKER_FIXTURE_MODE === "true",
+});
 
 const pool = createPostgresPool({
   connectionString: required("MN_POSTGRES_URL"),
@@ -136,10 +142,7 @@ const retention = {
   deliverableDays: positiveInteger("MN_RETENTION_DELIVERABLE_DAYS"),
   auditDays: positiveInteger("MN_RETENTION_AUDIT_DAYS"),
 };
-const configuredWorkerSupportedKinds = parseWorkerSupportedKinds(
-  process.env.MN_WORKER_SUPPORTED_KINDS,
-);
-const trustedWorkerSupportedKinds = boolean("MN_WORKER_ENABLED")
+const trustedWorkerSupportedKinds = workerEnabled
   ? configuredWorkerSupportedKinds
   : [];
 const oidc = new OidcIdentityResolver({
@@ -192,6 +195,7 @@ const host = await createAgentOsHost({
   cas,
   secretStore,
   protectedPayloadKeyProvider,
+  ...business,
   ...(enterprisePlugins ? {
     pluginRepository: enterprisePlugins.pluginRepository,
     trustedPluginRoots: enterprisePlugins.trustedPluginRoots,

@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "kind": "local_engineering_evidence_not_release",
+  "baseCommit": "1fbd9cbb83596110633736aa075e6cab8fb8c874",
+  "node": "22.19.0",
+  "npm": "11.10.1",
+  "productionAdmission": false,
+  "logs": [
+    {
+      "path": ".mn/architecture-a1-evidence/muniu-architecture-a1-audit-retry.log",
+      "sha256": "4ab52b82742a9ef7e1b41d7aa74ca3cf960b78e08cdcede9e397acaefc0caf0b"
+    },
+    {
+      "path": ".mn/architecture-a1-evidence/muniu-architecture-a1-boundaries.log",
+      "sha256": "fd4c434da0b14140991ccfaca00b4ec53d59a9d507e497a8e738089c135f81c1"
+    },
+    {
+      "path": ".mn/architecture-a1-evidence/muniu-architecture-a1-build.log",
+      "sha256": "855a60f41d44548ecd9d0745e07f9237d0280f32e7169042c6b0616533e9cc53"
+    },
+    {
+      "path": ".mn/architecture-a1-evidence/muniu-architecture-a1-cargo.log",
+      "sha256": "d966bbd375ce7ab38edb585dcc6ca667d11435e33a6a809e4325ffbe8fa14cb7"
+    },
+    {
+      "path": ".mn/architecture-a1-evidence/muniu-architecture-a1-enterprise-static.log",
+      "sha256": "8967d6c8a266f5f4cdcff02a1a0ad6cfeb3feca1439bc1cf642c2c6610910ebe"
+    },
+    {
+      "path": ".mn/architecture-a1-evidence/muniu-architecture-a1-final-test.log",
+      "sha256": "1c0d9ccfca313f698da2aa64ef2e54336f4baf016f66aa1182dbd201302a03a4"
+    },
+    {
+      "path": ".mn/architecture-a1-evidence/muniu-architecture-a1-focused.log",
+      "sha256": "3de4817db208c3cd8cb7cccf101dacacecbb90e56345f26c68c03c566d4a6a83"
+    },
+    {
+      "path": ".mn/architecture-a1-evidence/muniu-architecture-a1-red.log",
+      "sha256": "75b14acc3224c8c2964df17df8f43bdb0e849932c8bacc786110e30010e930f5"
+    },
+    {
+      "path": ".mn/architecture-a1-evidence/muniu-architecture-a1-sidecar.log",
+      "sha256": "07139a1e043b4fb27eb1567c267bee29f0511b8a384970a9c9b1b0f125ef9dac"
+    },
+    {
+      "path": ".mn/architecture-a1-evidence/muniu-architecture-a1-test-green.log",
+      "sha256": "dfaa2fb762d2b55f01a04d2ef37e7ac0ba859ccefa33a9b8b5b05164ddb16421"
+    },
+    {
+      "path": ".mn/architecture-a1-evidence/muniu-architecture-a1-test.log",
+      "sha256": "69714093e1ecb630693724d55886b8792c2d981b50453750b594d083c1ff423b"
+    },
+    {
+      "path": ".mn/architecture-a1-evidence/muniu-architecture-a1-typecheck.log",
+      "sha256": "c9a6740462603dde4cf7f0ff518b18fd56cf073002d1c1d1a259062b639c7f9f"
+    }
+  ]
+}

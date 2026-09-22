@@ -1,0 +1,9 @@
+{{- if .Values.business.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "muniu.fullname" . }}-business-scopes
+  labels: {{- include "muniu.labels" . | nindent 4 }}
+data:
+  scopes.json: {{ .Values.business.workspaceScopes | toJson | quote }}
+{{- end }}

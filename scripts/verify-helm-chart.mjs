@@ -75,4 +75,6 @@ for (const required of [
   if (!kind.includes(required)) throw new Error(`Kind values 缺少：${required}`);
 }
 
+const business = spawnSync(process.execPath, ["--test", "scripts/test/enterprise-business-helm.test.mjs"], { stdio: "inherit" });
+if (business.status !== 0) throw new Error("企业工业 Helm 部署契约失败");
 process.stdout.write("Helm v2 部署契约通过\n");

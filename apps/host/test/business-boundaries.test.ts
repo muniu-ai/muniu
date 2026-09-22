@@ -21,7 +21,7 @@ const digest = (character: string) => character.repeat(64);
 
 async function fixture(t: TestContext) {
   const root = await mkdtemp(join(tmpdir(), "muniu-business-boundaries-"));
-  const store = new SqliteStorage({ databaseFile: join(root, "state.sqlite"), hmacKey: Buffer.alloc(32, 1) });
+  const store = new SqliteStorage({ databaseFile: join(root, "state.sqlite"), hmacKey: Buffer.alloc(32, 1), now: () => new Date(now) });
   const cas = new FileCas({ rootDir: join(root, "cas") });
   const keyProvider = new InMemoryKeyProvider(Buffer.alloc(32, 2));
   const enabled: { tenantId: string; workspaceId: string }[] = [];

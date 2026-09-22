@@ -62,10 +62,12 @@ spec:
             failureThreshold: 3
           volumeMounts:
             - { name: tmp, mountPath: /tmp }
+            {{- include "muniu.businessMounts" . | nindent 12 }}
             - { name: sandbox-workspaces, mountPath: {{ .Values.sandbox.sharedWorkspace.mountPath | quote }} }
           resources: {{- toYaml .Values.worker.resources | nindent 12 }}
       volumes:
         - { name: tmp, emptyDir: {} }
+        {{- include "muniu.businessVolumes" . | nindent 8 }}
         - name: sandbox-workspaces
           persistentVolumeClaim: { claimName: {{ include "muniu.sharedWorkspaceClaimName" . }} }
       nodeSelector: {{- toYaml .Values.nodeSelector | nindent 8 }}

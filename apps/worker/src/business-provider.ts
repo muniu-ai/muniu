@@ -85,7 +85,9 @@ export async function loadBusinessProviderConfiguration(profile: "local" | "ente
     throw new Error("业务服务凭据未配置");
   };
   const authorityResolver = businessAuthorityTokenResolver(profile);
-  if (!(await tokenResolver()) || !(await authorityResolver())) throw new Error("业务服务凭据不能为空");
+  const token = await tokenResolver();
+  const authority = await authorityResolver();
+  if (!token || !authority || /[\r\n]/u.test(token) || /[\r\n]/u.test(authority)) throw new Error("业务服务凭据不能为空或包含换行");
   const url = new URL(endpoint);
   const allowInsecureHttp = profile === "local" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
   return { businessProvider: createSalesBusinessProvider({ endpoint, tokenResolver, allowInsecureHttp }),

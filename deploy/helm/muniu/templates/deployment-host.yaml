@@ -56,8 +56,10 @@ spec:
           resources: {{- toYaml .Values.host.resources | nindent 12 }}
           volumeMounts:
             - { name: tmp, mountPath: /tmp }
+            {{- include "muniu.businessMounts" . | nindent 12 }}
       volumes:
         - { name: tmp, emptyDir: {} }
+        {{- include "muniu.businessVolumes" . | nindent 8 }}
       nodeSelector: {{- toYaml .Values.nodeSelector | nindent 8 }}
       tolerations: {{- toYaml .Values.tolerations | nindent 8 }}
       affinity: {{- toYaml .Values.affinity | nindent 8 }}

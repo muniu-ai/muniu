@@ -1,0 +1,20 @@
+# 与目标环境 values 合用；域名、租户和 Secret 名称均须替换。
+business:
+  enabled: true
+  salesEndpoint: https://sales.example.test/api/v1/os-business
+  workspaceScopes:
+    - tenantId: demo-tenant
+      workspaceId: demo-workspace
+  existingSecret: muniu-business-credentials
+  salesTokenKey: sales-token
+  authorityTokenKey: authority-token
+
+worker:
+  fixtureMode: false
+  supportedKinds:
+    - system.noop
+    - agent.execution.run
+    - coding.reconciliation.verify
+    - coding.sandbox.cleanup
+    - business.action.execute
+    - business.candidate.extract

@@ -25,3 +25,25 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- define "muniu.sharedWorkspaceClaimName" -}}
 {{- if .Values.sandbox.sharedWorkspace.existingClaim }}{{ .Values.sandbox.sharedWorkspace.existingClaim }}{{ else }}{{ printf "%s-sandbox-workspaces" (include "muniu.fullname" .) }}{{ end }}
 {{- end }}
+
+{{- define "muniu.businessMounts" -}}
+{{- if .Values.business.enabled }}
+- { name: business-scopes, mountPath: /etc/muniu/business, readOnly: true }
+- { name: business-credentials, mountPath: /etc/muniu/business-credentials, readOnly: true }
+{{- end }}
+{{- end }}
+
+{{- define "muniu.businessVolumes" -}}
+{{- if .Values.business.enabled }}
+- name: business-scopes
+  configMap:
+    name: {{ include "muniu.fullname" . }}-business-scopes
+- name: business-credentials
+  secret:
+    secretName: {{ .Values.business.existingSecret }}
+    defaultMode: 0440
+    items:
+      - { key: {{ .Values.business.salesTokenKey | quote }}, path: sales-token }
+      - { key: {{ .Values.business.authorityTokenKey | quote }}, path: authority-token }
+{{- end }}
+{{- end }}

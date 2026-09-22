@@ -17,7 +17,8 @@ import { PostgresKernelStore } from "./lib/postgres-kernel-store.mjs";
 import { PostgresWorkerStore } from "./lib/postgres-worker-store.mjs";
 import { createEnterpriseWorkerStore } from "./lib/enterprise-worker-store.mjs";
 import { parseWorkerSupportedKinds } from "./lib/worker-handler-capabilities.mjs";
-import { VaultTransitKeyProvider } from "./lib/enterprise-secrets.mjs";
+import { VaultTransitKeyProvider, VaultModelSecretStore } from "./lib/enterprise-secrets.mjs";
+import { BUSINESS_KINDS, createEnterpriseBusinessHandlers, loadEnterpriseBusinessConfiguration } from "./lib/enterprise-business.mjs";
 import { configureProductProjectionJournal, createAgentOsCompositionRoot } from "../apps/host/dist/index.js";
 import { SigV4S3Client } from "./lib/s3-client.mjs";
 
@@ -50,6 +51,9 @@ if ((process.env.MN_TELEMETRY_ENABLED ?? "false") !== "false") {
 }
 
 const workerId = required("MN_WORKER_INSTANCE_ID");
+const configuredKinds = parseWorkerSupportedKinds(process.env.MN_WORKER_SUPPORTED_KINDS);
+const fixtureMode = process.env.MN_WORKER_FIXTURE_MODE === "true";
+const business = await loadEnterpriseBusinessConfiguration({ kinds: configuredKinds, fixtureMode });
 const pool = createPostgresPool({
   connectionString: required("MN_POSTGRES_URL"),
   application_name: workerId,
@@ -60,7 +64,6 @@ const kernelStore = new PostgresKernelStore({ pool, hmacKey: eventHmacKey });
 await kernelStore.initialize();
 const jobStore = new PostgresWorkerStore({ pool, hmacKey: eventHmacKey });
 const store = createEnterpriseWorkerStore({ kernelStore, jobStore });
-const fixtureMode = process.env.MN_WORKER_FIXTURE_MODE === "true";
 let cas;
 let protectedPayloadKeyProvider;
 if (!fixtureMode) {
@@ -113,7 +116,7 @@ const handlerModule = process.env.MN_WORKER_HANDLER_MODULE
 if (!handlerModule.startsWith("/")) throw new Error("MN_WORKER_HANDLER_MODULE 必须是绝对路径");
 const loaded = await import(pathToFileURL(handlerModule).href);
 const composition = await createAgentOsCompositionRoot({ profile: "enterprise", store });
-const handlers = typeof loaded.createHandlers === "function"
+const loadedHandlers = typeof loaded.createHandlers === "function"
   ? await loaded.createHandlers(Object.freeze({
       pool,
       store,
@@ -126,13 +129,23 @@ const handlers = typeof loaded.createHandlers === "function"
       ...(protectedPayloadKeyProvider ? { protectedPayloadKeyProvider } : {}),
     }))
   : loaded.handlers;
-if (!handlers || typeof handlers !== "object") {
+if (!loadedHandlers || typeof loadedHandlers !== "object") {
   throw new Error("Worker bootstrap 模块必须导出 handlers 对象或 createHandlers(context)");
 }
-const configuredKinds = parseWorkerSupportedKinds(process.env.MN_WORKER_SUPPORTED_KINDS);
+if (business && BUSINESS_KINDS.some(kind => kind in loadedHandlers)) {
+  throw new Error("工业任务只能由企业受信组合处理器负责");
+}
+const businessHandlers = createEnterpriseBusinessHandlers(business, {
+  store, composition, cas, protectedPayloadKeyProvider, fixtureMode,
+  ...(business ? { secretStore: new VaultModelSecretStore({
+    address: required("MN_VAULT_ADDR"), token: required("MN_VAULT_TOKEN"),
+    mount: process.env.MN_VAULT_KV_MOUNT ?? "secret", namespace: process.env.MN_VAULT_NAMESPACE,
+  }) } : {}),
+});
+const handlers = Object.freeze({ ...loadedHandlers, ...businessHandlers });
 const handlerReadiness = workerHandlerReadiness(
   handlers,
-  loaded.supportedKinds,
+  business ? [...(loaded.supportedKinds ?? []), ...BUSINESS_KINDS] : loaded.supportedKinds,
   configuredKinds,
 );
 if (!handlerReadiness.ready) {

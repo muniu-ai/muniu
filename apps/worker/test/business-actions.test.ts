@@ -21,7 +21,7 @@ function action(): IssueQuotePackageInputV1 {
 for (const scenario of ["completed", "unknown", "abandoned", "revoked", "revoked_before", "version_changed", "expired"] as const) {
   test(`正式出包使用既有工具审批并处理 ${scenario}`, async t => {
     const root = await mkdtemp(join(tmpdir(), "muniu-business-"));
-    const store = new SqliteStorage({ databaseFile: join(root, "state.sqlite"), hmacKey: Buffer.alloc(32, 1) });
+    const store = new SqliteStorage({ databaseFile: join(root, "state.sqlite"), hmacKey: Buffer.alloc(32, 1), now: () => new Date(timestamp) });
     store.configureProjectionJournal({ cas: new FileCas({ rootDir: join(root, "cas") }), keyProvider: new InMemoryKeyProvider(Buffer.alloc(32, 2)), namespaces: ["*non-core"] });
     t.after(async () => { store.close(); await rm(root, { recursive: true, force: true }); });
     await store.transact("local", tx => tx.putProjection("membership", "workspace:owner", {
@@ -93,10 +93,10 @@ for (const scenario of ["completed", "unknown", "abandoned", "revoked", "revoked
 
 test("出包检查点后重启只进入人工核对，旧Worker不能继续执行或提交", async t => {
   const root = await mkdtemp(join(tmpdir(), "muniu-business-restart-"));
-  const store = new SqliteStorage({ databaseFile: join(root, "state.sqlite"), hmacKey: Buffer.alloc(32, 1) });
+  let clock = timestamp;
+  const store = new SqliteStorage({ databaseFile: join(root, "state.sqlite"), hmacKey: Buffer.alloc(32, 1), now: () => new Date(clock) });
   store.configureProjectionJournal({ cas: new FileCas({ rootDir: join(root, "cas") }), keyProvider: new InMemoryKeyProvider(Buffer.alloc(32, 2)), namespaces: ["*non-core"] });
   t.after(async () => { store.close(); await rm(root, { recursive: true, force: true }); });
-  let clock = timestamp;
   await store.transact("local", tx => tx.putProjection("membership", "workspace:owner", {
     id: "workspace:owner", tenantId: "local", workspaceId: "workspace", principalId: "owner", workspaceRole: "owner",
     organizationRoles: [], streamVersion: 1, createdAt: timestamp, updatedAt: timestamp,

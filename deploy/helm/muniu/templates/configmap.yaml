@@ -15,6 +15,22 @@
 {{- if and .Values.worker.enabled (ne .Values.sandbox.driver "kubernetes") }}{{- fail "enterprise worker requires sandbox.driver=kubernetes" }}{{- end }}
 {{- if and .Values.worker.enabled (not .Values.worker.fixtureMode) (not .Values.vault.address) }}{{- fail "production worker requires vault.address" }}{{- end }}
 {{- if and .Values.worker.enabled (not .Values.worker.fixtureMode) (not .Values.vault.existingSecret) }}{{- fail "production worker requires vault.existingSecret" }}{{- end }}
+{{- if .Values.business.enabled }}
+{{- if not (regexMatch "^https://[^/@?# ]+(/[^?# ]*)?$" .Values.business.salesEndpoint) }}{{- fail "business.salesEndpoint must be a trusted HTTPS URL" }}{{- end }}
+{{- if not .Values.business.existingSecret }}{{- fail "business.existingSecret is required" }}{{- end }}
+{{- if or (not .Values.business.salesTokenKey) (not .Values.business.authorityTokenKey) (eq .Values.business.salesTokenKey .Values.business.authorityTokenKey) }}{{- fail "business credential keys must be present and distinct" }}{{- end }}
+{{- if .Values.worker.fixtureMode }}{{- fail "business.enabled cannot be used with worker.fixtureMode" }}{{- end }}
+{{- if and .Values.worker.enabled (or (not (has "business.action.execute" .Values.worker.supportedKinds)) (not (has "business.candidate.extract" .Values.worker.supportedKinds))) }}{{- fail "business.enabled requires both industrial worker kinds" }}{{- end }}
+{{- if lt (len .Values.business.workspaceScopes) 1 }}{{- fail "business.workspaceScopes must not be empty" }}{{- end }}
+{{- $workspaces := dict }}
+{{- range .Values.business.workspaceScopes }}
+{{- if or (not .tenantId) (not .workspaceId) (ne (len .) 2) }}{{- fail "business.workspaceScopes requires tenantId and workspaceId only" }}{{- end }}
+{{- if or (ne .tenantId (trim .tenantId)) (ne .workspaceId (trim .workspaceId)) (hasKey $workspaces .workspaceId) }}{{- fail "business.workspaceScopes must uniquely bind each workspace" }}{{- end }}
+{{- $_ := set $workspaces .workspaceId true }}
+{{- end }}
+{{- else }}
+{{- if or (has "business.action.execute" .Values.worker.supportedKinds) (has "business.candidate.extract" .Values.worker.supportedKinds) }}{{- fail "business.enabled is required for industrial worker kinds" }}{{- end }}
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -35,6 +51,12 @@ data:
   MN_WORKER_HANDLER_MODULE: {{ .Values.worker.handlerModule | quote }}
   MN_WORKER_FIXTURE_MODE: {{ .Values.worker.fixtureMode | quote }}
   MN_WORKER_SUPPORTED_KINDS: {{ .Values.worker.supportedKinds | toJson | quote }}
+  {{- if .Values.business.enabled }}
+  MUNIU_SALES_URL: {{ .Values.business.salesEndpoint | quote }}
+  MUNIU_BUSINESS_WORKSPACE_SCOPES_FILE: /etc/muniu/business/scopes.json
+  MUNIU_SALES_TOKEN_FILE: /etc/muniu/business-credentials/sales-token
+  MUNIU_BUSINESS_AUTHORITY_TOKEN_FILE: /etc/muniu/business-credentials/authority-token
+  {{- end }}
   MN_ENGINE_LOCK_DIGEST: {{ .Values.runtimeLocks.engineDigest | quote }}
   MN_PLUGIN_LOCK_DIGEST: {{ .Values.runtimeLocks.pluginDigest | quote }}
   MN_EXPECTED_ENGINE_LOCK_DIGEST: {{ .Values.runtimeLocks.engineDigest | quote }}
