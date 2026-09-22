@@ -1,0 +1,138 @@
+{
+  "schemaVersion": 1,
+  "kind": "architecture_engineering_candidate_not_release",
+  "capturedOn": "2026-09-22",
+  "engineeringComplete": false,
+  "businessValidated": false,
+  "newRealTenantsEnabled": false,
+  "signature": null,
+  "planSha256": "f56fd23e561c2570455cf1f0d3f9f18276e61c7e452b337b664bc29fe1919afd",
+  "agentOs": {
+    "commit": "94a73ea4302c53375e0822b4fd20dd0d4b011558",
+    "artifacts": [
+      {
+        "path": "package-lock.json",
+        "sha256": "bf5cf30c91e00bad229b9f3f5f29b6b065d7b9e615fca0293c13acb20e1ccfe4"
+      },
+      {
+        "path": "packages/contracts/src/business-effects.ts",
+        "sha256": "fd245444f01486f2b026c8a075e783603e969b24f8d017a8e1e3b6ac312371f0"
+      },
+      {
+        "path": "packages/contracts/src/business-effect-validation.ts",
+        "sha256": "ae111aca58362ea85ee29828e6148a3263d834efad26d0a88945057fc0da85eb"
+      },
+      {
+        "path": "packages/contracts/src/business-candidates.ts",
+        "sha256": "1c093402da278401aa5163748dc11f3c6e5ef7f485211cd9bd80f7e0cdc205f5"
+      },
+      {
+        "path": "scripts/enterprise-host.mjs",
+        "sha256": "d916087a30dbcab33d7906460654c78eca4a9962eca9e9edf07c3a3a69320aff"
+      },
+      {
+        "path": "scripts/enterprise-worker.mjs",
+        "sha256": "3820ef0dd3cee36784bd240ecf3d5e0fea9a0e619f2d8392f8d9bb76b94de5d7"
+      },
+      {
+        "path": "scripts/lib/enterprise-business.mjs",
+        "sha256": "2842ec686e9da9651c3df466a9f8e5d0ab8343efcd600db070a437469a686fb7"
+      },
+      {
+        "path": "scripts/lib/worker-readiness.mjs",
+        "sha256": "46a33f001ec53298d207df148dd21a91754e1302c8bab12dcc72e8f3c3101408"
+      },
+      {
+        "path": "deploy/helm/muniu/values.yaml",
+        "sha256": "b152aa9234f48bb50c15b731112d739f7724fa237a80ede4bffc55fe20d2eaa3"
+      }
+    ]
+  },
+  "sales": {
+    "commit": "cefec9f44f58ca51b6f0a3e17247ebe9b4f9ff69",
+    "artifacts": [
+      {
+        "path": "package-lock.json",
+        "sha256": "bcdd3cba99b9dbb0f32875de5ad6590432a7e3b7734469104f1ee5eb0dc10d73"
+      },
+      {
+        "path": "packages/contracts/openapi.d0.4.json",
+        "sha256": "7ff0768f2ea181b9278eeea4bd32789b458bc142b7ee79043e8c4d06586e27e0"
+      },
+      {
+        "path": "packages/domain/rfq.ts",
+        "sha256": "f6691067da82c30c64922cc3822294fc48aed644e4c0d51c2ec6212577ecd903"
+      },
+      {
+        "path": "apps/api/rfq-workspace.ts",
+        "sha256": "b70b13920863e6c40652e34d9c922b5e3150091efeb4f817fe428f8b23b65ff4"
+      },
+      {
+        "path": "apps/api/rfq-os-proxy.ts",
+        "sha256": "5340751721877dee89e1c3e028078b0b045e36e83e8ff1574277303dbfd5e368"
+      },
+      {
+        "path": "templates/industrial-quote-v1.html",
+        "sha256": "c0cb54c2124825871547d91533dfa87147fe2eeb2407ab59d5e9c6eecef4b68d"
+      },
+      {
+        "path": "templates/font-manifest.json",
+        "sha256": "dc96de833083059600caf977206c0ccef8876946378d20a9ede08718e5c56bd6"
+      },
+      {
+        "path": "packages/connectors/quote-pdf.ts",
+        "sha256": "032eac2e210e7da794163a39caa553ea464417ee57a7c5441addb15099b54e56"
+      },
+      {
+        "path": "Dockerfile",
+        "sha256": "2b98209005722dfc0b2635804206736f4948465953f69284945a000bfb069d54"
+      }
+    ]
+  },
+  "toolchain": {
+    "node": "22.19.0",
+    "npm": "11.10.1",
+    "osTypeScript": "5.7.2",
+    "salesTypeScript": "5.9.3"
+  },
+  "verification": {
+    "osNpmTest": {
+      "status": "passed",
+      "tests": 634
+    },
+    "osTypesDesktopBuild": "passed",
+    "osCargo": {
+      "status": "passed_on_unchanged_cargo_sources",
+      "tests": 6
+    },
+    "enterpriseStatic": "passed",
+    "salesDomain": {
+      "status": "passed",
+      "tests": 11
+    },
+    "salesTypecheckContractsBuilds": "passed",
+    "salesLint": {
+      "status": "failed",
+      "errors": 180
+    },
+    "salesDockerSourceTests": {
+      "status": "passed",
+      "tests": 2
+    },
+    "dockerImageBuild": "not_run",
+    "realDependenciesKind": "not_run",
+    "cloudStorageSemantics": "not_run",
+    "jointRecovery": "not_run",
+    "performanceLoad": "not_run",
+    "productionDependencyAudit": "network_failed",
+    "remoteSynchronization": "network_failed"
+  },
+  "remaining": [
+    "Cloud OSS/COS native conditional-write adapters and provider acceptance",
+    "Sales dependency/capability probes and graceful shutdown",
+    "Version cutover, runtime admission and full 72-case failure matrix",
+    "Joint restore with revocation and operation evidence",
+    "Outbox/reporting measurement and optimization; separate aggregate-lock plan",
+    "P6 comparison and P7 authorized business pilot"
+  ]
+}
