@@ -84,6 +84,8 @@ void test('对象篡改、缺少恢复证据、目录穿越和符号链接均拒
     f.manifest.objects[0].artifact.path = 'quote.pdf';
     f.manifest.objects.push({ ...f.manifest.objects[0], source: { key: 'quote', versionId: null, bucket: 'original' } }); f.seal();
     await assert.rejects(verify(f), /duplicate source object/);
+    f.manifest.objects[1] = { ...f.manifest.objects[0], source: { bucket: 'original', key: 'other', versionId: null }, artifact: await f.artifact('other.pdf', 'different bytes') }; f.seal();
+    await assert.rejects(verify(f), /conflicting content/);
   } finally { await f.cleanup(); }
 });
 

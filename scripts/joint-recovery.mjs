@@ -95,6 +95,7 @@ export async function verifyJointRecovery(manifest, trustedKeys, directory, { no
   }
   assert.ok(Array.isArray(manifest.objects), 'object inventory missing');
   const originals = new Set();
+  const backups = new Map();
   for (const object of manifest.objects) {
     for (const name of ['source', 'backup']) {
       const reference = object[name];
@@ -107,6 +108,10 @@ export async function verifyJointRecovery(manifest, trustedKeys, directory, { no
     assert.ok(!originals.has(objectId), 'duplicate source object');
     originals.add(objectId);
     await verifyArtifact(root, object.artifact, 'object');
+    const backupId = JSON.stringify([object.backup.bucket, object.backup.key, object.backup.versionId]);
+    const content = `${object.artifact.sha256}:${object.artifact.bytes}`;
+    assert.ok(!backups.has(backupId) || backups.get(backupId) === content, 'backup reference maps to conflicting content');
+    backups.set(backupId, content);
   }
   const effects = await verifyArtifact(root, manifest.artifacts?.effects, 'effects', true);
   assert.ok(time(effects.coverageStart, 'coverageStart') <= earliest && time(effects.coverageEnd, 'coverageEnd') >= stopped && time(effects.coverageEnd, 'coverageEnd') <= created && effects.includesActiveAtStart === true, 'effect coverage incomplete');
