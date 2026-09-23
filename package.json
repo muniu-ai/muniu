@@ -32,7 +32,7 @@
     "test:core": "npm run test -w @mn/contracts && npm run test -w @mn/kernel && npm run test -w @mn/agent-runtime && npm run test -w @mn/plugin-sdk && npm run test -w @mn/storage",
     "test:plugins": "npm run test -w @mn/plugin-opc && npm run test -w @mn/plugin-coding && npm run test -w @mn/runner-claude-cli && npm run test -w @mn/runner-codex-cli",
     "test:apps": "npm run test -w @mn/worker && npm run test -w @mn/host && npm run test -w @mn/cli",
-    "test:boundaries": "npm run verify:contracts && node --test scripts/test/agent-os-boundaries.test.mjs scripts/test/api-contract.test.mjs scripts/test/kind-node-image.test.mjs scripts/test/kind-runtime.test.mjs scripts/test/kind-sandbox-image.test.mjs scripts/test/kind-port-forward.test.mjs scripts/test/kind-coding-observer.test.mjs scripts/test/enterprise-sse.test.mjs scripts/test/enterprise-host-flow.test.mjs scripts/test/enterprise-secrets.test.mjs scripts/test/postgres-pool.test.mjs scripts/test/worker-readiness.test.mjs scripts/test/postgres-worker-store.test.mjs scripts/test/postgres-kernel-store.test.mjs scripts/test/postgres-maintenance.test.mjs scripts/test/s3-client.test.mjs scripts/test/enterprise-business.test.mjs",
+    "test:boundaries": "npm run verify:contracts && node --test scripts/test/agent-os-boundaries.test.mjs scripts/test/api-contract.test.mjs scripts/test/kind-node-image.test.mjs scripts/test/kind-runtime.test.mjs scripts/test/kind-sandbox-image.test.mjs scripts/test/kind-port-forward.test.mjs scripts/test/kind-coding-observer.test.mjs scripts/test/enterprise-sse.test.mjs scripts/test/enterprise-host-flow.test.mjs scripts/test/enterprise-secrets.test.mjs scripts/test/postgres-pool.test.mjs scripts/test/worker-readiness.test.mjs scripts/test/postgres-worker-store.test.mjs scripts/test/postgres-kernel-store.test.mjs scripts/test/postgres-maintenance.test.mjs scripts/test/s3-client.test.mjs scripts/test/enterprise-business.test.mjs scripts/test/joint-recovery.test.mjs",
     "test": "npm run build && npm run test:boundaries && npm run test:core && npm run test:plugins && npm run test:apps",
     "dev:host": "npm run build && node apps/host/dist/main.js",
     "dev:worker": "npm run build && node apps/worker/dist/index.js",
@@ -68,7 +68,8 @@
     "build:host-sidecar": "npm run build && node scripts/build-host-sidecar.mjs",
     "preflight:mac-signing": "node scripts/preflight-macos-signing.mjs",
     "tauri:desktop": "npm run tauri -w @mn/desktop-mac",
-    "release:mac": "npm run build:host-sidecar && npm run tauri:build -w @mn/desktop-mac"
+    "release:mac": "npm run build:host-sidecar && npm run tauri:build -w @mn/desktop-mac",
+    "verify:joint-recovery": "node scripts/joint-recovery.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
