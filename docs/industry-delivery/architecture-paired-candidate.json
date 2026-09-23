@@ -1,14 +1,14 @@
 {
   "schemaVersion": 1,
   "kind": "architecture_engineering_candidate_not_release",
-  "capturedOn": "2026-09-22",
+  "capturedOn": "2026-09-23",
   "engineeringComplete": false,
   "businessValidated": false,
   "newRealTenantsEnabled": false,
   "signature": null,
   "planSha256": "f56fd23e561c2570455cf1f0d3f9f18276e61c7e452b337b664bc29fe1919afd",
   "agentOs": {
-    "commit": "94a73ea4302c53375e0822b4fd20dd0d4b011558",
+    "commit": "b9d97fccabdefcaaedcaf34d9dc65fd0f867ebc2",
     "artifacts": [
       {
         "path": "package-lock.json",
@@ -45,11 +45,19 @@
       {
         "path": "deploy/helm/muniu/values.yaml",
         "sha256": "b152aa9234f48bb50c15b731112d739f7724fa237a80ede4bffc55fe20d2eaa3"
+      },
+      {
+        "path": "package.json",
+        "sha256": "d3cf7abddad02426e956ae9a0d22386df239b2b83a86ebfb8f882d2dedc98e11"
+      },
+      {
+        "path": "scripts/joint-recovery.mjs",
+        "sha256": "4564461a1bbf0c9f93724849380080ba052069a5dc6ef81b32bdf3db874368a5"
       }
     ]
   },
   "sales": {
-    "commit": "cefec9f44f58ca51b6f0a3e17247ebe9b4f9ff69",
+    "commit": "307d954c8ed9ed773e13195d30238230f0d9aac4",
     "artifacts": [
       {
         "path": "package-lock.json",
@@ -57,7 +65,7 @@
       },
       {
         "path": "packages/contracts/openapi.d0.4.json",
-        "sha256": "7ff0768f2ea181b9278eeea4bd32789b458bc142b7ee79043e8c4d06586e27e0"
+        "sha256": "9877d025cc65447f81e46dead8a43faf581f158df9451a4f0574e41191a9fe0f"
       },
       {
         "path": "packages/domain/rfq.ts",
@@ -85,7 +93,107 @@
       },
       {
         "path": "Dockerfile",
-        "sha256": "2b98209005722dfc0b2635804206736f4948465953f69284945a000bfb069d54"
+        "sha256": "3791c2327487a768246750f12bad3015b19bd25c2443c746e04812cd3e489add"
+      },
+      {
+        "path": "apps/api/health.ts",
+        "sha256": "9755b5fdb0616f73a07f91ad5c4fa5cc8280541174658f9aa8acc8c6bc0bb2c8"
+      },
+      {
+        "path": "apps/api/server.ts",
+        "sha256": "f3d18e892f60fe9ea9247df3f4d898d760ef402479557e32c3ddc62761098fdf"
+      },
+      {
+        "path": "apps/api/main.ts",
+        "sha256": "763d0c20e1237148c5e43e9858ff0ba80173bcd8c8ad4537bcf91bdc1c647aa2"
+      },
+      {
+        "path": "apps/api/migrations.ts",
+        "sha256": "059fbc18e476438a8137476dda1168f2ac613dab2394de4d97d1549c9b8ea022"
+      },
+      {
+        "path": "apps/api/sales-queries.ts",
+        "sha256": "ec6ca931ad42bf53d456ddbb38d513447fb443f4630d91938d41ae21901ccccb"
+      },
+      {
+        "path": "apps/api/sales-analytics.ts",
+        "sha256": "de5b1253bade1402bbb2f5dcc909d7927bebe90835d4d94b2767f9783c6a6e39"
+      },
+      {
+        "path": "apps/api/policy.ts",
+        "sha256": "3dab690b32f64c8be5142beb33c2ee974397a9edd7a376c9e15201da885a0638"
+      },
+      {
+        "path": "apps/worker/runner.ts",
+        "sha256": "d9bb7dcf3a1e8351b4917c53e268f74995619809780d8f899940601ff4da43fc"
+      },
+      {
+        "path": "apps/worker/outbox.ts",
+        "sha256": "fa7d3d7e9c8fcaa1d044c93c1b04dc0f564bfeeb2e6a24a10a016fe58dfa1a0e"
+      },
+      {
+        "path": "apps/worker/scheduler.ts",
+        "sha256": "38d88d4c19386e0b6c61e3ca81601fb4bdb6f2618cc680f88d635a183a5c30f2"
+      },
+      {
+        "path": "apps/worker/main.ts",
+        "sha256": "4f00c3f513646a1a29b3c9f3f33870e97b9dc5516f81c91b3e663a4f8ee911a7"
+      },
+      {
+        "path": "packages/domain/collections.ts",
+        "sha256": "c26789f98d81b89eff91be844faf6e2c720dbb7148dabaa5feb4da69dd389451"
+      },
+      {
+        "path": "packages/domain/sales-analytics.ts",
+        "sha256": "8449fc8871e5e17faf65fb932e42c9baab1e708167e9459688515bf446e4c52e"
+      },
+      {
+        "path": "compose.yaml",
+        "sha256": "6fd60ab4cbd383c434cc6a11cb1f4a942ffed4e0df4a6dd8c2277124d65d5721"
+      },
+      {
+        "path": "scripts/migrate.ts",
+        "sha256": "b1a2ae9fe42880e88f34540913f4eeeecfbb50bd48f36316a48a180b6774e187"
+      },
+      {
+        "path": "infra/migrations/001_core.sql",
+        "sha256": "7e7dd221a2133e78d824e264c8694f5ce30e20919aac30d22570a36ea385cfeb"
+      },
+      {
+        "path": "infra/migrations/002_wechat.sql",
+        "sha256": "fb47fe7b5b4a21acff802292274672b54ef023332e55ac8c4624af08b5b17090"
+      },
+      {
+        "path": "infra/migrations/003_industry_rfq.sql",
+        "sha256": "58efec448f4374912dec3ba610fd8a703d780abba38b45cd4c5b69bdae7052fa"
+      },
+      {
+        "path": "infra/migrations/004_sales_progress.sql",
+        "sha256": "c9a1caefeda0de57a9e2d650d413f0286d2fb72ea13ca7fc30195d814fd35a90"
+      },
+      {
+        "path": "infra/migrations/005_sales_solutions.sql",
+        "sha256": "eba6ec3aedcddd37f2249bd4a01f110453bf58d3e676ba6bad87d82d6fe5a5ed"
+      },
+      {
+        "path": "infra/migrations/006_sales_leads.sql",
+        "sha256": "3094e1e3a6e4f828c9312e9acee854653d4b35e8d05fc08c259d08cac29a4e45"
+      },
+      {
+        "path": "infra/migrations/007_sales_fulfillment.sql",
+        "sha256": "21d850ddb8e549178605880d1722bad56f1056f65d6053e1b4de7998a55dad88"
+      },
+      {
+        "path": "infra/migrations/008_sales_analytics.sql",
+        "sha256": "e900a718a0f3d0f67bec1c99bea41b0d7fbecf6e44c16a0fd308726ca17289b5"
+      },
+      {
+        "path": "infra/migrations/009_outbox_queries.sql",
+        "sha256": "acf778e83547f41b6faba5f03032b9b818856e5c7fccea69dd0a39dbf80f86dc"
+      },
+      {
+        "path": "infra/migrations/010_report_receipts.sql",
+        "sha256": "d6f85da4459168872fcf8224aa3c82376ff766c999da4108bf0b6951576a53dd"
       }
     ]
   },
@@ -98,18 +206,14 @@
   "verification": {
     "osNpmTest": {
       "status": "passed",
-      "tests": 634
+      "tests": 638
     },
     "osTypesDesktopBuild": "passed",
     "osCargo": {
-      "status": "passed_on_unchanged_cargo_sources",
+      "status": "passed_offline",
       "tests": 6
     },
     "enterpriseStatic": "passed",
-    "salesDomain": {
-      "status": "passed",
-      "tests": 11
-    },
     "salesTypecheckContractsBuilds": "passed",
     "salesLint": {
       "status": "failed",
@@ -117,22 +221,47 @@
     },
     "salesDockerSourceTests": {
       "status": "passed",
-      "tests": 2
+      "tests": 3,
+      "commit": "307d954"
     },
     "dockerImageBuild": "not_run",
     "realDependenciesKind": "not_run",
     "cloudStorageSemantics": "not_run",
     "jointRecovery": "not_run",
-    "performanceLoad": "not_run",
-    "productionDependencyAudit": "network_failed",
-    "remoteSynchronization": "network_failed"
+    "performanceLoad": "partial_local_synthetic_only",
+    "productionDependencyAudit": "not_retried_external_dependency",
+    "remoteSynchronization": "not_attempted_this_round",
+    "jointRecoveryInventory": {
+      "status": "passed",
+      "tests": 4,
+      "productionAdmission": false
+    },
+    "salesFullSuite": {
+      "status": "passed",
+      "tests": 131,
+      "commit": "4aa389d",
+      "includes": [
+        "in_memory_postgresql",
+        "local_chinese_pdf_rendering"
+      ]
+    },
+    "localOutboxMeasurement": {
+      "history": 100000,
+      "tenants": 1,
+      "beforeReturnedRows": 100001,
+      "afterReturnedRows": 1,
+      "beforeMs": 398.644917,
+      "afterMs": 1.179416,
+      "evidence": "Sales docs/architecture/outbox-local-measurement.json"
+    }
   },
   "remaining": [
+    "Sales strict lint: 180 existing errors; requires a separate type and UI remediation sub-plan",
+    "Dedicated RFQ-only profile and aggregate-lock changes require separate design and concurrency validation",
     "Cloud OSS/COS native conditional-write adapters and provider acceptance",
-    "Sales dependency/capability probes and graceful shutdown",
-    "Version cutover, runtime admission and full 72-case failure matrix",
-    "Joint restore with revocation and operation evidence",
-    "Outbox/reporting measurement and optimization; separate aggregate-lock plan",
-    "P6 comparison and P7 authorized business pilot"
+    "Actual Docker image build, multi-process PostgreSQL, version cutover and full 72-case fault matrix",
+    "Isolated joint restore with current revocation, key recovery and operation reconciliation; inventory verification alone is insufficient",
+    "Five-tenant mixed load and connection-budget validation",
+    "P6 comparison, P7 authorized business pilot, current dependency audit and remote synchronization"
   ]
 }
