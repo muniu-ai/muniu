@@ -44,7 +44,7 @@ export const codingPlugin = {
         title: "实现代码变更",
         expectedOutcome: "生成可审阅的代码变更、检查结果和证据",
         exampleInput: "修复已提交事件在重启后丢失的问题",
-        source: "Muniu",
+        source: "木牛 Agent OS",
         license: "Apache-2.0",
         version: "0.2.0",
         permissionIds: [

@@ -145,7 +145,7 @@ async function verifyOnboarding(page, requestLog) {
   await expectText(page, "公开资料研究");
   await expectText(page, "预期成果");
   await expectText(page, "示例输入");
-  await expectText(page, "木牛 OPC Agent OS");
+  await expectText(page, "木牛 Agent OS");
   await expectText(page, "Apache-2.0");
   await expectText(page, "已启用");
   const modelRequest = requestLog.find((entry) => entry.path === "/v2/model-connections");

@@ -133,7 +133,7 @@ export function ThreadAgentPanel({ api, workspaceId, pluginId, resourceId, profe
   return <section className="opc-agent-panel" aria-labelledby={titleId}>
     <header>
       <span className="opc-agent-mark"><Bot size={19} /></span>
-      <div><p className="eyebrow">{pluginId === "opc" ? "OPC Agent OS" : "Coding Agent OS"}</p><h2 id={titleId}>与 {agentName} 一起推进</h2><p>{pluginId === "opc" ? "Agent 只使用当前机会的上下文，建议需要你审阅。" : "默认由内置 Agent 在隔离副本生成变更，检查通过后仍需人工审批。"}</p></div>
+      <div><p className="eyebrow">木牛 Agent OS</p><h2 id={titleId}>与 {agentName} 一起推进</h2><p>{pluginId === "opc" ? "Agent 只使用当前机会的上下文，建议需要你审阅。" : "默认由内置 Agent 在隔离副本生成变更，检查通过后仍需人工审批。"}</p></div>
       <button className="icon-button" type="button" title="刷新会话" disabled={loading} onClick={() => void loadConversation(true)}><RefreshCw size={16} /></button>
     </header>
 
