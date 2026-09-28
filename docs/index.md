@@ -1,33 +1,41 @@
-# 木牛 Agent OS 0.2
+# 木牛文档
 
-木牛把桌面端、CLI 和 API 收敛到一个 Agent OS 内核。OPC 与 Coding 是随应用提供的产品插件，共用工作区、会话、执行、审批、事件、记忆、成果和任务恢复能力。
+木牛 Agent OS 0.2 是持久 Agent 执行平台。Desktop、CLI 与 API 通过 Host 使用同一套工作区、执行、审批和恢复能力；OPC 与 Coding 提供具体业务流程。
 
-## 从这里开始
+## 按任务开始
 
-- [快速开始](./quickstart.md)：完成四屏向导并创建第一个工作区。
-- [架构](./architecture.md)：了解 Scope、事件、权限、恢复与产品边界。
-- [CLI 参考](./reference/cli.md)：使用 `mn` 操作工作区、收件箱、OPC 和 Coding。
-- [API 路由](./reference/api-routes.md)：查看 HTTP、幂等、并发与 SSE 契约。
-- [插件开发](./plugin-authoring.md)：声明贡献、权限、投影和供应链元数据。
-- [企业运维](./enterprise-operations.md)：部署多副本 Host/Worker 与外部存储。
-- [安全边界](./security/overview.md)：核对插件、工具、密钥和数据治理边界。
+| 读者与目标 | 阅读路径 | 完成后得到什么 |
+| --- | --- | --- |
+| 使用者：第一次启动 | [快速开始](./quickstart.md) → [OPC](./guides/opc.md) 或 [Coding](./guides/coding.md) | 可连接的本机 Host、工作区与第一个任务 |
+| 脚本使用者：操作已有服务 | [CLI 使用](./guides/cli.md) → [CLI 参考](./reference/cli.md) 或 [API 路由](./reference/api-routes.md) | 明确的参数、返回格式与并发规则 |
+| 开发者：定位代码和修改行为 | [核心概念](./concepts.md) → [架构](./architecture.md) → [开发指南](./development.md) | 模块职责、事实来源与验证命令 |
+| Agent：接手仓库任务 | [仓库规则](https://github.com/muniu-ai/muniu/blob/main/AGENTS.md) → [Agent 工作指南](./agent-guide.md) | 最小阅读路径、改动边界与交付要求 |
+| 插件作者：增加业务能力 | [插件开发](./plugin-authoring.md) → [插件运维](./reference/plugins.md) | 公共 SDK 边界、签名与生命周期规则 |
+| 运维人员：部署和恢复 | [企业运维](./enterprise-operations.md) → [安全边界](./security/overview.md) | 部署依赖、维护操作与验收条件 |
 
-## 产品体验
+不确定某项能力是否已经可用，先看[能力与验证状态](./status.md)。遇到错误，按[故障排查](./troubleshooting.md)中的症状定位。
 
-一级导航固定为首页、工作区、收件箱、成果和活动。Agents、集成与设置默认折叠。`Cmd-K` 可搜索命令、机会、Coding 任务、Skill 和成果；快速捕获始终绑定当前工作区。
+## 查阅契约
 
-经营视图隐藏内部标识和执行细节，专业视图原位展开。两种视图产生相同的 API 请求与事件序列。工具日志默认折叠为阶段卡和结果卡，成果、审批与下一步优先展示。
+| 问题 | 文档 |
+| --- | --- |
+| HTTP 路径、权限、幂等与并发参数 | [API 路由](./reference/api-routes.md) · [OpenAPI](./reference/openapi.md) |
+| CLI 命令和参数 | [CLI 参考](./reference/cli.md) |
+| 事件、版本、SSE 游标和恢复代际 | [事件与恢复](./reference/events.md) |
+| 哪些工具需要审批，结果未知如何处理 | [工具与审批](./reference/tools.md) |
+| 插件安装、停用和升级 | [插件运维](./reference/plugins.md) |
+| 端口、状态目录、密钥和环境变量 | [配置参考](./reference/configuration.md) |
 
-## 插件概览
+CLI 帮助、API 路由表、OpenAPI 和内置插件目录由源码生成。改动接口时按[开发指南](./development.md)更新来源并重新生成，不直接修改生成区块。
 
-OPC 将一句自然语言输入整理为可审阅的机会对象，再沿“定义问题、研究、访谈、评估、最小收费方案、人工决策”推进。文件证据通过附件选择导入；访谈原文加密保存，只能追加标注。承诺与付费证据必须人工确认。证据不足时，界面和导出物只显示“方案待验证”。
+## 部署、发布与专项资料
 
-Coding 以仓库和任务组织会话，沿“发现、规格、影响、实现、验证、审批、学习”推进。内置 Agent 为默认 Runner；外部 Runner 需要显式启用并固定二进制身份。
+- [安全边界](./security/overview.md)、[日志脱敏](./security/redaction-policy.md)、[密钥扫描](./security/secret-scanning.md)：理解信任与数据处理规则。
+- [macOS 发布](./release/macos.md)、[签名与公证](./release/apple-developer-id.md)：制作和验收安装包；源码构建成功不代表已完成分发验收。
+- [架构决策](./adr/index.md)：理解已采用的版本和模块边界。
+- [工程验收记录](./verification/application-boundaries-2026-09-28.md)：查看对应提交的实际检查及未完成项。
+- [工业询价专项](./industry-delivery/README.md)：双仓库参考应用、合成样本和发布门禁；它不是首次使用木牛的前置条件。
 
-## 运行保证
+## 如何判断一份资料的适用范围
 
-- 本地以 SQLite WAL/FULL 为权威存储；企业以 PostgreSQL 为权威存储。
-- 事件、投影、Job、outbox 与审批状态在同一数据库事务提交。
-- CAS 按摘要 create-only 写入，提交事件后才成为事实引用。
-- 工具承诺先持久化再执行；结果未知的外部副作用进入人工核对。
-- 插件故障只降低对应插件能力，核心首页、收件箱、设置和其他插件保持可用。
+本目录的指南描述当前源码使用方式，参考文档记录接口。ADR 记录采用理由，验收记录只说明其日期、提交和环境下的结果。工业询价目录中的固定基线、样本与历史结果按原记录解释，不代表当前主分支或生产环境自动通过。

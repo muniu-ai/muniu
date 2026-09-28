@@ -1,6 +1,6 @@
 # Agent OS 0.2 技术与发布契约
 
-本文保留稳定文档路径，供发布检查引用。系统设计详见 [架构](./architecture.md)，接口详见 [API 路由](./reference/api-routes.md) 与 [OpenAPI](./reference/openapi.md)。
+本文记录 Agent OS 0.2 的版本边界和发布要求，不表示当前构建已通过发布验收。组件职责见[架构](./architecture.md)，术语见[核心概念](./concepts.md)，接口见 [API 路由](./reference/api-routes.md)与 [OpenAPI](./reference/openapi.md)。
 
 ## 版本边界
 
@@ -11,7 +11,7 @@
 
 ## 发布物
 
-不可变标签 `v0.2.0` 对应以下发布物：
+发布契约要求不可变标签 `v0.2.0` 包含以下发布物：
 
 - `muniu-v0.2.0.tar.gz`：源码归档；
 - `muniu-v0.2.0.spdx.json`：生产依赖 SBOM；
@@ -24,6 +24,8 @@
 ## 运行时契约
 
 - `apps/host` 是唯一组合根；`apps/worker` 只领取 lock 摘要一致的 Job。
+- Kernel 只管理通用执行与治理；行业控制规则位于私有 `@mn/business-execution`，不向产品插件开放。
+- 事实来自 `KernelEventV1` 及其认证的加密正文；查询投影和快照不能作为事实源。
 - 事件、投影、Job、outbox、审批与幂等结果在同一数据库事务提交。
 - 模型上下文和工具承诺先持久化再发送或执行。
 - 外部副作用结果未知时进入 `needs_reconciliation`，不得自动重放。
@@ -31,6 +33,8 @@
 - 遥测默认关闭；模型只使用 BYOK 连接。
 
 ## 发布门禁
+
+先按[贡献指南](https://github.com/muniu-ai/muniu/blob/main/CONTRIBUTING.md)安装并构建。下列 npm 命令在仓库根目录执行；`cargo test --locked` 在 `apps/desktop-mac/src-tauri` 执行。企业验证会创建测试基础设施并注入故障，前置条件和清理范围见[企业 fixture 验证](./enterprise-operations.md#企业-fixture-验证)；UI 验证见 [Desktop README](https://github.com/muniu-ai/muniu/blob/main/apps/desktop-mac/README.md#体验验收)。
 
 ```text
 npm test

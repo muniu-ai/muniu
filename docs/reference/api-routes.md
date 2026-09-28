@@ -2,6 +2,19 @@
 
 Agent OS 0.2 默认监听 `http://127.0.0.1:7318`。成功的 JSON 响应使用 `{ "data": ..., "traceId": "..." }`；错误直接返回统一错误对象。企业请求由部署的身份解析器认证，本地 profile 使用隐式 `local` tenant 与 `local-owner`。
 
+## 先检查连接
+
+先按[快速开始](../quickstart.md)启动本机 Host，再执行只读请求：
+
+```bash
+curl --fail-with-body --silent --show-error http://127.0.0.1:7318/v2/readiness
+curl --fail-with-body --silent --show-error http://127.0.0.1:7318/v2/workspaces
+```
+
+`readiness` 在就绪时返回 HTTP `200`，`data.ready` 为 `true`；未就绪时返回 `503`。工作区列表可能为空，这不等于连接失败。企业地址还需部署要求的身份凭据，不能照搬本地隐式身份。
+
+开发客户端时，以运行中 Host 的 `/v2/openapi.json` 和本提交的[契约源码](https://github.com/muniu-ai/muniu/blob/main/packages/contracts/src/openapi.ts)核对字段；版本不一致时先确认服务版本，再提交写请求。
+
 ## 通用规则
 
 - 所有 mutation 都需要非空 `Idempotency-Key` 请求头。

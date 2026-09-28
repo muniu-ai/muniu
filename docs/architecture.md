@@ -4,19 +4,22 @@
 
 业务主数据归应用所有；当前 OPC、Coding 与签名插件的领域仓储仍由 Host 数据端口承载，尚未完成独立数据库分离。本次边界修复及验收范围见 [ADR 0012](adr/0012-application-boundaries.md)。
 
-```text
-Desktop / CLI / API Shell
-            ↓
-       apps/host（Cordis）
-            ↓
-  contracts / kernel / agent-runtime
-       ↙                    ↘
-  OPC 插件                Coding 插件
-                              ↘
-                  Claude / Codex Runner Adapter
-            ↓
-       storage / apps/worker
-```
+术语见[核心概念](concepts.md)，操作步骤分别见[插件开发](plugin-authoring.md)、[企业运维](enterprise-operations.md)和[配置参考](reference/configuration.md)。
+
+## 组件职责与依赖
+
+`apps/host` 是唯一组合根，负责装配下列组件。表中的组合关系不表示 Kernel 依赖产品插件。
+
+| 组件 | 职责与边界 |
+| --- | --- |
+| Desktop、CLI、HTTP API | Shell 通过 Host `/v2` 契约发起业务操作；CLI 本地备份直接使用存储包 |
+| `packages/contracts`、`packages/plugin-sdk` | 公共契约与插件贡献接口 |
+| `packages/kernel` | 通用执行、授权、审批、事件与恢复控制，不导入产品插件或行业执行服务 |
+| `packages/agent-runtime` | Scope、AgentHandle、Inbox、Session 和执行预算，通过端口持久化 |
+| `packages/business-execution` | Host 与 Worker 共用的私有行业执行服务，保存询价候选和报价动作的控制状态；不是插件 SDK |
+| `plugins/*` | OPC、Coding 与外部 Runner 的产品定义和贡献，由 Host 装配 |
+| `packages/storage` | SQLite、PostgreSQL、CAS、加密与投影重建实现 |
+| `apps/worker` | 根据已提交 Job、权限、租约与 fencing token 执行处理器 |
 
 ## Scope 与贡献解析
 
@@ -83,11 +86,13 @@ Workflow 使用类型化声明式状态机，不执行插件提供的任意 Java
 - 公开 payload 与加密 payload 引用；
 - 前序摘要、当前摘要与 HMAC。
 
-所有写入提供 `expectedStreamVersion`。版本冲突返回 `409`。事件、投影、Job、outbox、审批和幂等结果在同一数据库事务提交。查询表与快照应能从事件重建，不得作为事实源。
+公开 HTTP 变更请求携带 `Idempotency-Key`；更新现有聚合时还需 `expectedStreamVersion`。事件追加按预期流版本提交，版本冲突返回 `409`。事件、投影、Job、outbox、审批和幂等结果在同一数据库事务提交。查询表与快照应能从事件及其认证的加密正文重建，不得作为事实源。
+
+当前实现把受保护查询状态保存为 CAS 中的加密事实，并用 `projection.fact_committed` 事件认证其引用。查询表保存 `muniu.projection.reference`，授权读取时解密。这里的加密事实日志属于事件提交的一部分；它不使查询表成为业务权威来源，也不代表 OPC、Coding 已拥有独立数据库。
 
 `replayCoreProjections` 校验 tenant 事件链的连续位置、摘要和 HMAC，并重建核心元数据。生产 Host 与 Worker 的非核心投影以及会话标题、审批正文等敏感核心投影写入加密事实日志；SQLite 与 PostgreSQL 的 `rebuildProjections` 在一个事务内校验并恢复核心、产品查询投影及受保护幂等结果。重建不执行模型、工具或 Job，不重建物理任务队列。CLI 备份恢复会在新目录执行这项验证，成功后才允许启动；企业通过 `maintenance:enterprise` 在停机维护窗口验证、重建和清理孤儿对象，不能手工删除运行中的表。前置检查、数据库连接隔离和失败恢复步骤见[企业运维](enterprise-operations.md)。
 
-文件先按摘要 create-only 写入 CAS，再在事务中提交事件引用。引用校验覆盖所有历史事件与加密投影事实，不能只扫描当前查询表。企业离线维护入口在完整校验后按保留期清理未提交的孤儿对象；运行中的写入必须先停止，不提供在线定时清理。已经提交的事件不会因 Host 或 Worker 重启而丢失。
+文件先按摘要 create-only 写入 CAS，再在事务中提交事件引用。引用校验覆盖所有历史事件与加密投影事实，不能只扫描当前查询表。企业离线维护入口在完整校验后按保留期清理未提交的孤儿对象；运行中的写入必须先停止，不提供在线定时清理。Host 与 Worker 从持久存储恢复已经提交的事件；这不替代数据库、CAS 和密钥系统的备份与恢复演练。
 
 本地 Host 在整个生命周期持有状态目录的 OS 文件锁。正常关闭后释放文件描述符，进程崩溃后由 OS 释放；不能通过换端口启动第二个使用同一状态目录的 daemon。锁文件保留，不通过删除文件解除活跃锁。macOS 使用系统 `lockf` 的文件描述符模式；Linux 本地开发使用系统 `flock`，缺少工具时拒绝启动。
 
@@ -133,7 +138,7 @@ Host 与 Worker 的 PostgreSQL 连接固定使用 20 秒 `idle_in_transaction_se
 
 每份敏感 payload 使用独立的 Keychain 包装密钥或 Vault transit key。删除先提交 tombstone 与密钥撤销记录，再销毁对应包装密钥；即使恢复旧 wrapped DEK，也不能使用已销毁的包装密钥解密。撤销结果未知时进入收件箱，不自动重复删除。协议测试不等于真实 Vault 故障验证；独立恢复 KMS 管理员备份不在此保证范围内。
 
-macOS 密钥写入使用 `security -i -q` 的命令标准输入和十六进制密码参数，并通过独立查询完整读回。密钥不进入子进程 argv，不依赖读取终端的密码提示。命令长度、运行时间和输出大小均受限，错误信息不携带原始输出。该调用方式依据 [Apple 的 security 工具接口](https://github.com/apple-oss-distributions/Security/blob/main/SecurityTool/macOS/security.c)，没有复制其实现；`npm run verify:local-keychain` 使用独立临时 service 验证读回与撤销，并清理本次测试条目。
+macOS 密钥写入使用 `security -i -q` 的命令标准输入和十六进制密码参数，并通过独立查询完整读回。密钥不进入子进程 argv，不依赖读取终端的密码提示。命令长度、运行时间和输出大小均受限，错误信息不携带原始输出。该调用方式依据 [Apple 的 security 工具接口](https://github.com/apple-oss-distributions/Security/blob/main/SecurityTool/macOS/security.c)，没有复制 Apple 的实现；`npm run verify:local-keychain` 使用独立临时 service 验证读回与撤销，并清理本次测试条目。
 
 Host、Worker 的 engine lock 与 plugin lock 摘要必须一致，否则 readiness 或 Job claim 失败。企业环境使用蓝绿切换，不进行混合版本滚动升级。
 

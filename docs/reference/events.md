@@ -1,6 +1,6 @@
 # 事件与恢复
 
-`KernelEventV1` 是 Agent OS 0.2 的事实记录。查询表、投影、快照、搜索索引和 UI 卡片均可从事件重建。
+`KernelEventV1` 是 Agent OS 0.2 的事实记录。查询状态由事件及其引用的受保护事实重建；只有数据库文件并不一定足够，受保护内容还需要对应 CAS 对象和有效密钥。概念区别见[核心概念](../concepts.md)，实际恢复步骤见 [CLI 备份](./cli.md#备份)和[企业运维](../enterprise-operations.md)。
 
 ## 结构
 
@@ -32,6 +32,8 @@ interface KernelEventV1 {
 
 `publicPayload` 只能包含展示、路由与投影所需的非敏感字段。密钥、原始访谈、客户资料和受保护附件放入加密 payload 或 CAS，并由 `protectedPayloadRef` 引用。
 
+这里的 `public` 指未加密的事件字段，不代表内容可以公开发布。事件读取仍受租户、工作区和资源授权约束。
+
 ## 写入规则
 
 1. 调用方提供当前 `expectedStreamVersion`。
@@ -48,6 +50,7 @@ interface KernelEventV1 {
 | tenant / workspace | `tenant.bootstrapped`、`workspace.created`、`workspace.updated`、`workspace.plugin_activated` |
 | thread / execution | `thread.created`、`thread.turn_submitted`、`execution.queued`、`execution.running`、`execution.waiting_approval`、终态事件 |
 | tool / approval | `tool.intent_recorded`、`approval.requested`、`approval.approved_once`、`approval.denied` |
+| tool admission | `tool_admission.started`、`tool_admission.settled` |
 | memory / sharing | `memory.proposed`、`memory.accepted`、`memory.rejected`、`memory.shared`、`memory.deleted`、`share_grant.revoked` |
 | asset | `asset.created`、`asset.deleted` |
 | model connection | `model_connection.saved`、`model_connection.probed` |
@@ -70,6 +73,8 @@ HMAC 可发现没有密钥的数据库改写，不证明宿主、数据库管理
 
 ## Generation 与恢复
 
-每次执行恢复或 owner 更换都产生新的 generation。模型上下文、工具 intent、批准和 Worker claim 都绑定 generation。旧 generation 的 fencing token、批准或结果不得写入当前执行。
+显式恢复 Execution 会推进其 generation，模型上下文、工具 intent 与批准需要符合当前代际。Worker 重新领取 Job 则增加租约的 fencing token，不必改变 Execution generation。两者分别防止沿用旧执行授权和旧 Worker 提交，不能互相替代。
 
 外部副作用结果未知时记录 `needs_reconciliation`，不生成推测性成功或失败事件。人工核对结果必须以新事件追加，不能改写原记录。
+
+恢复仍需检查当前工作区授权。重新加入工作区不恢复失效的批准，也不能清除已派发工具的未知效果。具体准入边界见 [ADR 0012](../adr/0012-application-boundaries.md)。

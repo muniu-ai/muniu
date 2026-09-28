@@ -1,6 +1,8 @@
 # 插件开发
 
-Agent OS 0.2 插件通过 `@mn/plugin-sdk` 贡献产品能力，通过 `@mn/contracts` 使用公共数据类型。产品插件不得依赖内核实现，也不得导入其他产品插件。
+Agent OS 0.2 插件通过 `@mn/plugin-sdk` 贡献产品能力，通过 `@mn/contracts` 使用公共数据类型。产品插件默认只依赖这两个公共包；其他依赖必须由已批准的设计明确命名。不得依赖 Kernel 实现、私有 `@mn/business-execution` 或其他产品插件。
+
+本文面向签名产品插件作者。先阅读[核心概念](concepts.md)和本页信任边界，再按包结构、贡献、数据、生命周期顺序实现。官方插件清单见[插件参考](reference/plugins.md)。
 
 ## 信任边界
 
@@ -122,7 +124,7 @@ const event = await context.data!.append({
 const record = await context.data!.get("records", "record-1");
 ```
 
-`append` 返回领域事件，`get` 返回投影记录或 `undefined`。事件正文与投影均使用加密 CAS，公开事件只保存身份、版本和引用。命令参数错误或版本冲突不将插件标记为故障。
+`append` 返回领域事件，`get` 返回投影记录或 `undefined`。事件正文与投影内容保存在加密 CAS 中；事件认证正文引用，查询表保存加密内容的引用，授权读取时解密。查询投影可重建，不能作为新的事实源。命令参数错误或版本冲突不将插件标记为故障。
 
 每个投影 namespace 必须声明 `sqlite` 和 `postgresql` 两个 `.json` 入口，两份定义的规范化内容必须一致。定义格式如下：
 
@@ -161,4 +163,11 @@ const record = await context.data!.get("records", "record-1");
 
 开发模式可从绝对本地路径加载资源，并允许 localhost HMR。界面必须持续显示开发警告，审计记录每次装载、卸载和配置变更。生产 CSP 只加载已验证的同源本地资源，并禁止 object、frame、base 和 form。
 
-提交前至少运行插件单元测试、投影重放测试、供应链测试、`npm run verify:plugins` 与 `git diff --check`。
+在仓库内开发时，先按[贡献指南](https://github.com/muniu-ai/muniu/blob/main/CONTRIBUTING.md)完成 `npm ci` 和构建，再执行插件单元测试、投影重放测试和供应链测试：
+
+```bash
+npm run verify:plugins
+git diff --check
+```
+
+`verify:plugins` 覆盖 SDK、官方插件和 Host 测试；新增插件还需在自身 workspace 中配置并执行测试。生产安装与开发 HMR 是不同装载路径，不能用开发验证代替签名、摘要和撤销检查。

@@ -1,65 +1,81 @@
 # 快速开始
 
-本指南从源码启动 macOS Desktop，并完成 Agent OS 0.2 的首次设置。需要 Node.js `22.19.x`、npm `11.10.1`、Git、Rust 工具链和 Apple 构建工具。
+本指南从源码启动 macOS Desktop，确认本机 Host 可用，再创建第一个 OPC 机会。首次成功的标志是：CLI 显示“Host 已就绪”，Desktop 中能打开机会档案。真实模型执行另行发起。
 
-## 启动 Desktop
+## 准备环境
+
+需要以下工具，所有命令均在仓库根目录执行：
+
+| 项目 | 要求 |
+| --- | --- |
+| 系统 | macOS；应用声明的最低版本为 12.0 |
+| JavaScript 工具链 | Node.js `22.19.x`、npm `11.10.1` |
+| 原生构建 | Git、Rust `1.88.0`、Apple Command Line Tools，包含 `clang`、`lipo` 和 `codesign` |
+| 本机服务 | `127.0.0.1:7318` 未被其他 Host 或旧版 daemon 占用 |
+| 模型 | 完成 Desktop 向导需要自己的 OpenAI、Anthropic 或 DeepSeek API Key |
+
+没有模型密钥也能启动 Host、执行只读诊断，并通过 CLI 创建工作区和业务对象，见[无模型密钥的 CLI 练习](./guides/cli.md#无模型密钥的首次练习)。当前 Desktop 向导不能跳过“连接模型”。
+
+## 1. 安装并构建
 
 ```bash
 git clone https://github.com/muniu-ai/muniu.git
 cd muniu
+node --version
+npm --version
+rustc --version
+xcode-select -p
 npm ci
 npm run build:host-sidecar
+```
+
+版本输出应分别为 `v22.19.x`、`11.10.1`、`rustc 1.88.0`。仓库的 `rust-toolchain.toml` 固定 Rust 版本；请使用能读取该配置的 Rust 工具链。`xcode-select -p` 应返回有效的开发工具目录。
+
+构建结束后应出现 `mn-host sidecar 已生成`。该命令也会构建 CLI，后续无需全局安装 `mn`。它只构建文件，不会启动 Host。
+
+## 2. 启动并检查 Host
+
+在同一终端执行，并保持终端运行：
+
+```bash
 npm run tauri:dev -w @mn/desktop-mac
 ```
 
-Desktop 管理本机 Host。默认监听 `127.0.0.1:7318`，权威状态写入 `~/.muniu/v2`。如果同一端口上已有早期 daemon，Host 会拒绝启动；先退出旧进程，再重试。两个版本不能同时运行。
+出现“木牛”窗口后，在另一个终端进入同一仓库根目录，执行只读检查：
 
-## 完成四屏向导
+```bash
+node apps/cli/dist/index.js doctor
+node apps/cli/dist/index.js plugin list --json
+```
 
-1. 选择经营视图或专业视图。两者只改变信息密度。
-2. 启用 OPC、Coding 或两者。官方插件随应用提供，按工作区激活。
-3. 选择厂商预设并输入自己的 API Key。向导把密钥写入 Keychain，探测连接后选择默认模型；无需填写内部厂商标识、模型标识、Base URL 或报文格式。
-4. 创建工作区和第一个机会或仓库，并运行只读样例。
+`doctor` 显示“Host 已就绪”后再继续。`plugin list --json` 应包含随应用提供的 `opc` 和 `coding` 插件；已安装不等于已在工作区启用。若显示未就绪或无法连接，见[故障排查](./troubleshooting.md)。
 
-首次连接失败时，密钥不会写入日志或导出物。先在向导中重新探测，再运行 `mn doctor --fix` 查看 Host 与插件健康状态。
+Desktop 自动启动并管理 Host，不需要同时执行 `npm run dev:host`。Host 默认使用 `http://127.0.0.1:7318`，本地状态位于 `~/.muniu/v2`。首次启动会在 macOS Keychain 中创建本地状态保护密钥；模型密钥在向导提交后另行保存。退出应用会停止它管理的 Host，状态会保留。
 
-## 创建第一个 OPC 机会
+## 3. 完成四步向导
 
-在快速捕获中输入一句业务描述，例如：
+首次练习只启用 OPC，避免同时处理机会和仓库两种对象。
+
+1. 在“选择视图”保留默认的“经营视图”，点击“继续”。经营视图与专业视图使用相同数据和操作。
+2. 在“启用插件”保留默认的“OPC 机会验证”，点击“继续”。插件按工作区启用；生产插件拥有 Host 进程权限，不是沙箱。
+3. 在“连接模型”选择厂商，填写自己的 API Key，点击“继续”。密钥不能留空。真正保存和连接探测会在最后提交向导时发生。
+4. 在“开始工作”填写工作区名称，将“第一条机会”替换为以下练习文本，保留“运行只读样例”，点击“进入工作台”。
 
 ```text
 独立顾问每周花半天整理客户访谈，希望自动归纳证据，但不能改写原始记录。
 ```
 
-系统生成可审阅的 `Opportunity`、目标客户、问题和可证伪假设。确认后再进入研究与访谈。证据卡必须同时容纳支持、反对和中立信号；最终 `pursue`、`revise` 或 `stop` 只能由人选择。
+这是练习输入，不是真实客户证据。提交后会保存模型连接、探测模型、创建工作区和机会，并记录样例完成事件。
 
-记录文件信号时直接选择文件，Desktop 会先把文件作为受保护 Asset 上传，再保存信号引用。访谈可选择 UTF-8 文本或 Markdown，也可粘贴原文；两种方式都会加密保存。机会事件和投影不复制访谈原文，后续分析只能追加标注。
+进入工作台后，打开“OPC”，点击机会卡片的“查看档案”。看到“界定这项机会”及关联的 OPC Agent 会话，即已完成首次设置。档案中的目标客户、问题和假设需要审阅补全，不能直接视为验证结论。
 
-OPC 固定输出机会验证档案、访谈包、证据账本、反证清单、最小收费方案和决策记录。它不会自动联系客户、发布内容、发送报价或收款。
+::: tip “只读样例”的范围
+当前样例只检查工作区已启用对应插件，并写入本地完成事件。它不会调用模型、抓取公开网页或读取真实仓库。样例完成不代表真实研究或 Coding 执行已经通过验证。
+:::
 
-完成人工决策后，点击“导出 6 项成果”保存 JSON 文件。macOS 会显示保存对话框，只创建新文件，不覆盖同名文件；取消后可再次保存，不会重复生成成果。文件包含经授权读取的访谈原文，属于明文资料，分享后无法撤回。当前单份导出上限为 20 MiB。
+## 4. 选择下一项工作
 
-## 创建第一个 Coding 任务
-
-启用 Coding 后，在 Coding 页面登记仓库绝对路径，再在顶部选择仓库、描述一个边界明确的变更。登记本身不读取或修改文件。一个工作区可以重复使用多个仓库；只有一个仓库时自动选择，多个仓库时必须明确选择。默认 Runner 是内置 Agent，界面只展示任务、diff、检查、审批、成果和下一步。Harness、候选数和预算位于高级执行设置。
-
-Gate 失败最多自动修复 3 次，总执行时长默认不超过 3600 秒。达到上限后进入人工决策。选择 Claude 或 Codex Runner 前，系统会展示并记录可执行文件的绝对路径、版本和摘要；二进制变化后必须重新确认。
-
-## 使用 CLI
-
-Desktop 运行时，可从另一个终端调用 CLI：
-
-```bash
-node apps/cli/dist/index.js doctor --fix
-node apps/cli/dist/index.js inbox
-node apps/cli/dist/index.js plugin list
-```
-
-为脚本添加 `--json` 可获得稳定机器格式。不要使用 CLI 参数传递模型密钥，以免密钥进入 shell history；密钥应通过 Desktop 向导写入 Keychain。
-
-## 下一步
-
-- [CLI 参考](./reference/cli.md)
-- [架构](./architecture.md)
-- [插件开发](./plugin-authoring.md)
-- [故障排查](./troubleshooting.md)
+- [完成一次 OPC 机会验证](./guides/opc.md)：界定假设、记录信号与访谈、人工决策、导出成果。
+- [创建并执行 Coding 任务](./guides/coding.md)：登记仓库、生成任务、发送给 Agent、审阅差异与审批。
+- [使用 CLI](./guides/cli.md)：不启动 Desktop 窗口的方式、无模型练习、JSON 输出与工作区定位。
+- [故障排查](./troubleshooting.md)：构建失败、端口冲突、模型连接与执行阻塞。

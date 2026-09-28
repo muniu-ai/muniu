@@ -2,9 +2,18 @@
 
 桌面端是木牛 Agent OS 0.2 的原生 Shell。它负责首次向导、全局导航、托盘入口和插件 UI 宿主；业务状态、审批与执行统一由本地 `mn-host` 的 `/v2` 接口处理。
 
+## 代码入口
+
+| 文件 | 职责 |
+| --- | --- |
+| [src/App.tsx](src/App.tsx)、[src/WorkspaceShell.tsx](src/WorkspaceShell.tsx) | 全局页面和工作区 Shell |
+| [src/api.ts](src/api.ts) | Host API 调用 |
+| [src/components/PluginSurface.tsx](src/components/PluginSurface.tsx) | 声明式插件 UI |
+| [src-tauri/src/lib.rs](src-tauri/src/lib.rs) | 原生集成与 sidecar 生命周期 |
+
 ## 本地开发
 
-浏览器模式适合快速修改界面。先在仓库根目录启动 Host：
+先按[贡献指南](../../CONTRIBUTING.md)准备 Node.js 22.19.x、npm 11.10.1 并执行 `npm ci`。浏览器模式适合修改界面；在 macOS 上从仓库根目录启动本地 Host：
 
 ```bash
 npm run dev:host
@@ -18,7 +27,7 @@ npm run dev:desktop
 
 浏览器预览默认使用 `http://127.0.0.1:5173`，连接 `http://127.0.0.1:7318`。
 
-验证原生集成时，构建 Host sidecar 后启动 Tauri：
+验证原生集成还需 Rust 和 Xcode Command Line Tools。先停止单独启动的 Host，避免默认端口冲突，再构建 Host sidecar 并启动 Tauri：
 
 ```bash
 npm run build:host-sidecar
@@ -39,13 +48,17 @@ Tauri 托管 `mn-host` sidecar，本地权威状态位于 `~/.muniu/v2`。同一
 
 ## 体验验收
 
+先在仓库根目录执行 `npm run build`，并安装 Chrome 或 Chromium。以下脚本会启动临时 Host 与页面服务、写入测试状态并操作无头浏览器；不需要启动日常使用的 Host。
+
 ```bash
+npm run typecheck:desktop
+npm run build:desktop
 npm run verify:onboarding-ui
 npm run verify:opc-ui
 npm run verify:coding-ui
 ```
 
-脚本使用临时真实 Host 和系统 Chrome，验证四屏向导、经营/专业视图、插件故障隔离、审批卡、成果优先展示、Cmd-K 和最小窗口尺寸。OPC 验收还会向通用 turns 接口提交消息，通过 SSE 接收异步 Agent 结果，检查游标续传，并验证暂停与恢复。文件与访谈原文作为受保护 Asset 上传，领域命令只提交 Asset ID。
+脚本使用真实 Host 路由、内存存储和模拟模型的 fixture，配合系统 Chrome 或 Chromium，验证四屏向导、经营/专业视图、插件故障隔离、审批卡、成果优先展示、Cmd-K 和最小窗口尺寸。OPC 验收还会向通用 turns 接口提交消息，通过 SSE 接收异步 Agent 结果，检查游标续传，并验证暂停与恢复。文件与访谈原文作为受保护 Asset 上传，领域命令只提交 Asset ID。该验证不覆盖真实厂商调用、Keychain 持久化、Tauri 权限或安装包签名。
 
 ## 安全边界
 

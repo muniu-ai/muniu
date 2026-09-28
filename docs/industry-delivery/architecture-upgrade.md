@@ -52,7 +52,7 @@ B1 验证：`npm test` 634 项通过，类型与桌面检查、桌面构建、9 
 
 OS 代码版本 `94a73ea` 已整合至本地 `muniu/main`；Sales 代码版本 `cefec9f` 已快进整合至方案所在工作区 `muniu-system-architecture`。Sales 实现认证租户路由、返回范围检查、OS 身份头转交，以及固定工具链和基础镜像的多阶段 Dockerfile。最终镜像构建包含非 root 中文 PDF 测试，但尚未实际构建。
 
-两端源码及契约摘要见[配套工程候选清单](architecture-paired-candidate.json)。该文件没有签名、生产镜像 digest 或业务准入效力。Sales 的 11 项领域测试、类型、契约和三种构建通过；严格 lint 仍有 180 项错误。完整数据库、RFQ 与双仓库验收未执行。
+两端源码及契约摘要见[配套工程候选清单](https://github.com/muniu-ai/muniu/blob/main/docs/industry-delivery/architecture-paired-candidate.json)。该文件没有签名、生产镜像 digest 或业务准入效力。Sales 的 11 项领域测试、类型、契约和三种构建通过；严格 lint 仍有 180 项错误。完整数据库、RFQ 与双仓库验收未执行。
 
 原方案 A～D 尚未整体完成。A3 云存储、Sales 探针和退出、发布切换、完整故障与联合恢复、性能量测和优化，以及真实模型与业务试点继续按原计划验收；不能用本次代码提交替代。
 
@@ -66,7 +66,7 @@ OS 代码版本 `94a73ea` 已整合至本地 `muniu/main`；Sales 代码版本 `
 - Sales 报表：数据库先过滤访问范围，保留来源复核；按订单读取收款并使用索引；商机、阶段和归因历史一次分组。
 - OS 联合恢复：[离线清单校验](joint-recovery-inventory.md)核对受信签名、文件摘要、对象映射、撤销检查点和完整副作用窗口；输出待核对 operationKey，始终不允许重放或生产准入。
 
-Sales 已快进整合至方案所在仓库 `307d954`。OS 实现为 `b9d97fc`，整合至本地 `muniu/main`。配套源码及摘要见[当前工程候选](architecture-paired-candidate.json)。两仓库边界保留，Sales 代码不复制进 OS 内核。
+Sales 已快进整合至方案所在仓库 `307d954`。OS 实现为 `b9d97fc`，整合至本地 `muniu/main`。配套源码及摘要见[当前工程候选](https://github.com/muniu-ai/muniu/blob/main/docs/industry-delivery/architecture-paired-candidate.json)。两仓库边界保留，Sales 代码不复制进 OS 内核。
 
 验证结果：OS 638 项测试、类型与桌面检查、桌面构建、sidecar smoke、6 项离线 Cargo 测试、企业静态 fixture 通过。恢复模块补充的 4 项定向测试通过。Sales 131 项完整回归通过，包含嵌入式数据库和实际中文 PDF；类型、契约、Web/小程序/完整构建通过；容器入口补充的 3 项源码检查通过。未启动 Docker、真实数据库、云服务或模型。
 

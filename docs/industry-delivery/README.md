@@ -2,6 +2,19 @@
 
 本目录供实施者和验收人员核对版本、资料授权、报价正确性与故障处理。样本校验通过仅证明验收包自身一致；产品执行、企业部署、竞品表现和客户收益分别记录。
 
+## 阅读顺序
+
+本目录是工业询价参考应用的专项资料，不是通用平台的入门教程。首次使用木牛先读[快速开始](../quickstart.md)；当前通用平台的检查范围见[能力与验证状态](../status.md)。下表中的历史记录继续按其原日期、固定提交和样本解释。
+
+| 目标 | 资料 |
+| --- | --- |
+| 理解两仓库职责与配套状态 | [架构衔接](architecture-upgrade.md) · [历史交付状态](delivery-status.md) |
+| 配置受信业务入口 | [企业业务配置](enterprise-business.md) |
+| 执行专用集成验证 | [双仓库依赖集成](integration.md) · [候选契约集成](candidate-integration.md) |
+| 准备恢复和发布证据 | [企业恢复](enterprise-recovery.md) · [联合恢复清单](joint-recovery-inventory.md) · [发布签名](release-signature.md) |
+| 理解样本与比较方法 | [验收样本](acceptance.md) · [比较契约](comparison.md) · [比较执行器](benchmark-runner.md) · [本地适配器](local-adapters.md) |
+| 查阅固定轮次结果 | [验证记录](verification.md) |
+
 ## 范围和状态
 
 参考应用限定为工业阀门询价资料整理、内部报价管理和批准版本的文件导出。发送报价由人工完成。样本中的产品、客户、参数、价格和商务规则均为虚构，不用于实际采购、选型或报价。
@@ -34,12 +47,12 @@ node scripts/industry-delivery-release-gate.mjs docs/industry-delivery/release-m
 
 ## 文件
 
-- [P0 基线](p0-baselines.json)：固定基线及捕获时工作树状态。
+- [P0 基线](https://github.com/muniu-ai/muniu/blob/main/docs/industry-delivery/p0-baselines.json)：固定基线及捕获时工作树状态。
 - [样本与故障规范](acceptance.md)：预期结果、异常测试和证据要求。
 - [对照契约](comparison.md)：同场比较、状态语义及汇总方法。
-- [发布清单模板](release-manifest.template.json)：联合版本和技术门禁。
+- [发布清单模板](https://github.com/muniu-ai/muniu/blob/main/docs/industry-delivery/release-manifest.template.json)：联合版本和技术门禁。
 - [发布签名与运行时准入](release-signature.md)：受信公钥、有效期、候选和产物绑定。
-- [源授权台账](source-authorization-ledger.json)：资料使用范围及真实资料准入要求。
+- [源授权台账](https://github.com/muniu-ai/muniu/blob/main/docs/industry-delivery/source-authorization-ledger.json)：资料使用范围及真实资料准入要求。
 - [企业部署与恢复](enterprise-recovery.md)：已有命令、依赖、停止条件和恢复证据。
 - [真实依赖集成验收](integration.md)：双仓库、双 Worker、真实数据库与文件出包的运行条件及结果限制。
 
@@ -49,4 +62,4 @@ node scripts/industry-delivery-release-gate.mjs docs/industry-delivery/release-m
 
 默认 shell 曾提供 Node.js 23.11.0 与 npm 11.4.1，不符合 OS 要求。验收包测试使用本机 `~/.local/share/muniu-toolchains/node-v22.19.0-darwin-arm64/bin` 中的 Node.js 22.19.0 与 npm 11.10.1。Sales 基线的 TypeScript 为 5.9.3，独立保留；OS 为 5.7.2，不合并构建链。
 
-[Sales 基线检查](p0-sales-checks.json)记录 43 项测试通过、类型检查通过及既有 lint 失败。日志摘要来自本地执行记录；临时日志不随仓库分发，发布验收须重新执行并保存持久证据，不能豁免既有 lint 问题。
+[Sales 基线检查](https://github.com/muniu-ai/muniu/blob/main/docs/industry-delivery/p0-sales-checks.json)记录 43 项测试通过、类型检查通过及既有 lint 失败。日志摘要来自本地执行记录；临时日志不随仓库分发，发布验收须重新执行并保存持久证据，不能豁免既有 lint 问题。

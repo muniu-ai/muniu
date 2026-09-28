@@ -1,6 +1,8 @@
 # `mn` 命令行
 
-`@mn/cli` 是木牛 Agent OS 0.2 的类型化命令宿主，只调用 Host 的 `/v2` 接口。默认输出适合直接阅读，`--json` 提供稳定的机器格式。
+`@mn/cli` 是木牛 Agent OS 0.2 的命令行 Shell。业务命令调用 Host 的 `/v2` 接口；`backup` 直接使用本地存储和 Keychain。默认输出适合直接阅读，`--json` 提供机器格式。
+
+命令解析、HTTP 客户端与本地备份入口位于 [src/index.ts](src/index.ts)，契约客户端来自 `@mn/contracts`。CLI 不装配产品插件或 Kernel。
 
 ## 命令面
 
@@ -26,7 +28,7 @@ mn backup ...
 
 ## 本地开发
 
-先在仓库根目录启动 Host：
+先按[贡献指南](../../CONTRIBUTING.md)准备 Node.js 22.19.x、npm 11.10.1 并执行 `npm ci`。需要调用业务命令时，在仓库根目录启动 Host：
 
 ```bash
 npm run dev:host
@@ -36,12 +38,16 @@ npm run dev:host
 
 ```bash
 npm run dev:cli -- --help
-npm run dev:cli -- doctor --fix
+npm run dev:cli -- doctor
 ```
 
-默认连接 `http://127.0.0.1:7318`。需要改用其他 Host 时设置 `MN_API_URL`。
+默认连接 `http://127.0.0.1:7318`。需要改用其他 Host 时设置 `MN_API_URL`。`doctor` 读取健康与就绪状态；`doctor --fix` 还会重新探测未就绪的模型连接并更新状态，可能访问模型服务。
+
+`backup` 使用 `MN_V2_STATE_ROOT` 指定的本地状态根，默认是 `~/.muniu/v2`；它不受 `MN_API_URL` 影响。备份与恢复的前置条件见 [CLI 参考](../../docs/reference/cli.md)。
 
 ## 验证
+
+先在仓库根目录完成 `npm run build`，再执行：
 
 ```bash
 npm run typecheck -w @mn/cli

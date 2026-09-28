@@ -11,7 +11,7 @@
 | `/Users/xiaomingwang/Documents/ChatGPT/muniu-industry-delivery` | `codex/industry-delivery-os` | [OS 快速开始](../quickstart.md)、[双仓库依赖集成](integration.md)、[候选契约集成](candidate-integration.md) |
 | `/Users/xiaomingwang/Documents/ChatGPT/创业项目/muniu-ai-sales-rfq` | `codex/industry-rfq-sales` | Sales 仓库 `docs/rfq/README.md`，含工业询价操作、网页/API 启动、字体准备及两端服务映射 |
 
-两仓库独立构建，共同使用 Node.js 22.19.x 与 npm 11.10.1；OS 保留 TypeScript 5.7.2，Sales 保留 5.9.3。本轮代码及模板、字体、迁移摘要见[配套候选清单](paired-candidate.json)。它没有生产镜像或有效发布签名，不是正式发布授权。
+两仓库独立构建，共同使用 Node.js 22.19.x 与 npm 11.10.1；OS 保留 TypeScript 5.7.2，Sales 保留 5.9.3。本轮代码及模板、字体、迁移摘要见[配套候选清单](https://github.com/muniu-ai/muniu/blob/main/docs/industry-delivery/paired-candidate.json)。它没有生产镜像或有效发布签名，不是正式发布授权。
 
 启动文档保留复现方法，不表示本轮仍有服务运行，也不要求现在执行其中的构建或容器命令。后续恢复重型验证须另行安排环境与资源。
 
@@ -35,15 +35,15 @@
 | --- | --- | --- |
 | OS 全量与静态基线 | 一轮 `npm test`、类型检查、桌面类型/构建、sidecar 与 Cargo 检查通过 | 属于相应轮次，不将之后的增量修改自动视为再次全量通过 |
 | OS 业务边界 | 14 类场景各 3 次，42 项通过；覆盖当前撤权、范围错配、失效核准、409 冲突及通用执行入口限制 | Host/Kernel、部分 Worker 与 SQLite，Sales 为测试端口，不能替代真实 PostgreSQL 故障矩阵 |
-| OS 候选再授权 | 候选 Worker 16 项定向通过；相关组合代码完成构建与受影响检查 | 跨仓库实跑另记，不能只凭源码和单测宣称候选闭环已验收 |
+| OS 候选再授权 | 候选 Worker 16 项定向通过；相关组合代码完成构建与受影响检查 | 跨仓库实际执行结果另记，不能只凭源码和单测宣称候选完整流程已验收 |
 | Sales 上轮全量 | 67/67 通过 | 保留为上轮结果，不覆盖最新证据冻结改动 |
 | Sales 最新增量 | 证据冻结定向 7 项通过，纯 helper 3 项另行通过；证据改动后的类型检查通过 | 不能与上轮 67 项相加冒充最新全量验证 |
 | Sales 最后全量 | 执行中止，未取得完整通过结论 | 未完成，不计为通过 |
 | Sales 严格 lint | 180 项既有错误尚未修复 | 失败仍保留，未放宽规则、未豁免 |
 | 双仓库真实依赖 | 原五场景一轮通过；正常出包和两类恢复另有各三次结果。扩充首轮为 10 项通过、1 项授权回调超时失败、1 项未执行 | 原始失败保留；三轮扩充和后续内部证据断言未执行，见[集成记录](integration.md) |
-| 候选跨仓库 | 运行器自检 2 项通过；一次实际运行触发 80 秒子进程时限，总耗时约 83 秒 | 九项验收未完成。负载是可能因素，尚未确认唯一原因；补充阶段记录后按用户要求未再实跑 |
-| Kind / enterprise 最新重跑 | 初期遇 Docker 插件和 frontend 镜像网络问题；后续运行因用户要求降低负载被人工终止 | 人工终止，不计为通过；不得用镜像构建成功替代部署、恢复或 sandbox 验收 |
-| P6 执行器 | 本地协议与纯辅助逻辑已有测试记录 | 真实模型和竞品对照未跑，没有领先结论 |
+| 候选跨仓库 | 运行器自检 2 项通过；一次实际运行触发 80 秒子进程时限，总耗时约 83 秒 | 九项验收未完成。负载是可能因素，尚未确认唯一原因；补充阶段记录后按用户要求未再次执行 |
+| Kind / enterprise 最新复验 | 初期遇 Docker 插件和 frontend 镜像网络问题；后续运行因用户要求降低负载被人工终止 | 人工终止，不计为通过；不得用镜像构建成功替代部署、恢复或 sandbox 验收 |
+| P6 执行器 | 本地协议与纯辅助逻辑已有测试记录 | 真实模型和竞品对照未执行，没有领先结论 |
 
 OS 基线临时日志位于 `/tmp/muniu-os-final-*.log`；Sales 最新日志包括 `/tmp/muniu-sales-final-test.log`、`/tmp/muniu-sales-final-lint.log`、`/tmp/muniu-sales-evidence-freeze-green.log` 和 `/tmp/muniu-sales-evidence-typecheck.log`。候选超时证据位于 `/tmp/muniu-candidate-e2e-NYIVtI/`。临时日志可能随环境清理消失，发布评审前需转存获准证据存储，不能仅凭路径或文档声明验收通过。
 
@@ -53,6 +53,6 @@ OS 基线临时日志位于 `/tmp/muniu-os-final-*.log`；Sales 最新日志包�
 - **P6：not_run。** 未在冻结的同条件配置下完成固定流程、木牛、DeepSeek Harness 与腾讯云 ADP 的真实比较。测试模型和 HTTP 协议 fixture 不计模型质量或竞品成绩。
 - **P7：blocked。** 没有获准真实客户资料、真实业务验收或付费证据。合成资料、演示 PDF 与已有工程测试均不能替代。
 
-后续恢复验收时，应先冻结两仓库代码与实际运行配置，保留现有失败，再分别完成候选闭环、完整故障与企业部署恢复、真实比较和客户验证。当前不继续执行重型验证，也不宣称发布就绪。
+后续恢复验收时，应先冻结两仓库代码与实际运行配置，保留现有失败，再分别完成候选完整流程、完整故障与企业部署恢复、真实比较和客户验证。当前不继续执行重型验证，也不宣称发布就绪。
 
-本地原始日志的路径与摘要见[证据索引](local-evidence-index.json)。日志保存在忽略目录 `.mn/industry-delivery-evidence`，未把运行状态或凭据提交到仓库。P6 本地适配器另见[实现及待验边界](local-adapters.md)：9 项轻量协议替身测试通过，真实服务接线仍未执行。固定抽取组依赖木牛受控执行，仅可作内部消融。
+本地原始日志的路径与摘要见[证据索引](https://github.com/muniu-ai/muniu/blob/main/docs/industry-delivery/local-evidence-index.json)。日志保存在忽略目录 `.mn/industry-delivery-evidence`，未把运行状态或凭据提交到仓库。P6 本地适配器另见[实现及待验边界](local-adapters.md)：9 项轻量协议替身测试通过，真实服务接线仍未执行。固定抽取组依赖木牛受控执行，仅可作内部消融。

@@ -1,6 +1,8 @@
 # CLI 参考
 
-`mn` 默认输出面向用户的简短结果；`--json` 输出稳定机器格式。CLI 连接 `MN_API_URL`，未设置时使用 `http://127.0.0.1:7318`。
+本文按命令查阅；首次连接和工作区示例见 [CLI 使用指南](../guides/cli.md)。`mn` 是包的可执行入口名，源码使用时在仓库根目录将它替换为 `node apps/cli/dist/index.js`，无需全局安装。
+
+除本地 `backup` 命令外，CLI 需要已经运行的 Host。默认连接 `http://127.0.0.1:7318`，可用 `MN_API_URL` 覆盖。`--json` 输出机器可读结果。下文大写占位符须替换为实际 ID、版本或摘要，不能原样提交。
 
 <!-- generated:cli-help:start -->
 
@@ -93,10 +95,10 @@ Coding 会话默认使用 `builtin`。只有显式传入 `--runner claude-cli` �
 ## 健康检查
 
 ```bash
-mn doctor --fix
+mn doctor
 ```
 
-命令检查 Host health 与 readiness。`--fix` 只执行可恢复的本地修复，不会替用户批准高风险工具、删除状态或重放未知结果的外部调用。
+`doctor` 读取 Host health 与 readiness。需要重新探测未就绪的模型连接时，显式使用 `mn doctor --fix`；该操作会请求模型服务，不能视为纯本地只读检查。它不会替用户批准高风险工具、删除状态或重放未知结果的外部调用。
 
 ## 插件
 
@@ -205,8 +207,8 @@ mn backup restore muniu-v2-backup.mnbackup --destination restored-v2
 {"ok":true,"command":"inbox","data":[]}
 ```
 
-失败输出会包含稳定 `code`、`message`、`action` 和 `retryable`，不输出 trace ID 或字段内容到普通脚本结果。退出码：
+使用 `--json` 时，失败响应为 `{ "ok": false, "command": "…", "error": { ... } }`，`error` 包含 `code`、`message`、`action`、`fieldIssues`、`traceId` 和 `retryable`。默认的人类可读输出只展示错误说明和处理建议。退出码：
 
-- `0`：成功；
-- `1`：可重试的 Host 或网络失败；
+- `0`：命令完成；`doctor` 的就绪结果仍须检查 `data.readiness.ready`，不能只判断退出码；
+- `1`：可重试的 Host 或网络失败，或未预期错误；
 - `2`：参数错误或不可重试的 API 错误。

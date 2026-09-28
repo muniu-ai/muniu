@@ -2,6 +2,8 @@
 
 These rules apply to the whole repository unless a deeper `AGENTS.md` narrows them.
 
+Navigation: [Agent workflow](docs/agent-guide.md) · [Development guide](docs/development.md) · [Documentation](docs/index.md) · [Contributing](CONTRIBUTING.md).
+
 ## Toolchain
 
 - Use Node.js 22.19.x and npm 11.10.1. Keep TypeScript exactly at 5.7.2 until an approved plan changes it.

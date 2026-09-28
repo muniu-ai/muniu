@@ -1,6 +1,6 @@
 # 配置参考
 
-Agent OS 0.2 使用显式部署配置与签名 plugin lock。用户不需要填写内部厂商标识、模型标识、Base URL 或报文格式。
+本文列出 Agent OS 0.2 本地入口与企业部署的主要配置边界。普通用户通过 Desktop 厂商预设配置 BYOK，不需要填写内部厂商标识、模型标识、Base URL 或报文格式。企业部署的完整参数以 [Helm values](https://github.com/muniu-ai/muniu/blob/main/deploy/helm/muniu/values.yaml)、[Host 入口](https://github.com/muniu-ai/muniu/blob/main/scripts/enterprise-host.mjs)和 [Worker 入口](https://github.com/muniu-ai/muniu/blob/main/scripts/enterprise-worker.mjs)为准；操作步骤见[企业运维](../enterprise-operations.md)。
 
 ## 本地配置
 
@@ -13,7 +13,9 @@ Agent OS 0.2 使用显式部署配置与签名 plugin lock。用户不需要填�
 | Keychain service | `com.muniu.agent-os.v2` | 保存模型密钥和包装密钥 |
 | CLI API 地址 | 与 Host 默认地址相同 | 可用 `MN_API_URL` 覆盖 |
 
-`MN_V2_STATE_ROOT` 必须指向 0.2 专用目录，不能指向早期状态目录。Desktop 启动时发现同端口已有早期 daemon 会拒绝继续。
+`MN_V2_STATE_ROOT` 必须指向 0.2 专用目录，不能指向早期状态目录。它改变数据库与 CAS 位置，不改变 Keychain service。CLI 本地备份也读取这个变量；`MN_API_URL` 只改变业务 API 地址，不会把备份操作转发给远端 Host。
+
+Desktop 启动时发现同端口已有 daemon 会拒绝继续。本地 Host 持有状态目录锁，不能通过换端口同时打开同一状态目录。
 
 本地签名插件仓库通过 `MN_PLUGIN_REPOSITORY_INDEX` 与 `MN_PLUGIN_TRUSTED_ROOTS` 配置，两者必须同时提供绝对路径。设置页面展示仓库目录，用户确认进程级信任边界后才能安装，再按工作区启用。
 
@@ -25,7 +27,7 @@ BYOK 是唯一模型接入方式。Desktop 从厂商预设创建连接，将 API
 
 ## 企业配置
 
-企业 profile 至少需要：
+生产配置应从默认 values 创建私有副本。`values-ci.yaml`、`values-kind.yaml` 与 Compose 的公开测试凭据只用于 fixture。企业 profile 至少需要：
 
 - PostgreSQL 连接与 schema `mn_v2`；
 - S3 bucket 与对象前缀 `v2/`；
@@ -35,7 +37,7 @@ BYOK 是唯一模型接入方式。Desktop 从厂商预设创建连接，将 API
 - engine lock 与 plugin lock 摘要；
 - Worker 运行时、租约和 sandbox 设置。
 
-缺少任一保留策略时，生产 readiness 必须失败。Host 与 Worker 的 engine/plugin lock 摘要不一致时，Host 拒绝 readiness 或 Worker 拒绝 claim。
+企业入口检查必填配置；缺少保留策略等配置时会拒绝启动。运行中的存储、密钥或 lock 检查失败时，readiness 失败或 Worker 停止领取任务。Host 与 Worker 的 engine/plugin lock 摘要必须一致。
 
 ### 企业签名插件仓库
 
