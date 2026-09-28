@@ -6,7 +6,7 @@ import {
 } from "@mn/contracts";
 import type { KernelTransaction } from "./store.js";
 
-/** Captures only core metadata. Ciphertext descriptors and key material stay outside this log. */
+/** Captures core facts; storage journals protect classified records before event authentication. */
 export function appendKernelEvent(transaction: KernelTransaction, request: EventAppendRequest): KernelEventV1 {
   const changes: ProjectionFactV1[] = [];
   const add = (namespace: CoreProjectionNamespace, id: unknown) => {

@@ -756,7 +756,6 @@ export class PostgresStorage implements StoragePort {
       execution,
       executionStreamVersion: executionProjection.streamVersion
     };
-    if (!isAgentJob && String(row.kind) !== "business.action.execute") return context;
     const jobId = String(row.job_id);
     const jobProjection = await this.#loadProjectionForUpdate(client, tenantId, "job", jobId, "Job");
     if (jobProjection.value.tenantId !== tenantId
@@ -1366,6 +1365,7 @@ export class PostgresStorage implements StoragePort {
       && "status" in value && value.status === "paused" ? "paused" : outcome;
     if (outcome === "failed" && (executionStatus === "failed"
       || executionStatus === "completed"
+      || executionStatus === "interrupted" || executionStatus === "needs_reconciliation"
       || (executionStatus === "cancelled" && failureCode === "EXECUTION_CANCELLED"))) {
       return;
     }
@@ -1470,6 +1470,7 @@ export class PostgresStorage implements StoragePort {
       occurredAt
     );
 
+    if (context.execution.status === "interrupted" || context.execution.status === "needs_reconciliation") return;
     if (context.execution.status !== "running"
       && context.execution.status !== "waiting_approval") {
       throw new Error(`状态为 ${String(context.execution.status)} 的 Execution 不能中断`);
@@ -1892,7 +1893,7 @@ export class PostgresStorage implements StoragePort {
       const context = await this.#loadAgentJobContext(client, row, false);
       if (!context) throw new Error(`Execution ${executionId} 的上下文不存在`);
       if (context.execution.status !== "running"
-        && context.execution.status !== "waiting_approval") {
+        && context.execution.status !== "waiting_approval" && context.execution.status !== "needs_reconciliation") {
         throw new Error(`状态为 ${String(context.execution.status)} 的 Execution 不能核对`);
       }
       const failure: JsonObject = {
@@ -2044,6 +2045,9 @@ function terminalExecutionClaimFailure(status: string): JsonObject | undefined {
       message: "Execution 已在领取 Job 前取消",
       retryable: false
     };
+  }
+  if (status === "interrupted" || status === "paused" || status === "needs_reconciliation") {
+    return { code: "EXECUTION_NOT_RUNNABLE", message: "Execution 已停止，不能自动领取旧 Job", retryable: false, executionStatus: status };
   }
   if (status === "completed" || status === "failed") {
     return {

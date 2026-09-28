@@ -67,7 +67,7 @@ if (role === 'sales') {
   const { S3Cas } = await import('@mn/storage');
   const { AgentOsKernel } = await import('@mn/kernel');
   const { AgentOsWorker, createBusinessActionWorkerHandler, createSalesBusinessProvider } = await import('@mn/worker');
-  const { createAgentOsHost, configureProductProjectionJournal } = await import('@mn/host');
+  const { createAgentOsHost, configureProductProjectionJournal, validateProjectionJournal } = await import('@mn/host');
   const { createPostgresPool } = await import('./lib/postgres-pool.mjs');
   const { PostgresKernelStore } = await import('./lib/postgres-kernel-store.mjs');
   const { PostgresWorkerStore } = await import('./lib/postgres-worker-store.mjs');
@@ -112,7 +112,10 @@ if (role === 'sales') {
     shutdown = async () => { await host.close(); };
   } else {
     configureProductProjectionJournal(kernelStore, cas, keys);
-    const store = createEnterpriseWorkerStore({ kernelStore, jobStore: new PostgresWorkerStore({ pool, hmacKey }) });
+    await validateProjectionJournal(kernelStore);
+    const jobStore = new PostgresWorkerStore({ pool, hmacKey });
+    configureProductProjectionJournal(jobStore, cas, keys);
+    const store = createEnterpriseWorkerStore({ kernelStore, jobStore });
     const kernel = new AgentOsKernel(store);
     const locks = await kernelStore.runtimeLocks();
     const worker = new AgentOsWorker({ id: workerId, store,

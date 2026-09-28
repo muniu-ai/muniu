@@ -928,13 +928,15 @@ test("工作区 SSE 持续推送、过滤事件时推进 tenant 游标并支持 
   const second = (await responseJson(await host.dispatch(jsonRequest("/v2/workspaces", {
     name: "持续流 B", viewMode: "business", pluginIds: [],
   }, "continuous-b")))).data;
+  const initialPosition = (await store.readEvents("local", 0, 100)).events.at(-1)!.position;
+  const eventId = (position: number) => new RegExp(`^id: ${position}$`, "m");
 
   const response = await host.dispatch(new Request(
     `http://host.test/v2/workspaces/${first.id}/events`,
     { headers: { "Last-Event-ID": "0" } },
   ));
   const reader = response.body!.getReader();
-  const initial = await readSseUntil(reader, (body) => /^id: 3$/m.test(body));
+  const initial = await readSseUntil(reader, (body) => eventId(initialPosition).test(body));
   assert.match(initial, /持续流 A/u);
   assert.doesNotMatch(initial, /持续流 B/u);
 
@@ -943,7 +945,7 @@ test("工作区 SSE 持续推送、过滤事件时推进 tenant 游标并支持 
     name: "不得泄露的 B 更新",
   }, "continuous-b-update", "PATCH"));
   assert.equal(secondUpdate.status, 200);
-  const filtered = await readSseUntil(reader, (body) => /^id: 4$/m.test(body));
+  const filtered = await readSseUntil(reader, (body) => eventId(initialPosition + 1).test(body));
   assert.match(filtered, /event: cursor/u);
   assert.doesNotMatch(filtered, /不得泄露的 B 更新/u);
 
@@ -953,17 +955,17 @@ test("工作区 SSE 持续推送、过滤事件时推进 tenant 游标并支持 
   }, "continuous-a-update", "PATCH"));
   assert.equal(firstUpdate.status, 200);
   const visible = await readSseUntil(reader, (body) => /持续流 A 已更新/u.test(body));
-  assert.match(visible, /^id: 5$/m);
+  assert.match(visible, eventId(initialPosition + 2));
   await reader.cancel();
 
   const resumed = await host.dispatch(new Request(
     `http://host.test/v2/workspaces/${first.id}/events`,
-    { headers: { "Last-Event-ID": "4" } },
+    { headers: { "Last-Event-ID": String(initialPosition + 1) } },
   ));
   const resumedReader = resumed.body!.getReader();
   const resumedBody = await readSseUntil(resumedReader, (body) => /持续流 A 已更新/u.test(body));
   assert.doesNotMatch(resumedBody, /name":"持续流 A"[,}]/u);
-  assert.match(resumedBody, /^id: 5$/m);
+  assert.match(resumedBody, eventId(initialPosition + 2));
   await resumedReader.cancel();
   await host.close();
 });

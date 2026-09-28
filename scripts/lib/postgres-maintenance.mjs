@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+import { DEFAULT_PROJECTION_JOURNAL_NAMESPACES } from "@mn/storage";
 import { createHash, randomUUID } from "node:crypto";
 import { replayCoreProjections } from "@mn/contracts";
 import { collectJournalCasReferences, prepareJournalRebuild } from "@mn/storage";
@@ -53,21 +54,22 @@ export async function withOfflineDatabase({ client, adminClient, database, offli
 
 export async function maintainPostgres({ client, adminClient, database, offlineConfirmed, operation, hmacKey, cas, keyProvider,
   actorId, retentionDays = 7, now = new Date() }) {
-  if (!["verify", "rebuild", "gc"].includes(operation) || !actorId?.trim()) throw new Error("维护操作或操作者无效");
+  if (!["verify", "rebuild", "gc", "upgrade-core-protection"].includes(operation) || !actorId?.trim()) throw new Error("维护操作或操作者无效");
   if (!Number.isSafeInteger(retentionDays) || retentionDays < 1 || retentionDays > 36500
     || !Number.isFinite(now.getTime())) throw new Error("孤儿对象保留期必须为 1 至 36500 天");
-  const journal = { cas, keyProvider, namespaces: ["*non-core"] };
+  const journal = { cas, keyProvider, namespaces: DEFAULT_PROJECTION_JOURNAL_NAMESPACES };
   // Every query uses the already-connected exclusive session; no pool may reconnect during maintenance.
   const pool = { query: client.query.bind(client), connect: async () => ({ query: client.query.bind(client), release() {} }) };
   const store = new PostgresKernelStore({ pool, hmacKey, projectionJournal: journal });
   return withOfflineDatabase({ client, adminClient, database, offlineConfirmed }, async () => {
     const roots = [];
     const referenced = new Set();
+    let upgradedRecords = 0;
     const tenants = await store.listTenantIds();
     if (!tenants.length && operation === "gc") throw new Error("空数据库不能授权清理 CAS；请核对备份与存储范围");
     for (const tenantId of tenants) {
       const head = await client.query("select next_position from mn_v2.tenant_heads where tenant_id = $1", [tenantId]);
-      const expectedPosition = Number(head.rows[0]?.next_position) - 1;
+      let expectedPosition = Number(head.rows[0]?.next_position) - 1;
       if (!Number.isSafeInteger(expectedPosition) || expectedPosition < 0) throw new Error("租户事件头缺失或无效");
       const events = [];
       for (;;) {
@@ -75,6 +77,17 @@ export async function maintainPostgres({ client, adminClient, database, offlineC
         events.push(...page.events);
         if (events.length > 1_000_000) throw new Error("单租户事件超过本次维护上限");
         if (page.events.length < 1000) break;
+      }
+      if (operation === "upgrade-core-protection") {
+        const upgraded = await store.upgradeCoreProjectionProtection(tenantId, { actorId, expectedPosition });
+        upgradedRecords += upgraded.upgradedRecords;
+        expectedPosition = upgraded.position;
+        for (;;) {
+          const page = await store.readEventHistory(tenantId, events.at(-1)?.position ?? 0, 1000);
+          events.push(...page.events);
+          if (events.length > 1_000_000) throw new Error("单租户事件超过本次维护上限");
+          if (page.events.length < 1000) break;
+        }
       }
       const input = { ...journal, tenantId, events, expectedPosition, hmacKey };
       replayCoreProjections(events, tenantId, hmacKey);
@@ -92,10 +105,13 @@ export async function maintainPostgres({ client, adminClient, database, offlineC
         publicPayload: { operation, rootDigest, cutoff: cutoff.toISOString(), ...extra } }));
     };
     if (operation !== "verify") await audit("storage.maintenance_requested");
-    if (operation === "rebuild") for (const tenantId of tenants) await store.rebuildProjections(tenantId);
+    if (["rebuild", "upgrade-core-protection"].includes(operation)) {
+      for (const tenantId of tenants) await store.rebuildProjections(tenantId);
+    }
     const removed = operation === "gc" ? await cas.gcOrphans(referenced, cutoff) : [];
     if (operation !== "verify") await audit("storage.maintenance_completed", { removedObjects: removed.length });
     return { verified: true, operation, tenants: tenants.length, rootDigest, referencedDigests: referenced.size,
-      removedObjects: removed.length, cutoff: cutoff.toISOString() };
+      removedObjects: removed.length, cutoff: cutoff.toISOString(),
+      ...(operation === "upgrade-core-protection" ? { upgradedRecords } : {}) };
   });
 }

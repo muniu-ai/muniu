@@ -31,8 +31,6 @@ import {
 } from "@mn/contracts";
 import {
   AgentOsKernel,
-  BusinessActionLedger,
-  BusinessCandidateLedger,
   appendKernelEvent,
   KernelError,
   PROVIDER_PRESETS,
@@ -44,6 +42,7 @@ import {
   type KernelTransaction,
   type ModelConnection,
 } from "@mn/kernel";
+import { BusinessActionLedger, BusinessCandidateLedger } from "@mn/business-execution";
 import {
   PluginBoundaryError,
   PluginContributionHost,
@@ -64,7 +63,7 @@ import {
   type KeyProvider,
 } from "@mn/storage";
 import { codingPlugin } from "@mn/plugin-coding";
-import { configureProductProjectionJournal } from "./projection-journal.js";
+import { configureProductProjectionJournal, validateProjectionJournal } from "./projection-journal.js";
 import { createAgentOsCompositionRoot } from "./composition.js";
 import { businessExecutionAuthorityResponse, prepareBusinessAction, publicBusinessAction } from "./business-actions.js";
 import { businessCandidateContentResponse, createBusinessCandidate, publicBusinessCandidate } from "./business-candidates.js";
@@ -804,6 +803,7 @@ interface InFlightAsyncMutation {
 export async function createAgentOsHost(options: AgentOsHostOptions): Promise<AgentOsHost> {
   const protectedJournal = Boolean(options.cas && options.protectedPayloadKeyProvider
     && configureProductProjectionJournal(options.store, options.cas, options.protectedPayloadKeyProvider));
+  if (protectedJournal) await validateProjectionJournal(options.store);
   const profile = options.profile ?? "local";
   const trustedWorkerSupportedKinds = Object.freeze(profile === "local"
     ? [...CODING_RECONCILIATION_WORKER_JOB_KINDS]
@@ -1392,7 +1392,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
             appendKernelEvent(transaction, {
               tenantId: TENANT_ID, aggregateType: "workspace", aggregateId: id,
               expectedStreamVersion: expected, type: "workspace.updated", actorId: ACTOR_ID,
-              generation: 0, correlationId: nextId("correlation"), publicPayload: { name: next.name, viewMode: next.viewMode },
+              generation: 0, correlationId: nextId("correlation"), publicPayload: { viewMode: next.viewMode },
             });
             return next;
           },

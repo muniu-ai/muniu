@@ -4,6 +4,8 @@ import { randomUUID } from "node:crypto";
 import { createProjectionFacts } from "@mn/contracts";
 
 import {
+  prepareProtectedProjection,
+  isJournalNamespace,
   computeEventDigest,
   computeEventHmac,
   JOB_LEASE_MILLISECONDS,
@@ -39,6 +41,14 @@ function requiredString(value, label) {
 }
 
 function terminalExecutionClaimFailure(status) {
+  if (["paused", "interrupted", "needs_reconciliation"].includes(status)) {
+    return {
+      code: "EXECUTION_NOT_RUNNABLE",
+      message: "Execution 当前不能领取任务",
+      retryable: false,
+      executionStatus: status,
+    };
+  }
   if (status === "cancelled") {
     return {
       code: "EXECUTION_CANCELLED",
@@ -174,15 +184,12 @@ async function loadExecutionContext(client, row, { requireAgentJob = true } = {}
   if (execution.tenantId !== tenantId) throw new Error("Job 与 Execution 所属租户不一致");
   const workspaceId = requiredString(execution.workspaceId, "Execution workspaceId");
   const generation = safeInteger(execution.generation, "Execution generation");
-  let jobProjection;
-  if (isAgentJob || String(row.kind) === "business.action.execute") {
-    jobProjection = await loadProjection(client, tenantId, "job", String(row.job_id), "Job");
-    const projected = jobProjection.value;
-    if (projected.tenantId !== tenantId
-      || projected.kind !== String(row.kind)
-      || requiredString(projected.id, "Job id") !== String(row.job_id)) {
-      throw new Error("Agent Job 物理记录与查询投影不一致");
-    }
+  const jobProjection = await loadProjection(client, tenantId, "job", String(row.job_id), "Job");
+  const projected = jobProjection.value;
+  if (projected.tenantId !== tenantId
+    || projected.kind !== String(row.kind)
+    || requiredString(projected.id, "Job id") !== String(row.job_id)) {
+    throw new Error("Job 物理记录与查询投影不一致");
   }
   return {
     tenantId,
@@ -192,10 +199,8 @@ async function loadExecutionContext(client, row, { requireAgentJob = true } = {}
     head,
     execution,
     executionStreamVersion: executionProjection.streamVersion,
-    ...(jobProjection ? {
-      job: jobProjection.value,
-      jobStreamVersion: jobProjection.streamVersion,
-    } : {}),
+    job: jobProjection.value,
+    jobStreamVersion: jobProjection.streamVersion,
   };
 }
 
@@ -220,7 +225,7 @@ function assertJobProjectionMatchesPhysical(context, row, mode, workerId, fencin
 }
 
 async function appendEvent(client, hmacKey, context, request, occurredAt) {
-  if (!request.projection) throw new Error("Worker lifecycle event is missing projection facts");
+  if (!request.projection && request.type !== "projection.fact_committed") throw new Error("Worker lifecycle event is missing projection facts");
   const expected = safeInteger(request.expectedStreamVersion, "expected streamVersion");
   await client.query(`
     insert into mn_v2.stream_heads (tenant_id, aggregate_type, aggregate_id, stream_version)
@@ -253,10 +258,12 @@ async function appendEvent(client, hmacKey, context, request, occurredAt) {
     ...(context.executionId ? { executionId: context.executionId } : {}),
     generation: context.generation,
     correlationId: request.correlationId,
-    publicPayload: { ...request.publicPayload, projectionFacts: createProjectionFacts([
+    ...(request.causationId ? { causationId: request.causationId } : {}),
+    ...(request.protectedPayloadRef ? { protectedPayloadRef: request.protectedPayloadRef } : {}),
+    publicPayload: { ...request.publicPayload, ...(request.projection ? { projectionFacts: createProjectionFacts([
       { namespace: request.aggregateType, id: request.aggregateId, value: request.projection },
       ...(request.relatedProjections ?? []),
-    ]) },
+    ]) } : {}) },
     ...(context.head.previousDigest ? { previousDigest: context.head.previousDigest } : {}),
   };
   const digest = computeEventDigest(body);
@@ -267,14 +274,14 @@ async function appendEvent(client, hmacKey, context, request, occurredAt) {
       event_type, occurred_at, actor_id, execution_id, generation, causation_id,
       correlation_id, public_payload, protected_payload_ref, previous_digest, digest, hmac
     ) values (
-      $1, $2, $3::uuid, $4, $5, $6, $7, $8::timestamptz, $9, $10, $11, null,
-      $12, $13::jsonb, null, $14, $15, $16
+      $1, $2, $3::uuid, $4, $5, $6, $7, $8::timestamptz, $9, $10, $11, $12,
+      $13, $14::jsonb, $15, $16, $17, $18
     )
   `, [
     event.tenantId, event.position, event.id, event.aggregateType, event.aggregateId,
     event.streamVersion, event.type, event.occurredAt, event.actorId, event.executionId ?? null,
-    event.generation, event.correlationId, JSON.stringify(event.publicPayload),
-    event.previousDigest ?? null, event.digest, event.hmac,
+    event.generation, event.causationId ?? null, event.correlationId, JSON.stringify(event.publicPayload),
+    event.protectedPayloadRef ?? null, event.previousDigest ?? null, event.digest, event.hmac,
   ]);
   const stream = await client.query(`
     update mn_v2.stream_heads set stream_version = $4
@@ -478,6 +485,8 @@ async function recordTerminal(client, hmacKey, context, row, workerId, fencingTo
   const executionStatus = String(context.execution.status);
   if (status === "failed" && (executionStatus === "failed"
     || executionStatus === "completed"
+    || executionStatus === "interrupted"
+    || executionStatus === "needs_reconciliation"
     || (executionStatus === "cancelled" && failureCode === "EXECUTION_CANCELLED"))) {
     return;
   }
@@ -540,6 +549,7 @@ async function recordInterrupted(client, hmacKey, context, row, workerId, fencin
     },
   }, now);
   await putProjection(client, context, "job", jobId, context.jobStreamVersion, nextJob, now);
+  if (["interrupted", "needs_reconciliation"].includes(context.execution.status)) return;
   if (context.execution.status !== "running" && context.execution.status !== "waiting_approval") {
     throw new Error(`状态为 ${String(context.execution.status)} 的 Execution 不能中断`);
   }
@@ -607,14 +617,21 @@ async function recordJobReconciliation(client, hmacKey, context, row, workerId, 
 export class PostgresWorkerStore {
   #pool;
   #hmacKey;
+  #projectionJournal;
 
-  constructor({ pool, hmacKey }) {
+  constructor({ pool, hmacKey, projectionJournal }) {
     if (!pool?.connect) throw new TypeError("PostgreSQL pool 无效");
     if (!(hmacKey instanceof Uint8Array) || hmacKey.byteLength < 32) {
       throw new TypeError("事件 HMAC 密钥至少需要 32 字节");
     }
     this.#pool = pool;
     this.#hmacKey = Buffer.from(hmacKey);
+    this.#projectionJournal = projectionJournal;
+  }
+
+  configureProjectionJournal(options) {
+    if (this.#projectionJournal) throw new Error("Projection journal is already configured");
+    this.#projectionJournal = options;
   }
 
   async claimJob(workerId, now, options = {}) {
@@ -890,7 +907,7 @@ export class PostgresWorkerStore {
         throw new Error("Job 与待核对的 Execution 不一致");
       }
       const context = await loadExecutionContext(client, row, { requireAgentJob: false });
-      if (!["running", "waiting_approval"].includes(context.execution.status)) {
+      if (!["running", "waiting_approval", "needs_reconciliation"].includes(context.execution.status)) {
         throw new Error(`Execution ${executionId} 不是可核对状态`);
       }
       const failure = { ...RECONCILIATION_FAILURE, executionId };
@@ -918,9 +935,13 @@ export class PostgresWorkerStore {
         summary: RECONCILIATION_FAILURE.message, risk: "unknown",
         resourceSummary: input.jobId, createdAt: occurredAt, status: "open",
       };
-      await appendEvent(client, this.#hmacKey, context, {
+      const protectedInbox = this.#projectionJournal && isJournalNamespace("inbox", this.#projectionJournal)
+        ? await prepareProtectedProjection(this.#projectionJournal, context.tenantId, { namespace: "inbox", id: inboxId, value: inbox })
+        : undefined;
+      if (protectedInbox && Date.parse(iso(row.lease_expires_at)) <= Date.now()) throw new StaleFencingTokenError(input.jobId);
+      const sourceEvent = await appendEvent(client, this.#hmacKey, context, {
         projection: nextExecution,
-        relatedProjections: [{ namespace: "inbox", id: inboxId, value: inbox }],
+        relatedProjections: protectedInbox ? [] : [{ namespace: "inbox", id: inboxId, value: inbox }],
         aggregateType: "execution", aggregateId: executionId,
         expectedStreamVersion: context.executionStreamVersion,
         type: "execution.needs_reconciliation", actorId: `worker:${workerId}`,
@@ -950,7 +971,7 @@ export class PostgresWorkerStore {
         ) values ($1, 'inbox', $2, 0, $3::jsonb, $4::timestamptz)
         on conflict (tenant_id, namespace, projection_key) do update set
           value_json = excluded.value_json, updated_at = excluded.updated_at
-      `, [context.tenantId, inboxId, JSON.stringify(inbox), occurredAt]);
+      `, [context.tenantId, inboxId, JSON.stringify(protectedInbox?.reference ?? inbox), occurredAt]);
       await client.query(`
         insert into mn_v2.outbox (
           message_id, tenant_id, topic, payload_json, available_at, created_at
@@ -961,6 +982,12 @@ export class PostgresWorkerStore {
         JSON.stringify({ executionId, jobId: input.jobId, workspaceId: context.workspaceId }),
         occurredAt,
       ]);
+      if (protectedInbox) await appendEvent(client, this.#hmacKey, context, {
+        aggregateType: "projectionFact", aggregateId: randomUUID(), expectedStreamVersion: 0,
+        type: "projection.fact_committed", actorId: sourceEvent.actorId, correlationId: sourceEvent.correlationId,
+        causationId: sourceEvent.id, protectedPayloadRef: protectedInbox.reference.protectedPayloadRef,
+        publicPayload: { namespace: "inbox", resourceId: inboxId, deleted: false, workspaceId: context.workspaceId },
+      }, occurredAt);
       await flushTenantHead(client, context);
       await client.query("commit");
     } catch (error) {

@@ -270,6 +270,21 @@ test("unknown external effects become a durable event, inbox item, and non-repla
   assert.match(adapter, /status = 'failed'/u);
 });
 
+test("enterprise fixture Worker retains real S3 and Vault projection protection", () => {
+  const worker = read("scripts/enterprise-worker.mjs");
+  const protection = worker.slice(
+    worker.indexOf("const store = createEnterpriseWorkerStore"),
+    worker.indexOf("const localEngineLock"),
+  );
+  assert.doesNotMatch(protection, /fixtureMode/u);
+  assert.match(protection, /const cas = new S3Cas/u);
+  assert.match(protection, /const protectedPayloadKeyProvider = new VaultTransitKeyProvider/u);
+  assert.match(protection, /configureProductProjectionJournal\(kernelStore, cas, protectedPayloadKeyProvider\)/u);
+  assert.match(protection, /configureProductProjectionJournal\(jobStore, cas, protectedPayloadKeyProvider\)/u);
+  assert.match(protection, /await validateProjectionJournal\(kernelStore\)/u);
+  assert.doesNotMatch(worker, /!protectedPayloadKeyProvider\s*\|\|/u);
+});
+
 test("enterprise Worker ships a production Agent execution bootstrap", async (t) => {
   const worker = read("scripts/enterprise-worker.mjs");
   const builtin = read("scripts/enterprise-worker-handlers.mjs");

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+import { DEFAULT_PROJECTION_JOURNAL_NAMESPACES, IdempotencyProtectionEvidenceRequiredError } from "./projection-journal.js";
 
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -31,6 +32,7 @@ import {
 import { canonicalJson } from "./integrity.js";
 import { FileCas } from "./cas.js";
 import { SqliteStorage } from "./sqlite.js";
+import { acquireLocalStateLock } from "./local-state-lock.js";
 
 const BACKUP_FORMAT = "muniu-agent-os-local-backup";
 const BACKUP_PURPOSE = "local-state-backup";
@@ -43,6 +45,7 @@ export type LocalBackupErrorCode =
   | "BACKUP_ARCHIVE_TOO_LARGE"
   | "BACKUP_FORMAT_INVALID"
   | "BACKUP_VERSION_UNSUPPORTED"
+  | "IDEMPOTENCY_PROTECTION_EVIDENCE_REQUIRED"
   | "BACKUP_INTEGRITY_FAILED"
   | "BACKUP_ENCRYPTION_FAILED"
   | "BACKUP_DECRYPTION_FAILED"
@@ -672,6 +675,7 @@ export class LocalSqliteBackup {
 
   async restoreState(fileName: string, destinationName: string, verification: {
     readonly hmacKey: Uint8Array; readonly keyProvider: KeyProvider;
+    readonly upgradeCoreProtection?: boolean;
   }): Promise<LocalStateRestoreResult> {
     if (verification?.hmacKey.byteLength !== 32 || !verification.keyProvider) {
       throw new LocalBackupError("BACKUP_INTEGRITY_FAILED", "恢复需要原事件 HMAC 密钥与数据包装密钥");
@@ -691,10 +695,30 @@ export class LocalSqliteBackup {
       createRestoredCas(casDirectory, decoded.casObjects);
       atomicCreate(file, decoded.sqlite);
       const restored = new SqliteStorage({ databaseFile: file, hmacKey: verification.hmacKey,
-        projectionJournal: { cas: new FileCas({ rootDir: casDirectory }), keyProvider: verification.keyProvider, namespaces: ["*non-core"] } });
+        projectionJournal: { cas: new FileCas({ rootDir: casDirectory }), keyProvider: verification.keyProvider, namespaces: DEFAULT_PROJECTION_JOURNAL_NAMESPACES } });
       try {
+        if (verification.upgradeCoreProtection) {
+          const lock = await acquireLocalStateLock(stateRoot);
+          try {
+            for (const tenantId of await restored.listTenantIds()) {
+              let position = 0;
+              for (;;) {
+                const page = await restored.readEventHistory(tenantId, position, 1000);
+                position = page.events.at(-1)?.position ?? position;
+                if (page.events.length < 1000) break;
+                if (position > 1_000_000) throw new Error("恢复事件超过升级上限");
+              }
+              await restored.upgradeCoreProjectionProtection(tenantId, {
+                actorId: "local-backup-restore", expectedPosition: position, lock,
+              });
+            }
+          } finally { lock.release(); }
+        }
         for (const tenantId of await restored.listTenantIds()) await restored.rebuildProjections(tenantId);
-      } catch {
+      } catch (error) {
+        if (error instanceof IdempotencyProtectionEvidenceRequiredError) {
+          throw new LocalBackupError(error.code, error.message);
+        }
         throw new LocalBackupError("BACKUP_INTEGRITY_FAILED", "事件或加密事实校验失败，未生成可启动状态目录");
       } finally { await restored.close(); }
       unlinkSync(pendingMarker);

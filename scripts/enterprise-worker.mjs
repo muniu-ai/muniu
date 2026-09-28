@@ -19,7 +19,7 @@ import { createEnterpriseWorkerStore } from "./lib/enterprise-worker-store.mjs";
 import { parseWorkerSupportedKinds } from "./lib/worker-handler-capabilities.mjs";
 import { VaultTransitKeyProvider, VaultModelSecretStore } from "./lib/enterprise-secrets.mjs";
 import { BUSINESS_KINDS, createEnterpriseBusinessHandlers, loadEnterpriseBusinessConfiguration } from "./lib/enterprise-business.mjs";
-import { configureProductProjectionJournal, createAgentOsCompositionRoot } from "../apps/host/dist/index.js";
+import { configureProductProjectionJournal, validateProjectionJournal, createAgentOsCompositionRoot } from "../apps/host/dist/index.js";
 import { SigV4S3Client } from "./lib/s3-client.mjs";
 
 function required(name) {
@@ -64,33 +64,31 @@ const kernelStore = new PostgresKernelStore({ pool, hmacKey: eventHmacKey });
 await kernelStore.initialize();
 const jobStore = new PostgresWorkerStore({ pool, hmacKey: eventHmacKey });
 const store = createEnterpriseWorkerStore({ kernelStore, jobStore });
-let cas;
-let protectedPayloadKeyProvider;
-if (!fixtureMode) {
-  const s3Client = new SigV4S3Client({
-    endpoint: required("MN_S3_ENDPOINT"),
-    region: process.env.MN_S3_REGION ?? "us-east-1",
-    accessKeyId: required("MN_S3_ACCESS_KEY_ID"),
-    secretAccessKey: required("MN_S3_SECRET_ACCESS_KEY"),
-    ...(process.env.MN_S3_SESSION_TOKEN
-      ? { sessionToken: process.env.MN_S3_SESSION_TOKEN }
-      : {}),
-  });
-  cas = new S3Cas({
-    client: s3Client,
-    bucket: required("MN_S3_BUCKET"),
-    prefix: process.env.MN_S3_PREFIX ?? "v2/",
-  });
-  protectedPayloadKeyProvider = new VaultTransitKeyProvider({
-    address: required("MN_VAULT_ADDR"),
-    token: required("MN_VAULT_TOKEN"),
-    mount: process.env.MN_VAULT_TRANSIT_MOUNT ?? "transit",
-    keyName: process.env.MN_VAULT_TRANSIT_KEY ?? "muniu-v2-protected-payloads",
-    individuallyRevocable: true,
-    namespace: process.env.MN_VAULT_NAMESPACE,
-  });
-  configureProductProjectionJournal(kernelStore, cas, protectedPayloadKeyProvider);
-}
+const s3Client = new SigV4S3Client({
+  endpoint: required("MN_S3_ENDPOINT"),
+  region: process.env.MN_S3_REGION ?? "us-east-1",
+  accessKeyId: required("MN_S3_ACCESS_KEY_ID"),
+  secretAccessKey: required("MN_S3_SECRET_ACCESS_KEY"),
+  ...(process.env.MN_S3_SESSION_TOKEN
+    ? { sessionToken: process.env.MN_S3_SESSION_TOKEN }
+    : {}),
+});
+const cas = new S3Cas({
+  client: s3Client,
+  bucket: required("MN_S3_BUCKET"),
+  prefix: process.env.MN_S3_PREFIX ?? "v2/",
+});
+const protectedPayloadKeyProvider = new VaultTransitKeyProvider({
+  address: required("MN_VAULT_ADDR"),
+  token: required("MN_VAULT_TOKEN"),
+  mount: process.env.MN_VAULT_TRANSIT_MOUNT ?? "transit",
+  keyName: process.env.MN_VAULT_TRANSIT_KEY ?? "muniu-v2-protected-payloads",
+  individuallyRevocable: true,
+  namespace: process.env.MN_VAULT_NAMESPACE,
+});
+configureProductProjectionJournal(kernelStore, cas, protectedPayloadKeyProvider);
+configureProductProjectionJournal(jobStore, cas, protectedPayloadKeyProvider);
+await validateProjectionJournal(kernelStore);
 
 const localEngineLock = lockDigest("MN_ENGINE_LOCK_DIGEST");
 const localPluginLock = lockDigest("MN_PLUGIN_LOCK_DIGEST");
@@ -125,8 +123,8 @@ const loadedHandlers = typeof loaded.createHandlers === "function"
       workerId,
       fixtureMode,
       composition,
-      ...(cas ? { cas } : {}),
-      ...(protectedPayloadKeyProvider ? { protectedPayloadKeyProvider } : {}),
+      cas,
+      protectedPayloadKeyProvider,
     }))
   : loaded.handlers;
 if (!loadedHandlers || typeof loadedHandlers !== "object") {
@@ -176,7 +174,7 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
 
 const heartbeat = createReadinessHeartbeat({
   check: async () => worker.readiness().ready
-    && (!protectedPayloadKeyProvider || await protectedPayloadKeyProvider.probe())
+    && await protectedPayloadKeyProvider.probe()
     && await probeWorkerLocks(pool, { engine: localEngineLock, plugin: localPluginLock }),
   publish: () => writeFile(readyFile, new Date().toISOString(), { mode: 0o600 }),
   remove: () => unlink(readyFile).catch(error => { if (error.code !== "ENOENT") throw error; }),

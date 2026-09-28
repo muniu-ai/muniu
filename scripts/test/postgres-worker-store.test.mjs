@@ -3,7 +3,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { computeEventHmac } from "@mn/storage";
+import { computeEventHmac, InMemoryKeyProvider, readJournalProjection } from "@mn/storage";
+import { createHash } from "node:crypto";
 
 import { PostgresKernelStore } from "../lib/postgres-kernel-store.mjs";
 import { PostgresWorkerStore } from "../lib/postgres-worker-store.mjs";
@@ -322,8 +323,9 @@ function projection(client, namespace, id) {
   return client.projections.get(`${namespace}:${id}`);
 }
 
-test("业务出包结果未知时原子同步物理任务和查询投影，人工核对不再尝试失效已结束任务", async () => {
-  const client = new WorkerFixtureClient({ kind: "business.action.execute", projected: true });
+for (const kind of ["business.action.execute", "knowledge.publish", "procurement.submit"]) {
+test(`${kind} 结果未知时原子同步物理任务和查询投影`, async () => {
+  const client = new WorkerFixtureClient({ kind, projected: true });
   const store = fixtureStore(client);
   const claimed = await store.claimJob("worker-a", startedAt);
   projection(client, "execution", "execution-a").status = "running";
@@ -335,6 +337,7 @@ test("业务出包结果未知时原子同步物理任务和查询投影，人�
   assert.equal(projection(client, "execution", "execution-a").status, "needs_reconciliation");
   assert.ok(client.events.some(event => event.type === "job.failed"));
 });
+}
 
 test("Agent Job 领取与完成原子推进 Job、Execution、HMAC 事件和 outbox", async () => {
   const client = new WorkerFixtureClient();
@@ -613,6 +616,21 @@ test("claim 原子终结终态 Execution 的 Agent Job 且不再重领", async (
   }
 });
 
+for (const status of ["paused", "interrupted", "needs_reconciliation"]) {
+  test(`${status} 执行的旧任务在领取前终结且保持原状态`, async () => {
+    const client = new WorkerFixtureClient();
+    const store = fixtureStore(client);
+    projection(client, "execution", "execution-a").status = status;
+    const before = clone(projection(client, "execution", "execution-a"));
+    assert.equal(await store.claimJob("worker-a", startedAt), undefined);
+    assert.equal(client.job.status, "failed");
+    assert.equal(client.job.failure_json.code, "EXECUTION_NOT_RUNNABLE");
+    assert.equal(client.job.attempts, 0);
+    assert.deepEqual(projection(client, "execution", "execution-a"), before);
+    assert.equal(await store.claimJob("worker-b", "2025-01-02T03:05:00.000Z"), undefined);
+  });
+}
+
 test("Agent Job 失败受 fencing 保护并同步 Job 与 Execution", async () => {
   const client = new WorkerFixtureClient();
   const store = fixtureStore(client);
@@ -651,6 +669,51 @@ test("Agent Job 中断原子推进 Job failed 与 Execution interrupted", async 
   assert.deepEqual(client.events.slice(-2).map(({ type }) => type), [
     "job.failed", "execution.interrupted",
   ]);
+});
+
+for (const status of ["interrupted", "needs_reconciliation"]) {
+  test(`撤权已写入 ${status} 时 Worker 失败只结算任务`, async () => {
+    const client = new WorkerFixtureClient();
+    const store = fixtureStore(client);
+    const claimed = await store.claimJob("worker-a", startedAt);
+    projection(client, "execution", "execution-a").status = status;
+    const before = clone(projection(client, "execution", "execution-a"));
+    await store.failJob(claimed.id, "worker-a", claimed.fencingToken,
+      { code: "EXECUTION_AUTHORIZATION_REVOKED", retryable: false }, "2025-01-02T03:04:10.000Z");
+    assert.equal(client.job.status, "failed");
+    assert.equal(projection(client, "job", claimed.id).status, "failed");
+    assert.deepEqual(projection(client, "execution", "execution-a"), before);
+  });
+}
+
+for (const status of ["interrupted", "needs_reconciliation"]) {
+  test(`撤权已写入 ${status} 时停止 Worker 仍能清理当前租约`, async () => {
+    const client = new WorkerFixtureClient();
+    const store = fixtureStore(client);
+    const claimed = await store.claimJob("worker-a", startedAt);
+    projection(client, "execution", "execution-a").status = status;
+    const before = clone(projection(client, "execution", "execution-a"));
+    await store.interruptJob(claimed.id, "worker-a", claimed.fencingToken,
+      "执行授权已撤销", "2025-01-02T03:04:10.000Z");
+    assert.equal(client.job.status, "failed");
+    assert.equal(projection(client, "job", claimed.id).status, "failed");
+    assert.deepEqual(projection(client, "execution", "execution-a"), before);
+  });
+}
+
+test("撤权已要求核对时 Worker 仍能结算未知操作", async () => {
+  const client = new WorkerFixtureClient();
+  const store = fixtureStore(client);
+  const claimed = await store.claimJob("worker-a", startedAt);
+  projection(client, "execution", "execution-a").status = "needs_reconciliation";
+  await store.markNeedsReconciliation("execution-a", {
+    jobId: claimed.id, workerId: "worker-a", fencingToken: claimed.fencingToken,
+    occurredAt: "2025-01-02T03:04:10.000Z",
+  });
+  assert.equal(client.job.status, "failed");
+  assert.equal(projection(client, "job", claimed.id).status, "failed");
+  assert.equal(projection(client, "execution", "execution-a").status, "needs_reconciliation");
+  assert.ok(client.inbox.has("reconciliation:execution-a:job-a"));
 });
 
 test("未知外部副作用在同一事务终止 Agent Job 并创建人工核对项", async () => {
@@ -810,4 +873,30 @@ test("无 executionId 的系统 Job 只推进物理状态", async () => {
   assert.equal(client.job.status, "completed");
   assert.equal(projection(client, "execution", "execution-a").status, "queued");
   assert.equal(client.events.length, 0);
+});
+
+
+test("Postgres Worker stores reconciliation inbox as an authenticated encrypted fact", async () => {
+  const client = new WorkerFixtureClient();
+  const objects = new Map();
+  const projectionJournal = { keyProvider: new InMemoryKeyProvider(Buffer.alloc(32, 26)), namespaces: ["inbox"],
+    cas: {
+      async put(bytes) { const digest = createHash("sha256").update(bytes).digest("hex"); objects.set(digest, bytes);
+        return { digest, byteLength: bytes.byteLength }; },
+      async get(digest) { return objects.get(digest); },
+    },
+  };
+  const store = new PostgresWorkerStore({ pool: { connect: async () => client }, hmacKey, projectionJournal });
+  const started = new Date(Date.now() + 1_000).toISOString();
+  await store.claimJob("worker-a", started);
+  await store.markNeedsReconciliation("execution-a", { jobId: "job-a", workerId: "worker-a",
+    fencingToken: 1, occurredAt: started });
+  const id = "reconciliation:execution-a:job-a";
+  const reference = client.inbox.get(id);
+  assert.equal(reference.format, "muniu.projection.reference");
+  const inbox = await readJournalProjection(projectionJournal, "tenant-a", "inbox", id, reference);
+  assert.equal(inbox.status, "open");
+  assert.equal(JSON.stringify(client.events).includes(inbox.title), false);
+  assert.equal(JSON.stringify(client.inbox.get(id)).includes(inbox.summary), false);
+  assert.equal(client.events.at(-1).type, "projection.fact_committed");
 });

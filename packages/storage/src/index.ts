@@ -2,6 +2,7 @@
 
 export * from "./attachments.js";
 export * from "./cas.js";
+export * from "./core-protection-upgrade.js";
 export * from "./encryption.js";
 export * from "./keychain-command.js";
 export * from "./integrity.js";

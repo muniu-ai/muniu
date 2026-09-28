@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@mn/agent-runtime": "0.2.0",
+    "@mn/business-execution": "0.2.0",
     "@mn/contracts": "0.2.0",
     "@mn/kernel": "0.2.0",
     "@mn/plugin-coding": "0.2.0",

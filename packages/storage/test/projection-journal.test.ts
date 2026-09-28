@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { DatabaseSync } from "node:sqlite";
-import { FileCas, InMemoryKeyProvider, SqliteStorage, replayProjectionJournal } from "../src/index.js";
+import { createProjectionFacts, type ProjectionFactV1 } from "@mn/contracts";
+import { ProtectedCoreStateUpgradeRequiredError, FileCas, InMemoryKeyProvider, SqliteStorage, replayProjectionJournal } from "../src/index.js";
 
 test("product projection facts commit with encrypted CAS references and no public business content", async () => {
   const root = mkdtempSync(join(tmpdir(), "mn-projection-journal-"));
@@ -226,4 +227,73 @@ test("an unreadable product payload does not disable core metadata or another na
     await store.close();
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+
+test("protected core facts never persist plaintext and rebuild preserves their complete values", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mn-core-confidentiality-"));
+  const databaseFile = join(root, "kernel.sqlite");
+  const keyProvider = new InMemoryKeyProvider(Buffer.alloc(32, 22));
+  const options = { cas: new FileCas({ rootDir: join(root, "cas") }), keyProvider,
+    namespaces: ["*non-core", "thread", "approval", "inbox", "toolIntent"] };
+  const store = new SqliteStorage({ databaseFile, hmacKey: Buffer.alloc(32, 23), projectionJournal: options });
+  const marker = "confidential-core-sample-731";
+  const records: ProjectionFactV1[] = [
+    { namespace: "thread" as const, id: "thread", value: { id: "thread", tenantId: "tenant", subject: marker, streamVersion: 1 } },
+    { namespace: "approval" as const, id: "approval", value: { id: "approval", tenantId: "tenant", intent: marker, streamVersion: 1 } },
+    { namespace: "inbox" as const, id: "inbox", value: { id: "inbox", tenantId: "tenant", summary: marker, streamVersion: 1 } },
+    { namespace: "toolIntent" as const, id: "intent", value: { id: "intent", tenantId: "tenant", intent: marker, streamVersion: 1 } },
+  ];
+  try {
+    await store.transact("tenant", tx => {
+      for (const record of records) tx.putProjection(record.namespace, record.id, record.value);
+      tx.appendEvent({ tenantId: "tenant", aggregateType: "thread", aggregateId: "thread", expectedStreamVersion: 0,
+        type: "thread.created", actorId: "owner", generation: 0, correlationId: "create",
+        publicPayload: { projectionFacts: createProjectionFacts(records) } });
+      tx.putIdempotency({ tenantId: "tenant", scope: "create", key: "one", requestDigest: "digest",
+        response: records[0]!.value, createdAt: new Date().toISOString() });
+    });
+    const raw = new DatabaseSync(databaseFile);
+    try {
+      for (const table of ["events", "projections", "idempotency", "outbox"]) {
+        assert.equal(JSON.stringify(raw.prepare(`select * from ${table}`).all()).includes(marker), false, table);
+      }
+      raw.exec("delete from projections; delete from idempotency");
+      await store.rebuildProjections("tenant");
+      for (const record of records) assert.deepEqual(await store.getProjection("tenant", record.namespace, record.id), record.value);
+      assert.deepEqual((await store.transact("tenant", tx => tx.getIdempotency("create", "one")))?.response, records[0]!.value);
+      assert.equal(JSON.stringify(raw.prepare("select * from projections").all()).includes(marker), false);
+      options.cas.get = async () => { throw new Error("protected core evidence unavailable"); };
+      await assert.rejects(store.transact("tenant", tx => tx.getProjection("approval", "approval")), /unavailable/);
+      await assert.rejects(store.rebuildProjections("tenant"), /unavailable/);
+    } finally { raw.close(); }
+  } finally { await store.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test("existing plaintext core state blocks configuration and rebuild without changing records", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mn-core-upgrade-required-"));
+  const databaseFile = join(root, "kernel.sqlite");
+  const store = new SqliteStorage({ databaseFile, hmacKey: Buffer.alloc(32, 28) });
+  const options = { cas: new FileCas({ rootDir: join(root, "cas") }),
+    keyProvider: new InMemoryKeyProvider(Buffer.alloc(32, 29)), namespaces: ["thread"] };
+  const legacy = { id: "thread", tenantId: "tenant", subject: "old-private-title", streamVersion: 1 };
+  try {
+    await store.transact("tenant", tx => {
+      tx.putProjection("thread", "thread", legacy);
+      tx.appendEvent({ tenantId: "tenant", aggregateType: "thread", aggregateId: "thread", expectedStreamVersion: 0,
+        type: "thread.created", actorId: "owner", generation: 0, correlationId: "create",
+        publicPayload: { projectionFacts: createProjectionFacts([{ namespace: "thread", id: "thread", value: legacy }]) } });
+    });
+    assert.throws(() => store.configureProjectionJournal(options), ProtectedCoreStateUpgradeRequiredError);
+    assert.deepEqual(await store.getProjection("tenant", "thread", "thread"), legacy);
+    const raw = new DatabaseSync(databaseFile);
+    try {
+      raw.exec("delete from projections");
+      store.configureProjectionJournal(options);
+      await assert.rejects(store.rebuildProjections("tenant"), ProtectedCoreStateUpgradeRequiredError);
+      assert.equal((await store.readEvents("tenant", 0, 100)).events.length, 1);
+      assert.equal(raw.prepare("select count(*) as count from projections").get()!.count, 0);
+    } finally { raw.close(); }
+  } finally { await store.close(); rmSync(root, { recursive: true, force: true }); }
 });

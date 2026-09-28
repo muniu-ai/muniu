@@ -2,7 +2,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { computeBusinessOperationKey } from "@mn/contracts";
-import { BusinessActionLedger, InMemoryKernelStore } from "../src/index.js";
+import { InMemoryKernelStore } from "@mn/kernel";
+import { BusinessActionLedger } from "../src/index.js";
 
 const now = "2026-09-18T08:00:00.000Z";
 const draft = {

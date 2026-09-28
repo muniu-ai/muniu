@@ -9,10 +9,11 @@ import type { EventAppendRequest, JsonObject, JsonValue, KernelEventV1 } from "@
 import { createProjectionFacts, CORE_PROJECTION_NAMESPACES, replayCoreProjections } from "@mn/contracts";
 
 import { computeEventDigest, computeEventHmac, assertEventPageIntegrity } from "./integrity.js";
-import { captureProjectionJournal, readJournalProjection, prepareJournalRebuild, collectJournalCasReferences, isJournalNamespace, type ProjectionJournalOptions } from "./projection-journal.js";
+import { assertProtectedIdempotencyState, assertIdempotencyReplayCoverage, assertProtectedCoreProjectionState, DEFAULT_PROJECTION_JOURNAL_NAMESPACES, prepareProtectedProjection, captureProjectionJournal, readJournalProjection, prepareJournalRebuild, collectJournalCasReferences, isJournalNamespace, type ProjectionJournalOptions } from "./projection-journal.js";
 import { FileCas } from "./cas.js";
 import type { KeyProvider } from "./encryption.js";
 import { assertLocalStateLock, type LocalStateLock } from "./local-state-lock.js";
+import { prepareCoreProjectionProtectionUpgrade, type CoreProjectionProtectionUpgradeInput, type CoreProjectionProtectionUpgradeResult } from "./core-protection-upgrade.js";
 import { serializeAsyncMethods } from "./serial-methods.js";
 import {
   CursorExpiredError,
@@ -244,12 +245,27 @@ export class SqliteStorage implements StoragePort {
     `).run();
     serializeAsyncMethods(this, ["initialize", "listTenantIds", "transact", "commit", "readEvents", "readEventHistory", "rebuildJournalProjections", "rebuildProjections",
       "advanceRetentionFloor", "getProjection", "listOutbox", "getApproval", "claimJob", "completeJob",
-      "renewJobLease", "failJob", "interruptJob", "markNeedsReconciliation", "getJob", "gcLocalOrphans", "close"]);
+      "renewJobLease", "failJob", "interruptJob", "markNeedsReconciliation", "getJob", "gcLocalOrphans", "upgradeCoreProjectionProtection", "close"]);
   }
 
   configureProjectionJournal(options: ProjectionJournalOptions): void {
     if (this.#projectionJournal) throw new Error("Projection journal is already configured");
+    assertProtectedCoreProjectionState(options,
+      (this.#database.prepare("select namespace, projection_key, value_json from projections").all() as RecordRow[])
+        .map(row => ({ namespace: String(row.namespace), id: String(row.projection_key), value: parseJson(row.value_json) })));
+    assertProtectedIdempotencyState(options, (this.#database.prepare("select response_json from idempotency").all() as RecordRow[])
+      .map(row => ({ response: parseJson(row.response_json) })));
     this.#projectionJournal = options;
+  }
+
+  async validateProjectionJournal(): Promise<void> {
+    if (!this.#projectionJournal) return;
+    assertProtectedCoreProjectionState(this.#projectionJournal,
+      (this.#database.prepare("select namespace, projection_key, value_json from projections").all() as RecordRow[])
+        .map(row => ({ namespace: String(row.namespace), id: String(row.projection_key), value: parseJson(row.value_json) })));
+    assertProtectedIdempotencyState(this.#projectionJournal,
+      (this.#database.prepare("select response_json from idempotency").all() as RecordRow[])
+        .map(row => ({ response: parseJson(row.response_json) })));
   }
 
   async initialize(): Promise<void> {}
@@ -280,7 +296,7 @@ export class SqliteStorage implements StoragePort {
         if (expectedPosition > 1_000_000) throw new Error("Local CAS verification exceeds the event limit");
         const events = (this.#database.prepare("select * from events where tenant_id = ? order by position").all(tenantId) as RecordRow[]).map(rowToEvent);
         replayCoreProjections(events, tenantId, this.#hmacKey);
-        for (const digest of await collectJournalCasReferences({ cas, keyProvider: options.keyProvider, namespaces: ["*non-core"],
+        for (const digest of await collectJournalCasReferences({ cas, keyProvider: options.keyProvider, namespaces: DEFAULT_PROJECTION_JOURNAL_NAMESPACES,
           events, tenantId, expectedPosition, hmacKey: this.#hmacKey, deadlineMilliseconds })) referenced.add(digest);
       }
       assertLocalStateLock(options.lock, this.#stateRoot);
@@ -850,6 +866,71 @@ export class SqliteStorage implements StoragePort {
     return this.#rebuildProjections(tenantId, true);
   }
 
+  #idempotencyRecords(tenantId: string) {
+    return (this.#database.prepare("select hex(idempotency_key) as encoded_key, request_hash, response_json, created_at from idempotency where tenant_id = ?")
+      .all(tenantId) as RecordRow[]).map(row => {
+      const key = Buffer.from(String(row.encoded_key), "hex").toString("utf8");
+      const separator = key.indexOf("\0");
+      if (separator < 0) throw new Error("Invalid Kernel idempotency key");
+      return { tenantId, scope: key.slice(0, separator), key: key.slice(separator + 1),
+        requestDigest: String(row.request_hash), response: parseJson(row.response_json), createdAt: String(row.created_at) };
+    });
+  }
+
+  #restoreIdempotency(receipts: readonly KernelIdempotencyRecordLike[]): void {
+    for (const receipt of receipts) this.#database.prepare(`
+      insert into idempotency (tenant_id, idempotency_key, request_hash, response_json, created_at) values (?, ?, ?, ?, ?)
+      on conflict(tenant_id, idempotency_key) do update set request_hash = excluded.request_hash,
+      response_json = excluded.response_json, created_at = excluded.created_at
+    `).run(receipt.tenantId, `${receipt.scope}\0${receipt.key}`, receipt.requestDigest, JSON.stringify(receipt.response), receipt.createdAt);
+  }
+
+  async upgradeCoreProjectionProtection(tenantId: string,
+    input: CoreProjectionProtectionUpgradeInput & { readonly lock: LocalStateLock }): Promise<CoreProjectionProtectionUpgradeResult> {
+    this.#assertOpen();
+    assertLocalStateLock(input.lock, this.#stateRoot);
+    if (!this.#projectionJournal) throw new Error("Projection journal is not configured");
+    this.#database.exec("begin immediate");
+    try {
+      const head = this.#database.prepare("select next_position, previous_digest from tenant_heads where tenant_id = ?")
+        .get(tenantId) as RecordRow | undefined;
+      const position = head ? safePosition(head.next_position) - 1 : 0;
+      if (position !== input.expectedPosition) throw new Error("Core protection upgrade event position changed");
+      const events = (this.#database.prepare("select * from events where tenant_id = ? order by position")
+        .all(tenantId) as RecordRow[]).map(rowToEvent);
+      if ((events.at(-1)?.digest ?? null) !== (head?.previous_digest ?? null)) throw new Error("Core protection upgrade event head integrity mismatch");
+      const plan = await prepareCoreProjectionProtectionUpgrade({ ...this.#projectionJournal, ...input,
+        tenantId, events, hmacKey: this.#hmacKey, idempotencyEntries: this.#idempotencyRecords(tenantId) });
+      assertLocalStateLock(input.lock, this.#stateRoot);
+      this.#restoreIdempotency(plan.idempotency);
+      if (!plan.changes.length) {
+        this.#database.exec("commit");
+        return { tenantId, fromPosition: position, position, upgradedRecords: 0, alreadyCurrent: true };
+      }
+      const occurredAt = this.#now().toISOString();
+      const runId = randomUUID();
+      const source = this.#appendEvent({ tenantId, aggregateType: "storageMaintenance", aggregateId: runId,
+        expectedStreamVersion: 0, type: "storage.core_protection_upgraded", actorId: input.actorId, generation: 0,
+        correlationId: runId, publicPayload: { fromPosition: plan.fromPosition, fromDigest: plan.fromDigest,
+          protectedRecords: plan.changes.length } }, occurredAt);
+      let last = source;
+      for (const { fact, reference } of plan.changes) {
+        this.#database.prepare("delete from projections where tenant_id = ? and namespace = ? and projection_key = ?")
+          .run(tenantId, fact.namespace, fact.id);
+        if (fact.value !== null) this.#writeProjections({ projections: [{ tenantId, namespace: fact.namespace, key: fact.id,
+          streamVersion: reference.streamVersion, value: reference as unknown as JsonObject }] }, occurredAt);
+        last = this.#appendEvent({ tenantId, aggregateType: "projectionFact", aggregateId: randomUUID(), expectedStreamVersion: 0,
+          type: "projection.fact_committed", actorId: input.actorId, generation: 0, causationId: source.id,
+          correlationId: runId, protectedPayloadRef: reference.protectedPayloadRef,
+          publicPayload: { namespace: fact.namespace, resourceId: fact.id, deleted: fact.value === null } }, occurredAt);
+        this.#writeOutbox({ outbox: [{ id: `projection-fact:${last.id}`, tenantId, topic: last.type,
+          payload: { eventId: last.id, position: last.position }, availableAt: occurredAt }] }, occurredAt);
+      }
+      this.#database.exec("commit");
+      return { tenantId, fromPosition: position, position: last.position, upgradedRecords: plan.changes.length, alreadyCurrent: false };
+    } catch (error) { this.#database.exec("rollback"); throw error; }
+  }
+
   async #rebuildProjections(tenantId: string, includeCore: boolean): Promise<{ readonly position: number; readonly count: number }> {
     this.#assertOpen();
     if (!this.#projectionJournal) throw new Error("Projection journal is not configured");
@@ -859,7 +940,9 @@ export class SqliteStorage implements StoragePort {
       const position = head ? safePosition(head.next_position) - 1 : 0;
       const events = (this.#database.prepare("select * from events where tenant_id = ? order by position").all(tenantId) as RecordRow[]).map(rowToEvent);
       const plan = await prepareJournalRebuild({ ...this.#projectionJournal, tenantId, events, expectedPosition: position, hmacKey: this.#hmacKey });
-      const core = includeCore ? replayCoreProjections(events, tenantId, this.#hmacKey).records : [];
+      assertIdempotencyReplayCoverage(this.#projectionJournal, this.#idempotencyRecords(tenantId), plan.idempotency);
+      const core = includeCore ? replayCoreProjections(events, tenantId, this.#hmacKey).records
+        .filter(row => !isJournalNamespace(row.namespace, this.#projectionJournal!)) : [];
       const namespaces = this.#database.prepare("select distinct namespace from projections where tenant_id = ?").all(tenantId) as RecordRow[];
       for (const row of namespaces) if (isJournalNamespace(String(row.namespace), this.#projectionJournal)
         || (includeCore && (CORE_PROJECTION_NAMESPACES as readonly string[]).includes(String(row.namespace)))) {
@@ -1537,6 +1620,7 @@ export class SqliteStorage implements StoragePort {
       && "status" in value && value.status === "paused" ? "paused" : outcome;
     if (outcome === "failed" && (executionStatus === "failed"
       || executionStatus === "completed"
+      || executionStatus === "interrupted" || executionStatus === "needs_reconciliation"
       || (executionStatus === "cancelled" && failureCode === "EXECUTION_CANCELLED"))) {
       return;
     }
@@ -1652,6 +1736,7 @@ export class SqliteStorage implements StoragePort {
     );
 
     if (!context.execution || !context.executionId || !context.workspaceId) return;
+    if (context.execution.status === "interrupted" || context.execution.status === "needs_reconciliation") return;
     if (context.execution.status !== "running"
       && context.execution.status !== "waiting_approval") {
       throw new Error(`状态为 ${String(context.execution.status)} 的 Execution 不能中断`);
@@ -1705,8 +1790,7 @@ export class SqliteStorage implements StoragePort {
     now: string
   ): void {
     const context = this.#jobContext(job);
-    if (!context || (!context.execution && String(job.kind) !== "business.action.execute")
-      || !context.executionId || !context.workspaceId) return;
+    if (!context || !context.executionId || !context.workspaceId) return;
     const jobStreamVersion = requiredSafeInteger(
       context.jobProjection.streamVersion,
       "Job streamVersion"
@@ -1816,6 +1900,12 @@ export class SqliteStorage implements StoragePort {
         createdAt: input.occurredAt,
         status: "open",
       };
+      const protectedInbox = this.#projectionJournal && isJournalNamespace("inbox", this.#projectionJournal)
+        ? await prepareProtectedProjection(this.#projectionJournal, tenantId, { namespace: "inbox", id: inboxId, value: inbox })
+        : undefined;
+      if (protectedInbox && Date.parse(String(job.lease_expires_at)) <= this.#now().getTime()) {
+        throw new StaleFencingTokenError(input.jobId);
+      }
       const failure: JsonObject = {
         code: "UNKNOWN_EXTERNAL_SIDE_EFFECT",
         message: "外部操作结果未知，需要人工核对",
@@ -1843,7 +1933,7 @@ export class SqliteStorage implements StoragePort {
         failure,
         input.occurredAt
       );
-      this.#appendEvent({
+      const sourceEvent = this.#appendEvent({
         tenantId,
         aggregateType: "execution",
         aggregateId: executionId,
@@ -1856,7 +1946,7 @@ export class SqliteStorage implements StoragePort {
         publicPayload: {
           projectionFacts: createProjectionFacts([
             { namespace: "execution", id: String(updatedExecution.id), value: updatedExecution },
-            { namespace: "inbox", id: inboxId, value: inbox },
+            ...(protectedInbox ? [] : [{ namespace: "inbox" as const, id: inboxId, value: inbox }]),
           ]),
           workspaceId, jobId: input.jobId, status: "needs_reconciliation",
         },
@@ -1883,9 +1973,19 @@ export class SqliteStorage implements StoragePort {
         "inbox",
         inboxId,
         0,
-        JSON.stringify(inbox),
+        JSON.stringify(protectedInbox?.reference ?? inbox),
         input.occurredAt
       );
+      if (protectedInbox) {
+        const fact = this.#appendEvent({ tenantId, aggregateType: "projectionFact", aggregateId: randomUUID(),
+          expectedStreamVersion: 0, type: "projection.fact_committed", actorId: sourceEvent.actorId,
+          executionId, generation, correlationId: sourceEvent.correlationId, causationId: sourceEvent.id,
+          protectedPayloadRef: protectedInbox.reference.protectedPayloadRef,
+          publicPayload: { namespace: "inbox", resourceId: inboxId, deleted: false, workspaceId },
+        }, input.occurredAt);
+        this.#writeOutbox({ outbox: [{ id: `projection-fact:${fact.id}`, tenantId, topic: fact.type,
+          payload: { eventId: fact.id, position: fact.position }, availableAt: input.occurredAt }] }, input.occurredAt);
+      }
       this.#database.exec("commit");
     } catch (error) {
       this.#database.exec("rollback");
@@ -1936,6 +2036,9 @@ function terminalExecutionClaimFailure(status: string): JsonObject | undefined {
       message: "Execution 已在领取 Job 前取消",
       retryable: false
     };
+  }
+  if (status === "interrupted" || status === "paused" || status === "needs_reconciliation") {
+    return { code: "EXECUTION_NOT_RUNNABLE", message: "Execution 已停止，不能自动领取旧 Job", retryable: false, executionStatus: status };
   }
   if (status === "completed" || status === "failed") {
     return {

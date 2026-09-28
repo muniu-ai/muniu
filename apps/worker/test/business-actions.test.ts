@@ -4,8 +4,9 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { computeBusinessOperationKey, type Approval, type EffectReceiptV1, type IssueQuotePackageInputV1 } from "@mn/contracts";
-import { AgentOsKernel, BusinessActionLedger, BUSINESS_ACTION_JOB_KIND } from "@mn/kernel";
+import { computeBusinessOperationKey, type Approval, type Execution, type EffectReceiptV1, type IssueQuotePackageInputV1 } from "@mn/contracts";
+import { AgentOsKernel, type ToolAdmission } from "@mn/kernel";
+import { BusinessActionLedger, BUSINESS_ACTION_JOB_KIND } from "@mn/business-execution";
 import { FileCas, InMemoryKeyProvider, SqliteStorage } from "@mn/storage";
 import { AgentOsWorker, createBusinessActionWorkerHandler, type BusinessProviderPorts } from "../src/index.js";
 
@@ -66,11 +67,17 @@ for (const scenario of ["completed", "unknown", "abandoned", "revoked", "revoked
     assert.ok(pending, `出包必须先等待批准：${JSON.stringify(await store.getJob(created.jobId))}`);
     assert.equal(dispatches, 0);
     if (scenario === "revoked") await store.transact("local", tx => tx.deleteProjection("membership", "workspace:owner"));
-    await kernel.decideApproval("local", "owner", "approve", pending.id, pending.streamVersion, "approve_once");
+    if (scenario === "revoked") {
+      await assert.rejects(kernel.decideApproval("local", "owner", "approve", pending.id, pending.streamVersion, "approve_once"),
+        { code: "EXECUTION_AUTHORIZATION_REVOKED" });
+    } else await kernel.decideApproval("local", "owner", "approve", pending.id, pending.streamVersion, "approve_once");
     const result = await running;
     const final = (await ledger.get("local", created.id))!;
     assert.equal(final.status, scenario === "completed" ? "completed" : ["unknown", "abandoned"].includes(scenario) ? "needs_reconciliation" : "rejected");
     assert.equal(dispatches, ["completed", "unknown", "abandoned"].includes(scenario) ? 1 : 0);
+    const admissions = await store.transact("local", tx => tx.listProjections<ToolAdmission>("toolAdmission"));
+    assert.equal(admissions[0]?.status, scenario === "completed" ? "settled"
+      : ["unknown", "abandoned"].includes(scenario) ? "started" : undefined);
     if (scenario === "unknown" || scenario === "abandoned") {
       assert.equal(result.status, "needs_reconciliation");
       assert.equal((await worker.pollOnce()).status, "idle");
@@ -91,7 +98,7 @@ for (const scenario of ["completed", "unknown", "abandoned", "revoked", "revoked
   });
 }
 
-test("出包检查点后重启只进入人工核对，旧Worker不能继续执行或提交", async t => {
+for (const revoked of [false, true]) test(`出包检查点${revoked ? "撤权并重新入会" : ""}后重启只进入人工核对，旧Worker不能继续执行或提交`, async t => {
   const root = await mkdtemp(join(tmpdir(), "muniu-business-restart-"));
   let clock = timestamp;
   const store = new SqliteStorage({ databaseFile: join(root, "state.sqlite"), hmacKey: Buffer.alloc(32, 1), now: () => new Date(clock) });
@@ -99,7 +106,7 @@ test("出包检查点后重启只进入人工核对，旧Worker不能继续执�
   t.after(async () => { store.close(); await rm(root, { recursive: true, force: true }); });
   await store.transact("local", tx => tx.putProjection("membership", "workspace:owner", {
     id: "workspace:owner", tenantId: "local", workspaceId: "workspace", principalId: "owner", workspaceRole: "owner",
-    organizationRoles: [], streamVersion: 1, createdAt: timestamp, updatedAt: timestamp,
+    organizationRoles: [], streamVersion: 0, createdAt: timestamp, updatedAt: timestamp,
   }));
   const ledger = new BusinessActionLedger(store, { now: () => clock });
   const kernel = new AgentOsKernel(store, { now: () => clock });
@@ -116,6 +123,16 @@ test("出包检查点后重启只进入人工核对，旧Worker不能继续执�
   await ledger.dispatch("local", created.id, intent, lease);
   const oldIdentity = { executionId: created.executionId, generation: 1, jobId: job.id, workerId: "old-worker", fencingToken: job.fencingToken };
   assert.equal((await ledger.authorizeExternal("local", created.id, oldIdentity)).allowed, true);
+  if (revoked) {
+    await store.transact("local", tx => {
+      tx.putProjection("workspace", "workspace", { id: "workspace", tenantId: "local" });
+      tx.putProjection("membership", "workspace:admin", { id: "workspace:admin", tenantId: "local",
+        workspaceId: "workspace", principalId: "admin", workspaceRole: "owner", organizationRoles: [] });
+    });
+    const removed = await kernel.removeWorkspaceMembership("local", "admin", "revoke", "workspace", "owner", 0);
+    assert.equal((await store.transact("local", tx => tx.getProjection<Execution>("execution", created.executionId)))?.status, "needs_reconciliation");
+    await kernel.setWorkspaceMembership("local", "admin", "readd", "workspace", "owner", removed.streamVersion, "operator");
+  }
   clock = "2026-09-18T08:00:31.000Z";
   let externalCalls = 0;
   const forbidden = async (): Promise<never> => { externalCalls++; throw new Error("禁止重发未知操作"); };

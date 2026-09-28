@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import assert from "node:assert/strict";
 import test from "node:test";
-import { InMemoryKernelStore } from "../src/store.js";
+import { InMemoryKernelStore } from "@mn/kernel";
 import { BusinessCandidateLedger } from "../src/business-candidates.js";
 
 test("询价候选入队固定无工具权限，明文原文不进入执行和任务投影", async () => {

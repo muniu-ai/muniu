@@ -89,7 +89,7 @@ test("本地身份、工作区、线程和执行共用同一事件流", async ()
     executionId: execution.id,
   }));
   const events = await store.readEvents("local", 0, 20);
-  assert.deepEqual(events.events.map((event) => event.position), [1, 2, 3, 4]);
+  assert.deepEqual(events.events.map((event) => event.position), [1, 2, 3, 4, 5]);
   assert.equal(events.events.at(-1)?.aggregateId, execution.id);
   assert.equal(events.events.every((event) => event.hmac.length === 64), true);
 });
@@ -762,6 +762,7 @@ test("工作区成员角色可审计修改，且不能移除最后一名所有�
   const events = (await store.readEvents("local", 0, 50)).events
     .filter((event) => event.aggregateType === "workspaceMembership");
   assert.deepEqual(events.map((event) => event.type), [
+    "workspace_membership.created",
     "workspace_membership.created",
     "workspace_membership.role_changed",
     "workspace_membership.removed",

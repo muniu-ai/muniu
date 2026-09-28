@@ -37,6 +37,14 @@ const approvalIntent: ToolCallIntent = {
   expiresAt: "2026-09-04T00:05:00.000Z",
 };
 
+function authorizationProjection<U>(namespace: string): U | undefined {
+  if (namespace === "execution") return { id: "execution-1", tenantId: "local", workspaceId: "workspace-1",
+    initiatedBy: "local-owner", generation: 1, status: "running" } as U;
+  if (namespace === "membership") return { tenantId: "local", workspaceId: "workspace-1",
+    principalId: "local-owner", workspaceRole: "owner" } as U;
+  return undefined;
+}
+
 const modelRequest = {
   executionId: "execution-1",
   agentId: "opc.opportunity-validator",
@@ -439,7 +447,7 @@ test("内核审批端口只在同一持久化意图获单次批准后放行", as
         getProjection<U>(namespace: string, id: string): U | undefined {
           if (namespace === "approval" && id === approval.id) return currentApproval as U;
           if (namespace === "toolIntent" && id === approvalIntent.id) return approvalIntent as U;
-          return undefined;
+          return authorizationProjection<U>(namespace);
         },
       });
     },
@@ -475,7 +483,7 @@ test("内核审批端口保留自动授权并响应取消", async (t) => {
     async transact<T>(_tenantId: string, work: (transaction: {
       getProjection<U>(namespace: string, id: string): U | undefined;
     }) => T): Promise<T> {
-      return work({ getProjection: () => undefined });
+      return work({ getProjection: authorizationProjection });
     },
   };
   await t.test("自动授权", async () => {

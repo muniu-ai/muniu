@@ -7,7 +7,7 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { createPostgresPool } from "./lib/postgres-pool.mjs";
-import { captureCodingRepository, captureCodingTask, configureProductProjectionJournal, createAgentOsCompositionRoot } from "@mn/host";
+import { captureCodingRepository, captureCodingTask, configureProductProjectionJournal, validateProjectionJournal, createAgentOsCompositionRoot } from "@mn/host";
 import { S3Cas, storeProtectedJson } from "@mn/storage";
 import { AgentOsWorker } from "@mn/worker";
 import { createHandlers, supportedKinds } from "./enterprise-worker-handlers.mjs";
@@ -33,6 +33,8 @@ const protectedPayloadKeyProvider = new VaultTransitKeyProvider({ address: proce
   token: process.env.MN_VAULT_TOKEN, mount: process.env.MN_VAULT_TRANSIT_MOUNT,
   keyName: process.env.MN_VAULT_TRANSIT_KEY, individuallyRevocable: true });
 configureProductProjectionJournal(kernelStore, cas, protectedPayloadKeyProvider);
+configureProductProjectionJournal(jobStore, cas, protectedPayloadKeyProvider);
+await validateProjectionJournal(kernelStore);
 const composition = await createAgentOsCompositionRoot({ profile: "enterprise", store });
 const kernel = composition.kernel;
 const fixtureRoot = await mkdtemp(join(process.env.MN_KUBERNETES_SHARED_ROOT, "production-proof-"));
@@ -100,7 +102,7 @@ try {
   const deadline = Date.now() + 240000;
   let approved = false;
   while (!completed && Date.now() < deadline) {
-    const pending = await readPendingKindApproval(pool, tenantId, execution.id);
+    const pending = await readPendingKindApproval(pool, tenantId, execution.id, { cas, keyProvider: protectedPayloadKeyProvider, namespaces: ["approval"] });
     if (pending) {
       assert.equal(pending.effectClass, "privileged");
       await kernel.decideApproval(tenantId, "fixture-owner", "approve", pending.id, pending.streamVersion, "approve_once");

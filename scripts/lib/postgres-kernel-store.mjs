@@ -3,7 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { createProjectionFacts, CORE_PROJECTION_NAMESPACES, replayCoreProjections } from "@mn/contracts";
 
-import { computeEventDigest, computeEventHmac, POSTGRES_SCHEMA_SQL, captureProjectionJournal, prepareJournalRebuild, isJournalNamespace, assertEventPageIntegrity } from "@mn/storage";
+import { assertProtectedIdempotencyState, assertIdempotencyReplayCoverage, assertProtectedCoreProjectionState, prepareCoreProjectionProtectionUpgrade, computeEventDigest, computeEventHmac, POSTGRES_SCHEMA_SQL, captureProjectionJournal, prepareJournalRebuild, isJournalNamespace, assertEventPageIntegrity } from "@mn/storage";
 
 const ENTERPRISE_SCHEMA_SQL = `
 ${POSTGRES_SCHEMA_SQL}
@@ -108,6 +108,16 @@ export class PostgresKernelStore {
   configureProjectionJournal(options) {
     if (this.#projectionJournal) throw new Error("Projection journal is already configured");
     this.#projectionJournal = options;
+  }
+
+  async validateProjectionJournal() {
+    if (!this.#projectionJournal) return;
+    const rows = await this.#pool.query("select namespace, projection_key, value_json from mn_v2.projections");
+    assertProtectedCoreProjectionState(this.#projectionJournal, rows.rows.map(row => ({
+      namespace: row.namespace, id: row.projection_key, value: json(row.value_json),
+    })));
+    const receipts = await this.#pool.query("select response_json from mn_v2.idempotency");
+    assertProtectedIdempotencyState(this.#projectionJournal, receipts.rows.map(row => ({ response: json(row.response_json) })));
   }
 
   async initialize() {
@@ -619,6 +629,92 @@ export class PostgresKernelStore {
     return this.#rebuildProjections(tenantId, true);
   }
 
+  async #idempotencyRecords(client, tenantId) {
+    const rows = await client.query("select idempotency_key, request_hash, response_json, created_at from mn_v2.idempotency where tenant_id = $1", [tenantId]);
+    return rows.rows.map(row => {
+      const [scope, key] = parseIdempotencyStorageKey(String(row.idempotency_key));
+      return { tenantId, scope, key, requestDigest: String(row.request_hash), response: json(row.response_json), createdAt: iso(row.created_at) };
+    });
+  }
+
+  async #restoreIdempotency(client, receipts) {
+    for (const receipt of receipts) await client.query(`
+      insert into mn_v2.idempotency (tenant_id, idempotency_key, request_hash, response_json, created_at)
+      values ($1, $2, $3, $4::jsonb, $5)
+      on conflict(tenant_id, idempotency_key) do update set request_hash = excluded.request_hash,
+      response_json = excluded.response_json, created_at = excluded.created_at
+    `, [receipt.tenantId, idempotencyStorageKey(receipt.scope, receipt.key), receipt.requestDigest, JSON.stringify(receipt.response), receipt.createdAt]);
+  }
+
+  /** The caller holds withOfflineDatabase's exclusive maintenance session. */
+  async upgradeCoreProjectionProtection(tenantId, input) {
+    if (!this.#projectionJournal) throw new Error("Projection journal is not configured");
+    const client = await this.#pool.connect();
+    try {
+      await client.query("begin isolation level serializable");
+      await client.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [tenantId]);
+      const head = await client.query("select next_position, previous_digest from mn_v2.tenant_heads where tenant_id = $1 for update", [tenantId]);
+      const position = safeInteger(head.rows[0]?.next_position ?? 1, "Event position") - 1;
+      if (position !== input.expectedPosition) throw new Error("Core protection upgrade event position changed");
+      const rows = await client.query("select * from mn_v2.events where tenant_id = $1 order by position", [tenantId]);
+      const events = rows.rows.map(rowToEvent);
+      if ((events.at(-1)?.digest ?? null) !== (head.rows[0]?.previous_digest ?? null)) throw new Error("Core protection upgrade event head integrity mismatch");
+      const plan = await prepareCoreProjectionProtectionUpgrade({ ...this.#projectionJournal, ...input,
+        tenantId, events, hmacKey: this.#hmacKey, idempotencyEntries: await this.#idempotencyRecords(client, tenantId) });
+      await this.#restoreIdempotency(client, plan.idempotency);
+      if (!plan.changes.length) {
+        await client.query("commit");
+        return { tenantId, fromPosition: position, position, upgradedRecords: 0, alreadyCurrent: true };
+      }
+      let nextPosition = position + 1;
+      let previousDigest = plan.fromDigest;
+      const occurredAt = this.#now();
+      const runId = randomUUID();
+      const append = async request => {
+        const body = { schemaVersion: 1, id: randomUUID(), tenantId, position: nextPosition++, streamVersion: 1,
+          occurredAt, actorId: input.actorId, generation: 0, correlationId: runId,
+          ...request, ...(previousDigest ? { previousDigest } : {}) };
+        const digest = computeEventDigest(body);
+        const event = { ...body, digest, hmac: computeEventHmac(digest, this.#hmacKey) };
+        await client.query(`insert into mn_v2.events (
+          tenant_id, position, event_id, aggregate_type, aggregate_id, stream_version,
+          event_type, occurred_at, actor_id, execution_id, generation, causation_id,
+          correlation_id, public_payload, protected_payload_ref, previous_digest, digest, hmac
+        ) values ($1,$2,$3::uuid,$4,$5,$6,$7,$8::timestamptz,$9,$10,$11,$12,$13,$14::jsonb,$15,$16,$17,$18)`,
+        [event.tenantId, event.position, event.id, event.aggregateType, event.aggregateId, event.streamVersion,
+          event.type, event.occurredAt, event.actorId, null, event.generation, event.causationId ?? null,
+          event.correlationId, JSON.stringify(event.publicPayload), event.protectedPayloadRef ?? null,
+          event.previousDigest ?? null, event.digest, event.hmac]);
+        await client.query(`insert into mn_v2.stream_heads (tenant_id, aggregate_type, aggregate_id, stream_version)
+          values ($1,$2,$3,1)`, [tenantId, event.aggregateType, event.aggregateId]);
+        await client.query(`insert into mn_v2.outbox (message_id, tenant_id, topic, payload_json, available_at, created_at)
+          values ($1,$2,$3,$4::jsonb,$5::timestamptz,$5::timestamptz)`,
+        [`core-upgrade:${event.id}`, tenantId, event.type, JSON.stringify({ eventId: event.id, position: event.position }), occurredAt]);
+        previousDigest = digest;
+        return event;
+      };
+      const source = await append({ aggregateType: "storageMaintenance", aggregateId: runId,
+        type: "storage.core_protection_upgraded", publicPayload: { fromPosition: plan.fromPosition,
+          fromDigest: plan.fromDigest, protectedRecords: plan.changes.length } });
+      for (const { fact, reference } of plan.changes) {
+        await client.query("delete from mn_v2.projections where tenant_id = $1 and namespace = $2 and projection_key = $3",
+          [tenantId, fact.namespace, fact.id]);
+        if (fact.value !== null) await client.query(`insert into mn_v2.projections
+          (tenant_id, namespace, projection_key, stream_version, value_json, updated_at)
+          values ($1,$2,$3,$4,$5::jsonb,$6::timestamptz)`,
+        [tenantId, fact.namespace, fact.id, reference.streamVersion, JSON.stringify(reference), occurredAt]);
+        await append({ aggregateType: "projectionFact", aggregateId: randomUUID(), type: "projection.fact_committed",
+          causationId: source.id, protectedPayloadRef: reference.protectedPayloadRef,
+          publicPayload: { namespace: fact.namespace, resourceId: fact.id, deleted: fact.value === null } });
+      }
+      await client.query("update mn_v2.tenant_heads set next_position = $2, previous_digest = $3 where tenant_id = $1",
+        [tenantId, nextPosition, previousDigest]);
+      await client.query("commit");
+      return { tenantId, fromPosition: position, position: nextPosition - 1, upgradedRecords: plan.changes.length, alreadyCurrent: false };
+    } catch (error) { await client.query("rollback"); throw error; }
+    finally { client.release(); }
+  }
+
   async #rebuildProjections(tenantId, includeCore) {
     if (!this.#projectionJournal) throw new Error("Projection journal is not configured");
     const client = await this.#pool.connect();
@@ -630,7 +726,9 @@ export class PostgresKernelStore {
       const rows = await client.query("select * from mn_v2.events where tenant_id = $1 order by position", [tenantId]);
       const plan = await prepareJournalRebuild({ ...this.#projectionJournal, tenantId, events: rows.rows.map(rowToEvent),
         expectedPosition: position, hmacKey: this.#hmacKey });
-      const core = includeCore ? replayCoreProjections(rows.rows.map(rowToEvent), tenantId, this.#hmacKey).records : [];
+      assertIdempotencyReplayCoverage(this.#projectionJournal, await this.#idempotencyRecords(client, tenantId), plan.idempotency);
+      const core = includeCore ? replayCoreProjections(rows.rows.map(rowToEvent), tenantId, this.#hmacKey).records
+        .filter(row => !isJournalNamespace(row.namespace, this.#projectionJournal)) : [];
       const namespaces = await client.query("select distinct namespace from mn_v2.projections where tenant_id = $1", [tenantId]);
       for (const row of namespaces.rows) if (isJournalNamespace(row.namespace, this.#projectionJournal)
         || (includeCore && CORE_PROJECTION_NAMESPACES.includes(row.namespace))) {

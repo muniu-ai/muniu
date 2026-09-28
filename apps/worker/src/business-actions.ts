@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 import type {
-  Approval, BusinessDecisionPortV1, BusinessInquirySourcePortV1, BusinessObjectSnapshotPortV1, EffectActionPortV1,
+  Approval, Execution, BusinessDecisionPortV1, BusinessInquirySourcePortV1, BusinessObjectSnapshotPortV1, EffectActionPortV1,
   EffectReceiptAndReconciliationPortV1, IssueQuotePackageInputV1, WorkerExecutionIdentityV1,
 } from "@mn/contracts";
 import { parseBusinessDecisionV1, parseBusinessObjectSnapshotV1, parseEffectAdmissionV1, parseEffectReceiptV1 } from "@mn/contracts";
-import { BusinessActionLedger, KernelError, sha256, type AgentOsKernel, type KernelStore } from "@mn/kernel";
+import { assertCurrentApprovalAuthorization, assertCurrentExecutionAuthorization, KernelError, sha256, type AgentOsKernel, type KernelStore } from "@mn/kernel";
+import { BusinessActionLedger } from "@mn/business-execution";
 import { UnknownExternalSideEffectError, type WorkerJobHandler } from "./index.js";
 
 export interface BusinessProviderPorts {
@@ -59,7 +60,14 @@ export function createBusinessActionWorkerHandler(options: {
       state = await ledger.waiting(job.tenantId, actionId, requested.approval.id, lease());
       while (true) {
         if (context.signal.aborted) throw new Error("业务动作已停止");
-        const approval = await options.store.transact(job.tenantId, tx => tx.getProjection<Approval>("approval", requested.approval.id));
+        const approval = await options.store.transact(job.tenantId, tx => {
+          const execution = tx.getProjection<Execution>("execution", intent.executionId);
+          if (!execution) throw new Error("Execution 不存在");
+          assertCurrentExecutionAuthorization(tx, execution);
+          const current = tx.getProjection<Approval>("approval", requested.approval.id);
+          if (current?.status === "approved_once") assertCurrentApprovalAuthorization(tx, current);
+          return current;
+        });
         if (!approval || approval.status === "denied" || approval.status === "expired" || Date.parse(approval.expiresAt) <= Date.parse(now()))
           throw new KernelError("BUSINESS_APPROVAL_DENIED", "出包批准已拒绝或过期", "刷新出包操作");
         if (approval.status === "approved_once") break;

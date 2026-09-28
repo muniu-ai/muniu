@@ -50,6 +50,9 @@ import type {
 } from "@mn/contracts";
 import { CODING_RUNNER_CONFIGURATION_NAMESPACE } from "@mn/contracts";
 import {
+  assertCurrentExecutionAuthorization,
+  assertCurrentToolApproval,
+  recordToolAdmission,
   authorityAllowsIntent,
   sha256,
   type InboxItem,
@@ -448,18 +451,33 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
 function finalizeCodingRuntime(tx: KernelTransaction, records: readonly RuntimeRecord[], state: CodingState,
   job: StoredJob, context: CodingWorkerJobContext, occurredAt: string): void | (() => void) {
   if (records.some(record => record.type === "model/request" || record.type === "model/reserved" || record.type === "tool/started"
+    || record.type === "job/started" || record.type === "subagent/reserved"
     || (record.type === "execution/status" && record.payload.status === "completed"))) {
     const execution = tx.getProjection<Execution>("execution", state.execution.id);
     if (!execution || execution.generation !== state.execution.generation) throw new StaleFencingTokenError(job.id);
+    if (execution.status === "needs_reconciliation") throw new CodingWorkerOutcomeError(execution.id, "needs_reconciliation", "外部操作结果需要人工核对");
     const control = tx.getProjection<{ generation: number; command: string }>("execution-control", execution.id);
     if (control?.generation === execution.generation && control.command === "interrupt") throw new RuntimeControlError("interrupted");
     if (execution.status === "cancelled" || execution.status === "paused" || execution.status === "interrupted") throw new RuntimeControlError(execution.status);
+    assertCurrentExecutionAuthorization(tx, execution);
+    for (const record of records) {
+      if (record.type === "tool/started" && typeof record.payload.toolCallId === "string") {
+        assertCurrentToolApproval(tx, execution.id, record.payload.toolCallId, occurredAt);
+      }
+    }
+  }
+  for (const record of records) {
+    if ((record.type === "tool/started" || record.type === "tool/result") && typeof record.payload.toolCallId === "string") {
+      recordToolAdmission(tx, state.execution, record.payload.toolCallId,
+        record.type === "tool/started" ? "started" : "settled", record.occurredAt);
+    }
   }
   recordRuntimeAttention(tx, state.execution, records);
   const status = records.filter(record => record.type === "execution/status").at(-1)?.payload.status;
   if (!["completed", "failed", "cancelled", "paused"].includes(String(status))) return;
   const execution = tx.getProjection<Execution>("execution", state.execution.id);
   if (!execution || execution.generation !== state.execution.generation) throw new StaleFencingTokenError(job.id);
+  if (execution.status === "needs_reconciliation") throw new CodingWorkerOutcomeError(execution.id, "needs_reconciliation", "外部操作结果需要人工核对");
   if ((execution.status === "cancelled" || execution.status === "paused" || execution.status === "interrupted")
     && execution.status !== status) throw new RuntimeControlError(execution.status);
   const run = tx.getProjection<StoredCodingRun>("coding.execution", execution.id);
@@ -1242,6 +1260,8 @@ async function loadCodingState(
   return store.transact(tenantId, (transaction) => {
     const execution = transaction.getProjection<Execution>("execution", executionId);
     if (!execution) throw new Error("Execution 不存在");
+    if (execution.status === "needs_reconciliation") throw new CodingWorkerOutcomeError(execution.id, "needs_reconciliation", "外部操作结果需要人工核对");
+    assertCurrentExecutionAuthorization(transaction, execution);
     const authority = transaction.getProjection<ExecutionAuthority>("authority", execution.authorityId);
     if (!authority) throw new Error("Execution Authority 不存在");
     const thread = transaction.getProjection<Thread>("thread", execution.threadId);

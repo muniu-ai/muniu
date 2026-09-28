@@ -26,6 +26,8 @@ for (const scenario of [
   const now = "2026-09-04T00:00:00.000Z";
   const entity = { tenantId: "local", createdAt: now, updatedAt: now, streamVersion: 0 };
   await store.transact("local", tx => {
+    tx.putProjection("membership", "workspace:local-owner", { ...entity, id: "workspace:local-owner",
+      workspaceId: "workspace", principalId: "local-owner", workspaceRole: "owner", organizationRoles: [] });
     tx.putProjection("thread", "thread", { ...entity, id: "thread", workspaceId: "workspace", subject: "验证需求", pluginId: "opc" });
     tx.putProjection("execution", "execution", { ...entity, id: "execution", workspaceId: "workspace", threadId: "thread", pluginId: "opc",
       agentDefinitionId: "opc.opportunity-validator", modelBindingId: "model", initiatedBy: "local-owner", executionPrincipalId: "agent",

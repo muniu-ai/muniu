@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { createHash, randomUUID } from "node:crypto";
-import { CORE_PROJECTION_NAMESPACES, verifyEventIntegrity, type JsonObject, type JsonValue, type KernelEventV1 } from "@mn/contracts";
+import { CORE_PROJECTION_NAMESPACES, PROTECTED_CORE_PROJECTION_NAMESPACES, verifyEventIntegrity, type JsonObject, type JsonValue, type KernelEventV1 } from "@mn/contracts";
 import type { ContentAddressedStorage } from "./cas.js";
 import { EnvelopeCipher, type EncryptedEnvelopeV1, type KeyProvider } from "./encryption.js";
 import { canonicalJson } from "./integrity.js";
@@ -27,10 +27,122 @@ export interface ProjectionJournalEntry {
   readonly value: unknown;
 }
 
-interface ProtectedProjectionReference {
+export interface ProtectedProjectionReference {
   readonly format: "muniu.projection.reference";
   readonly protectedPayloadRef: string;
   readonly streamVersion: number;
+}
+
+export class ProtectedCoreStateUpgradeRequiredError extends Error {
+  readonly code = "PROTECTED_CORE_STATE_UPGRADE_REQUIRED";
+  readonly remediation = "保留现有数据目录、备份与密钥；完成经审核的当前版本数据升级后重试";
+  constructor() {
+    super("现有核心事实包含未加密内容，当前保护策略已阻止启动或重建；原数据未修改");
+    this.name = "ProtectedCoreStateUpgradeRequiredError";
+  }
+}
+
+export function assertProtectedCoreProjectionState(options: ProjectionJournalOptions,
+  entries: readonly ProjectionJournalEntry[]): void {
+  for (const entry of entries) {
+    if (!(PROTECTED_CORE_PROJECTION_NAMESPACES as readonly string[]).includes(entry.namespace)
+      || !isJournalNamespace(entry.namespace, options)) continue;
+    const value = entry.value as Partial<ProtectedProjectionReference> | null;
+    if (value?.format !== "muniu.projection.reference" || typeof value.protectedPayloadRef !== "string") {
+      throw new ProtectedCoreStateUpgradeRequiredError();
+    }
+  }
+}
+
+export class IdempotencyProtectionEvidenceRequiredError extends Error {
+  readonly code = "IDEMPOTENCY_PROTECTION_EVIDENCE_REQUIRED";
+  readonly remediation = "保留原库、备份和幂等记录；仅凭已认证的加密回执事实离线重建，缺少事实时先核对原操作";
+  constructor() {
+    super("幂等回执缺少可验证的受保护状态，已阻止启动、升级或重建");
+    this.name = "IdempotencyProtectionEvidenceRequiredError";
+  }
+}
+
+function protectsCoreRecords(options: ProjectionJournalOptions): boolean {
+  return PROTECTED_CORE_PROJECTION_NAMESPACES.some(namespace => isJournalNamespace(namespace, options));
+}
+
+export function assertProtectedIdempotencyState(options: ProjectionJournalOptions,
+  records: readonly Pick<KernelIdempotencyRecordLike, "response">[]): void {
+  if (!protectsCoreRecords(options)) return;
+  for (const record of records) {
+    const reference = record.response as Partial<ProtectedProjectionReference> | null;
+    if (reference?.format !== "muniu.projection.reference" || typeof reference.protectedPayloadRef !== "string") {
+      throw new IdempotencyProtectionEvidenceRequiredError();
+    }
+  }
+}
+
+/** A cache is never evidence for accepting or discarding an idempotency commitment. */
+export function assertIdempotencyReplayCoverage(options: ProjectionJournalOptions,
+  records: readonly KernelIdempotencyRecordLike[], receipts: readonly KernelIdempotencyRecordLike[]): void {
+  if (!protectsCoreRecords(options)) return;
+  const proven = new Set(receipts.map(receipt => JSON.stringify([receipt.tenantId, receipt.scope, receipt.key])));
+  for (const record of records) if (!proven.has(JSON.stringify([record.tenantId, record.scope, record.key]))) {
+    throw new IdempotencyProtectionEvidenceRequiredError();
+  }
+}
+
+export function protectedIdempotencyReceipts(tenantId: string, events: readonly KernelEventV1[],
+  authenticatedFacts: readonly ProjectionJournalFact[]): readonly KernelIdempotencyRecordLike[] {
+  const references = new Map<string, string>();
+  for (const event of events) if (event.type === "projection.fact_committed"
+    && event.publicPayload.namespace === "kernel.protected-idempotency" && event.protectedPayloadRef) {
+    references.set(String(event.publicPayload.resourceId), event.protectedPayloadRef);
+  }
+  return authenticatedFacts.filter(fact => fact.namespace === "kernel.protected-idempotency" && fact.value !== null).map(fact => {
+    const receipt = fact.value as unknown as KernelIdempotencyRecordLike;
+    const protectedPayloadRef = references.get(fact.id);
+    if (receipt.tenantId !== tenantId || typeof receipt.scope !== "string" || typeof receipt.key !== "string"
+      || fact.id !== factKey(receipt.scope, receipt.key) || typeof receipt.requestDigest !== "string"
+      || typeof receipt.createdAt !== "string" || !protectedPayloadRef) throw new Error("Invalid idempotency replay fact");
+    return { ...receipt, response: { format: "muniu.projection.reference", protectedPayloadRef, streamVersion: 0 } };
+  });
+}
+
+export const DEFAULT_PROJECTION_JOURNAL_NAMESPACES = Object.freeze([
+  "*non-core", ...PROTECTED_CORE_PROJECTION_NAMESPACES,
+]);
+
+/** Remove only facts whose complete values are owned by the protected journal. */
+export function publicProjectionPayload(payload: JsonObject, options: ProjectionJournalOptions): JsonObject {
+  const facts = payload.projectionFacts;
+  if (facts === undefined) return payload;
+  if (!facts || typeof facts !== "object" || Array.isArray(facts)
+    || (facts as JsonObject).version !== 1 || !Array.isArray((facts as JsonObject).changes)) throw new Error("Invalid projection facts");
+  return { ...payload, projectionFacts: { version: 1, changes: ((facts as JsonObject).changes as JsonValue[]).filter(fact => {
+    if (!fact || typeof fact !== "object" || Array.isArray(fact) || typeof (fact as JsonObject).namespace !== "string") {
+      throw new Error("Invalid projection fact");
+    }
+    return !isJournalNamespace(String((fact as JsonObject).namespace), options);
+  }) } };
+}
+
+export async function prepareProtectedProjection(options: ProjectionJournalOptions, tenantId: string,
+  change: ProjectionJournalFact): Promise<{ readonly reference: ProtectedProjectionReference }> {
+  const payload: JsonObject = { version: 1, tenantId, namespace: change.namespace, id: change.id, value: change.value };
+  const plaintext = Buffer.from(canonicalJson(payload));
+  let envelope: EncryptedEnvelopeV1;
+  try {
+    envelope = await boundedIo(new EnvelopeCipher(options.keyProvider).encrypt(plaintext, {
+      tenantId, purpose: `projection:${factKey(change.namespace, change.id)}`,
+    }), options);
+  } finally { plaintext.fill(0); }
+  const bytes = Buffer.from(canonicalJson(envelope as unknown as JsonObject));
+  const object = await boundedIo(options.cas.put(bytes), options);
+  if (object.digest !== sha256(bytes) || object.byteLength !== bytes.byteLength) {
+    throw new Error("Projection journal CAS descriptor mismatch");
+  }
+  return { reference: {
+    format: "muniu.projection.reference", protectedPayloadRef: object.digest,
+    streamVersion: change.value !== null && typeof change.value === "object" && !Array.isArray(change.value)
+      && typeof (change.value as JsonObject).streamVersion === "number" ? Number((change.value as JsonObject).streamVersion) : 0,
+  } };
 }
 
 export function isJournalNamespace(namespace: string, options: ProjectionJournalOptions): boolean {
@@ -98,7 +210,7 @@ export function captureProjectionJournal(transaction: KernelTransactionLike, ten
         .sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0).map(fact => structuredClone(fact.value) as T);
     },
     appendEvent(request) {
-      const event = transaction.appendEvent(request);
+      const event = transaction.appendEvent({ ...request, publicPayload: publicProjectionPayload(request.publicPayload, options) });
       cause = event;
       return event;
     },
@@ -129,6 +241,10 @@ export function captureProjectionJournal(transaction: KernelTransactionLike, ten
     transaction: wrapped,
     async prepare(): Promise<void> {
       const selectedEntries = entries.filter(entry => selected(entry.namespace, options));
+      for (const entry of idempotencyEntries) {
+        try { assertProtectedIdempotencyState(options, [entry]); }
+        catch (error) { unreadableIdempotency.set(factKey(entry.scope, entry.key), error); }
+      }
       const protectedReceipts = idempotencyEntries.filter(entry =>
         (entry.response as ProtectedProjectionReference | null)?.format === "muniu.projection.reference");
       try {
@@ -173,24 +289,15 @@ export function captureProjectionJournal(transaction: KernelTransactionLike, ten
           namespace: "kernel.protected-idempotency", id, value: JSON.parse(JSON.stringify(record)) as JsonValue,
         });
       } else {
+        if (pendingIdempotency.size && protectsCoreRecords(options)) {
+          throw new Error("Protected idempotency writes require an originating event");
+        }
         for (const record of pendingIdempotency.values()) transaction.putIdempotency(record);
       }
       if (changes.size && !cause) throw new Error("Product projection changes require an originating event");
       const prepared = await boundedIo(Promise.all([...changes.values()].map(async change => {
-        const payload: JsonObject = { version: 1, tenantId, namespace: change.namespace, id: change.id, value: change.value };
-        const plaintext = Buffer.from(canonicalJson(payload));
-        let envelope: EncryptedEnvelopeV1;
-        try {
-          envelope = await new EnvelopeCipher(options.keyProvider).encrypt(plaintext, {
-            tenantId, purpose: `projection:${factKey(change.namespace, change.id)}`,
-          });
-        } finally { plaintext.fill(0); }
-        const bytes = Buffer.from(canonicalJson(envelope as unknown as JsonObject));
-        const object = await options.cas.put(bytes);
-        if (object.digest !== sha256(bytes) || object.byteLength !== bytes.byteLength) {
-          throw new Error("Projection journal CAS descriptor mismatch");
-        }
-        return { change, object };
+        const prepared = await prepareProtectedProjection(options, tenantId, change);
+        return { change, reference: prepared.reference };
       })), options);
       for (const [jobId, expiresAt] of leases) {
         if (Date.parse(expiresAt) <= Date.parse(now())) throw new StaleFencingTokenError(jobId);
@@ -204,12 +311,7 @@ export function captureProjectionJournal(transaction: KernelTransactionLike, ten
           payload: { eventId: event.id, revocationId: id }, availableAt: event.occurredAt });
       }
       // Preparation has no transaction access, so late CAS completion after a timeout only leaves an orphan.
-      for (const { change, object } of prepared) {
-        const reference: ProtectedProjectionReference = {
-          format: "muniu.projection.reference", protectedPayloadRef: object.digest,
-          streamVersion: change.value !== null && typeof change.value === "object" && !Array.isArray(change.value)
-            && typeof (change.value as JsonObject).streamVersion === "number" ? Number((change.value as JsonObject).streamVersion) : 0,
-        };
+      for (const { change, reference } of prepared) {
         if (change.namespace === "kernel.protected-idempotency") {
           transaction.putIdempotency({ ...pendingIdempotency.get(change.id)!, response: reference });
         } else if (change.value === null) transaction.deleteProjection(change.namespace, change.id);
@@ -219,7 +321,7 @@ export function captureProjectionJournal(transaction: KernelTransactionLike, ten
           tenantId, aggregateType: "projectionFact", aggregateId: id, expectedStreamVersion: 0,
           type: "projection.fact_committed", actorId: cause!.actorId, generation: cause!.generation,
           ...(cause!.executionId ? { executionId: cause!.executionId } : {}),
-          correlationId: cause!.correlationId, causationId: cause!.id, protectedPayloadRef: object.digest,
+          correlationId: cause!.correlationId, causationId: cause!.id, protectedPayloadRef: reference.protectedPayloadRef,
           publicPayload: { namespace: change.namespace, resourceId: change.id, deleted: change.value === null,
             ...(typeof cause!.publicPayload.workspaceId === "string" ? { workspaceId: cause!.publicPayload.workspaceId } : {}) },
         });
@@ -235,6 +337,9 @@ export async function readJournalProjection(options: ProjectionJournalOptions, t
   if (stored === undefined || !selected(namespace, options)) return stored;
   const reference = stored as ProtectedProjectionReference;
   if (reference?.format !== "muniu.projection.reference" || typeof reference.protectedPayloadRef !== "string") {
+    if ((PROTECTED_CORE_PROJECTION_NAMESPACES as readonly string[]).includes(namespace)) {
+      throw new ProtectedCoreStateUpgradeRequiredError();
+    }
     throw new Error("Product projection has no protected authoritative fact");
   }
   return readFactValue(options, tenantId, namespace, id, reference.protectedPayloadRef);
@@ -297,13 +402,40 @@ export interface JournalRebuildPlan {
   readonly idempotency: readonly KernelIdempotencyRecordLike[];
 }
 
+export function verifyProjectionJournalHistory(options: ProjectionJournalOptions & {
+  readonly events: readonly KernelEventV1[]; readonly tenantId: string; readonly hmacKey: Uint8Array;
+}): Promise<readonly ProjectionJournalFact[]> {
+  return boundedIo(replayProjectionJournal(options), options);
+}
+
+/** Only a later authenticated protected fact supersedes an earlier plaintext core fact. */
+export function unprotectedCoreProjectionFacts(options: ProjectionJournalOptions,
+  events: readonly KernelEventV1[]): readonly ProjectionJournalFact[] {
+  const pending = new Map<string, ProjectionJournalFact>();
+  for (const event of events) {
+    const envelope = event.publicPayload.projectionFacts as JsonObject | undefined;
+    if (envelope && Array.isArray(envelope.changes)) for (const raw of envelope.changes) {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+      const fact = raw as unknown as ProjectionJournalFact;
+      if (PROTECTED_CORE_PROJECTION_NAMESPACES.includes(fact.namespace as typeof PROTECTED_CORE_PROJECTION_NAMESPACES[number])
+        && selected(fact.namespace, options)) pending.set(factKey(fact.namespace, fact.id), fact);
+    }
+    if (event.type === "projection.fact_committed" && typeof event.publicPayload.namespace === "string"
+      && typeof event.publicPayload.resourceId === "string" && event.protectedPayloadRef) {
+      pending.delete(factKey(event.publicPayload.namespace, event.publicPayload.resourceId));
+    }
+  }
+  return [...pending.values()];
+}
+
 /** Validate every latest ciphertext before exposing any records to the database switch. */
 export async function prepareJournalRebuild(options: ProjectionJournalOptions & {
   readonly events: readonly KernelEventV1[]; readonly tenantId: string; readonly hmacKey: Uint8Array;
   readonly expectedPosition: number;
 }): Promise<JournalRebuildPlan> {
   if ((options.events.at(-1)?.position ?? 0) !== options.expectedPosition) throw new Error("Projection replay is missing committed events");
-  const facts = await boundedIo(replayProjectionJournal(options), options);
+  const facts = await verifyProjectionJournalHistory(options);
+  if (unprotectedCoreProjectionFacts(options, options.events).length) throw new ProtectedCoreStateUpgradeRequiredError();
   const references = new Map<string, string>();
   for (const event of options.events) if (event.type === "projection.fact_committed") {
     references.set(factKey(String(event.publicPayload.namespace), String(event.publicPayload.resourceId)), event.protectedPayloadRef!);

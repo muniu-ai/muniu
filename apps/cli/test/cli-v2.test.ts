@@ -6,6 +6,7 @@ import type {
   LocalBackupCreateResult,
   LocalStateRestoreResult,
 } from "@mn/storage";
+import { LocalBackupError } from "@mn/storage";
 import { runCli, resolveCliStateRoot, type CliIo } from "../src/index.js";
 
 test("CLI 备份使用与 Host 相同的 v2 状态根，忽略旧环境变量", () => {
@@ -779,8 +780,8 @@ test("backup 在本地创建、校验并恢复 SQLite 与 CAS 加密快照", asy
       calls.push(["check", fileName]);
       return { file: `/state/backups/${fileName}`, manifest, verified: true };
     },
-    async restore(fileName: string, destinationName: string): Promise<LocalStateRestoreResult> {
-      calls.push(["restore", fileName, destinationName]);
+    async restore(fileName: string, destinationName: string, options?: { upgradeCoreProtection?: boolean }): Promise<LocalStateRestoreResult> {
+      calls.push(["restore", fileName, destinationName, ...(options ? [options] : [])]);
       return {
         stateRoot: `/state/restore/${destinationName}`,
         verified: true,
@@ -800,11 +801,15 @@ test("backup 在本地创建、校验并恢复 SQLite 与 CAS 加密快照", asy
     "backup", "restore", "state.mnbackup", "--destination", "restored-v2", "--json",
   ], { io: output, fetch, backup }), 0);
   assert.equal(called, false);
+  assert.equal(await runCli([
+    "backup", "restore", "state.mnbackup", "--destination", "upgraded-v2", "--upgrade-core-protection", "--json",
+  ], { io: output, fetch, backup }), 0);
   assert.deepEqual(calls, [
     ["create", "state.mnbackup"],
     ["check", "state.mnbackup"],
     ["check", "state.mnbackup"],
     ["restore", "state.mnbackup", "restored-v2"],
+    ["restore", "state.mnbackup", "upgraded-v2", { upgradeCoreProtection: true }],
   ]);
   assert.deepEqual(JSON.parse(output.out[0] ?? "").data.created.manifest.capabilities, {
     sqlite: true,
@@ -866,4 +871,23 @@ test("插件 CLI 从签名字段定义验证参数并调用统一领域接口", 
   assert.deepEqual(mutations[0]?.body, { workspaceId: "space", expectedStreamVersion: 4, topic: "研究", limit: 5, brief: true });
   assert.equal(mutations[0]?.path, "/v2/plugins/research/summarize");
   assert.ok(mutations[0]?.idempotencyKey);
+});
+
+
+test("备份升级缺少幂等事实时保留诊断且不建议丢弃承诺", async () => {
+  const output = io();
+  const backup = {
+    async create(): Promise<never> { throw new Error("unexpected create"); },
+    async check(): Promise<never> { throw new Error("unexpected check"); },
+    async restore(): Promise<never> {
+      throw new LocalBackupError("IDEMPOTENCY_PROTECTION_EVIDENCE_REQUIRED", "幂等回执缺少受保护事实");
+    },
+  };
+  assert.equal(await runCli(["backup", "restore", "old.mnbackup", "--destination", "upgraded", "--upgrade-core-protection", "--json"],
+    { io: output, backup }), 2);
+  const error = JSON.parse(output.out[0]!).error;
+  assert.equal(error.code, "IDEMPOTENCY_PROTECTION_EVIDENCE_REQUIRED");
+  assert.match(error.action, /保留.*幂等/u);
+  assert.match(error.action, /核对原操作/u);
+  assert.doesNotMatch(error.action, /另一份|删除|重新发起|重试/u);
 });

@@ -60,6 +60,7 @@ node apps/cli/dist/index.js doctor --fix
 | `packages/contracts` | 公共类型、错误、事件与 OpenAPI 来源 |
 | `packages/kernel` | 身份、权限、插件、Job、Memory 与审计 |
 | `packages/agent-runtime` | Agent、会话、模型、工具与子 Agent 运行时 |
+| `packages/business-execution` | 询价候选与报价动作的执行控制服务 |
 | `packages/plugin-sdk` | 产品插件、UI、CLI 与服务贡献契约 |
 | `packages/storage` | SQLite/PostgreSQL、文件/S3 CAS、Keychain/KMS |
 | `plugins/opc` | 机会验证领域与成果 |

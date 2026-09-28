@@ -1078,6 +1078,11 @@ async function seed(
   await store.transact("local", (transaction) => {
     transaction.putProjection("workspace", workspace.id, workspace);
     transaction.putProjection("thread", thread.id, thread);
+    transaction.putProjection("membership", `${execution.workspaceId}:${execution.initiatedBy}`, {
+      id: `${execution.workspaceId}:${execution.initiatedBy}`, tenantId: execution.tenantId,
+      workspaceId: execution.workspaceId, principalId: execution.initiatedBy, workspaceRole: "owner",
+      organizationRoles: [], streamVersion: 1, createdAt: NOW, updatedAt: NOW,
+    });
     transaction.putProjection("execution", execution.id, execution);
     transaction.putProjection("authority", authority.id, authority);
     transaction.putProjection("coding.task", task.id, { ...task, streamVersion: 0 });

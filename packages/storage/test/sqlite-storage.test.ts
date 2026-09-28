@@ -77,6 +77,7 @@ async function seedAgentExecutionJob(
   options: {
     readonly executionId?: string;
     readonly jobId?: string;
+    readonly kind?: string;
     readonly projectedExecutionStreamVersion?: number;
   } = {}
 ): Promise<void> {
@@ -104,7 +105,7 @@ async function seedAgentExecutionJob(
     id: jobId,
     tenantId: "tenant-a",
     workspaceId: "workspace-1",
-    kind: "agent.execution.run",
+    kind: options.kind ?? "agent.execution.run",
     payload: { executionId, message: "实现修复" },
     status: "available",
     attempts: 0,
@@ -1187,6 +1188,26 @@ test("Agent Job 续租与未知副作用核对同步 Job 投影并保持原子�
   }
 });
 
+for (const kind of ["knowledge.publish", "procurement.submit"]) {
+  test(`SQLite ${kind} 未知效果同步终止任务投影且不可重领`, async () => {
+    const storage = new SqliteStorage({ databaseFile: temporaryPath("state.sqlite"), hmacKey: randomBytes(32) });
+    try {
+      await seedAgentExecutionJob(storage, { kind });
+      const claimed = await storage.claimJob("worker-a", "2026-09-04T00:00:00.000Z");
+      assert.ok(claimed);
+      await storage.markNeedsReconciliation("execution-agent", {
+        jobId: claimed.id, workerId: "worker-a", fencingToken: claimed.fencingToken,
+        occurredAt: "2026-09-04T00:00:01.000Z",
+      });
+      assert.equal((await storage.getJob(claimed.id))?.status, "failed");
+      assert.equal((await storage.getProjection("tenant-a", "job", claimed.id))?.status, "failed");
+      assert.equal((await storage.getProjection("tenant-a", "job", claimed.id))?.leaseOwner, undefined);
+      assert.equal((await storage.getProjection("tenant-a", "execution", "execution-agent"))?.status, "needs_reconciliation");
+      assert.equal(await storage.claimJob("worker-b", "2026-09-04T00:01:00.000Z"), undefined);
+    } finally { await storage.close(); }
+  });
+}
+
 test("续租与未知副作用核对均受 fencing 保护并原子终止 Job", async () => {
   const storage = new SqliteStorage({
     databaseFile: temporaryPath("state.sqlite"),
@@ -1349,4 +1370,31 @@ test("SQLite is structurally compatible with KernelStore transactions", async ()
   } finally {
     await storage.close();
   }
+});
+
+
+test("SQLite Worker journals reconciliation inbox through the protected core policy", async () => {
+  const databaseFile = temporaryPath("state.sqlite");
+  const storage = new SqliteStorage({ databaseFile, hmacKey: randomBytes(32),
+    now: () => new Date("2026-09-04T00:00:01.000Z"),
+    projectionJournal: { cas: new FileCas({ rootDir: temporaryPath("cas") }),
+      keyProvider: new InMemoryKeyProvider(Buffer.alloc(32, 25)), namespaces: ["inbox"] } });
+  try {
+    await seedAgentExecutionJob(storage, { executionId: "execution-private", jobId: "job-private" });
+    await storage.claimJob("worker-a", "2026-09-04T00:00:00.000Z");
+    await storage.markNeedsReconciliation("execution-private", { jobId: "job-private", workerId: "worker-a",
+      fencingToken: 1, occurredAt: "2026-09-04T00:00:01.000Z" });
+    const id = "reconciliation:execution-private:job-private";
+    const inbox = await storage.getProjection("tenant-a", "inbox", id);
+    assert.equal(inbox?.status, "open");
+    const raw = new DatabaseSync(databaseFile);
+    try {
+      const row = raw.prepare("select value_json from projections where namespace = 'inbox'").get()!;
+      assert.equal(JSON.parse(String(row.value_json)).format, "muniu.projection.reference");
+      assert.equal(JSON.stringify(raw.prepare("select * from events").all()).includes(String(inbox!.summary)), false);
+      raw.exec("delete from projections where namespace = 'inbox'");
+      await storage.rebuildJournalProjections("tenant-a");
+      assert.deepEqual(await storage.getProjection("tenant-a", "inbox", id), inbox);
+    } finally { raw.close(); }
+  } finally { await storage.close(); }
 });

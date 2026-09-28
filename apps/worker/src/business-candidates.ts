@@ -3,7 +3,8 @@ import { randomUUID } from "node:crypto";
 import { ExecutionBudgetExceededError, type ModelRequest, type ModelResponse } from "@mn/agent-runtime";
 import { parseRfqModelOutputV1, parseSalesInquirySnapshotV1, type BusinessInquirySourcePortV1, type JsonObject,
   type RfqCandidateV1, type SalesInquirySnapshotV1 } from "@mn/contracts";
-import { BusinessCandidateLedger, KernelError, sha256, type KernelStore, type ModelConnection } from "@mn/kernel";
+import { KernelError, sha256, type KernelStore, type ModelConnection } from "@mn/kernel";
+import { BusinessCandidateLedger } from "@mn/business-execution";
 import { storeProtectedJson } from "@mn/storage";
 import { fencedCodingStore } from "./coding.js";
 import type { WorkerJobHandler } from "./index.js";

@@ -8,7 +8,9 @@ import { readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { computeEventHmac } from "@mn/storage";
+import { CORE_PROJECTION_NAMESPACES } from "@mn/contracts";
+import { computeEventHmac, DEFAULT_PROJECTION_JOURNAL_NAMESPACES, isJournalNamespace,
+  prepareJournalRebuild, readJournalProjection, S3Cas } from "@mn/storage";
 import { replayCoreProjections } from "@mn/kernel";
 
 import { seedHostFlow, verifyCommittedEvent } from "./enterprise-host-flow.mjs";
@@ -125,7 +127,10 @@ async function composeFixture() {
 
     await verifyS3Cas();
     await verifyVaultTransit(state);
-    await verifyWorkers(pool, state.workspaceId);
+    const hmacKey = Buffer.from("ZW50ZXJwcmlzZS1lMmUtaG1hYy1maXh0dXJlLWtleS0wMg==", "base64");
+    const projectionJournal = fixtureProjectionJournal();
+    const kernelStore = new PostgresKernelStore({ pool, hmacKey, projectionJournal });
+    await verifyWorkers(pool, state.workspaceId, kernelStore);
 
     await compose("restart", "postgres");
     await waitFor(async () => {
@@ -139,8 +144,6 @@ async function composeFixture() {
     await verifyCommittedEvent(state);
     process.stdout.write("PostgreSQL 重启后，已提交事件仍可读取，RPO 0\n");
 
-    const hmacKey = Buffer.from("ZW50ZXJwcmlzZS1lMmUtaG1hYy1maXh0dXJlLWtleS0wMg==", "base64");
-    const kernelStore = new PostgresKernelStore({ pool, hmacKey });
     const allEvents = [];
     for (;;) {
       const page = await kernelStore.readEvents(state.tenantId, allEvents.at(-1)?.position ?? 0, 500);
@@ -148,13 +151,31 @@ async function composeFixture() {
       if (page.events.length < 500) break;
     }
     const rebuilt = replayCoreProjections(allEvents, state.tenantId, hmacKey);
-    for (const record of rebuilt.records) {
-      const persisted = await pool.query(`select value_json from mn_v2.projections
-        where tenant_id = $1 and namespace = $2 and projection_key = $3`,
-      [state.tenantId, record.namespace, record.id]);
-      assert.deepEqual(persisted.rows[0]?.value_json, record.value, `${record.namespace}:${record.id}`);
+    const protectedRebuilt = await prepareJournalRebuild({ ...projectionJournal,
+      tenantId: state.tenantId, hmacKey, events: allEvents, expectedPosition: allEvents.at(-1)?.position ?? 0 });
+    const protectedCore = protectedRebuilt.projections.filter(record => CORE_PROJECTION_NAMESPACES.includes(record.namespace));
+    assert.ok(protectedCore.some(record => record.namespace === "workspace" && record.id === state.workspaceId),
+      "核心重建必须包含受保护的工作区事实");
+    assert.ok(protectedCore.some(record => record.namespace === "inbox"
+      && record.id === "reconciliation:execution-reconcile:job-reconcile"), "核心重建必须包含加密核对收件项");
+    const expectedCore = [
+      ...rebuilt.records.filter(record => !isJournalNamespace(record.namespace, projectionJournal)),
+      ...protectedCore,
+    ];
+    const persistedCore = (await pool.query(`select namespace, projection_key, value_json from mn_v2.projections
+      where tenant_id = $1 and namespace = any($2::text[])`, [state.tenantId, CORE_PROJECTION_NAMESPACES])).rows;
+    const recordKey = record => JSON.stringify([record.namespace, record.id]);
+    const persistedByKey = new Map(persistedCore.map(row => [recordKey({ namespace: row.namespace, id: row.projection_key }), row.value_json]));
+    assert.deepEqual([...persistedByKey.keys()].sort(), expectedCore.map(recordKey).sort(), "核心投影集合必须与完整重建一致");
+    const expectedValues = await Promise.all(expectedCore.map(record =>
+      readJournalProjection(projectionJournal, state.tenantId, record.namespace, record.id, record.value)));
+    const authorizedValues = await kernelStore.transact(state.tenantId, transaction =>
+      expectedCore.map(record => transaction.getProjection(record.namespace, record.id)));
+    for (const [index, record] of expectedCore.entries()) {
+      assert.deepEqual(persistedByKey.get(recordKey(record)), record.value, `${record.namespace}:${record.id} 原始投影`);
+      assert.deepEqual(authorizedValues[index], expectedValues[index], `${record.namespace}:${record.id} 授权读取`);
     }
-    process.stdout.write("企业核心投影从已认证事件重放后与查询表一致\n");
+    process.stdout.write("企业核心投影从已认证事件与加密事实重建后，原始引用及授权读取均一致\n");
 
     await pool.query("update mn_v2.tenant_heads set retention_floor = $2 where tenant_id = $1", [state.tenantId, state.cursor + 1]);
     const expired = await fetch(`http://127.0.0.1:17319/v2/workspaces/${state.workspaceId}/events?after=0`, {
@@ -172,7 +193,7 @@ async function composeFixture() {
 async function verifyVaultTransit(state) {
   const options = { address: "http://127.0.0.1:58200", token: "mn-v2-vault-fixture-only", individuallyRevocable: true };
   const provider = new VaultTransitKeyProvider(options);
-  assert.equal(await provider.probe(), true);
+  await waitFor(() => provider.probe(), "Vault Transit 初始就绪");
   const plaintext = randomBytes(32);
   const erased = await provider.wrapKey(plaintext, { tenantId: state.tenantId, purpose: "fixture-erased" });
   const retained = await provider.wrapKey(plaintext, { tenantId: state.tenantId, purpose: "fixture-retained" });
@@ -225,44 +246,64 @@ async function verifyS3Cas() {
   process.stdout.write("S3 v2/ CAS 在对象存储重启后保持可读\n");
 }
 
+function fixtureProjectionJournal() {
+  return {
+    cas: new S3Cas({ bucket: "mn-v2-artifacts", prefix: "v2/", client: new SigV4S3Client({
+      endpoint: "http://127.0.0.1:59000", region: "us-east-1",
+      accessKeyId: "mn-e2e", secretAccessKey: "mn-e2e-secret-only",
+    }) }),
+    keyProvider: new VaultTransitKeyProvider({ address: "http://127.0.0.1:58200",
+      token: "mn-v2-vault-fixture-only", individuallyRevocable: true }),
+    namespaces: DEFAULT_PROJECTION_JOURNAL_NAMESPACES,
+  };
+}
+
 async function enqueue(pool, { id, kind, payload, workspaceId }) {
   const createdAt = new Date().toISOString();
-  await pool.query(`
-    insert into mn_v2.jobs (
-      job_id, tenant_id, workspace_id, kind, payload_json, status, attempts,
-      available_at, fencing_token, idempotency_key, created_at, updated_at
-    ) values ($1, 'tenant-enterprise-e2e', $2, $3, $4::jsonb, 'available', 0,
-      $6::timestamptz, 0, $5, $6::timestamptz, $6::timestamptz)
-  `, [id, workspaceId ?? null, kind, JSON.stringify(payload), `fixture:${id}`, createdAt]);
-  if (kind === "agent.execution.run") {
-    const projectedJob = {
-      id,
-      tenantId: "tenant-enterprise-e2e",
-      ...(workspaceId ? { workspaceId } : {}),
-      kind,
-      payload,
-      status: "available",
-      attempts: 0,
-      availableAt: createdAt,
-      fencingToken: 0,
-      idempotencyKey: `fixture:${id}`,
-      streamVersion: 0,
-      createdAt,
-      updatedAt: createdAt,
-    };
-    await pool.query(`
-      insert into mn_v2.projections (
-        tenant_id, namespace, projection_key, stream_version, value_json, updated_at
-      ) values ('tenant-enterprise-e2e', 'job', $1, 0, $2::jsonb, $3::timestamptz)
-    `, [id, JSON.stringify(projectedJob), createdAt]);
-  }
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    await client.query(`
+      insert into mn_v2.jobs (
+        job_id, tenant_id, workspace_id, kind, payload_json, status, attempts,
+        available_at, fencing_token, idempotency_key, created_at, updated_at
+      ) values ($1, 'tenant-enterprise-e2e', $2, $3, $4::jsonb, 'available', 0,
+        $6::timestamptz, 0, $5, $6::timestamptz, $6::timestamptz)
+    `, [id, workspaceId ?? null, kind, JSON.stringify(payload), `fixture:${id}`, createdAt]);
+    if (typeof payload.executionId === "string" && payload.executionId.trim()) {
+      const projectedJob = {
+        id,
+        tenantId: "tenant-enterprise-e2e",
+        ...(workspaceId ? { workspaceId } : {}),
+        kind,
+        payload,
+        status: "available",
+        attempts: 0,
+        availableAt: createdAt,
+        fencingToken: 0,
+        idempotencyKey: `fixture:${id}`,
+        streamVersion: 0,
+        createdAt,
+        updatedAt: createdAt,
+      };
+      await client.query(`
+        insert into mn_v2.projections (
+          tenant_id, namespace, projection_key, stream_version, value_json, updated_at
+        ) values ('tenant-enterprise-e2e', 'job', $1, 0, $2::jsonb, $3::timestamptz)
+      `, [id, JSON.stringify(projectedJob), createdAt]);
+    }
+    await client.query("commit");
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally { client.release(); }
 }
 
 async function job(pool, id) {
   return (await pool.query("select * from mn_v2.jobs where job_id = $1", [id])).rows[0];
 }
 
-async function verifyWorkers(pool, workspaceId) {
+async function verifyWorkers(pool, workspaceId, kernelStore) {
   await enqueue(pool, { id: "job-echo", kind: "fixture.echo", payload: { value: "ok" } });
   const echoed = await waitFor(async () => {
     const row = await job(pool, "job-echo");
@@ -379,7 +420,13 @@ async function verifyWorkers(pool, workspaceId) {
       and namespace = 'inbox'
       and projection_key = 'reconciliation:execution-reconcile:job-reconcile'
   `);
-  assert.equal(inbox.rows[0]?.value_json.status, "open");
+  assert.equal(inbox.rows[0]?.value_json.format, "muniu.projection.reference");
+  assert.match(inbox.rows[0]?.value_json.protectedPayloadRef, /^[a-f0-9]{64}$/u);
+  assert.equal(inbox.rows[0]?.value_json.status, undefined, "核对收件项不能明文存储");
+  const authorizedInbox = await kernelStore.transact("tenant-enterprise-e2e", transaction =>
+    transaction.getProjection("inbox", "reconciliation:execution-reconcile:job-reconcile"));
+  assert.equal(authorizedInbox?.status, "open");
+  assert.equal(authorizedInbox?.executionId, "execution-reconcile");
   const outbox = await pool.query(`
     select topic from mn_v2.outbox
     where tenant_id = 'tenant-enterprise-e2e'

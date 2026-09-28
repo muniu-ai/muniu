@@ -1,12 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 import { randomUUID } from "node:crypto";
 import type { BusinessCandidateV1, BusinessScopeV1, Execution, ExecutionAuthority, ExecutionBudget, JsonObject, WorkspaceMembership } from "@mn/contracts";
-import { computeExecutionAuthorityCommitment } from "./authority.js";
-import { sha256 } from "./canonical.js";
-import { KernelError } from "./errors.js";
-import { PROTECTED_PAYLOAD_KEY_NAMESPACE } from "./kernel.js";
-import { appendKernelEvent } from "./projections.js";
-import type { KernelJobLeaseAssertion, KernelJobSettlementReceipt, KernelStore, KernelTransaction } from "./store.js";
+import {
+  computeExecutionAuthorityCommitment, sha256, KernelError, PROTECTED_PAYLOAD_KEY_NAMESPACE, appendKernelEvent,
+  type KernelJobLeaseAssertion, type KernelJobSettlementReceipt, type KernelStore, type KernelTransaction,
+} from "@mn/kernel";
 
 export const BUSINESS_CANDIDATE_NAMESPACE = "business.candidate";
 export const BUSINESS_CANDIDATE_JOB_KIND = "business.candidate.extract";

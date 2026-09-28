@@ -1,6 +1,8 @@
 # Agent OS 0.2 架构
 
-0.2 使用通用内核和统一事实模型。Desktop、CLI 与 HTTP API 是 Shell；OPC、Coding 与外部 Runner 通过插件贡献能力。0.1 数据与协议保持隔离，不提供迁移或兼容入口。
+0.2 的 Kernel 管理执行与治理状态。Desktop、CLI 与 HTTP API 是 Shell；OPC、Coding 与外部 Runner 通过插件贡献能力。询价候选和报价动作的控制规则位于私有 `@mn/business-execution`，由 Host 与 Worker 调用，Kernel 不包含行业规则。0.1 数据与协议保持隔离，不提供迁移或兼容入口。
+
+业务主数据归应用所有；当前 OPC、Coding 与签名插件的领域仓储仍由 Host 数据端口承载，尚未完成独立数据库分离。本次边界修复及验收范围见 [ADR 0012](adr/0012-application-boundaries.md)。
 
 ```text
 Desktop / CLI / API Shell
@@ -83,7 +85,7 @@ Workflow 使用类型化声明式状态机，不执行插件提供的任意 Java
 
 所有写入提供 `expectedStreamVersion`。版本冲突返回 `409`。事件、投影、Job、outbox、审批和幂等结果在同一数据库事务提交。查询表与快照应能从事件重建，不得作为事实源。
 
-`replayCoreProjections` 校验 tenant 事件链的连续位置、摘要和 HMAC，并重建核心元数据。生产 Host 与 Worker 的非核心投影写入加密事实日志；SQLite 与 PostgreSQL 的 `rebuildProjections` 在一个事务内校验并恢复核心、产品查询投影及受保护幂等结果。重建不执行模型、工具或 Job，不重建物理任务队列。CLI 备份恢复会在新目录执行这项验证，成功后才允许启动；企业通过 `maintenance:enterprise` 在停机维护窗口验证、重建和清理孤儿对象，不能手工删除运行中的表。前置检查、数据库连接隔离和失败恢复步骤见[企业运维](enterprise-operations.md)。
+`replayCoreProjections` 校验 tenant 事件链的连续位置、摘要和 HMAC，并重建核心元数据。生产 Host 与 Worker 的非核心投影以及会话标题、审批正文等敏感核心投影写入加密事实日志；SQLite 与 PostgreSQL 的 `rebuildProjections` 在一个事务内校验并恢复核心、产品查询投影及受保护幂等结果。重建不执行模型、工具或 Job，不重建物理任务队列。CLI 备份恢复会在新目录执行这项验证，成功后才允许启动；企业通过 `maintenance:enterprise` 在停机维护窗口验证、重建和清理孤儿对象，不能手工删除运行中的表。前置检查、数据库连接隔离和失败恢复步骤见[企业运维](enterprise-operations.md)。
 
 文件先按摘要 create-only 写入 CAS，再在事务中提交事件引用。引用校验覆盖所有历史事件与加密投影事实，不能只扫描当前查询表。企业离线维护入口在完整校验后按保留期清理未提交的孤儿对象；运行中的写入必须先停止，不提供在线定时清理。已经提交的事件不会因 Host 或 Worker 重启而丢失。
 
@@ -113,6 +115,8 @@ Host 与 Worker 的 PostgreSQL 连接固定使用 20 秒 `idle_in_transaction_se
 | `unknown` | 需要 `approve_once` 或 `deny` |
 
 执行前重新规范化路径和资源摘要。工具版本、参数、资源、generation 或 authority commitment 变化时，原批准失效。提示文本不能授予权限。
+
+启动、恢复、模型请求与工具派发重新检查发起人的当前工作区权限；批准还要求审批人当前具备审批权限。移除成员或降级角色会使相关批准失效，并停止未派发动作。已准入且没有确定结果的工具调用保留人工核对状态，重新加入工作区不能恢复旧批准。已经发送到外部系统的请求只能尽力取消。
 
 ## 存储实现
 

@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { RuntimeControlError, type ToolApprovalPort } from "@mn/agent-runtime";
-import type { Approval, ToolCallIntent, ToolCallCommitment } from "@mn/contracts";
+import type { Approval, Execution, ToolCallIntent, ToolCallCommitment } from "@mn/contracts";
+
+import { assertCurrentApprovalAuthorization, assertCurrentExecutionAuthorization } from "@mn/kernel";
 
 export interface ToolApprovalKernel {
   requestToolApproval(
@@ -44,12 +46,20 @@ export function createKernelToolApprovalPort(
   return {
     async authorize(intent, signal) {
       if (signal.aborted) throw new Error("工具审批等待已取消");
-      const assertNotInterrupted = async () => {
-        const control = await options.store.transact(options.tenantId, tx =>
-          tx.getProjection<{ generation: number; command: string }>("execution-control", intent.executionId));
+      const assertCurrentAuthorization = async () => {
+        const control = await options.store.transact(options.tenantId, tx => {
+          const execution = tx.getProjection<Execution>("execution", intent.executionId);
+          if (!execution) throw new Error("Execution 不存在");
+          if (execution.generation !== intent.generation) throw new Error("工具调用来自旧执行代次");
+          if (execution.status === "cancelled" || execution.status === "paused" || execution.status === "interrupted") {
+            throw new RuntimeControlError(execution.status);
+          }
+          assertCurrentExecutionAuthorization(tx, execution);
+          return tx.getProjection<{ generation: number; command: string }>("execution-control", intent.executionId);
+        });
         if (control?.generation === intent.generation && control.command === "interrupt") throw new RuntimeControlError("interrupted");
       };
-      await assertNotInterrupted();
+      await assertCurrentAuthorization();
       const requested = await options.kernel.requestToolApproval(
         options.tenantId,
         options.actorId,
@@ -59,11 +69,12 @@ export function createKernelToolApprovalPort(
       if (requested.mode === "auto") return requested;
       while (true) {
         if (signal.aborted) throw new Error("工具审批等待已取消");
-        await assertNotInterrupted();
-        const state = await options.store.transact(options.tenantId, (transaction) => ({
-          approval: transaction.getProjection<Approval>("approval", requested.approval.id),
-          persistedIntent: transaction.getProjection<ToolCallCommitment>("toolIntent", intent.id),
-        }));
+        await assertCurrentAuthorization();
+        const state = await options.store.transact(options.tenantId, (transaction) => {
+          const approval = transaction.getProjection<Approval>("approval", requested.approval.id);
+          if (approval?.status === "approved_once") assertCurrentApprovalAuthorization(transaction, approval);
+          return { approval, persistedIntent: transaction.getProjection<ToolCallCommitment>("toolIntent", intent.id) };
+        });
         if (!state.approval) throw new Error("持久化批准请求不存在");
         if (state.approval.status === "approved_once") {
           if (!state.persistedIntent) throw new Error("持久化工具调用意图不存在");

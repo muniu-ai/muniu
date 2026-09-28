@@ -9,7 +9,8 @@ import {
   computeInquirySnapshotDigest, type Approval, type BusinessActionV1, type BusinessCandidateV1,
   type BusinessDecisionV1, type BusinessScopeV1, type Execution,
 } from "@mn/contracts";
-import { BUSINESS_ACTION_JOB_KIND, type BusinessActionState } from "@mn/kernel";
+import { BUSINESS_ACTION_JOB_KIND, type BusinessActionState } from "@mn/business-execution";
+import { appendKernelEvent } from "@mn/kernel";
 import { FileCas, InMemoryKeyProvider, SqliteStorage } from "@mn/storage";
 import { AgentOsWorker, createBusinessActionWorkerHandler, type BusinessProviderPorts } from "@mn/worker";
 import { createAgentOsHost } from "../src/index.js";
@@ -83,8 +84,13 @@ async function fixture(t: TestContext) {
   assert.equal(workspaceResponse.status, 201);
   const workspace = (await workspaceResponse.json() as { data: { id: string } }).data;
   enabled.push({ tenantId: "local", workspaceId: workspace.id });
-  await store.transact("local", tx => tx.putProjection("modelConnection", "model", { id: "model", tenantId: "local",
-    presetId: "deepseek", defaultModel: "deepseek-v4-flash", status: "ready", streamVersion: 1, secretRef: "keychain://muniu.v2/test" }));
+  await store.transact("local", tx => {
+    tx.putProjection("modelConnection", "model", { id: "model", tenantId: "local",
+      presetId: "deepseek", defaultModel: "deepseek-v4-flash", status: "ready", streamVersion: 1, secretRef: "keychain://muniu.v2/test" });
+    appendKernelEvent(tx, { tenantId: "local", aggregateType: "modelConnection", aggregateId: "model", expectedStreamVersion: 0,
+      type: "model_connection.saved", actorId: "local-owner", generation: 0, correlationId: "fixture-model",
+      publicPayload: { presetId: "deepseek" } });
+  });
   const scope: BusinessScopeV1 = { tenantId: "local", workspaceId: workspace.id, principalId: "local-owner", customerId: "customer" };
   const actionBody = { schemaVersion: "1", action: "issueQuotePackage", expectedStreamVersion: 0, workspaceId: workspace.id,
     customerId: scope.customerId, quoteId: "quote", quoteVersion: "1", decisionId: "decision", templateId: "standard",

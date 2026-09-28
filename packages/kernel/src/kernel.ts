@@ -19,7 +19,7 @@ import type {
   CodingRunnerId,
 } from "@mn/contracts";
 import { acceptMemory, rejectMemory } from "./memory.js";
-import { authorityAllowsIntent, computeExecutionAuthorityCommitment } from "./authority.js";
+import { assertCurrentApprovalAuthorization, assertCurrentExecutionAuthorization, authorityAllowsIntent, computeExecutionAuthorityCommitment, hasUnsettledToolCalls } from "./authority.js";
 import { sha256 } from "./canonical.js";
 import { KernelError, StreamVersionConflictError } from "./errors.js";
 import { transitionExecution, type ExecutionCommand } from "./execution.js";
@@ -63,10 +63,6 @@ export interface SubmitTurnInput {
     ExecutionAuthority,
     "id" | "tenantId" | "executionId" | "streamVersion" | "commitment" | "createdAt" | "updatedAt"
   >;
-}
-
-function payload(value: unknown): JsonObject {
-  return value as JsonObject;
 }
 
 export class AgentOsKernel {
@@ -173,8 +169,11 @@ export class AgentOsKernel {
       });
       this.append(transaction, {
         tenantId, aggregateType: "workspace", aggregateId: id, expectedStreamVersion: 0,
-        type: "workspace.created", actorId, publicPayload: payload(workspace),
+        type: "workspace.created", actorId, publicPayload: { viewMode: workspace.viewMode, activePluginIds: workspace.activePluginIds },
       });
+      this.append(transaction, { tenantId, aggregateType: "workspaceMembership", aggregateId: `${id}:${actorId}`,
+        expectedStreamVersion: 0, type: "workspace_membership.created", actorId,
+        publicPayload: { workspaceId: id, principalId: actorId, workspaceRole: "owner" } });
       return workspace;
     });
   }
@@ -210,6 +209,7 @@ export class AgentOsKernel {
     workspaceRole: WorkspaceRole,
   ): Promise<WorkspaceMembership> {
     const memberId = `${workspaceId}:${principalId}`;
+    const initial = await this.initialWorkspaceMembership(tenantId, workspaceId, principalId, expectedStreamVersion);
     return this.mutation(
       tenantId,
       `workspace.membership.set:${memberId}`,
@@ -231,6 +231,7 @@ export class AgentOsKernel {
         if (current && !current.removedAt && current.workspaceRole === "owner" && workspaceRole !== "owner") {
           this.assertAnotherWorkspaceOwner(transaction, workspaceId, principalId);
         }
+        this.initializeWorkspaceMembershipStream(transaction, actorId, current, initial);
         const timestamp = this.now();
         const next: WorkspaceMembership = {
           id: memberId,
@@ -244,6 +245,9 @@ export class AgentOsKernel {
           updatedAt: timestamp,
         };
         transaction.putProjection("membership", memberId, next);
+        if (!["owner", "operator"].includes(workspaceRole)) {
+          this.revokeMemberExecutions(transaction, tenantId, actorId, workspaceId, principalId, timestamp, workspaceRole !== "reviewer");
+        }
         this.append(transaction, {
           tenantId,
           aggregateType: "workspaceMembership",
@@ -271,6 +275,7 @@ export class AgentOsKernel {
     expectedStreamVersion: number,
   ): Promise<WorkspaceMembership> {
     const memberId = `${workspaceId}:${principalId}`;
+    const initial = await this.initialWorkspaceMembership(tenantId, workspaceId, principalId, expectedStreamVersion);
     return this.mutation(
       tenantId,
       `workspace.membership.remove:${memberId}`,
@@ -291,6 +296,7 @@ export class AgentOsKernel {
         if (current.workspaceRole === "owner") {
           this.assertAnotherWorkspaceOwner(transaction, workspaceId, principalId);
         }
+        this.initializeWorkspaceMembershipStream(transaction, actorId, current, initial);
         const timestamp = this.now();
         const next: WorkspaceMembership = {
           ...current,
@@ -299,6 +305,7 @@ export class AgentOsKernel {
           updatedAt: timestamp,
         };
         transaction.putProjection("membership", memberId, next);
+        this.revokeMemberExecutions(transaction, tenantId, actorId, workspaceId, principalId, timestamp);
         this.append(transaction, {
           tenantId,
           aggregateType: "workspaceMembership",
@@ -311,6 +318,71 @@ export class AgentOsKernel {
         return next;
       },
     );
+  }
+
+  /** Current 0.2 workspaces originally recorded their first owner in workspace.created only. */
+  private async initialWorkspaceMembership(tenantId: string, workspaceId: string, principalId: string, expectedVersion: number):
+    Promise<{ readonly membership: WorkspaceMembership; readonly eventId: string } | undefined> {
+    if (expectedVersion !== 1) return undefined;
+    const memberId = `${workspaceId}:${principalId}`;
+    const read = this.store.readEventHistory ?? this.store.readEvents;
+    let position = 0;
+    let initial: { readonly membership: WorkspaceMembership; readonly eventId: string } | undefined;
+    for (;;) {
+      const page = await read.call(this.store, tenantId, position, 500);
+      for (const event of page.events) {
+        if (event.aggregateType === "workspaceMembership" && event.aggregateId === memberId) return undefined;
+        if (event.type !== "workspace.created" || event.aggregateId !== workspaceId || event.actorId !== principalId) continue;
+        const facts = event.publicPayload.projectionFacts;
+        if (!facts || typeof facts !== "object" || Array.isArray(facts)) continue;
+        const changes = (facts as JsonObject).changes;
+        if (!Array.isArray(changes)) continue;
+        for (const value of changes) {
+          if (!value || typeof value !== "object" || Array.isArray(value)
+            || value.namespace !== "membership" || value.id !== memberId || !value.value) continue;
+          const member = value.value as unknown as WorkspaceMembership;
+          if (member.id === memberId && member.tenantId === tenantId && member.workspaceId === workspaceId
+            && member.principalId === principalId && member.workspaceRole === "owner"
+            && member.streamVersion === 1 && !member.removedAt) initial = { membership: member, eventId: event.id };
+        }
+      }
+      if (page.events.length < 500) return initial;
+      position = page.events.at(-1)!.position;
+    }
+  }
+
+  private initializeWorkspaceMembershipStream(transaction: KernelTransaction, actorId: string,
+    current: WorkspaceMembership | undefined,
+    initial: { readonly membership: WorkspaceMembership; readonly eventId: string } | undefined): void {
+    if (!current || !initial || sha256(current) !== sha256(initial.membership)) return;
+    this.append(transaction, { tenantId: current.tenantId, aggregateType: "workspaceMembership", aggregateId: current.id,
+      expectedStreamVersion: 0, type: "workspace_membership.created", actorId, causationId: initial.eventId,
+      publicPayload: { workspaceId: current.workspaceId, principalId: current.principalId, workspaceRole: "owner" } });
+  }
+
+  private revokeMemberExecutions(
+    transaction: KernelTransaction, tenantId: string, actorId: string,
+    workspaceId: string, principalId: string, occurredAt: string, revokeReviews = true,
+  ): void {
+    const approvedExecutions = new Set(transaction.listProjections<Approval>("approval")
+      .filter(approval => revokeReviews && approval.workspaceId === workspaceId
+        && approval.decidedBy === principalId && approval.status === "approved_once")
+      .map(approval => approval.executionId));
+    for (const execution of transaction.listProjections<Execution>("execution")) {
+      if (execution.workspaceId !== workspaceId
+        || (execution.initiatedBy !== principalId && !approvedExecutions.has(execution.id))
+        || ["completed", "failed", "cancelled"].includes(execution.status)) continue;
+      const status = execution.status === "needs_reconciliation" || hasUnsettledToolCalls(transaction, execution.id)
+        ? "needs_reconciliation" : "interrupted";
+      transaction.putProjection("execution", execution.id, { ...execution, status,
+        failureCode: "EXECUTION_AUTHORIZATION_REVOKED", streamVersion: execution.streamVersion + 1, updatedAt: occurredAt });
+      this.append(transaction, { tenantId, aggregateType: "execution", aggregateId: execution.id,
+        expectedStreamVersion: execution.streamVersion, type: "execution.authorization_revoked", actorId,
+        executionId: execution.id, generation: execution.generation,
+        publicPayload: { workspaceId, previousStatus: execution.status, status, reason: "workspace_membership_revoked" } });
+      expireExecutionApprovals(transaction, { tenantId, actorId, executionId: execution.id,
+        generation: execution.generation, occurredAt, reason: "workspace_membership_revoked" });
+    }
   }
 
   private assertAnotherWorkspaceOwner(
@@ -369,7 +441,7 @@ export class AgentOsKernel {
       transaction.putProjection("thread", id, thread);
       this.append(transaction, {
         tenantId, aggregateType: "thread", aggregateId: id, expectedStreamVersion: 0,
-        type: "thread.created", actorId, publicPayload: payload(thread),
+        type: "thread.created", actorId, publicPayload: { workspaceId: thread.workspaceId, pluginId: thread.pluginId },
       });
       return thread;
     });
@@ -622,6 +694,7 @@ export class AgentOsKernel {
       if (execution.streamVersion !== expectedStreamVersion) {
         throw new KernelError("STREAM_VERSION_CONFLICT", "执行版本已变化", "刷新执行状态后重试", true);
       }
+      if (command === "start" || command === "resume") assertCurrentExecutionAuthorization(transaction, execution);
       const nextStatus = transitionExecution(execution.status, command);
       const now = this.now();
       const next: Execution = {
@@ -714,6 +787,7 @@ export class AgentOsKernel {
     return this.mutation(tenantId, `tool.intent:${intent.executionId}`, idempotencyKey, intent, (transaction) => {
       const execution = transaction.getProjection<Execution>("execution", intent.executionId);
       if (!execution) throw new KernelError("EXECUTION_NOT_FOUND", "执行不存在", "刷新执行状态");
+      assertCurrentExecutionAuthorization(transaction, execution);
       if (execution.status !== "running") throw new KernelError("EXECUTION_NOT_RUNNING", "当前执行不能创建工具调用", "刷新执行状态");
       if (transaction.getProjection("toolIntent", intent.id)) throw new KernelError("TOOL_CALL_ID_REUSED", "工具调用标识已被使用", "为新调用生成独立标识");
       const expiresAt = Date.parse(intent.expiresAt);
@@ -806,6 +880,10 @@ export class AgentOsKernel {
           "批准请求关联的执行不存在",
           "停止处理并检查审计记录",
         );
+      }
+      if (decision === "approve_once") {
+        assertCurrentExecutionAuthorization(transaction, execution);
+        assertCurrentApprovalAuthorization(transaction, { ...approval, decidedBy: actorId });
       }
       if (execution.status !== "waiting_approval") {
         throw new KernelError(
@@ -1268,7 +1346,6 @@ export class AgentOsKernel {
           publicPayload: {
             workspaceId: current.workspaceId,
             objectDigest,
-            reason,
           },
         });
         return tombstone;
@@ -1297,7 +1374,7 @@ export class AgentOsKernel {
       this.append(transaction, {
         tenantId, aggregateType: "modelConnection", aggregateId: connection.id, expectedStreamVersion: 0,
         type: "model_connection.saved", actorId,
-        publicPayload: { presetId: connection.presetId, displayName: connection.displayName },
+        publicPayload: { presetId: connection.presetId },
       });
       return connection;
     });

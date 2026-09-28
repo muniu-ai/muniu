@@ -3,8 +3,8 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 import { parseBusinessScopeV1, parseRfqModelOutputV1, parseSalesInquirySnapshotV1,
   type BusinessCandidateContentV1, type BusinessCandidateV1, type BusinessInquirySourcePortV1,
   type BusinessScopeV1, type CreateBusinessCandidateV2, type JsonObject, type RfqCandidateV1 } from "@mn/contracts";
-import { BusinessCandidateLedger, assertBusinessCandidateMember, findModelPrice, KernelError, PROTECTED_PAYLOAD_KEY_NAMESPACE, sha256,
-  type BusinessCandidateState, type KernelStore, type ModelConnection } from "@mn/kernel";
+import { findModelPrice, KernelError, PROTECTED_PAYLOAD_KEY_NAMESPACE, sha256, type KernelStore, type ModelConnection } from "@mn/kernel";
+import { BusinessCandidateLedger, assertBusinessCandidateMember, type BusinessCandidateState } from "@mn/business-execution";
 import { readProtectedJson, storeProtectedJson, type ContentAddressedStorage, type KeyProvider, type ProtectedJsonKeyRecordV1 } from "@mn/storage";
 
 export interface BusinessCandidateHostOptions {

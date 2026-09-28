@@ -28,6 +28,7 @@
   mn backup create state.mnbackup --verify
   mn backup check state.mnbackup
   mn backup restore state.mnbackup --destination restored-v2
+  mn backup restore state.mnbackup --destination protected-v2 --upgrade-core-protection
 
 签名插件：
   mn plugin catalog
@@ -175,13 +176,24 @@ mn code reconcile EXECUTION_ID create_new_call
 
 ## 备份
 
+旧版 0.2 数据提示 `PROTECTED_CORE_STATE_UPGRADE_REQUIRED` 时，可显式恢复并升级到新目录。用于切换的最终备份前，先退出木牛并停止使用原状态目录的 Host、Worker，保持停写直到切换完成；备份之后原库新增的操作不会进入恢复副本。
+
+```bash
+mn backup create before-core-protection.mnbackup --verify
+mn backup restore before-core-protection.mnbackup --destination protected-v2 --upgrade-core-protection
+```
+
+升级验证原事件链和加密事实，将当前敏感核心记录写入加密日志，再重建查询状态。原数据库和备份保持不变；历史事件中的旧明文仍保留，不能将升级视为历史数据擦除。失败时不生成可启动目录，但已创建的 Keychain 密钥项可能保留。仅在验证成功后，将 `MN_V2_STATE_ROOT` 指向返回的新目录。
+
+旧明文幂等回执只有在事件链中存在对应的已认证加密事实时，才能据此恢复。缺少事实会阻断升级与启动；必须保留原库、备份和幂等记录，先核对原操作，不能删除记录重试或将查询缓存重新认定为事实。
+
 ```bash
 mn backup create muniu-v2-backup.mnbackup --verify
 mn backup check muniu-v2-backup.mnbackup
 mn backup restore muniu-v2-backup.mnbackup --destination restored-v2
 ```
 
-本地备份把一致的 SQLite 快照与 `~/.muniu/v2/cas` 对象封装为同一个 AES-256-GCM 加密包，并记录数据库、每个 CAS 对象和完整负载的摘要。恢复使用新的状态目录，包含 `state.sqlite3` 与 `cas/`；先验证事件 HMAC、CAS 摘要与加密事实，再重建核心和产品查询投影。校验失败不生成可启动目录，Host 也会拒绝带有未完成验证标记的目录。已完成模型和工具调用不会因查询表重建而重跑。
+本地备份把一致的 SQLite 快照与 `~/.muniu/v2/cas` 对象封装为同一个 AES-256-GCM 加密包，并记录数据库、每个 CAS 对象和完整负载的摘要。恢复使用新的状态目录，包含 `state.sqlite3` 与 `cas/`；先验证事件 HMAC、CAS 摘要与加密事实，再重建核心和产品查询投影。校验失败不生成可启动目录，Host 也会拒绝带有未完成验证标记的目录。已完成的模型和工具调用不会因查询表重建而重新执行。
 
 备份位于当前 v2 状态根的 `backups/`，恢复目录位于 `restore/`。退出现有木牛进程后，可将 `MN_V2_STATE_ROOT` 指向命令返回的 `stateRoot` 启动。操作不修改原状态，也不自动切换。恢复仍依赖原 v2 Keychain 中的事件 HMAC、备份包装密钥与数据包装密钥；备份包不包含这些密钥，不能单独用于另一台电脑。已撤销的密钥不会因恢复旧备份而重新生效。
 

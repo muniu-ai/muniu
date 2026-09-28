@@ -21,6 +21,8 @@ curl --fail http://127.0.0.1:7318/v2/readiness
 
 health 表示进程与插件可响应，readiness 表示存储、密钥和 lock 条件允许接收工作。单个插件 degraded 时，核心 health 仍可成功。
 
+若启动返回 `PROTECTED_CORE_STATE_UPGRADE_REQUIRED`，表示当前 0.2 数据仍采用旧版核心记录保护范围。保留原目录、备份和密钥；本地按 [CLI 备份升级](reference/cli.md#备份)恢复到新目录，企业按 [离线维护](enterprise-operations.md#离线维护入口)升级。不要清空数据库或跳过校验。
+
 ## 模型连接失败
 
 回到 Desktop 的集成设置，重新选择厂商预设并运行探测。不要手工填写底层 Base URL、报文格式或内部模型标识。

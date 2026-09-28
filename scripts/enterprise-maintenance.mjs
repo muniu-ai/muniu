@@ -17,9 +17,9 @@ let adminClient;
 try {
   const args = process.argv.slice(2);
   if (args.length === 1 && args[0] === "--help") {
-    process.stdout.write("用法：npm run maintenance:enterprise -- verify|rebuild|gc --offline --database DATABASE\n必须先停止所有共用数据库与 CAS 的 Host/Worker；失败后数据库保持离线。gc 使用 MN_CAS_ORPHAN_RETENTION_DAYS（默认 7 天）。\n");
+    process.stdout.write("用法：npm run maintenance:enterprise -- verify|rebuild|gc|upgrade-core-protection --offline --database DATABASE\n必须先停止所有共用数据库与 CAS 的 Host/Worker；失败后数据库保持离线。升级前保存数据库、CAS 和密钥备份；升级不改写历史事件。gc 使用 MN_CAS_ORPHAN_RETENTION_DAYS（默认 7 天）。\n");
   } else {
-    if (args.length !== 4 || !["verify", "rebuild", "gc"].includes(args[0]) || args[1] !== "--offline" || args[2] !== "--database") {
+    if (args.length !== 4 || !["verify", "rebuild", "gc", "upgrade-core-protection"].includes(args[0]) || args[1] !== "--offline" || args[2] !== "--database") {
       throw new Error("维护参数无效；使用 --help 查看用法");
     }
     const hmacKey = Buffer.from(required("MN_EVENT_HMAC_KEY"), "base64");

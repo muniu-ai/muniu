@@ -102,6 +102,41 @@ test("恢复状态根在事件 HMAC 校验失败时不返回可启动目录", as
   assert.equal(existsSync(join(root, "restore", "missing-head")), false);
 });
 
+test("旧版核心记录只能显式升级恢复副本，原数据库和备份不变", async () => {
+  const root = temporaryDirectory();
+  const databaseFile = join(root, "state.sqlite3");
+  const hmacKey = Buffer.alloc(32, 2);
+  const keyProvider = new InMemoryKeyProvider(Buffer.alloc(32, 3));
+  const storage = new SqliteStorage({ databaseFile, hmacKey });
+  const subject = "旧版敏感会话正文";
+  await storage.transact("local", tx => {
+    const value = { id: "thread-a", tenantId: "local", workspaceId: "workspace-a", subject, streamVersion: 1 };
+    tx.putProjection("thread", "thread-a", value);
+    tx.appendEvent({ tenantId: "local", aggregateType: "thread", aggregateId: "thread-a",
+      expectedStreamVersion: 0, type: "thread.created", actorId: "owner", generation: 0, correlationId: "thread-a",
+      publicPayload: { projectionFacts: { version: 1, changes: [{ namespace: "thread", id: "thread-a", value }] } } });
+  });
+  await storage.close();
+  const backup = new LocalSqliteBackup({ databaseFile, backupDirectory: join(root, "backups"),
+    restoreDirectory: join(root, "restore"), keyProvider });
+  const created = await backup.create("old.mnbackup");
+  const original = readFileSync(databaseFile);
+  const archive = readFileSync(created.file);
+  await assert.rejects(backup.restoreState("old.mnbackup", "without-upgrade", { hmacKey, keyProvider }));
+  const verification = { hmacKey, keyProvider, upgradeCoreProtection: true };
+  const upgraded = await backup.restoreState("old.mnbackup", "upgraded", verification);
+  const db = new DatabaseSync(upgraded.file);
+  try {
+    const row = db.prepare("select value_json from projections where namespace = 'thread'").get();
+    assert.ok(row);
+    assert.ok(!String(row.value_json).includes(subject));
+    assert.equal(db.prepare("select count(*) as count from events where event_type = 'thread.created'").get()?.count, 1);
+  } finally { db.close(); }
+  assert.deepEqual(readFileSync(databaseFile), original);
+  assert.deepEqual(readFileSync(created.file), archive);
+  assert.equal(existsSync(join(upgraded.stateRoot, ".restore-pending")), false);
+});
+
 test("backup checks the source size before loading a snapshot and synchronizes created directory entries", async t => {
   const root = temporaryDirectory();
   const databaseFile = join(root, "state.sqlite");
@@ -421,4 +456,30 @@ test("create 使用 create-only 语义并报告稳定错误", async () => {
     keyProvider: new InMemoryKeyProvider(randomBytes(32))
   });
   await assert.rejects(missing.create("missing.mnbackup"), hasBackupCode("BACKUP_SOURCE_NOT_FOUND"));
+});
+
+
+test("恢复升级保留缺失幂等证据的诊断并保留原数据库", async () => {
+  const root = temporaryDirectory();
+  const databaseFile = join(root, "state.sqlite");
+  const hmacKey = randomBytes(32);
+  const keyProvider = new InMemoryKeyProvider(randomBytes(32));
+  const storage = new SqliteStorage({ databaseFile, hmacKey });
+  const backup = new LocalSqliteBackup({ databaseFile, backupDirectory: join(root, "backups"),
+    restoreDirectory: join(root, "restored"), keyProvider });
+  try {
+    await storage.transact("local", tx => {
+      tx.appendEvent({ tenantId: "local", aggregateType: "fixture", aggregateId: "one", expectedStreamVersion: 0,
+        type: "fixture.recorded", actorId: "owner", generation: 0, correlationId: "one", publicPayload: {} });
+      tx.putIdempotency({ tenantId: "local", scope: "old", key: "operation", requestDigest: "request",
+        response: { private: "unproven-effect-response" }, createdAt: new Date().toISOString() });
+    });
+    const original = await storage.transact("local", tx => tx.getIdempotency("old", "operation"));
+    await backup.create("old.mnbackup");
+    await assert.rejects(backup.restoreState("old.mnbackup", "upgraded", { hmacKey, keyProvider, upgradeCoreProtection: true }),
+      { code: "IDEMPOTENCY_PROTECTION_EVIDENCE_REQUIRED" });
+    assert.deepEqual(await storage.transact("local", tx => tx.getIdempotency("old", "operation")), original);
+    assert.equal(existsSync(join(root, "restored", "upgraded")), false);
+    assert.equal(existsSync(join(root, "backups", "old.mnbackup")), true);
+  } finally { await storage.close(); }
 });

@@ -5,12 +5,11 @@ import type {
   IssueQuotePackageInputV1, JsonObject, ToolCallIntent, WorkspaceMembership, WorkerExecutionIdentityV1,
 } from "@mn/contracts";
 import { computeBusinessActionDigest, parseIssueQuotePackageInputV1 } from "@mn/contracts";
-import { assertApprovalUsable, authorityAllowsIntent, computeExecutionAuthorityCommitment } from "./authority.js";
-import { expireExecutionApprovals } from "./approvals.js";
-import { sha256 } from "./canonical.js";
-import { KernelError } from "./errors.js";
-import { appendKernelEvent } from "./projections.js";
-import type { KernelJobLeaseAssertion, KernelJobSettlementReceipt, KernelStore, KernelTransaction } from "./store.js";
+import {
+  assertApprovalUsable, assertCurrentApprovalAuthorization, recordToolAdmission, authorityAllowsIntent, computeExecutionAuthorityCommitment,
+  expireExecutionApprovals, sha256, KernelError, appendKernelEvent,
+  type KernelJobLeaseAssertion, type KernelJobSettlementReceipt, type KernelStore, type KernelTransaction,
+} from "@mn/kernel";
 
 export const BUSINESS_ACTION_NAMESPACE = "business.action";
 export const BUSINESS_ACTION_JOB_KIND = "business.action.execute";
@@ -185,8 +184,10 @@ export class BusinessActionLedger {
         fail("STALE_APPROVAL", "出包批准或执行代次已失效");
       authorityAllowsIntent(authority, intent);
       assertApprovalUsable(approved, { ...persisted, normalizedArguments: intent.normalizedArguments }, intent, this.now());
+      assertCurrentApprovalAuthorization(tx, approved);
       if (intent.argumentsDigest !== action.actionDigest || computeBusinessActionDigest(action.action) !== action.actionDigest)
         fail("BUSINESS_ACTION_CHANGED", "出包参数已变化");
+      recordToolAdmission(tx, execution, intent.id, "started", this.now());
       return this.write(tx, action, { status: "running", dispatchStartedAt: this.now() }, "dispatch_started");
     });
   }
@@ -196,6 +197,11 @@ export class BusinessActionLedger {
       if (lease) requireBusinessLease(tx, lease);
       const action = this.require(tx, id);
       if (["completed", "rejected", "terminated"].includes(action.status)) fail("BUSINESS_ACTION_TERMINAL", "业务动作已经结束");
+      if (patch.receipt && ["completed", "rejected"].includes(patch.receipt.status)) {
+        if (patch.receipt.actionId !== action.id || patch.receipt.operationKey !== action.operationKey)
+          fail("BUSINESS_RECEIPT_MISMATCH", "回执与当前出包操作不一致");
+        recordToolAdmission(tx, this.execution(tx, action), `${action.id}:issue`, "settled", this.now());
+      }
       const next = this.write(tx, action, patch, "updated");
       if (patch.status === "rejected") {
         const execution = this.execution(tx, action);
@@ -238,6 +244,7 @@ export class BusinessActionLedger {
       if (receipt.actionId !== action.id || receipt.operationKey !== action.operationKey || receipt.status !== "completed")
         fail("BUSINESS_RECEIPT_MISMATCH", "回执与当前出包操作不一致");
       if (!tx.settleJob) fail("BUSINESS_SETTLEMENT_UNAVAILABLE", "存储不支持业务动作事务结算");
+      recordToolAdmission(tx, this.execution(tx, action), `${action.id}:issue`, "settled", this.now());
       this.write(tx, action, { status: "completed", receipt }, "completed");
       this.writeExecution(tx, this.execution(tx, action), "completed", "completed");
       return tx.settleJob({ ...lease, outcome: "completed", value: { actionId: id, operationKey: action.operationKey } });
@@ -263,6 +270,7 @@ export class BusinessActionLedger {
       if (decision === "terminate" && (!receipt || receipt.status !== "rejected" || receipt.reasonCode !== "ABANDONED"
         || receipt.actionId !== id || receipt.operationKey !== action.operationKey))
         fail("BUSINESS_ABANDONMENT_REQUIRED", "业务系统尚未确认此操作已永久放弃");
+      recordToolAdmission(tx, this.execution(tx, action), `${action.id}:issue`, "settled", this.now());
       const inboxId = `reconciliation:${action.executionId}:${action.jobId}`;
       const inbox = tx.getProjection<JsonObject>("inbox", inboxId);
       if (inbox) tx.putProjection("inbox", inboxId, { ...inbox, status: "resolved" });

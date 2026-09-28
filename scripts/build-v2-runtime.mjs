@@ -20,6 +20,7 @@ const buildOrder = [
   "packages/contracts",
   "packages/storage",
   "packages/kernel",
+  "packages/business-execution",
   "packages/plugin-sdk",
   "packages/agent-runtime",
   "plugins/opc",

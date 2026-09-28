@@ -325,7 +325,6 @@ export async function createAssets(options: CreateAssetsOptions): Promise<readon
           digest: asset.digest,
           mediaType: asset.mediaType,
           byteLength: asset.byteLength,
-          fileName: asset.fileName,
           protected: asset.protected,
         },
         ...(asset.protectedPayloadRef ? { protectedPayloadRef: asset.protectedPayloadRef } : {}),

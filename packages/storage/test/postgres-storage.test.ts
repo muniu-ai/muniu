@@ -673,6 +673,25 @@ test("PostgreSQL 未知副作用原子写入 Job、Execution、Inbox 和核对 o
   assert.ok(client.outbox.some((message) => message.topic === "execution.reconciliation_required"));
 });
 
+for (const kind of ["knowledge.publish", "procurement.submit"]) {
+  test(`PostgreSQL ${kind} 未知效果同步终止任务投影`, async () => {
+    const client = new PostgresLifecycleFixture({ kind, projectJob: true });
+    const storage = fixtureStorage(client);
+    const claimed = await storage.claimJob("worker-a", startedAt);
+    assert.ok(claimed);
+    projection(client, "execution", "execution-a").status = "running";
+    await storage.markNeedsReconciliation("execution-a", {
+      jobId: claimed.id, workerId: "worker-a", fencingToken: claimed.fencingToken,
+      occurredAt: "2025-01-02T03:04:06.000Z",
+    });
+    assert.equal(client.job.status, "failed");
+    assert.equal(projection(client, "job", claimed.id).status, "failed");
+    assert.equal(projection(client, "job", claimed.id).leaseOwner, undefined);
+    assert.equal(projection(client, "execution", "execution-a").status, "needs_reconciliation");
+    assert.ok(client.events.some(event => event.type === "job.failed"));
+  });
+}
+
 test("PostgreSQL 生命周期版本冲突回滚物理 Job、投影、事件与 outbox", async () => {
   const client = new PostgresLifecycleFixture({ projectedExecutionStreamVersion: 2 });
   const storage = fixtureStorage(client);

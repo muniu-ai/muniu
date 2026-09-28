@@ -4,7 +4,8 @@ import {
   computeBusinessOperationKey, parseBusinessDecisionV1, parseBusinessObjectSnapshotV1,
   type BusinessActionV1, type BusinessScopeV1, type CreateBusinessActionV2, type IssueQuotePackageInputV1,
 } from "@mn/contracts";
-import { BusinessActionLedger, KernelError, sha256, type BusinessActionState, type KernelStore } from "@mn/kernel";
+import { KernelError, sha256, type KernelStore } from "@mn/kernel";
+import { BusinessActionLedger, type BusinessActionState } from "@mn/business-execution";
 import { assertBusinessAuthorityCurrent, type BusinessProviderPorts } from "@mn/worker";
 export { createSalesBusinessProvider, businessAuthorityTokenResolver, loadBusinessProviderConfiguration } from "@mn/worker";
 

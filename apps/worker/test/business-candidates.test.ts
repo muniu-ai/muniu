@@ -7,7 +7,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { PersistentModelBudget } from "@mn/agent-runtime";
 import { computeInquirySnapshotDigest, type BusinessInquirySourcePortV1, type JsonObject, type SalesInquirySnapshotV1 } from "@mn/contracts";
-import { BusinessCandidateLedger } from "@mn/kernel";
+import { BusinessCandidateLedger } from "@mn/business-execution";
 import { FileCas, InMemoryKeyProvider, SqliteStorage, storeProtectedJson } from "@mn/storage";
 import { AgentOsWorker } from "../src/index.js";
 import { createProtectedRuntimeStore, readProtectedRuntimePayload } from "../src/runtime-store.js";

@@ -22,6 +22,9 @@ import {
 } from "@mn/agent-runtime";
 import {
   AgentOsKernel,
+  assertCurrentExecutionAuthorization,
+  assertCurrentToolApproval,
+  recordToolAdmission,
   type KernelJobSettlementReceipt,
   type KernelStore,
   type KernelTransaction,
@@ -647,6 +650,9 @@ export function createKernelAgentTurnHandler(
       const state = await options.store.transact(job.tenantId, (transaction) => {
         const execution = transaction.getProjection<Execution>("execution", executionId);
         if (!execution) throw new Error("Execution 不存在");
+        if (execution.status === "needs_reconciliation") throw new UnknownExternalSideEffectError(execution.id);
+        if (execution.status === "interrupted" || execution.status === "paused") throw new AgentExecutionInterruptedError(execution.id);
+        assertCurrentExecutionAuthorization(transaction, execution);
         const authority = transaction.getProjection<ExecutionAuthority>("authority", execution.authorityId);
         if (!authority) throw new Error("Execution Authority 不存在");
         const thread = transaction.getProjection<Thread>("thread", execution.threadId);
@@ -756,17 +762,33 @@ export function createKernelAgentTurnHandler(
       const onCommit = (transaction: KernelTransaction, records: readonly RuntimeRecord[]) => {
         recordRuntimeAttention(transaction, state.execution, records);
         if (records.some(record => record.type === "model/request" || record.type === "model/reserved" || record.type === "tool/started"
+          || record.type === "job/started" || record.type === "subagent/reserved"
           || (record.type === "execution/status" && record.payload.status === "completed"))) {
           const current = transaction.getProjection<Execution>("execution", executionId);
+          if (!current || current.generation !== state.execution.generation) throw new StaleFencingTokenError(job.id);
+          if (current.status === "needs_reconciliation") throw new UnknownExternalSideEffectError(executionId);
           const control = transaction.getProjection<{ generation: number; command: string }>("execution-control", executionId);
           if (control?.generation === state.execution.generation && control.command === "interrupt") throw new RuntimeControlError("interrupted");
-          if (current?.status === "cancelled" || current?.status === "interrupted" || current?.status === "paused") throw new RuntimeControlError(current.status);
+          if (current.status === "cancelled" || current.status === "interrupted" || current.status === "paused") throw new RuntimeControlError(current.status);
+          assertCurrentExecutionAuthorization(transaction, current);
+          for (const record of records) {
+            if (record.type === "tool/started" && typeof record.payload.toolCallId === "string") {
+              assertCurrentToolApproval(transaction, executionId, record.payload.toolCallId, (options.now ?? (() => new Date().toISOString()))());
+            }
+          }
+        }
+        for (const record of records) {
+          if ((record.type === "tool/started" || record.type === "tool/result") && typeof record.payload.toolCallId === "string") {
+            recordToolAdmission(transaction, state.execution, record.payload.toolCallId,
+              record.type === "tool/started" ? "started" : "settled", record.occurredAt);
+          }
         }
         if (!context.acknowledgeJobSettlement) return;
         const status = records.filter(record => record.type === "execution/status").at(-1)?.payload.status;
         if (status !== "completed" && status !== "failed" && status !== "cancelled" && status !== "paused") return;
         const current = transaction.getProjection<Execution>("execution", executionId);
         if (!current || current.generation !== state.execution.generation) throw new StaleFencingTokenError(job.id);
+        if (current.status === "needs_reconciliation") throw new UnknownExternalSideEffectError(executionId);
         if ((current.status === "cancelled" || current.status === "paused" || current.status === "interrupted")
           && current.status !== status) throw new RuntimeControlError(current.status);
         if (!transaction.settleJob) throw new Error("存储未实现事务内 Job 终结，Worker 已拒绝提交终态");

@@ -40,6 +40,7 @@ const HELP = `木牛 Agent OS 0.2
   mn backup create state.mnbackup --verify
   mn backup check state.mnbackup
   mn backup restore state.mnbackup --destination restored-v2
+  mn backup restore state.mnbackup --destination protected-v2 --upgrade-core-protection
 
 签名插件：
   mn plugin catalog
@@ -83,7 +84,7 @@ export interface CliDependencies {
 export interface CliBackup {
   create(fileName: string): Promise<LocalBackupCreateResult>;
   check(fileName: string): Promise<LocalBackupCheckResult>;
-  restore(fileName: string, destinationName: string): Promise<LocalStateRestoreResult>;
+  restore(fileName: string, destinationName: string, options?: { readonly upgradeCoreProtection?: boolean }): Promise<LocalStateRestoreResult>;
 }
 
 interface ParsedArguments {
@@ -823,8 +824,12 @@ async function backup(
   getClient: () => CliBackup,
   now: () => Date,
 ): Promise<CliResult> {
-  assertAllowedFlags(parsed, ["output", "file", "destination", "verify"]);
+  assertAllowedFlags(parsed, ["output", "file", "destination", "verify", "upgrade-core-protection"]);
   const operation = parsed.positional[0] ?? "create";
+  if (parsed.flags.has("upgrade-core-protection")
+    && (operation !== "restore" || parsed.flags.get("upgrade-core-protection") !== true)) {
+    throw new CliUsageError("--upgrade-core-protection 仅用于恢复到新状态目录，不接受参数值");
+  }
   try {
     if (operation === "create") {
       const fileName = flag(parsed, "output") ?? parsed.positional[1]
@@ -855,11 +860,13 @@ async function backup(
         throw new CliUsageError("用法：mn backup restore <备份文件名> --destination <新状态目录名>");
       }
       const destination = flag(parsed, "destination", true)!;
-      const restored = await getClient().restore(fileName, destination);
+      const upgradeCoreProtection = parsed.flags.has("upgrade-core-protection");
+      const restored = await getClient().restore(fileName, destination,
+        ...(upgradeCoreProtection ? [{ upgradeCoreProtection: true }] : []));
       return {
         command: "backup",
         data: { operation, restored },
-        human: `备份已恢复到独立状态目录：${restored.stateRoot}；退出当前木牛进程后，将 MN_V2_STATE_ROOT 指向此目录启动。原状态未修改，仍需原 v2 Keychain 密钥。`,
+        human: `备份已恢复到独立状态目录：${restored.stateRoot}；${upgradeCoreProtection ? "当前核心记录已升级加密，历史事件保留原内容。" : ""}退出当前木牛进程后，将 MN_V2_STATE_ROOT 指向此目录启动。原状态未修改，仍需原 v2 Keychain 密钥。`,
       };
     }
     throw new CliUsageError("backup 仅支持 create、check 或 restore");
@@ -877,6 +884,7 @@ async function backup(
 }
 
 function backupErrorAction(code: string): string {
+  if (code === "IDEMPOTENCY_PROTECTION_EVIDENCE_REQUIRED") return "保留原库、备份和幂等记录；先核对原操作，仅凭已认证事实恢复";
   if (code === "BACKUP_DESTINATION_EXISTS") return "使用新的文件名；木牛不会覆盖已有备份或数据库";
   if (code === "BACKUP_DECRYPTION_FAILED") return "确认当前 Keychain 仍包含创建备份时使用的 v2 包装密钥";
   if (code === "BACKUP_SOURCE_NOT_FOUND") return "检查备份文件名或先创建备份";
@@ -898,11 +906,11 @@ function createDefaultBackup(dependencies: CliDependencies): CliBackup {
     restoreDirectory: join(stateRoot, "restore"),
     keyProvider: new MacOsKeychainKeyProvider({ account: "backup-wrapping-key" }),
   });
-  return { create: backup.create.bind(backup), check: backup.check.bind(backup), async restore(fileName, destinationName) {
+  return { create: backup.create.bind(backup), check: backup.check.bind(backup), async restore(fileName, destinationName, options) {
     const encoded = await runKeychainCommand(["find-generic-password", "-s", "com.muniu.agent-os.v2", "-a", "event-hmac", "-w"]);
     const hmacKey = Buffer.from(encoded, "base64");
     try {
-      return await backup.restoreState(fileName, destinationName, { hmacKey,
+      return await backup.restoreState(fileName, destinationName, { hmacKey, ...options,
         keyProvider: new MacOsKeychainKeyProvider({ account: "protected-payload-wrapping-key", individuallyRevocable: true }) });
     } finally { hmacKey.fill(0); }
   } };

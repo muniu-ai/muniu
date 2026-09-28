@@ -1,7 +1,9 @@
 import type {
   Approval,
   CodingRunnerId,
+  Execution,
   ExecutionAuthority,
+  WorkspaceMembership,
   ResourceRef,
   ToolCallIntent,
   ToolEffectClass,
@@ -9,6 +11,69 @@ import type {
 import { approvalStillMatches, isPotentiallyAutoApprovable } from "@mn/contracts";
 import { sha256 } from "./canonical.js";
 import { KernelError } from "./errors.js";
+import type { KernelTransaction } from "./store.js";
+import type { ToolAdmission } from "./tool-admission.js";
+
+/** Check the human grant behind the execution, never the synthetic agent identity. */
+export function assertCurrentExecutionAuthorization(
+  transaction: Pick<KernelTransaction, "getProjection">,
+  execution: Execution,
+): void {
+  const membership = transaction.getProjection<WorkspaceMembership>(
+    "membership", `${execution.workspaceId}:${execution.initiatedBy}`,
+  );
+  if (!membership || membership.tenantId !== execution.tenantId
+    || membership.workspaceId !== execution.workspaceId || membership.principalId !== execution.initiatedBy
+    || membership.removedAt || !["owner", "operator"].includes(membership.workspaceRole)) {
+    throw new KernelError("EXECUTION_AUTHORIZATION_REVOKED", "执行发起人的当前授权已撤销", "由有操作权限的成员重新发起执行");
+  }
+}
+
+export function assertCurrentApprovalAuthorization(
+  transaction: Pick<KernelTransaction, "getProjection">,
+  approval: Approval,
+): void {
+  const membership = approval.decidedBy && transaction.getProjection<WorkspaceMembership>(
+    "membership", `${approval.workspaceId}:${approval.decidedBy}`,
+  );
+  if (!membership || membership.tenantId !== approval.tenantId
+    || membership.workspaceId !== approval.workspaceId || membership.principalId !== approval.decidedBy
+    || membership.removedAt || !["owner", "operator", "reviewer"].includes(membership.workspaceRole)) {
+    throw new KernelError("APPROVER_AUTHORIZATION_REVOKED", "批准人的当前审核授权已撤销", "由有审核权限的成员重新批准");
+  }
+}
+
+/** The admission transaction rechecks approvals after asynchronous tool preparation. */
+export function assertCurrentToolApproval(
+  transaction: Pick<KernelTransaction, "getProjection" | "listProjections">,
+  executionId: string,
+  toolCallId: string,
+  now: string,
+): void {
+  const approval = transaction.listProjections<Approval>("approval")
+    .find(item => item.executionId === executionId && item.toolCallId === toolCallId);
+  if (!approval) return;
+  if (approval.status !== "approved_once" || approval.expiresAt <= now) {
+    throw new KernelError("APPROVAL_EXPIRED", "工具调用批准已失效", "重新审阅当前操作");
+  }
+  assertCurrentApprovalAuthorization(transaction, approval);
+}
+
+/** Protected runtime payloads are opaque; unmatched starts conservatively require reconciliation. */
+export function hasUnsettledToolCalls(
+  transaction: Pick<KernelTransaction, "getProjection" | "listProjections">,
+  executionId: string,
+): boolean {
+  if (transaction.listProjections<ToolAdmission>("toolAdmission")
+    .some(admission => admission.executionId === executionId && admission.status === "started")) return true;
+  const runtime = transaction.getProjection<{ readonly records: readonly { readonly type: string }[] }>("agent-runtime", executionId);
+  let pending = 0;
+  for (const record of runtime?.records ?? []) {
+    if (record.type === "tool/started") pending += 1;
+    if (record.type === "tool/result") pending = Math.max(0, pending - 1);
+  }
+  return pending > 0;
+}
 
 export type ExecutionAuthorityCommitmentInput = Pick<
   ExecutionAuthority,

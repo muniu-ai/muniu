@@ -1,8 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
+import { readJournalProjection } from "@mn/storage";
+
 const transientConnectionCodes = new Set(["ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "57P01", "57P02", "57P03", "53300"]);
 
-export async function readPendingKindApproval(pool, tenantId, executionId) {
+export async function readPendingKindApproval(pool, tenantId, executionId, projectionJournal) {
   try {
+    if (projectionJournal) {
+      const result = await pool.query(`select projection_key, value_json from mn_v2.projections
+        where tenant_id = $1 and namespace = 'approval'`, [tenantId]);
+      for (const row of result.rows) {
+        const approval = await readJournalProjection(projectionJournal, tenantId, "approval", row.projection_key, row.value_json);
+        if (approval?.executionId === executionId && approval.status === "pending") return approval;
+      }
+      return undefined;
+    }
     const result = await pool.query(`select value_json from mn_v2.projections
       where tenant_id = $1 and namespace = 'approval'
         and value_json->>'executionId' = $2 and value_json->>'status' = 'pending'`, [tenantId, executionId]);
