@@ -151,6 +151,8 @@ curl --fail http://HOST/v2/readiness
 
 先在仓库根目录完成 `npm ci` 和 `npm run build`。Compose 验证需要 Docker、Compose 与 Helm；Kind 验证还需要 Kind、kubectl、buildx 和 curl。两项验证都会下载或构建镜像、写入测试数据并注入故障，不能连接生产数据库或复用生产集群。
 
+MinIO 与 mc 的原测试版本现由[固定官方源码构建](https://github.com/muniu-ai/muniu/blob/main/deploy/fixtures/README.md)，Compose 和 Kind 共用本地镜像。首次构建需要访问 Docker Hub、GitHub 和 Go 模块源并编译 Go 程序；不再从已无法匿名拉取的 MinIO 镜像仓库下载。该历史版本只用于测试，不作为生产存储建议。
+
 Compose 默认使用固定回环端口，运行前须确保端口空闲，并使用独立的 `COMPOSE_PROJECT_NAME`。脚本结束时默认执行 `down --volumes --remove-orphans`，删除该项目容器和卷；`--keep-compose` 可保留现场。Kind 默认创建 `muniu-v2` 集群，已有同名集群时拒绝执行；结束后删除本次创建的集群，`MN_KIND_KEEP=1` 可保留现场。
 
 ```bash

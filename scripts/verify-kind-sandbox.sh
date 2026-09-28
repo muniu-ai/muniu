@@ -39,13 +39,13 @@ trap finish EXIT
 for command in docker kind kubectl helm curl; do
   command -v "${command}" >/dev/null || { echo "缺少命令：${command}" >&2; exit 127; }
 done
+node_image="$(node scripts/lib/kind-node-image.mjs)"
 if kind get clusters | grep -Fxq "${cluster_name}"; then
   echo "Kind 集群 ${cluster_name} 已存在；为避免删除用户状态，本次验证拒绝覆盖" >&2
   exit 1
 fi
 
 docker build --tag "${image}" .
-node_image="$(node scripts/lib/kind-node-image.mjs)"
 kind create cluster --name "${cluster_name}" --config deploy/kind/config.yaml --image "${node_image}"
 cluster_created=true
 node scripts/lib/kind-runtime.mjs "${cluster_name}"
@@ -63,15 +63,15 @@ calico_images=(
 )
 dependency_images=(
   "postgres:16-alpine"
-  "minio/minio:RELEASE.2025-04-22T22-12-26Z"
-  "minio/mc:RELEASE.2025-04-16T18-13-26Z"
 )
+minio_image="mn-minio-fixture:2025-04"
+docker build --file deploy/fixtures/minio.Dockerfile --tag "${minio_image}" deploy/fixtures
 vault_image="hashicorp/vault:1.21.4@sha256:4e33b126a59c0c333b76fb4e894722462659a6bec7c48c9ee8cea56fccfd2569"
 for dependency in "${calico_images[@]}" "${dependency_images[@]}" "${vault_image}"; do
   docker image inspect "${dependency}" >/dev/null 2>&1 || docker pull "${dependency}"
 done
 vault_import_image="$(node scripts/lib/kind-vault-image.mjs "${cluster_name}" --import-reference)"
-kind load docker-image "${image}" "${calico_images[@]}" "${dependency_images[@]}" "${vault_import_image}" --name "${cluster_name}"
+kind load docker-image "${image}" "${calico_images[@]}" "${dependency_images[@]}" "${minio_image}" "${vault_import_image}" --name "${cluster_name}"
 sandbox_image_digest="$(node scripts/lib/kind-sandbox-image.mjs "${cluster_name}")"
 calico_manifest="$(mktemp -t muniu-calico.XXXXXXXX)"
 curl --http1.1 --fail --location --retry 3 --retry-all-errors \

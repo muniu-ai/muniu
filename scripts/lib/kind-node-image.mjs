@@ -2,7 +2,6 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { parse } from "yaml";
 
 // https://github.com/kubernetes-sigs/kind/releases/tag/v0.30.0
 export const approvedNodeImage = "kindest/node:v1.34.0@sha256:7416a61b42b1662ca6ca89f02028ac133a309a2a30ba309614e8ec94d976dc5a";
@@ -20,6 +19,12 @@ export function selectCachedKindNode(configuredImage, cached) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  let parse;
+  try {
+    ({ parse } = await import("yaml"));
+  } catch {
+    throw new Error("Kind 宿主依赖未就绪；请在仓库根目录执行 npm ci 后重试");
+  }
   const configured = parse(readFileSync(new URL("../../deploy/kind/config.yaml", import.meta.url), "utf8"));
   let cached;
   try {

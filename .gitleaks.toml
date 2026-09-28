@@ -28,9 +28,9 @@ paths = [
 ]
 regexes = ['''^sk-test-not-a-real-secret$''']
 
-# The remaining entries are commit-bound false positives from the imported local
-# baseline. Each exception requires the detected rule, one exact path, the exact
-# extracted value, and the one commit that introduced the test fixture. See
+# The remaining entries are commit-bound reviewed false positives. Each
+# exception requires the detected rule, one exact path, the exact extracted
+# value, and the one commit that introduced that occurrence. See
 # docs/security/secret-scanning.md for the review record.
 
 [[allowlists]]
@@ -96,3 +96,102 @@ condition = "AND"
 commits = ["5f97c6e0816b373494668d78018b50d85c155ff7"]
 paths = ['''^packages/harness/test/hardening\.test\.ts$''']
 regexes = ['''^eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiIxMjM0NTY3ODkwIn0\.signature-secret$''']
+
+# Reviewed CI 36411326688 findings; each value is bound to its original commit.
+
+[[allowlists]]
+description = "Reviewed industry fixture operation digests; CI 36411326688"
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["ad18e593c2a95ba92c32c5af1d01837373004bbe"]
+paths = ['''^docs/industry-delivery/integration-results\.json$''']
+regexes = [
+  '''^bd05f6a3f0b21ef3f1782a680f84afed19d7f804aac9bd397274534ed9489544$''',
+  '''^c297482305e5078c39b87b8095ccbaf5b6a8487814a39a686e537c10d9f74241$''',
+  '''^c36c7621030c42a6ab7edce1e222f7395f6a7e2b4e843ab450c1ec911f506126$''',
+  '''^f542fe230aaf61728f446cf9a7acd5bf43957ae78268d1134349b98f58c9c0c8$'''
+]
+
+[[allowlists]]
+description = "Reviewed industry fixture operation digests; CI 36411326688"
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["466793846bf3296ae8cf3b44ea6d4f0ae6d39f88"]
+paths = ['''^docs/industry-delivery/integration-results\.json$''']
+regexes = [
+  '''^06f5c80fa89adcbbde582d00b9bfd046528bd33a535962615ac5d584c2a3483e$''',
+  '''^20826c393bc92fed9295f72350a18fcd16b2fa8d370ec674a97540f91f825900$''',
+  '''^24ce49daad12629eab60b3634aa9cb4df570b98907595438112e4aba7e20f6d7$''',
+  '''^2fbc3c2c5652e12fa7cb3f4a07c21f22a8aeebac2107ae470d3876d2b722ea47$''',
+  '''^31dccb4395f8366e3a84eb5ecc08b39a15aa7de5081dd68a1fef76117a7fc771$''',
+  '''^46540600a2846803b26334760b7b0f4b51b577a9b543ce6ad0050930a4768228$''',
+  '''^6dfbbb7763c1208471af4896b4766c659105be3333111936cf0da8233b5f9e31$''',
+  '''^74651d64307f96a47489c7036aa1834776a67727775a2e1158cfd175317ce7d6$''',
+  '''^87fefd58dcd9c896af30b2c1c4c41b693e7288c82cf62a21cb8f69aee38904ea$''',
+  '''^8b323762c4ac021821b4c68a603654eab08727036c4116fde372e6a56f0f1b76$''',
+  '''^8c1458ec30b98843554a79dfc389036f4a28626cdcfe33f4437082f66a1f6d8b$''',
+  '''^bd40ee737f0ea81d139adb7ad9ef325b8433d0e4a4c4a11f7b9665b8771b8931$''',
+  '''^c08f9c11cb72d2cd5b709f085128f7276b85ffe160a65e39b885f4a34eff0cae$''',
+  '''^e1b628b6c5d31d703ef6ea8881ae6d1af60f447c9adc39de74bdeecfa769206a$''',
+  '''^f27c9d5496006cfe073146d25a538ff555cb822b9a5f4d99625b1eff99b12862$'''
+]
+
+[[allowlists]]
+description = "Model input-count basis enum misclassified as an API key; CI 36411326688"
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["89eb29591a6f9294faa3aa379debb47a6d6bbc3c"]
+paths = ['''^apps/host/src/execution-metering\.ts$''']
+regexes = [
+  '''^conservative_utf8_estimate$'''
+]
+
+[[allowlists]]
+description = "Model input-count basis enum misclassified as an API key; CI 36411326688"
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["89eb29591a6f9294faa3aa379debb47a6d6bbc3c"]
+paths = ['''^apps/worker/src/model-invoker\.ts$''']
+regexes = [
+  '''^conservative_utf8_estimate$'''
+]
+
+[[allowlists]]
+description = "Model input-count basis enum misclassified as an API key; CI 36411326688"
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["89eb29591a6f9294faa3aa379debb47a6d6bbc3c"]
+paths = ['''^apps/worker/test/model-usage\.test\.ts$''']
+regexes = [
+  '''^conservative_utf8_estimate$'''
+]
+
+[[allowlists]]
+description = "Explicitly synthetic enterprise fixture HMAC; CI 36411326688"
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["049203831723206ef08402c2bcd4f9b80cb7b58f"]
+paths = ['''^docker-compose\.enterprise\.yml$''']
+regexes = [
+  '''^ZW50ZXJwcmlzZS1lMmUtaG1hYy1maXh0dXJlLWtleS0wMg==$'''
+]
+
+[[allowlists]]
+description = "Explicitly synthetic enterprise fixture HMAC; CI 36411326688"
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["049203831723206ef08402c2bcd4f9b80cb7b58f"]
+paths = ['''^deploy/kind/enterprise-fixture\.yaml$''']
+regexes = [
+  '''^ZW50ZXJwcmlzZS1raW5kLWhtYWMtZml4dHVyZS1rZXktMDI=$'''
+]
+
+[[allowlists]]
+description = "Imported S3 helper name misclassified as an API key; CI 36411326688"
+targetRules = ["generic-api-key"]
+condition = "AND"
+commits = ["958a4612eb98def38ced61c43ff82c9c3aac5e83"]
+paths = ['''^apps/api/src/migrateAppServerV3\.ts$''']
+regexes = [
+  '''^s3RegionFromEnvironment$'''
+]
