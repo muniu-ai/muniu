@@ -5,6 +5,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import "./minio-fixture.test.mjs";
 
 import { EnvelopeCipher } from "@mn/storage";
 
@@ -143,11 +144,7 @@ test("macOS CI and release jobs exercise the external Coding Runner chain", () =
       /^  desktop:\n[\s\S]*?(?=^  [a-z][a-z-]+:\n|(?![\s\S]))/mu,
     )?.[0] ?? "";
     assert.match(desktopJob, /runs-on: macos-14/u);
-    assert.match(desktopJob, /npm run build:vendor/u);
-    assert.match(desktopJob, /npm run build:core/u);
-    assert.match(desktopJob, /npm run build -w @mn\/plugin-coding/u);
-    assert.match(desktopJob, /npm run build -w @mn\/runner-claude-cli/u);
-    assert.match(desktopJob, /npm run build -w @mn\/runner-codex-cli/u);
+    const buildIndex = desktopJob.search(/run: npm run build\s*$/mu);
     assert.match(desktopJob, /npm test -w @mn\/runner-claude-cli/u);
     assert.match(desktopJob, /npm test -w @mn\/runner-codex-cli/u);
     assert.match(desktopJob, /npm test -w @mn\/worker/u);
@@ -156,8 +153,9 @@ test("macOS CI and release jobs exercise the external Coding Runner chain", () =
     assert.match(desktopJob, /npm run verify:coding-ui/u);
     const installIndex = desktopJob.indexOf("npm ci");
     assert.ok(installIndex >= 0);
-    for (const command of ["build:vendor", "build:core", "npm test -w @mn/worker"]) {
-      assert.ok(desktopJob.indexOf(command) > installIndex);
+    assert.ok(buildIndex > installIndex);
+    for (const command of ["npm test -w @mn/runner-claude-cli", "npm test -w @mn/runner-codex-cli", "npm test -w @mn/worker"]) {
+      assert.ok(desktopJob.indexOf(command) > buildIndex);
     }
   }
 });

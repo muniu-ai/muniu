@@ -23,6 +23,7 @@ import {
   AgentOsWorker,
   createKernelAgentTurnHandler,
   type ByokModelInvoker,
+  type WorkerJobHandler,
 } from "../src/index.js";
 
 const NOW = "2026-09-04T00:00:00.000Z";
@@ -32,8 +33,8 @@ test("真实 Worker 通过受控仓库、macOS sandbox 和 Gate 持久化 Coding
   skip: !SANDBOX_AVAILABLE,
 }, async (t) => {
   const fixture = await codingFixture(t, [passingPatch()], { inputMessage: "只修改文案，不要新增文件" });
-  const polling = fixture.worker.pollOnce();
-  const approval = await waitForApproval(fixture.store);
+  const polling = fixture.pollOnce();
+  const approval = await waitForApproval(fixture.store, polling);
   assert.equal(approval.effectClass, "privileged");
   assert.match(approval.intent, /候选成果/u);
   await fixture.kernel.decideApproval(
@@ -95,9 +96,9 @@ test("Coding 在同一个 AgentHandle 中按 FIFO 消费后续输入并保留各
   const fixture = await codingFixture(t, [passingPatch(), passingPatch()]);
   const runtime = new KernelProjectionRuntimeStore({ tenantId: "local", store: fixture.store });
   await new PersistentInbox(runtime, "execution-1").enqueue("follow_up", "再检查一次文案");
-  const polling = fixture.worker.pollOnce();
+  const polling = fixture.pollOnce();
   for (let turn = 1; turn <= 2; turn += 1) {
-    const approval = await waitForApproval(fixture.store);
+    const approval = await waitForApproval(fixture.store, polling);
     await fixture.kernel.decideApproval("local", "local-owner", `approve-turn-${turn}`, approval.id, approval.streamVersion, "approve_once");
   }
   assert.deepEqual(await polling, { status: "completed", jobId: "job-1" });
@@ -118,8 +119,8 @@ test("Coding 结果与 Job 原子终结，不给普通取消留下矛盾窗口",
   skip: !SANDBOX_AVAILABLE,
 }, async (t) => {
   const fixture = await codingFixture(t, [passingPatch()], { cancelAfterCodingCompletion: true });
-  const polling = fixture.worker.pollOnce();
-  const approval = await waitForApproval(fixture.store);
+  const polling = fixture.pollOnce();
+  const approval = await waitForApproval(fixture.store, polling);
   await fixture.kernel.decideApproval(
     "local",
     "local-owner",
@@ -147,8 +148,9 @@ test("Coding 多轮共用三次修复预算，耗尽后不继续调用模型", {
   const fixture = await codingFixture(t, [failingPatch(), failingPatch(), passingPatch(), ...Array.from({ length: 4 }, () => failingPatch())]);
   const runtime = new KernelProjectionRuntimeStore({ tenantId: "local", store: fixture.store });
   await new PersistentInbox(runtime, "execution-1").enqueue("follow_up", "继续核对");
-  const pending = fixture.worker.pollOnce();
-  const approval = await waitForApproval(fixture.store, 5_000);
+  const pending = fixture.pollOnce();
+  // 审批前需要依次执行两次失败候选和一次成功候选。
+  const approval = await waitForApproval(fixture.store, pending, 3 * 5_000);
   await fixture.kernel.decideApproval("local", "local-owner", "approve-before-budget", approval.id, approval.streamVersion, "approve_once");
   assert.deepEqual(await pending, { status: "completed", jobId: "job-1" });
   assert.equal(fixture.modelCalls(), 5);
@@ -156,9 +158,30 @@ test("Coding 多轮共用三次修复预算，耗尽后不继续调用模型", {
   assert.equal((await runtime.readExecution("execution-1")).filter(record => record.type === "budget/reserved").length, 3);
 });
 
+test("Coding 测试清理会中断待处理审批并等待 Worker 退出", {
+  skip: !SANDBOX_AVAILABLE,
+  timeout: 20_000,
+}, async t => {
+  let polling: Promise<unknown> | undefined;
+  await t.test("保留待处理审批直到清理", async t => {
+    const fixture = await codingFixture(t, [passingPatch()]);
+    const pending = fixture.pollOnce();
+    polling = pending.catch(error => error);
+    await waitForApproval(fixture.store, pending);
+  });
+  assert.deepEqual(await polling, { status: "interrupted", jobId: "job-1" });
+});
+
+test("Coding 审批等待会识别 Worker 提前退出", { skip: !SANDBOX_AVAILABLE }, async t => {
+  const fixture = await codingFixture(t, []);
+  const polling = fixture.pollOnce();
+  assert.deepEqual(await polling, { status: "completed", jobId: "job-1" });
+  await assert.rejects(waitForApproval(fixture.store, polling), /Coding Worker 在审批前退出/u);
+});
+
 test("模型用量未知时暂停 Coding 执行和任务，保留预留且不重试", { skip: !SANDBOX_AVAILABLE }, async t => {
   const fixture = await codingFixture(t, []);
-  assert.deepEqual(await fixture.worker.pollOnce(), { status: "completed", jobId: "job-1" });
+  assert.deepEqual(await fixture.pollOnce(), { status: "completed", jobId: "job-1" });
   const state = await fixture.store.transact("local", tx => ({ run: tx.getProjection<{ status: string }>("coding.execution", "execution-1"),
     task: tx.getProjection<CodingTask>("coding.task", "task-1"), execution: tx.getProjection<Execution>("execution", "execution-1") }));
   assert.equal(state.execution?.status, "paused");
@@ -172,7 +195,7 @@ test("模型用量未知时暂停 Coding 执行和任务，保留预留且不重
 
 test("模型已结算但未提交规定工具调用时失败关闭，不留下运行中的 Coding 投影", { skip: !SANDBOX_AVAILABLE }, async t => {
   const fixture = await codingFixture(t, [passingPatch()], { invalidModelResponse: true });
-  assert.deepEqual(await fixture.worker.pollOnce(), { status: "failed", jobId: "job-1" });
+  assert.deepEqual(await fixture.pollOnce(), { status: "failed", jobId: "job-1" });
   const state = await fixture.store.transact("local", tx => ({ run: tx.getProjection<{ status: string }>("coding.execution", "execution-1"),
     task: tx.getProjection<CodingTask>("coding.task", "task-1"), execution: tx.getProjection<Execution>("execution", "execution-1") }));
   assert.equal(state.execution?.status, "failed");
@@ -191,7 +214,7 @@ test("恢复前时间预算已耗尽时不启动模型，并将 CodingTask 置�
   const runtime = new KernelProjectionRuntimeStore({ tenantId: "local", store: fixture.store });
   await runtime.append({ executionId: "execution-1", type: "budget/started",
     payload: { startedAtMs: Date.parse(NOW) - 3_600_001, maxDurationMs: 3_600_000 } });
-  assert.deepEqual(await fixture.worker.pollOnce(), { status: "completed", jobId: "job-1" });
+  assert.deepEqual(await fixture.pollOnce(), { status: "completed", jobId: "job-1" });
   assert.equal(fixture.modelCalls(), 0);
   assert.equal((await fixture.store.transact("local", tx => tx.getProjection<Execution>("execution", "execution-1")))?.status, "paused");
   assert.equal((await fixture.store.transact("local", tx => tx.getProjection<CodingTask>("coding.task", "task-1")))?.status, "needs_human_decision");
@@ -202,7 +225,7 @@ test("真实 Worker 在 Gate 连续失败后最多修复三次并进入人工决
   skip: !SANDBOX_AVAILABLE,
 }, async (t) => {
   const fixture = await codingFixture(t, Array.from({ length: 4 }, () => failingPatch()));
-  assert.deepEqual(await fixture.worker.pollOnce(), { status: "completed", jobId: "job-1" });
+  assert.deepEqual(await fixture.pollOnce(), { status: "completed", jobId: "job-1" });
 
   const state = await fixture.store.transact("local", (transaction) => ({
     execution: transaction.getProjection<Execution>("execution", "execution-1"),
@@ -241,7 +264,7 @@ test("审批等待期间重复处理同一 Job 从持久检查点恢复且不重
     signal: new AbortController().signal,
   };
   const first = fixture.handler(claimed, context);
-  const approval = await waitForApproval(fixture.store);
+  const approval = await waitForApproval(fixture.store, first);
   const recovered = fixture.handler(claimed, context);
   await fixture.kernel.decideApproval(
     "local",
@@ -281,7 +304,20 @@ async function codingFixture(
   options: { readonly cancelAfterCodingCompletion?: boolean; readonly inputMessage?: string; readonly invalidModelResponse?: boolean } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "muniu-coding-worker-"));
-  t.after(async () => rm(root, { recursive: true, force: true }));
+  const stop = new AbortController();
+  const active = new Set<Promise<unknown>>();
+  let store: SqliteStorage | undefined;
+  t.after(async () => {
+    stop.abort();
+    await Promise.allSettled(active);
+    await store?.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  function track<T>(operation: Promise<T>): Promise<T> {
+    active.add(operation);
+    void operation.then(() => active.delete(operation), () => active.delete(operation));
+    return operation;
+  }
   const repositoryPath = join(root, "source");
   await mkdir(repositoryPath);
   await writeFile(join(repositoryPath, "message.txt"), "old value\n", "utf8");
@@ -293,12 +329,11 @@ async function codingFixture(
     "commit", "--quiet", "-m", "fixture",
   ]);
   const fixedRepositoryPath = await realpath(repositoryPath);
-  const store = new SqliteStorage({
+  store = new SqliteStorage({
     databaseFile: join(root, "state.sqlite"),
     hmacKey: Buffer.alloc(32, 7),
   });
   await store.initialize();
-  t.after(async () => store.close());
   await seed(store, fixedRepositoryPath, options.inputMessage);
 
   let calls = 0;
@@ -375,8 +410,11 @@ async function codingFixture(
   return {
     store,
     kernel,
-    handler,
-    worker,
+    handler: ((job, context) => track(handler(job, {
+      ...context,
+      signal: AbortSignal.any([context.signal, stop.signal]),
+    }))) satisfies WorkerJobHandler,
+    pollOnce: () => track(worker.pollOnce(stop.signal)),
     sandboxRoot: join(root, "sandboxes"),
     modelCalls: () => calls,
     cancelAttempts: () => cancelAttemptCount,
@@ -536,12 +574,15 @@ async function seed(store: SqliteStorage, repositoryPath: string, inputMessage?:
   });
 }
 
-async function waitForApproval(store: SqliteStorage, timeoutMs = 5_000): Promise<Approval> {
+async function waitForApproval(store: SqliteStorage, polling: Promise<unknown>, timeoutMs = 5_000): Promise<Approval> {
+  let settled: { readonly error?: unknown } | undefined;
+  void polling.then(() => { settled = {}; }, error => { settled = { error }; });
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const approval = await store.transact("local", (transaction) =>
       transaction.listProjections<Approval>("approval").find((item) => item.status === "pending"));
     if (approval) return approval;
+    if (settled) throw new Error("Coding Worker 在审批前退出", { cause: settled.error });
     const job = await store.getJob("job-1");
     if (job?.status === "failed") {
       throw new Error(`Coding Job 在审批前失败：${JSON.stringify(job.failure)}`);
