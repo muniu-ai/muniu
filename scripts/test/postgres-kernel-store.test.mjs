@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { PostgresKernelStore } from "../lib/postgres-kernel-store.mjs";
+import { configureKindModelConnection } from "../lib/kind-model-fixture.mjs";
 
 class FixtureClient {
   queries = [];
@@ -35,6 +36,41 @@ class FixtureClient {
 
   release() {}
 }
+
+test("Kind model fixture commits saved and probed events with a replayable protected model connection", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mn-kind-model-fixture-"));
+  const client = new FixtureClient();
+  const hmacKey = Buffer.alloc(32, 41);
+  const projectionJournal = { cas: new FileCas({ rootDir: join(root, "cas") }),
+    keyProvider: new InMemoryKeyProvider(Buffer.alloc(32, 42)), namespaces: DEFAULT_PROJECTION_JOURNAL_NAMESPACES };
+  const store = new PostgresKernelStore({ pool: { query: client.query.bind(client), connect: async () => client },
+    hmacKey, projectionJournal });
+  try {
+    const connection = await store.transact("kind-tenant", tx => configureKindModelConnection(tx, "kind-tenant"));
+    const events = client.queries.filter(query => query.sql.startsWith("insert into mn_v2.events")).map(({ parameters: p }) => ({
+      schemaVersion: 1, tenantId: p[0], position: p[1], id: p[2], aggregateType: p[3], aggregateId: p[4],
+      streamVersion: p[5], type: p[6], occurredAt: p[7], actorId: p[8], ...(p[9] ? { executionId: p[9] } : {}),
+      generation: p[10], ...(p[11] ? { causationId: p[11] } : {}), correlationId: p[12], publicPayload: JSON.parse(p[13]),
+      ...(p[14] ? { protectedPayloadRef: p[14] } : {}), ...(p[15] ? { previousDigest: p[15] } : {}), digest: p[16], hmac: p[17],
+    }));
+    assert.deepEqual(events.map(event => event.type), ["model_connection.saved", "model_connection.probed", "projection.fact_committed"]);
+    const [saved, probed, fact] = events;
+    assert.deepEqual([saved.streamVersion, probed.streamVersion, connection.streamVersion], [1, 2, 2]);
+    assert.equal(saved.aggregateId, connection.id);
+    assert.equal(probed.aggregateId, connection.id);
+    assert.equal(saved.publicPayload.presetId, connection.presetId);
+    assert.equal(probed.publicPayload.defaultModel, connection.defaultModel);
+    assert.equal(probed.publicPayload.modelCount, connection.discoveredModels.length);
+    assert.equal(fact.causationId, probed.id);
+    assert.equal(fact.publicPayload.namespace, "modelConnection");
+    assert.equal(fact.publicPayload.resourceId, connection.id);
+    assert.equal(connection.status, "ready");
+    assert.equal(JSON.stringify(client.queries).includes(connection.secretRef), false);
+    const facts = await replayProjectionJournal({ ...projectionJournal, tenantId: "kind-tenant", hmacKey, events });
+    assert.deepEqual(facts.find(value => value.namespace === "modelConnection" && value.id === connection.id)?.value, connection);
+    assert.equal(client.queries.at(-1).sql, "commit");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 for (const kind of ["business.action.execute", "business.candidate.extract", "agent.execution.run"]) {
   test(`PostgreSQL 原子结算只为 agent job 管理执行终态：${kind}`, async () => {

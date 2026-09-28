@@ -17,6 +17,7 @@ import { createEnterpriseWorkerStore } from "./lib/enterprise-worker-store.mjs";
 import { SigV4S3Client } from "./lib/s3-client.mjs";
 import { VaultTransitKeyProvider } from "./lib/enterprise-secrets.mjs";
 import { readPendingKindApproval } from "./lib/kind-coding-observer.mjs";
+import { configureKindModelConnection } from "./lib/kind-model-fixture.mjs";
 
 assert.equal(process.env.MN_WORKER_FIXTURE_MODE, "false");
 const tenantId = `coding-proof-${randomUUID()}`;
@@ -61,16 +62,13 @@ try {
   const thread = (await kernel.listThreads(tenantId, workspace.id))
     .find((value) => value.resourceRef?.namespace === "coding.task" && value.resourceRef.resourceId === task.id);
   assert.ok(thread, "Host 必须创建绑定 Coding 任务的 Thread");
-  await store.transact(tenantId, (tx) => {
-    tx.putProjection("modelConnection", "fixture-model", { id: "fixture-model", tenantId,
-      presetId: "deepseek", secretRef: "vault://muniu/v2/models/fixture", defaultModel: "fixture-model", status: "ready" });
-  });
+  const modelConnection = await store.transact(tenantId, (tx) => configureKindModelConnection(tx, tenantId));
   const execution = await kernel.submitTurn(tenantId, "fixture-owner", "turn", {
     preparedMessage: await storeProtectedJson({ tenantId, workspaceId: workspace.id, ownerType: "thread",
       ownerId: thread.id, protectedPayloadRef: `thread-payload-${randomUUID()}`, value: { message: task.request },
       cas, keyProvider: protectedPayloadKeyProvider, createdAt: new Date().toISOString() }),
     workspaceId: workspace.id, threadId: thread.id, expectedStreamVersion: thread.streamVersion,
-    message: task.request, agentDefinitionId: "coding.builtin", modelBindingId: "fixture-model",
+    message: task.request, agentDefinitionId: "coding.builtin", modelBindingId: modelConnection.id,
     executionPrincipalId: "agent:coding", runnerId: "builtin",
     authority: { workspaceId: workspace.id, principalId: "agent:coding",
       toolIds: ["coding.repository.read", "coding.sandbox.write", "coding.gate.verify", "coding.candidate.accept"],
