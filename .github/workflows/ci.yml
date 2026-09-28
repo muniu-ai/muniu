@@ -143,6 +143,8 @@ jobs:
       - run: npm ci
       - name: Build Runner, Worker, and desktop Host fixture dependencies
         run: npm run build
+      - name: Test storage and Darwin state locking
+        run: npm test -w @mn/storage
       - name: Test external Coding Runner chain
         run: |
           npm test -w @mn/runner-claude-cli

@@ -44,6 +44,8 @@ for (const name of ["ci", "release"]) {
   const workflow = parse(readFileSync(join(root, `.github/workflows/${name}.yml`), "utf8"));
 
   test(`${name}: macOS builds workspace dependencies before each Runner or Worker test`, () => {
+    assert.ok(commands(workflow, "desktop").includes("npm test -w @mn/storage"),
+      "Run storage tests on macOS to verify Darwin state locking");
     const built = new Set();
     let checked = 0;
     for (const command of commands(workflow, "desktop").flatMap(expandedCommands)) {
