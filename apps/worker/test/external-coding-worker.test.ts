@@ -740,7 +740,10 @@ test("用户取消外部 Runner 后持久化 Coding cancelled 并清理隔离资
     "cancel",
   );
 
-  assert.deepEqual(await polling, { status: "cancelled", jobId: "job-1" });
+  const cancellation = await Promise.race([polling, new Promise<never>((_, reject) => {
+    const timer = setTimeout(() => reject(new Error("取消信号未及时终止 Runner")), 8_000); timer.unref();
+  })]);
+  assert.deepEqual(cancellation, { status: "cancelled", jobId: "job-1" });
   const state = await fixture.store.transact("local", (transaction) => ({
     execution: transaction.getProjection<Execution>("execution", "execution-1"),
     task: transaction.getProjection<CodingTask>("coding.task", "task-1"),
@@ -750,6 +753,7 @@ test("用户取消外部 Runner 后持久化 Coding cancelled 并清理隔离资
   assert.equal(state.task?.status, "cancelled");
   assert.equal(state.run?.status, "cancelled");
   assert.equal(state.run?.externalInvocation.status, "settled");
+  assert.equal(state.run?.externalInvocation.terminationStatus, "confirmed");
   await drainDeferredCleanup(fixture);
   assert.deepEqual(await readdir(fixture.sandboxRoot), []);
 });

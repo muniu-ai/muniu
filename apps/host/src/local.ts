@@ -29,6 +29,7 @@ import { createAgentOsHost, type AgentOsHost, type AgentOsHostOptions } from "./
 import { MacOsKeychainSecretStore } from "./secrets.js";
 import { createSignedWorkerResolver } from "./plugin-worker.js";
 import { createOpcModelContextReader } from "./opc-model-context.js";
+import { assertGoalExecutionResources } from "./goal-runtime.js";
 import { createEnterpriseFilePluginRepository } from "./enterprise-plugin-repository.js";
 import type { ModelSecretStore } from "./secrets.js";
 
@@ -144,6 +145,7 @@ export async function startLocalAgentOsHost(options: StartLocalHostOptions = {})
     const turnHandler = createKernelAgentTurnHandler({
       scopeContext: host.context,
       resolveThreadContext: createOpcModelContextReader({ store, cas, protectedPayloadKeyProvider }),
+      assertExecutionResources: assertGoalExecutionResources,
       ...(pluginRepository ? { resolvePluginWorker: createSignedWorkerResolver({ store, repository: pluginRepository }) } : {}),
       store,
       secretStore,

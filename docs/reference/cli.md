@@ -20,11 +20,22 @@
   plugin            查看、安装、更新、启用、停用或运行插件命令
   opc               管理机会验证工作
   code              管理 Coding 任务
+  goal              管理目标、计划和成果验收
   backup            创建、校验或恢复本地加密备份
 
 全局参数：
   --json            输出稳定 JSON
   --help            显示帮助
+
+目标与验收：
+  mn goal list --workspace <工作区 ID>
+  mn goal show <目标 ID> --workspace <工作区 ID>
+  mn goal create --workspace <工作区 ID> --file <目标 JSON 文件>
+  mn goal plan <目标 ID> --workspace <工作区 ID> --version <目标版本> --model <模型连接 ID>
+  mn goal start <目标 ID> --workspace <工作区 ID> --version <目标版本> --plan <计划 ID> --plan-digest <计划摘要>
+  mn goal refresh <目标 ID> --workspace <工作区 ID> --version <目标版本>
+  mn goal cancel <目标 ID> --workspace <工作区 ID> --version <目标版本>
+  mn goal accept <目标 ID> --workspace <工作区 ID> --version <目标版本> --file <验收 JSON 文件>
 
 备份示例：
   mn backup create state.mnbackup --verify

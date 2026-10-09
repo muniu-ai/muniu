@@ -154,6 +154,7 @@ test("本地 BYOK 会话在备份恢复和全部查询投影重建后仍可读�
   let second: AgentOsHost | undefined;
   try {
     first = await startLocalAgentOsHost({
+      legacyDaemonProbe: async () => false,
       stateRoot: directory,
       port: 0,
       secretStore: secrets,
@@ -224,6 +225,7 @@ test("本地 BYOK 会话在备份恢复和全部查询投影重建后仍可读�
     } finally { await recoveryStore.close(); }
 
     second = await startLocalAgentOsHost({
+      legacyDaemonProbe: async () => false,
       stateRoot: restoredState.stateRoot,
       port: 0,
       secretStore: secrets,
@@ -277,6 +279,7 @@ test("OPC Agent 通过统一 Runtime 和内核权限读取公开网页", async (
   let host: AgentOsHost | undefined;
   try {
     host = await startLocalAgentOsHost({
+      legacyDaemonProbe: async () => false,
       stateRoot: directory,
       port: 0,
       secretStore: secrets,
@@ -360,6 +363,7 @@ test("follow_up 按 FIFO 进入下一 turn，steer 只在下一模型边界注�
   let host: AgentOsHost | undefined;
   try {
     host = await startLocalAgentOsHost({
+      legacyDaemonProbe: async () => false,
       stateRoot: directory,
       port: 0,
       secretStore: secrets,
@@ -458,6 +462,7 @@ test("关闭本地 Host 会中断在途模型后再关闭 SQLite", async () => {
   let executionId = "";
   try {
     host = await startLocalAgentOsHost({
+      legacyDaemonProbe: async () => false,
       stateRoot: directory,
       port: 0,
       secretStore: secrets,
@@ -560,6 +565,7 @@ test("取消在途 Execution 会中止模型并终结 Job，重启后不再认�
   let executionId = "";
   try {
     first = await startLocalAgentOsHost({
+      legacyDaemonProbe: async () => false,
       stateRoot: directory, port: 0, secretStore: secrets, modelInvoker: invoke, modelQuoter,
       protectedPayloadKeyProvider: protection,
       workerIdleDelayMs: 1,
@@ -629,6 +635,7 @@ test("取消在途 Execution 会中止模型并终结 Job，重启后不再认�
     await inspected.close();
 
     second = await startLocalAgentOsHost({
+      legacyDaemonProbe: async () => false,
       stateRoot: directory, port: 0, secretStore: secrets, modelInvoker: invoke, modelQuoter,
       protectedPayloadKeyProvider: protection,
       workerIdleDelayMs: 1,
@@ -667,6 +674,7 @@ test("模型发出后中断：重启和公开 resume 保留未知用量，不重
   let second: AgentOsHost | undefined;
   try {
     first = await startLocalAgentOsHost({
+      legacyDaemonProbe: async () => false,
       stateRoot: directory, port: 0, secretStore: secrets, modelInvoker: invoke, modelQuoter,
       protectedPayloadKeyProvider: protection,
       workerIdleDelayMs: 1,
@@ -705,6 +713,7 @@ test("模型发出后中断：重启和公开 resume 保留未知用量，不重
     first = undefined;
 
     second = await startLocalAgentOsHost({
+      legacyDaemonProbe: async () => false,
       stateRoot: directory, port: 0, secretStore: secrets, modelInvoker: invoke, modelQuoter,
       protectedPayloadKeyProvider: protection,
       workerIdleDelayMs: 1,

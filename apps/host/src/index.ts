@@ -18,3 +18,5 @@ export * from "./secrets.js";
 export * from "./plugin-worker.js";
 export * from "./opc-model-context.js";
 export * from "./projection-journal.js";
+
+export { assertGoalExecutionResources } from "./goal-runtime.js";

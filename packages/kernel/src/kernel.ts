@@ -46,6 +46,7 @@ export interface PreparedMemoryPayload {
 }
 
 export interface SubmitTurnInput {
+  readonly coordination?: { readonly aggregateType: string; readonly aggregateId: string; readonly revisionId: string };
   readonly pluginPackageSha256?: string;
   readonly preparedMessage?: {
     readonly protectedPayloadRef: string;
@@ -84,29 +85,25 @@ export class AgentOsKernel {
     request: unknown,
     work: (transaction: KernelTransaction) => T,
   ): Promise<T> {
+    return this.store.transact(tenantId, transaction => this.mutationInTransaction(transaction, tenantId, scope, idempotencyKey, request, work));
+  }
+
+  private mutationInTransaction<T>(transaction: KernelTransaction, tenantId: string, scope: string,
+    idempotencyKey: string, request: unknown, work: (transaction: KernelTransaction) => T): T {
     if (!idempotencyKey.trim()) {
       throw new KernelError("IDEMPOTENCY_KEY_REQUIRED", "缺少 Idempotency-Key", "为本次写操作提供唯一键");
     }
-    return this.store.transact(tenantId, (transaction) => {
-      const requestDigest = sha256(request);
-      const previous = transaction.getIdempotency(scope, idempotencyKey);
-      if (previous) {
-        if (previous.requestDigest !== requestDigest) {
-          throw new KernelError("IDEMPOTENCY_KEY_REUSED", "幂等键已用于不同请求", "使用新的 Idempotency-Key");
-        }
-        return previous.response as T;
+    const requestDigest = sha256(request);
+    const previous = transaction.getIdempotency(scope, idempotencyKey);
+    if (previous) {
+      if (previous.requestDigest !== requestDigest) {
+        throw new KernelError("IDEMPOTENCY_KEY_REUSED", "幂等键已用于不同请求", "使用新的 Idempotency-Key");
       }
-      const response = work(transaction);
-      transaction.putIdempotency({
-        tenantId,
-        scope,
-        key: idempotencyKey,
-        requestDigest,
-        response,
-        createdAt: this.now(),
-      });
-      return response;
-    });
+      return previous.response as T;
+    }
+    const response = work(transaction);
+    transaction.putIdempotency({ tenantId, scope, key: idempotencyKey, requestDigest, response, createdAt: this.now() });
+    return response;
   }
 
   private append(
@@ -504,8 +501,14 @@ export class AgentOsKernel {
     idempotencyKey: string,
     input: SubmitTurnInput,
   ): Promise<Execution> {
+    return this.store.transact(tenantId, transaction => this.submitTurnInTransaction(transaction, tenantId, actorId, idempotencyKey, input));
+  }
+
+  /** The caller owns authorization and commits its product fact in this transaction. */
+  submitTurnInTransaction(transaction: KernelTransaction, tenantId: string, actorId: string,
+    idempotencyKey: string, input: SubmitTurnInput): Execution {
     const { preparedMessage, ...request } = input;
-    return this.mutation(tenantId, `thread.turn:${input.threadId}`, idempotencyKey, request, (transaction) => {
+    return this.mutationInTransaction(transaction, tenantId, `thread.turn:${input.threadId}`, idempotencyKey, request, (transaction) => {
       const workspace = transaction.getProjection<Workspace>("workspace", input.workspaceId);
       if (!workspace) throw new KernelError("WORKSPACE_NOT_FOUND", "工作区不存在", "刷新工作区列表");
       const thread = transaction.getProjection<Thread>("thread", input.threadId);
@@ -576,7 +579,7 @@ export class AgentOsKernel {
         tenantId,
         workspaceId: input.workspaceId,
         kind: "agent.execution.run",
-        payload: { executionId, ...(preparedMessage
+        payload: { executionId, ...(input.coordination ? { coordination: { ...input.coordination } } : {}), ...(preparedMessage
           ? { protectedPayloadRef: preparedMessage.protectedPayloadRef, threadId: thread.id }
           : { message: input.message.trim() }) },
         status: "available",
@@ -688,14 +691,23 @@ export class AgentOsKernel {
     expectedStreamVersion: number,
     command: ExecutionCommand,
   ): Promise<Execution> {
-    return this.mutation(tenantId, `execution.command:${executionId}`, idempotencyKey, { expectedStreamVersion, command }, (transaction) => {
+    return this.store.transact(tenantId, transaction => this.commandExecutionInTransaction(transaction, tenantId, actorId,
+      idempotencyKey, executionId, expectedStreamVersion, command));
+  }
+
+  /** Compose an execution command with a product mutation without a second commit. */
+  commandExecutionInTransaction(transaction: KernelTransaction, tenantId: string, actorId: string,
+    idempotencyKey: string, executionId: string, expectedStreamVersion: number, command: ExecutionCommand): Execution {
+    return this.mutationInTransaction(transaction, tenantId, `execution.command:${executionId}`, idempotencyKey, { expectedStreamVersion, command }, (transaction) => {
       const execution = transaction.getProjection<Execution>("execution", executionId);
       if (!execution) throw new KernelError("EXECUTION_NOT_FOUND", "执行不存在", "刷新执行列表");
       if (execution.streamVersion !== expectedStreamVersion) {
         throw new KernelError("STREAM_VERSION_CONFLICT", "执行版本已变化", "刷新执行状态后重试", true);
       }
       if (command === "start" || command === "resume") assertCurrentExecutionAuthorization(transaction, execution);
-      const nextStatus = transitionExecution(execution.status, command);
+      const transition = transitionExecution(execution.status, command);
+      const nextStatus = command === "cancel" && (execution.status === "needs_reconciliation" || hasUnsettledToolCalls(transaction, executionId))
+        ? "needs_reconciliation" : transition;
       const now = this.now();
       const next: Execution = {
         ...execution,
@@ -707,6 +719,10 @@ export class AgentOsKernel {
         finishedAt: ["completed", "failed", "cancelled"].includes(nextStatus) ? now : execution.finishedAt,
       };
       transaction.putProjection("execution", executionId, next);
+      if (command === "cancel") {
+        transaction.putProjection("execution-control", executionId, { executionId,
+          generation: next.generation, command: "cancel", requestedAt: now });
+      }
       if (command === "resume" || command === "cancel") {
         for (const item of transaction.listProjections<InboxItem>("inbox")) {
           if (item.executionId === executionId && item.id.startsWith("runtime-pause:") && item.status === "open") {
@@ -717,7 +733,7 @@ export class AgentOsKernel {
       this.append(transaction, {
         tenantId, aggregateType: "execution", aggregateId: executionId,
         expectedStreamVersion, type: `execution.${nextStatus}`, actorId, executionId,
-        generation: next.generation, publicPayload: { previousStatus: execution.status, status: nextStatus },
+        generation: next.generation, publicPayload: { previousStatus: execution.status, status: nextStatus, command },
       });
       if (command === "resume" || command === "cancel" || command === "pause" || command === "interrupt") {
         expireExecutionApprovals(transaction, { tenantId, executionId, actorId, generation: next.generation,

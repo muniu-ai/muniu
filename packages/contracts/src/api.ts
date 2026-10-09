@@ -143,6 +143,11 @@ export interface CodingReconciliationViewV2 {
 }
 
 export const CORE_API_ROUTES = [
+  "/v2/workspaces/{workspaceId}/goals",
+  "/v2/goals/{goalId}",
+  "/v2/goals/{goalId}/plan-revisions",
+  "/v2/goals/{goalId}/commands",
+  "/v2/goals/{goalId}/acceptances",
   "/v2/business-actions",
   "/v2/business-actions/{actionId}",
   "/v2/business-actions/{actionId}/reconciliation-decisions",

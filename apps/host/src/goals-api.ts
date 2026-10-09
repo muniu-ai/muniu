@@ -1,0 +1,74 @@
+// SPDX-License-Identifier: Apache-2.0
+import type { GoalBudgetV2, GoalDeliverableSpecV2, GoalResourceRefV2 } from "@mn/contracts";
+import { KernelError } from "@mn/kernel";
+import { acceptGoalDelivery, cancelGoal, createGoal, getGoal, getGoalForCoordination, listGoals, proposeGoalPlan, startGoal } from "./goals.js";
+import { createHostGoalRuntime, goalThreadResources, type HostGoalRuntimeOptions } from "./goal-runtime.js";
+import { readBoundedJsonBody } from "./http-body.js";
+
+export interface GoalRequestOptions extends HostGoalRuntimeOptions { readonly request: Request; readonly tenantId: string; readonly principalId: string; readonly mutationKey?: string }
+function invalid(): never { throw new KernelError("GOAL_REQUEST_INVALID", "目标请求字段无效", "按目标接口要求填写字段"); }
+function object(value: unknown, fields: readonly string[]): Record<string, unknown> { if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).some(key => !fields.includes(key))) invalid(); return value as Record<string, unknown>; }
+function text(value: unknown, limit = 200): string { if (typeof value !== "string" || !value.trim() || value.length > limit) invalid(); return value; }
+function integer(value: unknown): number { if (!Number.isSafeInteger(value) || (value as number) < 0) invalid(); return value as number; }
+function array(value: unknown, limit = 100): unknown[] { if (!Array.isArray(value) || value.length > limit) invalid(); return value; }
+function resources(value: unknown): GoalResourceRefV2[] { return array(value).map(item => { const ref = object(item, ["namespace", "resourceId", "streamVersion", "digest"]); return { namespace: text(ref.namespace), resourceId: text(ref.resourceId), streamVersion: integer(ref.streamVersion), ...(ref.digest === undefined ? {} : { digest: text(ref.digest) }) }; }); }
+function budget(value: unknown): GoalBudgetV2 { const input = object(value, ["maxTokens", "maxCostMinorUnits", "currency", "maxDurationMs"]); return { maxTokens: integer(input.maxTokens), maxCostMinorUnits: text(input.maxCostMinorUnits), currency: text(input.currency, 3), maxDurationMs: integer(input.maxDurationMs) }; }
+function deliverables(value: unknown): GoalDeliverableSpecV2[] { return array(value, 1).map(item => { const input = object(item, ["key", "title", "required", "criteria"]); if (typeof input.required !== "boolean") invalid(); return { key: text(input.key), title: text(input.title), required: input.required, criteria: array(input.criteria, 20).map(value => { const criterion = object(value, ["id", "description"]); return { id: text(criterion.id), description: text(criterion.description, 2000) }; }) }; }); }
+export async function dispatchGoalRequest(options: GoalRequestOptions): Promise<{ readonly data: unknown; readonly status: number } | undefined> {
+  const url = new URL(options.request.url);
+  const collection = /^\/v2\/workspaces\/([^/]+)\/goals$/u.exec(url.pathname);
+  const item = /^\/v2\/goals\/([^/]+)(?:\/(plan-revisions|commands|acceptances))?$/u.exec(url.pathname);
+  if (!collection && !item) return undefined;
+  const runtime = createHostGoalRuntime(options);
+  if (options.request.method === "GET") {
+    if (item?.[2]) return undefined;
+    if (collection ? url.searchParams.size : url.searchParams.size !== 1 || url.searchParams.getAll("workspaceId").length !== 1) invalid();
+    const workspaceId = collection ? text(decodeURIComponent(collection[1]!)) : text(url.searchParams.get("workspaceId"));
+    const service = await runtime.service({ tenantId: options.tenantId, principalId: options.principalId, workspaceId });
+    return { status: 200, data: collection ? await listGoals(service) : await getGoal({ ...service, goalId: text(decodeURIComponent(item![1]!)) }) };
+  }
+  if (options.request.method !== "POST" || (!collection && !item?.[2])) return undefined;
+  if (url.searchParams.size) invalid();
+  const idempotencyKey = options.mutationKey ?? options.request.headers.get("Idempotency-Key") ?? "";
+  if (!idempotencyKey.trim() || idempotencyKey.length > 200) throw new KernelError("IDEMPOTENCY_KEY_REQUIRED", "目标变更需要幂等键", "为本次操作提供 Idempotency-Key");
+  const body = await readBoundedJsonBody(options.request, { maxBytes: 128 * 1024 });
+  const workspaceId = collection ? text(decodeURIComponent(collection[1]!)) : text(body.workspaceId);
+  const scope = { tenantId: options.tenantId, principalId: options.principalId, workspaceId };
+  const service = await runtime.service(scope);
+  if (collection) {
+    object(body, ["threadId", "objective", "resourceRefs", "budget", "deliverables"]);
+    const threadId = text(body.threadId), selected = resources(body.resourceRefs);
+    const bound = await options.store.transact(scope.tenantId, tx => goalThreadResources(tx, scope, threadId));
+    if (selected.some(ref => !bound.some(item => item.namespace === ref.namespace && item.resourceId === ref.resourceId))) invalid();
+    for (const ref of bound) {
+      const existing = selected.find(item => item.namespace === ref.namespace && item.resourceId === ref.resourceId);
+      if (existing && (existing.streamVersion !== ref.streamVersion || (existing.digest && existing.digest !== ref.digest))) invalid();
+      if (existing) selected.splice(selected.indexOf(existing), 1);
+      selected.push(ref);
+    }
+    return { status: 201, data: await createGoal({ ...service, idempotencyKey, threadId, objective: text(body.objective, 16000), resourceRefs: selected, budget: budget(body.budget), deliverables: deliverables(body.deliverables) }) };
+  }
+  const goalId = text(decodeURIComponent(item![1]!)), expectedStreamVersion = integer(body.expectedStreamVersion);
+  const base = { ...service, goalId, expectedStreamVersion, idempotencyKey };
+  if (item![2] === "plan-revisions") {
+    object(body, ["workspaceId", "expectedStreamVersion", "modelBindingId"]);
+    const detail = await getGoal(base);
+    const proposal = await options.store.transact(scope.tenantId, tx => runtime.proposal(tx, detail.goal, text(body.modelBindingId)));
+    return { status: 200, data: await proposeGoalPlan({ ...base, proposal, planRequest: { modelBindingId: text(body.modelBindingId) } }) };
+  }
+  if (item![2] === "commands") {
+    const command = text(body.command);
+    object(body, command === "start" ? ["workspaceId", "expectedStreamVersion", "command", "planRevisionId", "planDigest"] : ["workspaceId", "expectedStreamVersion", "command"]);
+    const detail = await (command === "start" ? getGoal(base) : getGoalForCoordination(base));
+    const prepared = { ...base, ...await runtime.service(scope, command === "start" ? detail : undefined, command === "start") };
+    if (command === "start") return { status: 200, data: await startGoal({ ...prepared, planRevisionId: text(body.planRevisionId), planDigest: text(body.planDigest) }) };
+    if (command === "refresh") return { status: 200, data: await runtime.refresh(prepared) };
+    if (command === "cancel") return { status: 200, data: await cancelGoal(prepared) };
+    return invalid();
+  }
+  object(body, ["workspaceId", "expectedStreamVersion", "deliverySetId", "criteriaVersion", "items"]);
+  return { status: 200, data: await acceptGoalDelivery({ ...base, deliverySetId: text(body.deliverySetId), criteriaVersion: text(body.criteriaVersion), items: array(body.items, 20).map(value => {
+    const item = object(value, ["key", "digest", "reviewedCriterionIds"]);
+    return { key: text(item.key), digest: text(item.digest), reviewedCriterionIds: array(item.reviewedCriterionIds, 20).map(value => text(value)) };
+  }) }) };
+}

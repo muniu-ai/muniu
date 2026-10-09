@@ -165,3 +165,18 @@ test("批准后审批人失去审核权限，派发前再次核验批准人", as
   assert.equal(result.status, "failed");
   assert.equal(f.toolCalls(), 0);
 });
+
+
+test("工具在途取消会阻断后续模型请求，并保留待核对状态", async t => {
+  const f = await fixture(t, { execute: async () => {
+    const execution = await f.read();
+    await f.kernel.commandExecution("local", "operator", "cancel-in-flight", execution.id, execution.streamVersion, "cancel");
+  } });
+  const polling = f.worker.pollOnce();
+  await approve(f);
+  assert.equal((await polling).status, "needs_reconciliation");
+  assert.equal((await f.read()).status, "needs_reconciliation");
+  assert.equal(f.modelCalls(), 1);
+  assert.equal(f.toolCalls(), 1);
+  assert.equal((await f.worker.pollOnce()).status, "idle");
+});

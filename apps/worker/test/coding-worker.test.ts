@@ -61,6 +61,7 @@ test("真实 Worker 通过受控仓库、macOS sandbox 和 Gate 持久化 Coding
   assert.equal(state.execution?.status, "completed");
   assert.equal(state.task?.status, "completed");
   assert.equal(state.task?.stage, "learn");
+  assert.equal(state.task?.request, "把 message.txt 的 old value 改成 new value");
   assert.equal(state.candidates.length, 1);
   assert.match(state.candidates[0].diff, /\+new value/u);
   assert.equal("sandboxPath" in state.candidates[0], false);

@@ -42,6 +42,7 @@ export default defineConfig({
           { text: "能力与验证状态", link: "/status" },
           { text: "OPC 机会验证", link: "/guides/opc" },
           { text: "Coding 研发任务", link: "/guides/coding" },
+          { text: "目标与验收", link: "/guides/goals" },
           { text: "CLI 使用", link: "/guides/cli" },
           { text: "故障排查", link: "/troubleshooting" },
         ],
@@ -54,6 +55,9 @@ export default defineConfig({
           { text: "架构", link: "/architecture" },
           { text: "插件开发", link: "/plugin-authoring" },
           { text: "架构决策", link: "/adr/" },
+          { text: "多 Agent、多模型提案", link: "/proposals/agent-os-multi-agent-optimization-2026-10-09" },
+          { text: "目标编排复用审查", link: "/verification/agent-os-s0-reuse-2026-10-09" },
+          { text: "目标与验收验证", link: "/verification/agent-os-s1-2026-10-09" },
         ],
       },
       {

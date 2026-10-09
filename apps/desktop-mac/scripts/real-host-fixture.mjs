@@ -1,10 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createAgentOsHost } from "../../host/dist/index.js";
+import { assertGoalExecutionResources } from "../../host/dist/goal-runtime.js";
+import { createOpcModelContextReader } from "../../host/dist/index.js";
+import { AgentOsWorker, createKernelAgentTurnHandler } from "../../worker/dist/index.js";
 import { KernelProjectionRuntimeStore, PersistentModelBudget } from "../../../packages/agent-runtime/dist/index.js";
 import { InMemoryKernelStore } from "../../../packages/kernel/dist/index.js";
-import { InMemoryKeyProvider } from "../../../packages/storage/dist/index.js";
+import { InMemoryKeyProvider, SqliteStorage } from "../../../packages/storage/dist/index.js";
 import { signedUiPluginFixture } from "./signed-plugin-fixture.mjs";
 
 const port = Number(process.env.MN_FIXTURE_API_PORT);
@@ -12,7 +18,8 @@ const appOrigin = process.env.MN_FIXTURE_APP_ORIGIN;
 const mode = process.env.MN_FIXTURE_MODE ?? "onboarding";
 if (!Number.isSafeInteger(port) || port <= 0 || !appOrigin) throw new Error("缺少真实 Host fixture 配置");
 
-const store = new InMemoryKernelStore();
+const goalStateRoot = mode === "goals" ? await mkdtemp(join(tmpdir(), "muniu-goal-ui-")) : undefined;
+const store = goalStateRoot ? new SqliteStorage({ databaseFile: join(goalStateRoot, "state.sqlite3"), hmacKey: randomBytes(32) }) : new InMemoryKernelStore();
 const now = () => new Date().toISOString();
 const id = (kind) => `${kind}-${randomUUID()}`;
 const objects = new Map();
@@ -32,18 +39,17 @@ const cas = {
   async has(digest) { return objects.has(digest); },
   async gcOrphans() { return []; },
 };
+const keyProvider = new InMemoryKeyProvider(randomBytes(32));
+const secretStore = { async save(account) { return `keychain://muniu.v2/${account}`; }, async read() { return "fixture-key"; } };
 const host = await createAgentOsHost({
   ...signedUiPluginFixture(),
   store,
   cas,
-  protectedPayloadKeyProvider: new InMemoryKeyProvider(randomBytes(32)),
+  protectedPayloadKeyProvider: keyProvider,
   now,
   id,
   allowedOrigins: [appOrigin],
-  secretStore: {
-    async save(account) { return `keychain://muniu.v2/${account}`; },
-    async read() { return "fixture-key"; },
-  },
+  secretStore,
   modelProbe: async ({ preset }) => ({
     models: preset.suggestedModels,
     defaultModel: preset.suggestedModels[0],
@@ -55,13 +61,34 @@ const simulatedExecutions = new Set();
 const agentSimulation = mode === "opc"
   ? setInterval(() => void simulateOpcAgent(), 50)
   : undefined;
+let goalWorkerBusy = false;
+const goalWorker = mode === "goals" ? new AgentOsWorker({ id: "goal-ui-worker", store,
+  lock: { engineLockDigest: "fixture", expectedEngineLockDigest: "fixture", pluginLockDigest: "fixture", expectedPluginLockDigest: "fixture" },
+  handlers: { "agent.execution.run": createKernelAgentTurnHandler({ store, secretStore, approvalKernel: host.kernel,
+    runtimeProtection: { cas, keyProvider }, assertExecutionResources: assertGoalExecutionResources,
+    resolveThreadContext: createOpcModelContextReader({ store, cas, protectedPayloadKeyProvider: keyProvider }),
+    modelInvoker: async () => ({ text: "三个验证问题：近期如何获客、现有方式有哪些不足、是否愿意参加下一轮访谈。现有资料是研究起点，付费意愿仍属待验证假设。", toolCalls: [], usage: { inputTokens: 10, cachedInputTokens: 0, outputTokens: 20 } }),
+    modelQuoter: async () => ({ inputTokenLimit: 100, maxOutputTokens: 100, rates: { id: "fixture", currency: "CNY", inputNanoMinorUnitsPerToken: "0", cachedInputNanoMinorUnitsPerToken: "0", outputNanoMinorUnitsPerToken: "0" } }),
+  }) },
+}) : undefined;
+const goalWorkerTimer = goalWorker ? setInterval(() => {
+  if (goalWorkerBusy) return;
+  goalWorkerBusy = true;
+  void store.transact("local", tx => tx.listProjections("goal.state").some(goal => goal.objective === "验证目标成果验收"))
+    .then(enabled => enabled ? goalWorker.pollOnce() : undefined)
+    .catch(error => process.stderr.write(`目标 fixture 失败：${error.message}\n`)).finally(() => { goalWorkerBusy = false; });
+}, 100) : undefined;
 await host.listen({ port });
 process.stdout.write("READY\n");
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.on(signal, () => {
     if (agentSimulation) clearInterval(agentSimulation);
-    void host.close().finally(() => process.exit(0));
+    if (goalWorkerTimer) clearInterval(goalWorkerTimer);
+    void host.close().finally(async () => {
+      if (goalStateRoot) { await store.close(); await rm(goalStateRoot, { recursive: true, force: true }); }
+      process.exit(0);
+    });
   });
 }
 

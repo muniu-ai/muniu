@@ -2,6 +2,7 @@ import { CORE_API_ROUTES } from "./api.js";
 import type { JsonObject } from "./json.js";
 import { API_OUTPUT_COMPONENTS_V2, API_OUTPUT_SCHEMAS_V2 } from "./generated-responses.js";
 import type { ApiOutputsV2 } from "./api-outputs.js";
+import { goalMutationSchema } from "./goal-api-schema.js";
 
 type HttpMethod = "get" | "post" | "put" | "patch" | "delete";
 
@@ -14,6 +15,12 @@ export interface ApiOperationV2 {
 }
 
 export const API_OPERATIONS_V2 = [
+  { method: "get", path: "/v2/workspaces/{workspaceId}/goals", operationId: "listGoals", mutation: false, versioned: false },
+  { method: "post", path: "/v2/workspaces/{workspaceId}/goals", operationId: "createGoal", mutation: true, versioned: false },
+  { method: "get", path: "/v2/goals/{goalId}", operationId: "getGoal", mutation: false, versioned: false },
+  { method: "post", path: "/v2/goals/{goalId}/plan-revisions", operationId: "proposeGoalPlan", mutation: true, versioned: true },
+  { method: "post", path: "/v2/goals/{goalId}/commands", operationId: "commandGoal", mutation: true, versioned: true },
+  { method: "post", path: "/v2/goals/{goalId}/acceptances", operationId: "acceptGoalDelivery", mutation: true, versioned: true },
   { method: "post", path: "/v2/business-actions", operationId: "createBusinessAction", mutation: true, versioned: true },
   { method: "get", path: "/v2/business-actions/{actionId}", operationId: "getBusinessAction", mutation: false, versioned: false },
   { method: "post", path: "/v2/business-actions/{actionId}/reconciliation-decisions", operationId: "reconcileBusinessAction", mutation: true, versioned: true },
@@ -154,7 +161,7 @@ export function createOpenApiDocument(): JsonObject {
       for (const name of ["generation", "fencingToken"]) parameters.push({ in: "query", name, required: true, schema: { type: "integer", minimum: 1 } });
     }
     if (["listInbox", "listMemories", "listDeliverables", "getHealth"].includes(operation.operationId)) parameters.push({ in: "query", name: "workspaceId", required: false, schema: { type: "string" } });
-    if (operation.operationId === "listActivity") parameters.push({ in: "query", name: "workspaceId", required: true, schema: { type: "string" } });
+    if (["listActivity", "getGoal"].includes(operation.operationId)) parameters.push({ in: "query", name: "workspaceId", required: true, schema: { type: "string" } });
     if (operation.operationId === "listMemories") parameters.push({ in: "query", name: "namespace", required: false, schema: { type: "string" } });
     if ([
       "listCodingRunners",
@@ -541,6 +548,8 @@ export function createOpenApiDocument(): JsonObject {
 }
 
 function mutationSchema(operationId: string, versioned: boolean): JsonObject {
+  const goalSchema = goalMutationSchema(operationId);
+  if (goalSchema) return goalSchema;
   if (operationId === "createBusinessCandidate") return { $ref: "#/components/schemas/CreateBusinessCandidateMutation" };
   if (operationId === "createBusinessAction") return { $ref: "#/components/schemas/CreateBusinessActionMutation" };
   if (operationId === "reconcileBusinessAction") return { $ref: "#/components/schemas/ReconcileBusinessActionMutation" };

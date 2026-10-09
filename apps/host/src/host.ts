@@ -1,4 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { dispatchGoalRequest } from "./goals-api.js";
+import { GOAL_NAMESPACE, readGoalForAccounting, reconcileGoalUsage } from "./goals.js";
+import { createHostGoalRuntime } from "./goal-runtime.js";
+import type { GoalV2 } from "@mn/contracts";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import { Context } from "@deepseek-ai/cordis";
 import { KernelProjectionRuntimeStore, type RuntimeRecord } from "@mn/agent-runtime";
@@ -160,6 +164,7 @@ export type TenantPluginInstallerFactory = (
 ) => PluginInstallerPort | undefined | Promise<PluginInstallerPort | undefined>;
 
 export interface AgentOsHostOptions {
+  readonly goalPollIntervalMs?: number;
   readonly businessProvider?: BusinessProviderPorts;
   readonly businessWorkspaceScopes?: readonly { readonly tenantId: string; readonly workspaceId: string }[];
   readonly businessAuthorityTokenResolver?: () => Promise<string>;
@@ -1204,6 +1209,14 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
       const tenantPlugins = tenantRuntime.plugins;
       const pluginInstaller = tenantRuntime.installer;
       await pluginInstaller?.synchronize?.();
+      if (/^\/v2\/workspaces\/[^/]+\/goals$/u.test(url.pathname) || url.pathname.startsWith("/v2/goals/")) {
+        if (!protectedJournal || !options.cas || !options.protectedPayloadKeyProvider) throw new KernelError("GOAL_PROTECTED_STORAGE_REQUIRED", "目标需要受保护的事件存储", "配置受保护存储后重试");
+        const result = await dispatchGoalRequest({ request, store: options.store, kernel, cas: options.cas, keyProvider: options.protectedPayloadKeyProvider,
+          protectedJournal, now, id: nextId, tenantId: TENANT_ID, principalId: ACTOR_ID,
+          definitions: [tenantPlugins.definition("opc"), tenantPlugins.definition("coding")].filter((value): value is PluginDefinitionV1 => Boolean(value)),
+          ...(typeof mutationKey === "string" ? { mutationKey } : {}) });
+        if (result) return json(result.data, result.status, traceId);
+      }
       const pluginWorkspaceKey = (workspaceId: string) => encodePluginWorkspace(TENANT_ID, workspaceId);
       const resolveCodingNewCallRuntimeReadiness: CodingNewCallReadinessResolver = async ({
         workspaceId,
@@ -1628,7 +1641,11 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
             if (!officialPluginIds.has(thread.pluginId)) {
               pluginInstaller?.assertCanStartExecution?.(thread.pluginId);
             }
-            return kernel.submitTurn(TENANT_ID, ACTOR_ID, mutationKey as string, {
+            return options.store.transact(TENANT_ID, transaction => {
+              const goalOwned = transaction.listProjections<GoalV2>(GOAL_NAMESPACE)
+                .some(goal => goal.threadId === threadId && goal.workspaceId === workspaceId && !["accepted", "cancelled", "failed"].includes(goal.status));
+              if (goalOwned) throw new KernelError("GOAL_EXECUTION_ENTRY_REQUIRED", "此会话由目标计划管理", "通过目标入口开始、刷新或取消执行");
+              return kernel.submitTurnInTransaction(transaction, TENANT_ID, ACTOR_ID, mutationKey as string, {
               workspaceId,
               threadId,
               expectedStreamVersion: expected,
@@ -1654,6 +1671,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
                   maxDurationMs: 3_600_000,
                 },
               },
+              });
             });
           },
         );
@@ -1687,6 +1705,9 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         const execution = await projectionGet<Execution>(options.store, TENANT_ID, "execution", executionId);
         if (!execution) throw new KernelError("EXECUTION_NOT_FOUND", "执行不存在", "刷新执行列表");
         await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, execution.workspaceId, "operate");
+        if (await options.store.transact(TENANT_ID, tx => tx.listProjections<GoalV2>(GOAL_NAMESPACE).some(goal => goal.executionRef?.executionId === execution.id))) {
+          throw new KernelError("GOAL_EXECUTION_ENTRY_REQUIRED", "此执行由固定目标计划管理", "通过目标入口刷新或取消执行");
+        }
         if (execution.pluginId === "industry") {
           throw new KernelError("BUSINESS_EXECUTION_COMMAND_FORBIDDEN", "行业固定流程只能通过业务入口管理", "在业务页查看候选、批准出包或核对未知结果");
         }
@@ -2905,6 +2926,48 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
   };
   schedulePluginRefresh();
 
+  let goalTimer: ReturnType<typeof setTimeout> | undefined;
+  let goalRecovery = Promise.resolve();
+  let goalCursor = 0;
+  const recoverGoals = async () => {
+    if (!protectedJournal || !options.cas || !options.protectedPayloadKeyProvider) return;
+    const tenantIds = options.store.listTenantIds ? await options.store.listTenantIds() : [LOCAL_TENANT_ID];
+    const pending: { tenantId: string; goal: GoalV2 }[] = [];
+    for (const tenantId of tenantIds) {
+      const goals = await options.store.transact(tenantId, tx => tx.listProjections<GoalV2>(GOAL_NAMESPACE)
+        .filter(goal => goal.executionRef && goal.status !== "accepted"
+          && (goal.reservation?.status !== "settled" || ["running", "waiting_approval", "needs_reconciliation"].includes(goal.status))));
+      pending.push(...goals.map(goal => ({ tenantId, goal })));
+    }
+    if (!pending.length) { goalCursor = 0; return; }
+    const start = goalCursor % pending.length;
+    for (let offset = 0; offset < Math.min(20, pending.length); offset++) {
+      if (recoveryStopped) return;
+      const { tenantId, goal } = pending[(start + offset) % pending.length]!;
+      try {
+        const tenantRuntime = await runtimeForTenant(tenantId);
+        const runtime = createHostGoalRuntime({ store: options.store, kernel, cas: options.cas, keyProvider: options.protectedPayloadKeyProvider,
+          protectedJournal, now, id: nextId, definitions: [tenantRuntime.plugins.definition("opc"), tenantRuntime.plugins.definition("coding")].filter((value): value is PluginDefinitionV1 => Boolean(value)) });
+        const detail = await readGoalForAccounting({ store: options.store, tenantId, goalId: goal.id });
+        const scope = { tenantId, workspaceId: goal.workspaceId, principalId: goal.authorization?.principalId ?? goal.principalId };
+        try {
+          const service = await runtime.service(scope);
+          await runtime.observeInBackground({ ...service, goalId: goal.id });
+        } catch {
+          const service = await runtime.service(scope, detail, false, true);
+          await reconcileGoalUsage({ ...service, goalId: goal.id });
+        }
+      } catch { /* A failed inspection never authorizes work or marks unknown usage settled. */ }
+    }
+    goalCursor = (start + Math.min(20, pending.length)) % pending.length;
+  };
+  const scheduleGoalRecovery = () => {
+    if (recoveryStopped || !protectedJournal) return;
+    goalTimer = setTimeout(() => { goalRecovery = recoverGoals().catch(() => {}).finally(scheduleGoalRecovery); }, options.goalPollIntervalMs ?? 500);
+    goalTimer.unref?.();
+  };
+  scheduleGoalRecovery();
+
   return {
     context,
     kernel,
@@ -2973,6 +3036,8 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         recoveryStopped = true;
         if (revocationTimer) clearTimeout(revocationTimer);
         if (pluginRefreshTimer) clearTimeout(pluginRefreshTimer);
+        if (goalTimer) clearTimeout(goalTimer);
+        await goalRecovery;
         await pluginRefresh;
         await revocationRecovery;
         for (const closeStream of [...activeEventStreams]) closeStream();

@@ -42,6 +42,12 @@ curl --fail-with-body --silent --show-error http://127.0.0.1:7318/v2/workspaces
 
 | 方法 | 路径 | operationId | 幂等键 | stream version |
 | --- | --- | --- | --- | --- |
+| `GET` | `/v2/workspaces/{workspaceId}/goals` | `listGoals` | — | — |
+| `POST` | `/v2/workspaces/{workspaceId}/goals` | `createGoal` | 必需 | — |
+| `GET` | `/v2/goals/{goalId}` | `getGoal` | — | — |
+| `POST` | `/v2/goals/{goalId}/plan-revisions` | `proposeGoalPlan` | 必需 | 必需 |
+| `POST` | `/v2/goals/{goalId}/commands` | `commandGoal` | 必需 | 必需 |
+| `POST` | `/v2/goals/{goalId}/acceptances` | `acceptGoalDelivery` | 必需 | 必需 |
 | `POST` | `/v2/business-actions` | `createBusinessAction` | 必需 | 必需 |
 | `GET` | `/v2/business-actions/{actionId}` | `getBusinessAction` | — | — |
 | `POST` | `/v2/business-actions/{actionId}/reconciliation-decisions` | `reconcileBusinessAction` | 必需 | 必需 |

@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 
 const mode = process.argv[2] ?? "onboarding";
-if (!new Set(["onboarding", "opc", "coding"]).has(mode)) throw new Error(`未知验证模式：${mode}`);
+if (!new Set(["onboarding", "opc", "coding", "goals"]).has(mode)) throw new Error(`未知验证模式：${mode}`);
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const desktopDir = resolve(scriptDir, "..");
 const repoRoot = resolve(desktopDir, "..", "..");
@@ -64,6 +64,7 @@ try {
   if (mode === "onboarding") await verifyOnboarding(page, requests);
   if (mode === "opc") await verifyOpc(page, requests, apiUrl);
   if (mode === "coding") await verifyCoding(page, requests);
+  if (mode === "goals") await verifyGoals(page, requests);
   await page.getByTitle("技术配置").click();
   if (!await page.getByRole("button", { name: "设置", exact: true }).isVisible()) await page.getByTitle("技术配置").click();
   await page.getByRole("button", { name: "设置", exact: true }).click();
@@ -109,6 +110,170 @@ try {
   await browser?.close().catch(() => undefined);
   for (const child of children.reverse()) child.kill("SIGTERM");
   if (process.env.MN_DESKTOP_E2E_KEEP_TEMP !== "1") await rm(temporaryRoot, { recursive: true, force: true });
+}
+
+async function verifyGoals(page, requestLog) {
+  await page.getByRole("button", { name: "目标", exact: true }).click();
+  await page.getByLabel("预期结果").waitFor();
+  const externalWorkspace = (await hostData(apiUrl, "/v2/workspaces"))[0];
+  const externalThreadId = await page.getByLabel("关联任务").inputValue();
+  const createExternalGoal = async objective => {
+    const response = await fetch(`${apiUrl}/v2/workspaces/${externalWorkspace.id}/goals`, {
+      method: "POST", headers: { "content-type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+      body: JSON.stringify({ threadId: externalThreadId, objective, resourceRefs: [],
+        budget: { maxTokens: 1000, maxCostMinorUnits: "50", currency: "CNY", maxDurationMs: 60000 },
+        deliverables: [{ key: "result", title: "任务成果", required: true, criteria: [{ id: "scope", description: "说明验证范围" }] }] }),
+    });
+    if (!response.ok) throw new Error("外部目标创建失败");
+    return (await response.json()).data;
+  };
+  let releaseOldList;
+  let reportHeldList;
+  const heldList = new Promise(resolve => { reportHeldList = resolve; });
+  const releasedList = new Promise(resolve => { releaseOldList = resolve; });
+  let holdNextList = true;
+  const listUrl = `${apiUrl}/v2/workspaces/${externalWorkspace.id}/goals`;
+  await page.route(listUrl, async route => {
+    if (route.request().method() !== "GET" || !holdNextList) return route.continue();
+    holdNextList = false;
+    const response = await route.fetch();
+    reportHeldList();
+    await releasedList;
+    await route.fulfill({ response });
+  });
+  await createExternalGoal("外部入口创建的目标");
+  await waitForHeldResponse(heldList);
+  await createExternalGoal("随后创建的目标");
+  await page.getByRole("button", { name: /随后创建的目标/u }).waitFor();
+  const delayedList = page.waitForResponse(response => response.url() === listUrl && response.request().method() === "GET");
+  releaseOldList();
+  await delayedList;
+  await page.waitForTimeout(200);
+  if (!await page.getByRole("button", { name: /随后创建的目标/u }).isVisible()) throw new Error("迟到列表响应覆盖了新目标");
+  await page.unroute(listUrl);
+  await page.getByRole("button", { name: /外部入口创建的目标/u }).waitFor();
+  await page.getByLabel("预期结果").fill("整理设计师获客访谈的验证问题");
+  await page.getByLabel("验收标准（每行一项）").fill("列出三个验证问题\n区分事实与待验证假设");
+  await page.getByRole("button", { name: "创建目标", exact: true }).click();
+  await page.getByRole("heading", { name: "整理设计师获客访谈的验证问题", exact: true }).waitFor();
+  await page.getByRole("button", { name: "生成计划", exact: true }).click();
+  await page.getByText("待确认计划", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "确认计划并启动", exact: true }).click();
+  await page.getByText("执行中", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "取消目标", exact: true }).click();
+  await page.getByText("已取消", { exact: true }).waitFor();
+  const create = requestLog.find(request => request.method === "POST" && /\/workspaces\/[^/]+\/goals$/u.test(request.path));
+  if (create?.body?.deliverables?.[0]?.criteria?.length !== 2) throw new Error("目标未保存完整验收标准");
+  const start = requestLog.find(request => request.body?.command === "start" && request.path.includes("/goals/"));
+  if (!start?.body?.planRevisionId || !start.body.planDigest || !Number.isInteger(start.body.expectedStreamVersion)) throw new Error("目标启动未绑定审阅过的计划和版本");
+  const cancel = requestLog.find(request => request.body?.command === "cancel" && request.path.includes("/goals/"));
+  if (cancel.body.expectedStreamVersion <= start.body.expectedStreamVersion) throw new Error("目标取消未使用最新版本");
+  await page.getByRole("button", { name: "新建目标", exact: true }).click();
+  await page.getByLabel("预期结果").fill("验证目标成果验收");
+  await page.getByRole("button", { name: "创建目标", exact: true }).click();
+  await page.getByRole("heading", { name: "验证目标成果验收", exact: true }).waitFor();
+  await page.getByRole("button", { name: "生成计划", exact: true }).click();
+  await page.getByRole("button", { name: "确认计划并启动", exact: true }).click();
+  await page.getByText("待验收", { exact: true }).waitFor();
+  const acceptance = page.getByRole("region", { name: "成果验收" });
+  await acceptance.getByText(/三个验证问题：近期如何获客/u).waitFor();
+  const accept = acceptance.getByRole("button", { name: "接收成果", exact: true });
+  if (await accept.isEnabled()) throw new Error("未逐条复核标准时不能接收成果");
+  await acceptance.getByRole("checkbox").nth(0).check();
+  if (await accept.isEnabled()) throw new Error("只复核部分标准时不能接收成果");
+  await acceptance.getByRole("checkbox").nth(1).check();
+  await accept.click();
+  await page.getByText("已验收", { exact: true }).waitFor();
+  const accepted = requestLog.find(request => request.method === "POST" && request.path.endsWith("/acceptances"));
+  if (!accepted?.body?.deliverySetId || accepted.body.items?.[0]?.reviewedCriterionIds?.length !== 2 || !accepted.body.items[0].digest) throw new Error("验收未绑定成果版本和完整标准");
+  await assertViewportFit(page);
+  await page.screenshot({ path: join(temporaryRoot, "goal-detail.png") });
+  const workspaceId = accepted.body.workspaceId;
+  const goalPath = accepted.path.slice(0, -"/acceptances".length);
+  const detail = await hostData(apiUrl, `${goalPath}?workspaceId=${encodeURIComponent(workspaceId)}`);
+  let releaseOldResponse;
+  let reportHeldResponse;
+  const heldResponse = new Promise(resolve => { reportHeldResponse = resolve; });
+  const releasedResponse = new Promise(resolve => { releaseOldResponse = resolve; });
+  let holdNextRead = true;
+  await page.route(`${apiUrl}${goalPath}?workspaceId=*`, async route => {
+    if (!holdNextRead) return route.continue();
+    holdNextRead = false;
+    const response = await route.fetch();
+    if (response.status() !== 200) throw new Error("延迟读取未取得变更前的成果");
+    reportHeldResponse();
+    await releasedResponse;
+    await route.fulfill({ response });
+  });
+  const anotherGoal = await fetch(`${apiUrl}/v2/workspaces/${encodeURIComponent(workspaceId)}/goals`, {
+    method: "POST", headers: { "content-type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+    body: JSON.stringify({ threadId: detail.goal.threadId, objective: "触发工作区刷新", resourceRefs: [],
+      budget: detail.goal.budget, deliverables: detail.goal.deliverables }),
+  });
+  if (!anotherGoal.ok) throw new Error("无法触发工作区目标刷新");
+  await waitForHeldResponse(heldResponse);
+  const source = detail.goal.resourceRefs.find(ref => ref.namespace === "opc.opportunity");
+  const changed = await fetch(`${apiUrl}/v2/plugins/opc/opportunities/${source.resourceId}/commands`, {
+    method: "POST", headers: { "content-type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+    body: JSON.stringify({ workspaceId, expectedStreamVersion: source.streamVersion, command: "frame", input: {
+      targetCustomer: "独立设计师", problem: "来源条件已变化", falsifiableHypothesis: "需要根据新资料重新复核",
+    } }),
+  });
+  if (!changed.ok) throw new Error(`来源变更 fixture 失败：${await changed.text()}`);
+  await page.locator(".goal-preview").waitFor({ state: "hidden" });
+  await page.getByRole("alert").filter({ hasText: /资料|版本|来源/u }).waitFor();
+  const delayedRead = page.waitForResponse(response => response.url().startsWith(`${apiUrl}${goalPath}?`) && response.status() === 200);
+  releaseOldResponse();
+  await delayedRead;
+  await page.waitForTimeout(200);
+  if (await page.locator(".goal-preview").isVisible()) throw new Error("来源失效后的迟到响应恢复了成果正文");
+  await page.unroute(`${apiUrl}${goalPath}?workspaceId=*`);
+  let reportHeldFailure;
+  let releaseFailure;
+  const heldFailure = new Promise(resolve => { reportHeldFailure = resolve; });
+  const releasedFailure = new Promise(resolve => { releaseFailure = resolve; });
+  let holdNextFailure = true;
+  await page.route(`${apiUrl}${goalPath}?workspaceId=*`, async route => {
+    if (!holdNextFailure) return route.continue();
+    holdNextFailure = false;
+    const response = await route.fetch();
+    if (response.ok()) throw new Error("失效来源仍允许读取原目标");
+    reportHeldFailure();
+    await releasedFailure;
+    await route.fulfill({ response });
+  });
+  const nextGoal = await createExternalGoal("独立切换目标");
+  await waitForHeldResponse(heldFailure);
+  const nextGoalUrl = `${apiUrl}/v2/goals/${nextGoal.goal.id}?workspaceId=*`;
+  let releaseNextGoal;
+  let reportNextGoal;
+  const heldNextGoal = new Promise(resolve => { reportNextGoal = resolve; });
+  const releasedNextGoal = new Promise(resolve => { releaseNextGoal = resolve; });
+  await page.route(nextGoalUrl, async route => {
+    const response = await route.fetch();
+    reportNextGoal();
+    await releasedNextGoal;
+    await route.fulfill({ response });
+  });
+  await page.getByRole("button", { name: /独立切换目标/u }).click();
+  await waitForHeldResponse(heldNextGoal);
+  const delayedFailure = page.waitForResponse(response => response.url().startsWith(`${apiUrl}${goalPath}?`) && !response.ok());
+  releaseFailure();
+  await delayedFailure;
+  await page.waitForTimeout(100);
+  releaseNextGoal();
+  await page.getByRole("heading", { name: "独立切换目标", exact: true }).waitFor();
+  await page.unroute(nextGoalUrl);
+  await page.unroute(`${apiUrl}${goalPath}?workspaceId=*`);
+}
+
+async function waitForHeldResponse(promise) {
+  let timer;
+  try {
+    await Promise.race([promise, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error("未收到预期的并发读取响应")), 12000);
+    })]);
+  } finally { clearTimeout(timer); }
 }
 
 async function verifyOnboarding(page, requestLog) {

@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { apiPath, operationInputFields, matchApiOperation, parseApiResponse, type ApiPath, type JsonApiOperationIdV2, type ApiOutputsV2 } from "@mn/contracts/client";
 import { homedir } from "node:os";
+import { readFile } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ApiErrorV2, Thread, WorkspacePluginSurfaceV1 } from "@mn/contracts";
@@ -30,11 +31,22 @@ const HELP = `木牛 Agent OS 0.2
   plugin            查看、安装、更新、启用、停用或运行插件命令
   opc               管理机会验证工作
   code              管理 Coding 任务
+  goal              管理目标、计划和成果验收
   backup            创建、校验或恢复本地加密备份
 
 全局参数：
   --json            输出稳定 JSON
   --help            显示帮助
+
+目标与验收：
+  mn goal list --workspace <工作区 ID>
+  mn goal show <目标 ID> --workspace <工作区 ID>
+  mn goal create --workspace <工作区 ID> --file <目标 JSON 文件>
+  mn goal plan <目标 ID> --workspace <工作区 ID> --version <目标版本> --model <模型连接 ID>
+  mn goal start <目标 ID> --workspace <工作区 ID> --version <目标版本> --plan <计划 ID> --plan-digest <计划摘要>
+  mn goal refresh <目标 ID> --workspace <工作区 ID> --version <目标版本>
+  mn goal cancel <目标 ID> --workspace <工作区 ID> --version <目标版本>
+  mn goal accept <目标 ID> --workspace <工作区 ID> --version <目标版本> --file <验收 JSON 文件>
 
 备份示例：
   mn backup create state.mnbackup --verify
@@ -264,6 +276,60 @@ function reconciliationVersions(
     expectedStreamVersion: coreVersion,
     expectedCodingStreamVersion: codingVersion,
   };
+}
+
+async function goal(parsed: ParsedArguments, api: ApiClient): Promise<CliResult> {
+  const action = parsed.positional[0] ?? "list";
+  const command = `goal ${action}`;
+  if (action === "list") {
+    assertAllowedFlags(parsed, ["workspace"]);
+    const data = await api.get(apiPath("listGoals", { workspaceId: flag(parsed, "workspace", true)! }));
+    return { command, data, human: data.length ? data.map(item => `${item.id} · ${item.objective} · ${item.status}`).join("\n") : "当前工作区没有目标" };
+  }
+  if (action === "create") {
+    assertAllowedFlags(parsed, ["workspace", "file"]);
+    const data = await api.mutate(apiPath("createGoal", { workspaceId: flag(parsed, "workspace", true)! }), await goalFile(parsed));
+    return { command, data, human: `已创建目标：${data.goal.id}` };
+  }
+  if (!["show", "plan", "start", "refresh", "cancel", "accept"].includes(action)) throw new CliUsageError("goal 支持 list、show、create、plan、start、refresh、cancel、accept");
+  const goalId = parsed.positional[1];
+  if (!goalId) throw new CliUsageError("缺少目标 ID");
+  if (action === "show") {
+    assertAllowedFlags(parsed, ["workspace"]);
+    const data = await api.get(apiPath("getGoal", { goalId }, { workspaceId: flag(parsed, "workspace", true)! }));
+    return { command, data, human: JSON.stringify(data, null, 2) };
+  }
+  flag(parsed, "version", true);
+  const expectedStreamVersion = integerFlag(parsed, "version", 0);
+  if (expectedStreamVersion < 1) throw new CliUsageError("--version 必须为正整数");
+  const workspaceId = flag(parsed, "workspace", true)!;
+  const base = { workspaceId, expectedStreamVersion };
+  if (action === "plan") {
+    assertAllowedFlags(parsed, ["workspace", "version", "model"]);
+    const data = await api.mutate(apiPath("proposeGoalPlan", { goalId }), { ...base, modelBindingId: flag(parsed, "model", true)! });
+    return { command, data, human: JSON.stringify(data, null, 2) };
+  }
+  if (action === "accept") {
+    assertAllowedFlags(parsed, ["workspace", "version", "file"]);
+    const data = await api.mutate(apiPath("acceptGoalDelivery", { goalId }), { ...await goalFile(parsed), ...base });
+    return { command, data, human: `目标状态：${data.goal.status}` };
+  }
+  assertAllowedFlags(parsed, action === "start" ? ["workspace", "version", "plan", "plan-digest"] : ["workspace", "version"]);
+  const data = await api.mutate(apiPath("commandGoal", { goalId }), { ...base, command: action,
+    ...(action === "start" ? { planRevisionId: flag(parsed, "plan", true)!, planDigest: flag(parsed, "plan-digest", true)! } : {}) });
+  return { command, data, human: `目标状态：${data.goal.status}` };
+}
+
+async function goalFile(parsed: ParsedArguments): Promise<Record<string, unknown>> {
+  const path = flag(parsed, "file", true)!;
+  let input: unknown;
+  try {
+    const content = await readFile(path, "utf8");
+    if (Buffer.byteLength(content) > 128 * 1024) throw new Error("oversized input");
+    input = JSON.parse(content);
+  } catch { throw new CliUsageError("无法读取目标 JSON 文件；文件必须为有效 JSON，且不超过 128 KiB"); }
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new CliUsageError("目标 JSON 文件必须包含一个对象");
+  return input as Record<string, unknown>;
 }
 
 async function setup(parsed: ParsedArguments, api: ApiClient): Promise<CliResult> {
@@ -947,6 +1013,7 @@ export async function runCli(arguments_: readonly string[], dependencies: CliDep
       case "plugin": result = await plugin(parsed, api); break;
       case "opc": result = await opc(parsed, api); break;
       case "code": result = await code(parsed, api); break;
+      case "goal": result = await goal(parsed, api); break;
       case "backup": result = await backup(
         parsed,
         () => dependencies.backup ?? createDefaultBackup(dependencies),

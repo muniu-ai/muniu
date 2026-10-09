@@ -53,6 +53,7 @@ import {
   assertCurrentExecutionAuthorization,
   assertCurrentToolApproval,
   recordToolAdmission,
+  hasUnsettledToolCalls,
   authorityAllowsIntent,
   sha256,
   type InboxItem,
@@ -300,6 +301,7 @@ export interface CodingModelSecretReader {
 }
 
 export interface CodingExecutionWorkerOptions {
+  readonly assertExecutionResources?: (transaction: KernelTransaction, execution: Execution) => void;
   readonly scopeContext?: AgentScope["context"];
   readonly commandExecutor?: CodingCommandExecutor;
   readonly memoryReader?: AgentMemoryReader;
@@ -381,8 +383,9 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
     const executionId = payloadString(job.payload, "executionId");
     const store = fencedCodingStore(options.store, job, context, now);
     const state = await loadCodingState(store, job.tenantId, executionId);
+    await store.transact(job.tenantId, tx => options.assertExecutionResources?.(tx, state.execution));
     const onCommit = (tx: KernelTransaction, records: readonly RuntimeRecord[]) =>
-      finalizeCodingRuntime(tx, records, state, job, context, now());
+      finalizeCodingRuntime(tx, records, state, job, context, now(), options.assertExecutionResources);
     const runtime = options.runtimeProtection ? createProtectedRuntimeStore({
       ...options.runtimeProtection, tenantId: job.tenantId, workspaceId: state.execution.workspaceId, store, now, onCommit,
     }) : new KernelProjectionRuntimeStore({ tenantId: job.tenantId, store, now,
@@ -449,7 +452,8 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
 }
 
 function finalizeCodingRuntime(tx: KernelTransaction, records: readonly RuntimeRecord[], state: CodingState,
-  job: StoredJob, context: CodingWorkerJobContext, occurredAt: string): void | (() => void) {
+  job: StoredJob, context: CodingWorkerJobContext, occurredAt: string,
+  assertResources?: (transaction: KernelTransaction, execution: Execution) => void): void | (() => void) {
   if (records.some(record => record.type === "model/request" || record.type === "model/reserved" || record.type === "tool/started"
     || record.type === "job/started" || record.type === "subagent/reserved"
     || (record.type === "execution/status" && record.payload.status === "completed"))) {
@@ -457,9 +461,11 @@ function finalizeCodingRuntime(tx: KernelTransaction, records: readonly RuntimeR
     if (!execution || execution.generation !== state.execution.generation) throw new StaleFencingTokenError(job.id);
     if (execution.status === "needs_reconciliation") throw new CodingWorkerOutcomeError(execution.id, "needs_reconciliation", "外部操作结果需要人工核对");
     const control = tx.getProjection<{ generation: number; command: string }>("execution-control", execution.id);
+    if (control?.generation === execution.generation && control.command === "cancel") throw new RuntimeControlError("cancelled");
     if (control?.generation === execution.generation && control.command === "interrupt") throw new RuntimeControlError("interrupted");
     if (execution.status === "cancelled" || execution.status === "paused" || execution.status === "interrupted") throw new RuntimeControlError(execution.status);
     assertCurrentExecutionAuthorization(tx, execution);
+    assertResources?.(tx, execution);
     for (const record of records) {
       if (record.type === "tool/started" && typeof record.payload.toolCallId === "string") {
         assertCurrentToolApproval(tx, execution.id, record.payload.toolCallId, occurredAt);
@@ -742,7 +748,7 @@ function createCodingTurnHandler(options: CodingExecutionWorkerOptions) {
       if (context.signal.aborted && !isUserCancellation(context.signal) && engineResult.status !== "needs_reconciliation") {
         throw new Error("Coding 执行已中断");
       }
-      const result = isUserCancellation(context.signal)
+      const result = isUserCancellation(context.signal) && (!(runner instanceof ExternalCodingRunner) || runner.terminationConfirmed)
         ? cancelledCodingResult(engineResult)
         : engineResult;
       const approvalIntent = result.status === "waiting_approval"
@@ -3753,31 +3759,39 @@ async function persistCodingResult(input: {
   readonly now: string;
 }): Promise<StoredCodingRun> {
   const committed = await input.store.transact(input.tenantId, (transaction) => {
-    const liveExecution = transaction.getProjection<Execution>(
+    let liveExecution = transaction.getProjection<Execution>(
       "execution",
       input.state.execution.id,
     );
     if (!liveExecution || liveExecution.generation !== input.state.execution.generation) {
       throw new Error("Coding Execution 已变化，拒绝提交过期结果");
     }
-    const result = liveExecution.status === "cancelled"
-      ? cancelledCodingResult(input.result)
-      : input.result;
+    const current = transaction.getProjection<StoredCodingRun>("coding.execution", input.state.execution.id);
+    if (!current || current.generation !== input.state.execution.generation) throw new Error("Coding 执行开始检查点不存在");
+    const control = transaction.getProjection<{ generation: number; command: string }>("execution-control", liveExecution.id);
+    const confirmedCancellation = liveExecution.status === "needs_reconciliation" && input.result.status === "cancelled"
+      && control?.generation === liveExecution.generation && control.command === "cancel"
+      && current.externalInvocation && input.runnerTerminationConfirmed && !hasUnsettledToolCalls(transaction, liveExecution.id);
+    if (confirmedCancellation) {
+      const cancelled: Execution = { ...liveExecution, status: "cancelled", streamVersion: liveExecution.streamVersion + 1,
+        updatedAt: input.now, finishedAt: input.now };
+      transaction.putProjection("execution", cancelled.id, cancelled);
+      appendKernelEvent(transaction, { tenantId: input.tenantId, aggregateType: "execution", aggregateId: cancelled.id,
+        expectedStreamVersion: liveExecution.streamVersion, type: "execution.cancelled", actorId: liveExecution.executionPrincipalId,
+        executionId: cancelled.id, generation: cancelled.generation, correlationId: cancelled.id,
+        publicPayload: { previousStatus: liveExecution.status, status: "cancelled", reason: "runner_termination_confirmed" } });
+      liveExecution = cancelled;
+    }
+    const result: CodingExecutionResult = liveExecution.status === "cancelled" ? cancelledCodingResult(input.result)
+      : liveExecution.status === "needs_reconciliation" && input.result.status === "cancelled"
+        ? { ...input.result, status: "needs_reconciliation", nextStep: "取消已请求，外部执行结果仍需核对" } : input.result;
     if (result.status === "cancelled") {
-      if (liveExecution.status !== "cancelled") {
-        throw new Error("只有已取消的 Execution 可持久化 Coding 取消结果");
-      }
-    } else if (result.status === "failed" && liveExecution.status === "failed") {
-      // 拒绝审批会先由内核终结 Execution，Coding 投影仍必须原子收敛。
+      if (liveExecution.status !== "cancelled") throw new Error("只有已确认取消的 Execution 可持久化 Coding 取消结果");
+    } else if ((result.status === "failed" && liveExecution.status === "failed")
+      || (result.status === "needs_reconciliation" && liveExecution.status === "needs_reconciliation")) {
+      // Preserve a known rejection or an unresolved external result while converging domain state.
     } else if (liveExecution.status !== "running" && liveExecution.status !== "waiting_approval") {
       throw new Error(`Coding Execution 已进入 ${liveExecution.status}，拒绝提交后续结果`);
-    }
-    const current = transaction.getProjection<StoredCodingRun>(
-      "coding.execution",
-      input.state.execution.id,
-    );
-    if (!current || current.generation !== input.state.execution.generation) {
-      throw new Error("Coding 执行开始检查点不存在");
     }
     if (current.result) {
       return {
@@ -3897,8 +3911,10 @@ async function persistCodingResult(input: {
         gateCount: result.gates.length,
       },
     });
+    const currentTask = transaction.getProjection<CodingTask>("coding.task", input.state.task.id);
+    if (!currentTask) throw new Error("CodingTask 不存在");
     transaction.putProjection("coding.task", input.state.task.id, {
-      ...input.state.task,
+      ...currentTask,
       stage: result.status === "waiting_approval" ? "approve" : "verify",
       status: input.context.runtime && ["completed", "failed", "cancelled", "needs_human_decision"].includes(result.status) ? "active" : result.status,
       streamVersion: taskVersion,

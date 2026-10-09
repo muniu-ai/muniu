@@ -1,0 +1,27 @@
+// SPDX-License-Identifier: Apache-2.0
+import type { JsonObject } from "./json.js";
+
+export function goalMutationSchema(operationId: string): JsonObject | undefined {
+  const string = { type: "string", minLength: 1, maxLength: 200 };
+  const version = { type: "integer", minimum: 0 };
+  const object = (required: readonly string[], properties: JsonObject): JsonObject => ({ type: "object", additionalProperties: false, required: [...required], properties });
+  const array = (items: JsonObject, minItems = 0, maxItems = 100): JsonObject => ({ type: "array", items, minItems, maxItems });
+  const base = { workspaceId: string, expectedStreamVersion: version };
+  const resource = object(["namespace", "resourceId", "streamVersion"], { namespace: string, resourceId: string, streamVersion: version, digest: string });
+  const criterion = object(["id", "description"], { id: string, description: { type: "string", minLength: 1, maxLength: 2000 } });
+  if (operationId === "createGoal") return object(["threadId", "objective", "resourceRefs", "budget", "deliverables"], {
+    threadId: string, objective: { type: "string", minLength: 1, maxLength: 16000 }, resourceRefs: array(resource),
+    budget: object(["maxTokens", "maxCostMinorUnits", "currency", "maxDurationMs"], { maxTokens: { type: "integer", minimum: 1 }, maxCostMinorUnits: { type: "string", pattern: "^(0|[1-9][0-9]{0,23})$" }, currency: { type: "string", pattern: "^[A-Z]{3}$" }, maxDurationMs: { type: "integer", minimum: 1 } }),
+    deliverables: array(object(["key", "title", "required", "criteria"], { key: string, title: string, required: { type: "boolean" }, criteria: array(criterion, 1, 20) }), 1, 1),
+  });
+  if (operationId === "proposeGoalPlan") return object(["workspaceId", "expectedStreamVersion", "modelBindingId"], { ...base, modelBindingId: string });
+  if (operationId === "commandGoal") return { oneOf: [
+    object(["workspaceId", "expectedStreamVersion", "command", "planRevisionId", "planDigest"], { ...base, command: { const: "start" }, planRevisionId: string, planDigest: string }),
+    object(["workspaceId", "expectedStreamVersion", "command"], { ...base, command: { enum: ["refresh", "cancel"] } }),
+  ] };
+  if (operationId === "acceptGoalDelivery") return object(["workspaceId", "expectedStreamVersion", "deliverySetId", "criteriaVersion", "items"], {
+    ...base, deliverySetId: string, criteriaVersion: string,
+    items: array(object(["key", "digest", "reviewedCriterionIds"], { key: string, digest: string, reviewedCriterionIds: array(string, 1, 20) }), 1, 20),
+  });
+  return undefined;
+}

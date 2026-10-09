@@ -353,6 +353,7 @@ test("本地组合根可注入 v2 Keychain provider，并在 SQLite 与文件 CA
   let second: AgentOsHost | undefined;
   try {
     first = await startLocalAgentOsHost({
+      legacyDaemonProbe: async () => false,
       stateRoot,
       port: 0,
       secretStore: localSecrets,
@@ -380,6 +381,7 @@ test("本地组合根可注入 v2 Keychain provider，并在 SQLite 与文件 CA
     first = undefined;
 
     second = await startLocalAgentOsHost({
+      legacyDaemonProbe: async () => false,
       stateRoot,
       port: 0,
       secretStore: localSecrets,

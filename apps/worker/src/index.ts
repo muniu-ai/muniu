@@ -592,6 +592,7 @@ export interface OpcPublicWebReader {
 export interface AgentExecutionStore extends WorkerJobStore, KernelStore {}
 
 export interface KernelAgentTurnHandlerOptions {
+  readonly assertExecutionResources?: (transaction: KernelTransaction, execution: Execution) => void;
   readonly scopeContext?: AgentScope["context"];
   readonly resolveThreadContext?: (thread: Thread) => Promise<string | undefined>;
   readonly resolvePluginWorker?: (execution: Execution) => Promise<PluginWorkerV1>;
@@ -653,6 +654,7 @@ export function createKernelAgentTurnHandler(
         if (execution.status === "needs_reconciliation") throw new UnknownExternalSideEffectError(execution.id);
         if (execution.status === "interrupted" || execution.status === "paused") throw new AgentExecutionInterruptedError(execution.id);
         assertCurrentExecutionAuthorization(transaction, execution);
+        options.assertExecutionResources?.(transaction, execution);
         const authority = transaction.getProjection<ExecutionAuthority>("authority", execution.authorityId);
         if (!authority) throw new Error("Execution Authority 不存在");
         const thread = transaction.getProjection<Thread>("thread", execution.threadId);
@@ -771,6 +773,7 @@ export function createKernelAgentTurnHandler(
           if (control?.generation === state.execution.generation && control.command === "interrupt") throw new RuntimeControlError("interrupted");
           if (current.status === "cancelled" || current.status === "interrupted" || current.status === "paused") throw new RuntimeControlError(current.status);
           assertCurrentExecutionAuthorization(transaction, current);
+          options.assertExecutionResources?.(transaction, current);
           for (const record of records) {
             if (record.type === "tool/started" && typeof record.payload.toolCallId === "string") {
               assertCurrentToolApproval(transaction, executionId, record.payload.toolCallId, (options.now ?? (() => new Date().toISOString()))());
@@ -861,6 +864,7 @@ export function createKernelAgentTurnHandler(
         secretStore: options.secretStore,
         modelInvoker: invokeModel,
         modelQuoter: quoteModel,
+        ...(options.assertExecutionResources ? { assertExecutionResources: options.assertExecutionResources } : {}),
         ...(options.memoryReader ? { memoryReader: options.memoryReader } : {}),
         ...(options.runtimeProtection ? { runtimeProtection: options.runtimeProtection } : {}),
         approvalKernel,
@@ -880,7 +884,14 @@ export function createKernelAgentTurnHandler(
     const executionId = requiredPayloadString(job.payload, "executionId");
     const pluginId = await options.store.transact(job.tenantId, (transaction) =>
       transaction.getProjection<Execution>("execution", executionId)?.pluginId);
-    if (pluginId !== "coding") return genericHandler(job, context);
+    if (pluginId !== "coding") {
+      try { return await genericHandler(job, context); }
+      catch (error) {
+        const status = await options.store.transact(job.tenantId, tx => tx.getProjection<Execution>("execution", executionId)?.status);
+        if (status === "needs_reconciliation") throw new UnknownExternalSideEffectError(executionId);
+        throw error;
+      }
+    }
     if (!codingHandler) {
       throw new Error("Coding sandbox 尚未配置，已拒绝无沙箱执行");
     }
@@ -927,11 +938,12 @@ async function observeCodingExecutionControl(
   let current = Promise.resolve();
   const inspect = async () => {
     if (stopped || abort.signal.aborted) return;
-    const status = await store.transact(tenantId, (transaction) =>
-      transaction.getProjection<Execution>("execution", executionId)?.status);
-    if (status === "cancelled" || status === "paused" || status === "interrupted") {
-      abort.abort(status);
-    }
+    const { execution, control } = await store.transact(tenantId, transaction => ({
+      execution: transaction.getProjection<Execution>("execution", executionId),
+      control: transaction.getProjection<{ generation: number; command: string }>("execution-control", executionId),
+    }));
+    if (execution && control?.generation === execution.generation && control.command === "cancel") abort.abort("cancelled");
+    else if (execution?.status === "cancelled" || execution?.status === "paused" || execution?.status === "interrupted") abort.abort(execution.status);
   };
   const schedule = () => {
     current = current.then(inspect).catch(() => abort.abort("执行控制状态检查失败"));
@@ -986,7 +998,9 @@ async function observeExecutionControl(
       execution: transaction.getProjection<Execution>("execution", handle.executionId),
       control: transaction.getProjection<{ generation: number; command: string }>("execution-control", handle.executionId),
     }));
-    if (execution?.status === "cancelled") await handle.cancel("用户取消");
+    if (execution?.status === "needs_reconciliation" && control?.generation === execution.generation && control.command === "cancel") {
+      await handle.interrupt("用户取消，已开始的操作仍需核对");
+    } else if (execution?.status === "cancelled") await handle.cancel("用户取消");
     else if (execution?.status === "interrupted" || execution?.status === "paused"
       || (execution && control?.generation === execution.generation && control.command === "interrupt")) {
       await handle.interrupt("执行控制要求中断");

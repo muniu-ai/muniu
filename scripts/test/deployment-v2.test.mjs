@@ -314,6 +314,7 @@ test("enterprise Worker ships a production Agent execution bootstrap", async (t)
   assert.match(worker, /workerHandlerReadiness/u);
   assert.match(worker, /kinds:\s*supportedKinds/u);
   assert.match(builtin, /export const supportedKinds/u);
+  assert.match(builtin, /assertExecutionResources:\s*assertGoalExecutionResources/u);
   assert.match(host, /trustedWorkerSupportedKinds/u);
   assert.match(host, /MN_WORKER_ENABLED/u);
   assert.match(host, /MN_WORKER_SUPPORTED_KINDS/u);

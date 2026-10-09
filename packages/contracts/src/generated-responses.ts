@@ -2,6 +2,27 @@
 // SPDX-License-Identifier: Apache-2.0
 import type { JsonObject } from "./json.js";
 export const API_OUTPUT_SCHEMAS_V2: Readonly<Record<string, JsonObject>> = {
+  "listGoals": {
+    "type": "array",
+    "items": {
+      "$ref": "#/components/schemas/OutputGoalV2"
+    }
+  },
+  "createGoal": {
+    "$ref": "#/components/schemas/OutputGoalDetailV2"
+  },
+  "getGoal": {
+    "$ref": "#/components/schemas/OutputGoalDetailV2"
+  },
+  "proposeGoalPlan": {
+    "$ref": "#/components/schemas/OutputGoalDetailV2"
+  },
+  "commandGoal": {
+    "$ref": "#/components/schemas/OutputGoalDetailV2"
+  },
+  "acceptGoalDelivery": {
+    "$ref": "#/components/schemas/OutputGoalDetailV2"
+  },
   "createBusinessAction": {
     "$ref": "#/components/schemas/OutputBusinessActionV1"
   },
@@ -405,6 +426,653 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
       "$ref": "#/components/schemas/OutputJsonValue"
     }
   },
+  "OutputGoalDeliverableSpecV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "key",
+      "title",
+      "required",
+      "criteria"
+    ],
+    "properties": {
+      "key": {
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      },
+      "required": {
+        "anyOf": [
+          {
+            "type": "boolean",
+            "const": false
+          },
+          {
+            "type": "boolean",
+            "const": true
+          }
+        ]
+      },
+      "criteria": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "description"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  },
+  "OutputGoalResourceRefV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "streamVersion",
+      "namespace",
+      "resourceId"
+    ],
+    "properties": {
+      "streamVersion": {
+        "type": "number"
+      },
+      "namespace": {
+        "type": "string"
+      },
+      "resourceId": {
+        "type": "string"
+      },
+      "digest": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputGoalBudgetV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "maxTokens",
+      "maxCostMinorUnits",
+      "currency",
+      "maxDurationMs"
+    ],
+    "properties": {
+      "maxTokens": {
+        "type": "number"
+      },
+      "maxCostMinorUnits": {
+        "type": "string"
+      },
+      "currency": {
+        "type": "string"
+      },
+      "maxDurationMs": {
+        "type": "number"
+      }
+    }
+  },
+  "OutputGoalStatusV2": {
+    "anyOf": [
+      {
+        "type": "string",
+        "const": "needs_reconciliation"
+      },
+      {
+        "type": "string",
+        "const": "running"
+      },
+      {
+        "type": "string",
+        "const": "waiting_approval"
+      },
+      {
+        "type": "string",
+        "const": "failed"
+      },
+      {
+        "type": "string",
+        "const": "cancelled"
+      },
+      {
+        "type": "string",
+        "const": "accepted"
+      },
+      {
+        "type": "string",
+        "const": "draft"
+      },
+      {
+        "type": "string",
+        "const": "awaiting_authorization"
+      },
+      {
+        "type": "string",
+        "const": "awaiting_acceptance"
+      }
+    ]
+  },
+  "OutputGoalExecutionRefV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "executionId",
+      "threadId",
+      "planRevisionId",
+      "generation"
+    ],
+    "properties": {
+      "executionId": {
+        "type": "string"
+      },
+      "threadId": {
+        "type": "string"
+      },
+      "planRevisionId": {
+        "type": "string"
+      },
+      "generation": {
+        "type": "number"
+      }
+    }
+  },
+  "OutputGoalUsageV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "tokens",
+      "costMinorUnits",
+      "currency"
+    ],
+    "properties": {
+      "tokens": {
+        "type": "number"
+      },
+      "costMinorUnits": {
+        "type": "string"
+      },
+      "currency": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputGoalV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "tenantId",
+      "workspaceId",
+      "principalId",
+      "threadId",
+      "objective",
+      "inputVersion",
+      "criteriaVersion",
+      "deliverables",
+      "resourceRefs",
+      "budget",
+      "status",
+      "streamVersion",
+      "createdAt",
+      "updatedAt"
+    ],
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "tenantId": {
+        "type": "string"
+      },
+      "workspaceId": {
+        "type": "string"
+      },
+      "principalId": {
+        "type": "string"
+      },
+      "threadId": {
+        "type": "string"
+      },
+      "objective": {
+        "type": "string"
+      },
+      "inputVersion": {
+        "type": "number"
+      },
+      "criteriaVersion": {
+        "type": "string"
+      },
+      "deliverables": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputGoalDeliverableSpecV2"
+        }
+      },
+      "resourceRefs": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputGoalResourceRefV2"
+        }
+      },
+      "budget": {
+        "$ref": "#/components/schemas/OutputGoalBudgetV2"
+      },
+      "status": {
+        "$ref": "#/components/schemas/OutputGoalStatusV2"
+      },
+      "streamVersion": {
+        "type": "number"
+      },
+      "createdAt": {
+        "type": "string"
+      },
+      "updatedAt": {
+        "type": "string"
+      },
+      "planRevisionId": {
+        "type": "string"
+      },
+      "executionRef": {
+        "$ref": "#/components/schemas/OutputGoalExecutionRefV2"
+      },
+      "reservation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "unknown"
+              },
+              {
+                "type": "string",
+                "const": "reserved"
+              },
+              {
+                "type": "string",
+                "const": "settled"
+              }
+            ]
+          },
+          "actual": {
+            "$ref": "#/components/schemas/OutputGoalUsageV2"
+          }
+        }
+      },
+      "authorization": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "planDigest",
+          "principalId",
+          "membershipStreamVersion"
+        ],
+        "properties": {
+          "planDigest": {
+            "type": "string"
+          },
+          "principalId": {
+            "type": "string"
+          },
+          "membershipStreamVersion": {
+            "type": "number"
+          }
+        }
+      },
+      "deliverySetId": {
+        "type": "string"
+      },
+      "acceptanceId": {
+        "type": "string"
+      },
+      "cancellationRequestedAt": {
+        "type": "string"
+      },
+      "reasonCode": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputResourceRef": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "namespace",
+      "resourceId"
+    ],
+    "properties": {
+      "namespace": {
+        "type": "string"
+      },
+      "resourceId": {
+        "type": "string"
+      },
+      "digest": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputToolEffectClass": {
+    "anyOf": [
+      {
+        "type": "string",
+        "const": "local_read"
+      },
+      {
+        "type": "string",
+        "const": "external_read"
+      },
+      {
+        "type": "string",
+        "const": "local_reversible_write"
+      },
+      {
+        "type": "string",
+        "const": "local_irreversible_write"
+      },
+      {
+        "type": "string",
+        "const": "external_side_effect"
+      },
+      {
+        "type": "string",
+        "const": "financial"
+      },
+      {
+        "type": "string",
+        "const": "privileged"
+      },
+      {
+        "type": "string",
+        "const": "unknown"
+      }
+    ]
+  },
+  "OutputGoalPlanRevisionV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "goalId",
+      "threadId",
+      "revision",
+      "inputVersion",
+      "criteriaVersion",
+      "budget",
+      "resourceRefs",
+      "deliverables",
+      "digest",
+      "createdAt",
+      "domainInputDigest",
+      "threadStreamVersion",
+      "pluginId",
+      "pluginVersion",
+      "agentDefinitionId",
+      "modelBindingId",
+      "modelConnectionStreamVersion",
+      "model",
+      "runnerId",
+      "toolIds",
+      "dataScopes",
+      "autoAllowedEffects"
+    ],
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "goalId": {
+        "type": "string"
+      },
+      "threadId": {
+        "type": "string"
+      },
+      "revision": {
+        "type": "number"
+      },
+      "inputVersion": {
+        "type": "number"
+      },
+      "criteriaVersion": {
+        "type": "string"
+      },
+      "budget": {
+        "$ref": "#/components/schemas/OutputGoalBudgetV2"
+      },
+      "resourceRefs": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputGoalResourceRefV2"
+        }
+      },
+      "deliverables": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputGoalDeliverableSpecV2"
+        }
+      },
+      "digest": {
+        "type": "string"
+      },
+      "createdAt": {
+        "type": "string"
+      },
+      "domainInputDigest": {
+        "type": "string"
+      },
+      "threadStreamVersion": {
+        "type": "number"
+      },
+      "pluginId": {
+        "anyOf": [
+          {
+            "type": "string",
+            "const": "opc"
+          },
+          {
+            "type": "string",
+            "const": "coding"
+          }
+        ]
+      },
+      "pluginVersion": {
+        "type": "string"
+      },
+      "pluginPackageSha256": {
+        "type": "string"
+      },
+      "agentDefinitionId": {
+        "type": "string"
+      },
+      "modelBindingId": {
+        "type": "string"
+      },
+      "modelConnectionStreamVersion": {
+        "type": "number"
+      },
+      "model": {
+        "type": "string"
+      },
+      "runnerId": {
+        "type": "string",
+        "const": "builtin"
+      },
+      "toolIds": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "dataScopes": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputResourceRef"
+        }
+      },
+      "autoAllowedEffects": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputToolEffectClass"
+        }
+      }
+    }
+  },
+  "OutputGoalOutputRefV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "key",
+      "resourceRef",
+      "digest",
+      "criteriaVersion",
+      "preview",
+      "sourceRefs",
+      "checks"
+    ],
+    "properties": {
+      "key": {
+        "type": "string"
+      },
+      "resourceRef": {
+        "$ref": "#/components/schemas/OutputGoalResourceRefV2"
+      },
+      "digest": {
+        "type": "string"
+      },
+      "criteriaVersion": {
+        "type": "string"
+      },
+      "preview": {
+        "type": "string"
+      },
+      "sourceRefs": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputGoalResourceRefV2"
+        }
+      },
+      "checks": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "checkId",
+            "status",
+            "evidenceRefs"
+          ],
+          "properties": {
+            "checkId": {
+              "type": "string"
+            },
+            "status": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "const": "failed"
+                },
+                {
+                  "type": "string",
+                  "const": "passed"
+                }
+              ]
+            },
+            "evidenceRefs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/OutputGoalResourceRefV2"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "OutputGoalDeliverySetV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "goalId",
+      "planRevisionId",
+      "criteriaVersion",
+      "items",
+      "digest",
+      "createdAt"
+    ],
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "goalId": {
+        "type": "string"
+      },
+      "planRevisionId": {
+        "type": "string"
+      },
+      "criteriaVersion": {
+        "type": "string"
+      },
+      "items": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputGoalOutputRefV2"
+        }
+      },
+      "digest": {
+        "type": "string"
+      },
+      "createdAt": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputGoalDetailV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "goal",
+      "plan",
+      "deliverySet"
+    ],
+    "properties": {
+      "goal": {
+        "$ref": "#/components/schemas/OutputGoalV2"
+      },
+      "plan": {
+        "anyOf": [
+          {
+            "type": "null"
+          },
+          {
+            "$ref": "#/components/schemas/OutputGoalPlanRevisionV2"
+          }
+        ]
+      },
+      "deliverySet": {
+        "anyOf": [
+          {
+            "type": "null"
+          },
+          {
+            "$ref": "#/components/schemas/OutputGoalDeliverySetV2"
+          }
+        ]
+      }
+    }
+  },
   "OutputBusinessScopeV1": {
     "type": "object",
     "additionalProperties": false,
@@ -513,61 +1181,6 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
         "const": "pdf"
       },
       "issueDate": {
-        "type": "string"
-      }
-    }
-  },
-  "OutputToolEffectClass": {
-    "anyOf": [
-      {
-        "type": "string",
-        "const": "local_read"
-      },
-      {
-        "type": "string",
-        "const": "external_read"
-      },
-      {
-        "type": "string",
-        "const": "local_reversible_write"
-      },
-      {
-        "type": "string",
-        "const": "local_irreversible_write"
-      },
-      {
-        "type": "string",
-        "const": "external_side_effect"
-      },
-      {
-        "type": "string",
-        "const": "financial"
-      },
-      {
-        "type": "string",
-        "const": "privileged"
-      },
-      {
-        "type": "string",
-        "const": "unknown"
-      }
-    ]
-  },
-  "OutputResourceRef": {
-    "type": "object",
-    "additionalProperties": false,
-    "required": [
-      "namespace",
-      "resourceId"
-    ],
-    "properties": {
-      "namespace": {
-        "type": "string"
-      },
-      "resourceId": {
-        "type": "string"
-      },
-      "digest": {
         "type": "string"
       }
     }
@@ -4935,11 +5548,11 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
                 },
                 {
                   "type": "string",
-                  "const": "missing"
+                  "const": "passed"
                 },
                 {
                   "type": "string",
-                  "const": "passed"
+                  "const": "missing"
                 },
                 {
                   "type": "string",

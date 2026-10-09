@@ -3,6 +3,443 @@ info:
   title: Muniu Agent OS API
   version: 0.2.0
 paths:
+  /v2/workspaces/{workspaceId}/goals:
+    get:
+      operationId: listGoals
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/OutputGoalV2"
+                  traceId:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+      x-muniu-versioned: false
+    post:
+      operationId: createGoal
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - threadId
+                - objective
+                - resourceRefs
+                - budget
+                - deliverables
+              properties:
+                threadId: &a1
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+                objective:
+                  type: string
+                  minLength: 1
+                  maxLength: 16000
+                resourceRefs:
+                  type: array
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required:
+                      - namespace
+                      - resourceId
+                      - streamVersion
+                    properties:
+                      namespace: *a1
+                      resourceId: *a1
+                      streamVersion:
+                        type: integer
+                        minimum: 0
+                      digest: *a1
+                  minItems: 0
+                  maxItems: 100
+                budget:
+                  type: object
+                  additionalProperties: false
+                  required:
+                    - maxTokens
+                    - maxCostMinorUnits
+                    - currency
+                    - maxDurationMs
+                  properties:
+                    maxTokens:
+                      type: integer
+                      minimum: 1
+                    maxCostMinorUnits:
+                      type: string
+                      pattern: ^(0|[1-9][0-9]{0,23})$
+                    currency:
+                      type: string
+                      pattern: ^[A-Z]{3}$
+                    maxDurationMs:
+                      type: integer
+                      minimum: 1
+                deliverables:
+                  type: array
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required:
+                      - key
+                      - title
+                      - required
+                      - criteria
+                    properties:
+                      key: *a1
+                      title: *a1
+                      required:
+                        type: boolean
+                      criteria:
+                        type: array
+                        items:
+                          type: object
+                          additionalProperties: false
+                          required:
+                            - id
+                            - description
+                          properties:
+                            id: *a1
+                            description:
+                              type: string
+                              minLength: 1
+                              maxLength: 2000
+                        minItems: 1
+                        maxItems: 20
+                  minItems: 1
+                  maxItems: 1
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/OutputGoalDetailV2"
+                  traceId:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+      x-muniu-versioned: false
+  /v2/goals/{goalId}:
+    get:
+      operationId: getGoal
+      parameters:
+        - in: path
+          name: goalId
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/OutputGoalDetailV2"
+                  traceId:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+      x-muniu-versioned: false
+  /v2/goals/{goalId}/plan-revisions:
+    post:
+      operationId: proposeGoalPlan
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: goalId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - workspaceId
+                - expectedStreamVersion
+                - modelBindingId
+              properties:
+                workspaceId: &a2
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+                expectedStreamVersion:
+                  type: integer
+                  minimum: 0
+                modelBindingId: *a2
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/OutputGoalDetailV2"
+                  traceId:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+      x-muniu-versioned: true
+  /v2/goals/{goalId}/commands:
+    post:
+      operationId: commandGoal
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: goalId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - type: object
+                  additionalProperties: false
+                  required:
+                    - workspaceId
+                    - expectedStreamVersion
+                    - command
+                    - planRevisionId
+                    - planDigest
+                  properties:
+                    workspaceId: &a3
+                      type: string
+                      minLength: 1
+                      maxLength: 200
+                    expectedStreamVersion: &a4
+                      type: integer
+                      minimum: 0
+                    command:
+                      const: start
+                    planRevisionId: *a3
+                    planDigest: *a3
+                - type: object
+                  additionalProperties: false
+                  required:
+                    - workspaceId
+                    - expectedStreamVersion
+                    - command
+                  properties:
+                    workspaceId: *a3
+                    expectedStreamVersion: *a4
+                    command:
+                      enum:
+                        - refresh
+                        - cancel
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/OutputGoalDetailV2"
+                  traceId:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+      x-muniu-versioned: true
+  /v2/goals/{goalId}/acceptances:
+    post:
+      operationId: acceptGoalDelivery
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: goalId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - workspaceId
+                - expectedStreamVersion
+                - deliverySetId
+                - criteriaVersion
+                - items
+              properties:
+                workspaceId: &a5
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+                expectedStreamVersion:
+                  type: integer
+                  minimum: 0
+                deliverySetId: *a5
+                criteriaVersion: *a5
+                items:
+                  type: array
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required:
+                      - key
+                      - digest
+                      - reviewedCriterionIds
+                    properties:
+                      key: *a5
+                      digest: *a5
+                      reviewedCriterionIds:
+                        type: array
+                        items: *a5
+                        minItems: 1
+                        maxItems: 20
+                  minItems: 1
+                  maxItems: 20
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/OutputGoalDetailV2"
+                  traceId:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+      x-muniu-versioned: true
   /v2/business-actions:
     post:
       operationId: createBusinessAction
@@ -579,7 +1016,7 @@ paths:
                   - data
                   - traceId
                 properties:
-                  data: &a1
+                  data: &a6
                     $ref: "#/components/schemas/OutputReadinessV2"
                   traceId:
                     type: string
@@ -604,7 +1041,7 @@ paths:
                   - data
                   - traceId
                 properties:
-                  data: *a1
+                  data: *a6
                   traceId:
                     type: string
       x-muniu-versioned: false
@@ -714,7 +1151,7 @@ paths:
                 - viewMode
                 - pluginIds
               properties:
-                name: &a2
+                name: &a7
                   type: string
                   minLength: 1
                 viewMode:
@@ -723,7 +1160,7 @@ paths:
                     - professional
                 pluginIds:
                   type: array
-                  items: *a2
+                  items: *a7
               additionalProperties: false
       responses:
         "201":
@@ -1143,18 +1580,18 @@ paths:
                 - subject
                 - pluginId
               properties:
-                subject: &a3
+                subject: &a8
                   type: string
                   minLength: 1
-                pluginId: *a3
+                pluginId: *a8
                 resourceRef:
                   type: object
                   required:
                     - namespace
                     - resourceId
                   properties:
-                    namespace: *a3
-                    resourceId: *a3
+                    namespace: *a8
+                    resourceId: *a8
                   additionalProperties: false
               additionalProperties: false
       responses:
@@ -1364,7 +1801,7 @@ paths:
                   - data
                   - traceId
                 properties:
-                  data: &a4
+                  data: &a9
                     $ref: "#/components/schemas/OutputExecution"
                   traceId:
                     type: string
@@ -1379,7 +1816,7 @@ paths:
                   - data
                   - traceId
                 properties:
-                  data: *a4
+                  data: *a9
                   traceId:
                     type: string
         "400":
@@ -1865,12 +2302,12 @@ paths:
                 - sourceEventId
                 - value
               properties:
-                workspaceId: &a5
+                workspaceId: &a10
                   type: string
                   minLength: 1
-                namespace: *a5
-                resourceId: *a5
-                sourceEventId: *a5
+                namespace: *a10
+                resourceId: *a10
+                sourceEventId: *a10
                 scopeType:
                   enum:
                     - workspace
@@ -1884,9 +2321,9 @@ paths:
                 value:
                   type: object
                   additionalProperties: true
-                expiresAt: *a5
-                derivedFromMemoryId: *a5
-                derivedViaShareGrantId: *a5
+                expiresAt: *a10
+                derivedFromMemoryId: *a10
+                derivedViaShareGrantId: *a10
               additionalProperties: false
       responses:
         "201":
@@ -2146,10 +2583,10 @@ paths:
                 - toNamespace
                 - expectedStreamVersion
               properties:
-                memoryId: &a6
+                memoryId: &a11
                   type: string
                   minLength: 1
-                toNamespace: *a6
+                toNamespace: *a11
                 expectedStreamVersion:
                   type: integer
                   minimum: 0
@@ -2324,10 +2761,10 @@ paths:
                     - openai
                     - deepseek
                     - anthropic
-                apiKey: &a7
+                apiKey: &a12
                   type: string
                   minLength: 1
-                displayName: *a7
+                displayName: *a12
               additionalProperties: false
       responses:
         "201":
@@ -2431,10 +2868,10 @@ paths:
                 - pluginId
                 - version
               properties:
-                pluginId: &a8
+                pluginId: &a13
                   type: string
                   minLength: 1
-                version: *a8
+                version: *a13
               additionalProperties: false
       responses:
         "201":
@@ -3468,7 +3905,7 @@ paths:
                   - data
                   - traceId
                 properties:
-                  data: &a9
+                  data: &a14
                     $ref: "#/components/schemas/OutputCodingReconciliationResultV2"
                   traceId:
                     type: string
@@ -3483,7 +3920,7 @@ paths:
                   - data
                   - traceId
                 properties:
-                  data: *a9
+                  data: *a14
                   traceId:
                     type: string
         "400":
@@ -3515,6 +3952,434 @@ components:
       type: object
       additionalProperties:
         $ref: "#/components/schemas/OutputJsonValue"
+    OutputGoalDeliverableSpecV2:
+      type: object
+      additionalProperties: false
+      required:
+        - key
+        - title
+        - required
+        - criteria
+      properties:
+        key:
+          type: string
+        title:
+          type: string
+        required:
+          anyOf:
+            - type: boolean
+              const: false
+            - type: boolean
+              const: true
+        criteria:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required:
+              - id
+              - description
+            properties:
+              id:
+                type: string
+              description:
+                type: string
+    OutputGoalResourceRefV2:
+      type: object
+      additionalProperties: false
+      required:
+        - streamVersion
+        - namespace
+        - resourceId
+      properties:
+        streamVersion:
+          type: number
+        namespace:
+          type: string
+        resourceId:
+          type: string
+        digest:
+          type: string
+    OutputGoalBudgetV2:
+      type: object
+      additionalProperties: false
+      required:
+        - maxTokens
+        - maxCostMinorUnits
+        - currency
+        - maxDurationMs
+      properties:
+        maxTokens:
+          type: number
+        maxCostMinorUnits:
+          type: string
+        currency:
+          type: string
+        maxDurationMs:
+          type: number
+    OutputGoalStatusV2:
+      anyOf:
+        - type: string
+          const: needs_reconciliation
+        - type: string
+          const: running
+        - type: string
+          const: waiting_approval
+        - type: string
+          const: failed
+        - type: string
+          const: cancelled
+        - type: string
+          const: accepted
+        - type: string
+          const: draft
+        - type: string
+          const: awaiting_authorization
+        - type: string
+          const: awaiting_acceptance
+    OutputGoalExecutionRefV2:
+      type: object
+      additionalProperties: false
+      required:
+        - executionId
+        - threadId
+        - planRevisionId
+        - generation
+      properties:
+        executionId:
+          type: string
+        threadId:
+          type: string
+        planRevisionId:
+          type: string
+        generation:
+          type: number
+    OutputGoalUsageV2:
+      type: object
+      additionalProperties: false
+      required:
+        - tokens
+        - costMinorUnits
+        - currency
+      properties:
+        tokens:
+          type: number
+        costMinorUnits:
+          type: string
+        currency:
+          type: string
+    OutputGoalV2:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - tenantId
+        - workspaceId
+        - principalId
+        - threadId
+        - objective
+        - inputVersion
+        - criteriaVersion
+        - deliverables
+        - resourceRefs
+        - budget
+        - status
+        - streamVersion
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+        tenantId:
+          type: string
+        workspaceId:
+          type: string
+        principalId:
+          type: string
+        threadId:
+          type: string
+        objective:
+          type: string
+        inputVersion:
+          type: number
+        criteriaVersion:
+          type: string
+        deliverables:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutputGoalDeliverableSpecV2"
+        resourceRefs:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutputGoalResourceRefV2"
+        budget:
+          $ref: "#/components/schemas/OutputGoalBudgetV2"
+        status:
+          $ref: "#/components/schemas/OutputGoalStatusV2"
+        streamVersion:
+          type: number
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+        planRevisionId:
+          type: string
+        executionRef:
+          $ref: "#/components/schemas/OutputGoalExecutionRefV2"
+        reservation:
+          type: object
+          additionalProperties: false
+          required:
+            - status
+          properties:
+            status:
+              anyOf:
+                - type: string
+                  const: unknown
+                - type: string
+                  const: reserved
+                - type: string
+                  const: settled
+            actual:
+              $ref: "#/components/schemas/OutputGoalUsageV2"
+        authorization:
+          type: object
+          additionalProperties: false
+          required:
+            - planDigest
+            - principalId
+            - membershipStreamVersion
+          properties:
+            planDigest:
+              type: string
+            principalId:
+              type: string
+            membershipStreamVersion:
+              type: number
+        deliverySetId:
+          type: string
+        acceptanceId:
+          type: string
+        cancellationRequestedAt:
+          type: string
+        reasonCode:
+          type: string
+    OutputResourceRef:
+      type: object
+      additionalProperties: false
+      required:
+        - namespace
+        - resourceId
+      properties:
+        namespace:
+          type: string
+        resourceId:
+          type: string
+        digest:
+          type: string
+    OutputToolEffectClass:
+      anyOf:
+        - type: string
+          const: local_read
+        - type: string
+          const: external_read
+        - type: string
+          const: local_reversible_write
+        - type: string
+          const: local_irreversible_write
+        - type: string
+          const: external_side_effect
+        - type: string
+          const: financial
+        - type: string
+          const: privileged
+        - type: string
+          const: unknown
+    OutputGoalPlanRevisionV2:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - goalId
+        - threadId
+        - revision
+        - inputVersion
+        - criteriaVersion
+        - budget
+        - resourceRefs
+        - deliverables
+        - digest
+        - createdAt
+        - domainInputDigest
+        - threadStreamVersion
+        - pluginId
+        - pluginVersion
+        - agentDefinitionId
+        - modelBindingId
+        - modelConnectionStreamVersion
+        - model
+        - runnerId
+        - toolIds
+        - dataScopes
+        - autoAllowedEffects
+      properties:
+        id:
+          type: string
+        goalId:
+          type: string
+        threadId:
+          type: string
+        revision:
+          type: number
+        inputVersion:
+          type: number
+        criteriaVersion:
+          type: string
+        budget:
+          $ref: "#/components/schemas/OutputGoalBudgetV2"
+        resourceRefs:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutputGoalResourceRefV2"
+        deliverables:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutputGoalDeliverableSpecV2"
+        digest:
+          type: string
+        createdAt:
+          type: string
+        domainInputDigest:
+          type: string
+        threadStreamVersion:
+          type: number
+        pluginId:
+          anyOf:
+            - type: string
+              const: opc
+            - type: string
+              const: coding
+        pluginVersion:
+          type: string
+        pluginPackageSha256:
+          type: string
+        agentDefinitionId:
+          type: string
+        modelBindingId:
+          type: string
+        modelConnectionStreamVersion:
+          type: number
+        model:
+          type: string
+        runnerId:
+          type: string
+          const: builtin
+        toolIds:
+          type: array
+          items:
+            type: string
+        dataScopes:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutputResourceRef"
+        autoAllowedEffects:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutputToolEffectClass"
+    OutputGoalOutputRefV2:
+      type: object
+      additionalProperties: false
+      required:
+        - key
+        - resourceRef
+        - digest
+        - criteriaVersion
+        - preview
+        - sourceRefs
+        - checks
+      properties:
+        key:
+          type: string
+        resourceRef:
+          $ref: "#/components/schemas/OutputGoalResourceRefV2"
+        digest:
+          type: string
+        criteriaVersion:
+          type: string
+        preview:
+          type: string
+        sourceRefs:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutputGoalResourceRefV2"
+        checks:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required:
+              - checkId
+              - status
+              - evidenceRefs
+            properties:
+              checkId:
+                type: string
+              status:
+                anyOf:
+                  - type: string
+                    const: failed
+                  - type: string
+                    const: passed
+              evidenceRefs:
+                type: array
+                items:
+                  $ref: "#/components/schemas/OutputGoalResourceRefV2"
+    OutputGoalDeliverySetV2:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - goalId
+        - planRevisionId
+        - criteriaVersion
+        - items
+        - digest
+        - createdAt
+      properties:
+        id:
+          type: string
+        goalId:
+          type: string
+        planRevisionId:
+          type: string
+        criteriaVersion:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutputGoalOutputRefV2"
+        digest:
+          type: string
+        createdAt:
+          type: string
+    OutputGoalDetailV2:
+      type: object
+      additionalProperties: false
+      required:
+        - goal
+        - plan
+        - deliverySet
+      properties:
+        goal:
+          $ref: "#/components/schemas/OutputGoalV2"
+        plan:
+          anyOf:
+            - type: "null"
+            - $ref: "#/components/schemas/OutputGoalPlanRevisionV2"
+        deliverySet:
+          anyOf:
+            - type: "null"
+            - $ref: "#/components/schemas/OutputGoalDeliverySetV2"
     OutputBusinessScopeV1:
       type: object
       additionalProperties: false
@@ -3595,37 +4460,6 @@ components:
           type: string
           const: pdf
         issueDate:
-          type: string
-    OutputToolEffectClass:
-      anyOf:
-        - type: string
-          const: local_read
-        - type: string
-          const: external_read
-        - type: string
-          const: local_reversible_write
-        - type: string
-          const: local_irreversible_write
-        - type: string
-          const: external_side_effect
-        - type: string
-          const: financial
-        - type: string
-          const: privileged
-        - type: string
-          const: unknown
-    OutputResourceRef:
-      type: object
-      additionalProperties: false
-      required:
-        - namespace
-        - resourceId
-      properties:
-        namespace:
-          type: string
-        resourceId:
-          type: string
-        digest:
           type: string
     OutputApproval:
       type: object
@@ -6540,9 +7374,9 @@ components:
                   - type: string
                     const: failed
                   - type: string
-                    const: missing
-                  - type: string
                     const: passed
+                  - type: string
+                    const: missing
                   - type: string
                     const: error
               summary:

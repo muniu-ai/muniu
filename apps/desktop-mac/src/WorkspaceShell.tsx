@@ -16,12 +16,13 @@ import {
   SettingsPage, WorkspacesPage,
 } from "./pages/CorePages";
 import { CodingPage, OpcPage } from "./pages/PluginPages";
+import { GoalsPage } from "./pages/GoalsPage";
 import type {
   ActivitySummary, AgentCatalog, CodingRepositorySummary, CodingTaskSummary, DeliverableSummary, HomeSummary, MemorySummary,
   InboxItemSummary, OpportunitySummary, PluginHealth, ProductPluginId, WorkspaceMemberSummary, WorkspaceSummary,
 } from "./types";
 
-type PageId = "home" | "workspaces" | "inbox" | "deliverables" | "activity" | "agents" | "integrations" | "settings" | "opc" | "coding" | `plugin:${string}`;
+type PageId = "home" | "goals" | "workspaces" | "inbox" | "deliverables" | "activity" | "agents" | "integrations" | "settings" | "opc" | "coding" | `plugin:${string}`;
 
 const emptyHome: HomeSummary = { todayActions: [], blockers: [], approvals: [], recentDeliverables: [] };
 const emptyAgentCatalog: AgentCatalog = { agents: [], skills: [] };
@@ -194,6 +195,7 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces }: Wor
       <button className="workspace-switcher" onClick={() => setPage("workspaces")}><span className="workspace-avatar">{workspace.name.slice(0, 1)}</span>{!sidebarCompact && <span><strong>{workspace.name}</strong><small>{workspace.viewMode === "business" ? "经营视图" : "专业视图"}</small></span>}{!sidebarCompact && <ChevronDown size={15} />}</button>
       <nav>
         <NavButton compact={sidebarCompact} active={page === "home"} label="首页" icon={<Home />} onClick={() => setPage("home")} />
+        <NavButton compact={sidebarCompact} active={page === "goals"} label="目标" icon={<FileCheck2 />} onClick={() => setPage("goals")} />
         <NavButton compact={sidebarCompact} active={page === "workspaces"} label="工作区" icon={<FolderKanban />} onClick={() => setPage("workspaces")} />
         <NavButton compact={sidebarCompact} active={page === "inbox"} label="收件箱" badge={home.approvals.length} icon={<Inbox />} onClick={() => setPage("inbox")} />
         <NavButton compact={sidebarCompact} active={page === "deliverables"} label="成果" icon={<FileCheck2 />} onClick={() => setPage("deliverables")} />
@@ -236,6 +238,10 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces }: Wor
         {coreError && page === "home" && <ErrorState detail={coreError} action="检查 Host 后重试" onRetry={() => void refreshCore()} />}
         {!coreLoading && !coreError && page === "home" && <HomePage summary={home} onNavigate={(target) => setPage(target as PageId)} />}
         {page === "workspaces" && <WorkspacesPage workspaces={workspaces} currentId={workspace.id} members={members} onSelect={selectWorkspace} />}
+        {page === "goals" && <GoalsPage key={workspace.id} api={api} workspaceId={workspace.id} onOpenThread={thread => {
+          if (thread.pluginId === "coding") { setSelectedCodingTaskId(thread.resourceRef?.resourceId); setPage("coding"); }
+          else { setSelectedOpportunityId(thread.resourceRef?.resourceId); setPage("opc"); }
+        }} />}
         {page === "inbox" && <InboxPage workspaceId={workspace.id} summary={home} api={api} onChanged={refreshCore} onOpen={openInboxItem} />}
         {page === "deliverables" && <DeliverablesPage items={deliverables} onOpen={(item) => openProduct(item.pluginId)} />}
         {page === "activity" && <ActivityPage items={activity} professional={professional} />}

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createNodePublicWebReader } from "@mn/plugin-opc";
-import { createEnterpriseFilePluginRepository, createSignedWorkerResolver, createOpcModelContextReader } from "@mn/host";
+import { createEnterpriseFilePluginRepository, createSignedWorkerResolver, createOpcModelContextReader, assertGoalExecutionResources } from "@mn/host";
 import {
   createCodingReconciliationVerificationWorkerHandler,
   createCodingSandboxCleanupWorkerHandler,
@@ -103,6 +103,7 @@ export async function createHandlers(context) {
   const plugins = indexFile ? await createEnterpriseFilePluginRepository({ indexFile, trustedRootsFile }) : undefined;
   if (plugins && plugins.repositoryDigest !== repositoryDigest) throw new Error("Worker 插件仓库摘要不一致");
   const turnHandler = createKernelAgentTurnHandler({
+    assertExecutionResources: assertGoalExecutionResources,
     resolveThreadContext: createOpcModelContextReader({ store: context.store, cas: context.cas, protectedPayloadKeyProvider: context.protectedPayloadKeyProvider }),
     ...(plugins ? { resolvePluginWorker: createSignedWorkerResolver({ store: context.store, repository: plugins.pluginRepository }) } : {}),
     store: context.store,

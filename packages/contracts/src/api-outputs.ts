@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import type { AgentCatalogV2, CodingReconciliationDecisionV2, CodingReconciliationViewV2 } from "./api.js";
 import type { JsonObject, JsonValue } from "./json.js";
+import type { GoalDetailV2, GoalV2 } from "./goals.js";
 import type {
   Approval, Asset, AssetTombstone, CodingRunnerConfigurationV1, Deliverable, Execution,
   MemoryRecord, MemoryTombstone, PluginInstallation, PluginPurgeResult, RunnerBinaryInspectionV1,
@@ -256,6 +257,12 @@ export type CodingRunnerViewV2 =
 
 /** JSON extension points are explicit; every fixed Host operation has a concrete DTO. */
 export interface ApiOutputsV2 {
+  readonly listGoals: readonly GoalV2[];
+  readonly createGoal: GoalDetailV2;
+  readonly getGoal: GoalDetailV2;
+  readonly proposeGoalPlan: GoalDetailV2;
+  readonly commandGoal: GoalDetailV2;
+  readonly acceptGoalDelivery: GoalDetailV2;
   readonly createBusinessAction: BusinessActionV1;
   readonly getBusinessAction: BusinessActionV1;
   readonly reconcileBusinessAction: BusinessActionV1;
