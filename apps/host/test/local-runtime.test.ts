@@ -193,7 +193,7 @@ test("本地 BYOK 会话在备份恢复和全部查询投影重建后仍可读�
   const requests: ModelRequest[] = [];
   const invoke: ByokModelInvoker = async (input) => {
     assert.equal(input.presetId, "deepseek");
-    assert.equal(input.model, "deepseek-v4-flash");
+    assert.equal(input.model, "deepseek-flash");
     assert.equal(input.apiKey, "fixture-byok-key");
     assert.deepEqual(input.request.availableToolIds, ["opc.public-web.read"]);
     assert.match(input.request.messages[0]?.content ?? "", /反证/u);

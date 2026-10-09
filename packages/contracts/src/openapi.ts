@@ -16,6 +16,8 @@ export interface ApiOperationV2 {
 }
 
 export const API_OPERATIONS_V2 = [
+  { method: "get", path: "/v2/workspaces/{workspaceId}/agent-readiness", operationId: "getWorkspaceAgentReadiness", mutation: false, versioned: false },
+  { method: "post", path: "/v2/model-connections/{connectionId}/model", operationId: "selectModelConnectionModel", mutation: true, versioned: true },
   { method: "get", path: "/v2/plugins/opc/business", operationId: "getOpcBusiness", mutation: false, versioned: false },
   { method: "post", path: "/v2/plugins/opc/business/commands", operationId: "commandOpcBusiness", mutation: true, versioned: true },
   { method: "get", path: "/v2/workspaces/{workspaceId}/goals", operationId: "listGoals", mutation: false, versioned: false },
@@ -573,7 +575,8 @@ function mutationSchema(operationId: string, versioned: boolean): JsonObject {
     createThread: object(["subject", "pluginId"], { subject: string, pluginId: string, resourceRef: object(["namespace", "resourceId"], { namespace: string, resourceId: string }) }),
     commandExecution: object(["expectedStreamVersion", "command"], { expectedStreamVersion: version, command: { enum: ["follow_up", "steer", "cancel", "resume"] }, message: string }),
     decideApproval: object(["expectedStreamVersion", "decision"], { expectedStreamVersion: version, decision: { enum: ["approve_once", "deny"] } }),
-    createModelConnection: object(["presetId", "apiKey"], { presetId: { enum: ["openai", "deepseek", "anthropic"] }, apiKey: string, displayName: string }),
+    createModelConnection: object(["presetId", "apiKey"], { presetId: { enum: ["openai", "deepseek", "anthropic", "moonshot", "qwen"] }, apiKey: string, displayName: string }),
+    selectModelConnectionModel: object(["expectedStreamVersion", "modelName"], { expectedStreamVersion: version, modelName: string }),
     probeModelConnection: object(["expectedStreamVersion"], { expectedStreamVersion: version, makeDefault: { type: "boolean" } }),
     installPlugin: object(["pluginId", "version"], { pluginId: string, version: string }),
     updatePlugin: object(["expectedStreamVersion", "version"], { expectedStreamVersion: version, version: string }),

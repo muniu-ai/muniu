@@ -197,6 +197,8 @@ export const CORE_API_ROUTES = [
   "/v2/model-connections/presets",
   "/v2/model-connections",
   "/v2/model-connections/{connectionId}/probe",
+  "/v2/model-connections/{connectionId}/model",
+  "/v2/workspaces/{workspaceId}/agent-readiness",
   "/v2/plugins/installations",
   "/v2/plugins/installations/{pluginId}",
   "/v2/plugins/installations/{pluginId}/disable",

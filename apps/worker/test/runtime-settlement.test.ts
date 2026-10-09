@@ -12,6 +12,8 @@ import { AgentOsWorker, createKernelAgentTurnHandler, createProtectedRuntimeStor
 
 for (const scenario of [
   { name: "完成", status: "completed", jobStatus: "completed" },
+  { name: "Kimi 完成", status: "completed", jobStatus: "completed" },
+  { name: "Qwen 完成", status: "completed", jobStatus: "completed" },
   { name: "失败", status: "failed", jobStatus: "failed" },
   { name: "取消与完成竞争", status: "cancelled", jobStatus: "failed" },
   { name: "结束时仍有调整方向", status: "paused", jobStatus: "completed" },
@@ -36,7 +38,8 @@ for (const scenario of [
       toolIds: [], dataScopes: [], autoAllowedEffects: [], commitment: "authority", budget: {
         maxSubagentDepth: 0, maxSubagents: 0, maxTokens: 10000, maxCostMinorUnits: "100", currency: "CNY", maxDurationMs: 60000,
       } });
-    tx.putProjection("modelConnection", "model", { id: "model", tenantId: "local", presetId: "deepseek", secretRef: "keychain://muniu.v2/model",
+    tx.putProjection("modelConnection", "model", { id: "model", tenantId: "local", presetId: scenario.name === "Kimi 完成" ? "moonshot" : scenario.name === "Qwen 完成" ? "qwen" : "deepseek",
+      secretRef: "keychain://muniu.v2/model",
       defaultModel: "deepseek-chat", status: "ready" });
     const job = { ...entity, id: "job", workspaceId: "workspace", kind: "agent.execution.run", payload: { executionId: "execution", message: "验证需求" },
       status: "available", attempts: 0, availableAt: now, fencingToken: 0, idempotencyKey: "job-key" };
@@ -77,7 +80,8 @@ for (const scenario of [
       rates: { id: "non-billable-fixture", currency: "CNY", inputNanoMinorUnitsPerToken: "0",
         cachedInputNanoMinorUnitsPerToken: "0", outputNanoMinorUnitsPerToken: "0" } };
     },
-    secretStore: { read: async () => "fixture-key" }, modelInvoker: async () => {
+    secretStore: { read: async () => "fixture-key" }, modelInvoker: async invocation => {
+      assert.equal(invocation.presetId, scenario.name === "Kimi 完成" ? "moonshot" : scenario.name === "Qwen 完成" ? "qwen" : "deepseek");
       modelCalls++;
       assert.ok(owner.context.registry.size > registrySize, "运行时 Scope 必须由组合根持有");
       assert.equal((await reader.readExecution("execution")).filter(record => record.type === "model/reserved").length, 1);

@@ -45,4 +45,4 @@ Coding 将仓库中的变更组织为任务、候选差异、检查、审批和�
 
 首次任务优先使用默认内置 Agent。选择 Claude CLI 或 Codex CLI 前，在“技术配置 → 集成”启用对应 Runner，并核对可执行文件的绝对路径、版本和摘要。文件变化后必须重新确认。
 
-外部 Runner 需要官方原生安装的 macOS Mach-O CLI，npm 或 shebang 包装脚本不被生产 Worker 接受。Runner 不接管木牛的模型连接、Prompt、Skill 或历史会话。具体配置命令见 [CLI 参考](../reference/cli.md)。
+外部 Runner 需要官方原生安装的 macOS Mach-O CLI，npm 或 shebang 包装脚本不被生产 Worker 接受。Runner 不接管木牛的模型连接、Prompt、Skill 或历史会话。在设置中先查看[外部 Agent 调度检查](agents-and-models.md)，具体配置命令见 [CLI 参考](../reference/cli.md)。

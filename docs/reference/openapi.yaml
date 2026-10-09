@@ -3,6 +3,100 @@ info:
   title: Muniu Agent OS API
   version: 0.2.0
 paths:
+  /v2/workspaces/{workspaceId}/agent-readiness:
+    get:
+      operationId: getWorkspaceAgentReadiness
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/OutputAgentReadinessReportV1"
+                  traceId:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+      x-muniu-versioned: false
+  /v2/model-connections/{connectionId}/model:
+    post:
+      operationId: selectModelConnectionModel
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: connectionId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - expectedStreamVersion
+                - modelName
+              properties:
+                expectedStreamVersion:
+                  type: integer
+                  minimum: 0
+                modelName:
+                  type: string
+                  minLength: 1
+              additionalProperties: false
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/OutputModelConnectionV2"
+                  traceId:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+      x-muniu-versioned: true
   /v2/plugins/opc/business:
     get:
       operationId: getOpcBusiness
@@ -2378,9 +2472,9 @@ paths:
                       status:
                         anyOf:
                           - type: string
-                            const: needs_reconciliation
-                          - type: string
                             const: running
+                          - type: string
+                            const: needs_reconciliation
                           - type: string
                             const: completed
                           - type: string
@@ -3216,6 +3310,8 @@ paths:
                     - openai
                     - deepseek
                     - anthropic
+                    - moonshot
+                    - qwen
                 apiKey: &a23
                   type: string
                   minLength: 1
@@ -5137,17 +5233,17 @@ components:
     OutputGoalStatusV2:
       anyOf:
         - type: string
-          const: accepted
-        - type: string
-          const: needs_reconciliation
-        - type: string
           const: running
         - type: string
           const: waiting_approval
         - type: string
+          const: needs_reconciliation
+        - type: string
           const: failed
         - type: string
           const: cancelled
+        - type: string
+          const: accepted
         - type: string
           const: draft
         - type: string
@@ -5373,9 +5469,9 @@ components:
         pluginId:
           anyOf:
             - type: string
-              const: opc
-            - type: string
               const: coding
+            - type: string
+              const: opc
         pluginVersion:
           type: string
         pluginPackageSha256:
@@ -5678,11 +5774,11 @@ components:
         status:
           anyOf:
             - type: string
-              const: accepted
-            - type: string
               const: completed
             - type: string
               const: unknown
+            - type: string
+              const: accepted
             - type: string
               const: rejected
         packageId:
@@ -5735,13 +5831,13 @@ components:
         status:
           anyOf:
             - type: string
-              const: needs_reconciliation
-            - type: string
               const: queued
             - type: string
               const: running
             - type: string
               const: waiting_approval
+            - type: string
+              const: needs_reconciliation
             - type: string
               const: completed
             - type: string
@@ -5807,11 +5903,11 @@ components:
         status:
           anyOf:
             - type: string
-              const: needs_reconciliation
-            - type: string
               const: queued
             - type: string
               const: running
+            - type: string
+              const: needs_reconciliation
             - type: string
               const: completed
             - type: string
@@ -6529,8 +6625,6 @@ components:
     OutputExecutionStatus:
       anyOf:
         - type: string
-          const: needs_reconciliation
-        - type: string
           const: queued
         - type: string
           const: running
@@ -6540,6 +6634,8 @@ components:
           const: paused
         - type: string
           const: interrupted
+        - type: string
+          const: needs_reconciliation
         - type: string
           const: completed
         - type: string
@@ -6922,9 +7018,9 @@ components:
         status:
           anyOf:
             - type: string
-              const: accepted
-            - type: string
               const: proposed
+            - type: string
+              const: accepted
             - type: string
               const: rejected
             - type: string
@@ -6971,9 +7067,9 @@ components:
         status:
           anyOf:
             - type: string
-              const: accepted
-            - type: string
               const: proposed
+            - type: string
+              const: accepted
             - type: string
               const: rejected
             - type: string
@@ -7111,6 +7207,7 @@ components:
       type: object
       additionalProperties: false
       required:
+        - modelOptions
         - id
         - tenantId
         - presetId
@@ -7120,6 +7217,25 @@ components:
         - status
         - streamVersion
       properties:
+        modelOptions:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required:
+              - modelName
+              - selectable
+            properties:
+              modelName:
+                type: string
+              selectable:
+                anyOf:
+                  - type: boolean
+                    const: false
+                  - type: boolean
+                    const: true
+              reason:
+                type: string
         defaultForNewExecutions:
           anyOf:
             - type: boolean
@@ -7150,6 +7266,189 @@ components:
               const: invalid
         streamVersion:
           type: number
+    OutputAgentReadinessCheckV1:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - status
+        - message
+      properties:
+        id:
+          anyOf:
+            - type: string
+              const: model
+            - type: string
+              const: coding_plugin
+            - type: string
+              const: runner_plugin
+            - type: string
+              const: permission
+            - type: string
+              const: confirmation
+            - type: string
+              const: binary_identity
+            - type: string
+              const: worker
+            - type: string
+              const: sandbox
+            - type: string
+              const: authentication
+            - type: string
+              const: approval
+            - type: string
+              const: adapter
+        status:
+          anyOf:
+            - type: string
+              const: unknown
+            - type: string
+              const: passed
+            - type: string
+              const: blocked
+            - type: string
+              const: required
+        message:
+          type: string
+        action:
+          type: string
+    OutputExternalCodingRunnerId:
+      anyOf:
+        - type: string
+          const: claude-cli
+        - type: string
+          const: codex-cli
+    OutputRunnerBinaryIdentityV1:
+      type: object
+      additionalProperties: false
+      required:
+        - version
+        - requestedPath
+        - realPath
+        - sha256
+        - device
+        - inode
+        - byteLength
+        - modifiedAtMs
+      properties:
+        version:
+          type: string
+        requestedPath:
+          type: string
+        realPath:
+          type: string
+        sha256:
+          type: string
+        device:
+          type: string
+        inode:
+          type: string
+        byteLength:
+          type: number
+        modifiedAtMs:
+          type: number
+    OutputCodingRunnerConfigurationV1:
+      type: object
+      additionalProperties: false
+      required:
+        - workspaceId
+        - runnerId
+        - status
+        - identity
+        - identityDigest
+        - confirmedBy
+        - confirmedAt
+        - id
+        - tenantId
+        - streamVersion
+        - createdAt
+        - updatedAt
+      properties:
+        workspaceId:
+          type: string
+        runnerId:
+          $ref: "#/components/schemas/OutputExternalCodingRunnerId"
+        status:
+          type: string
+          const: confirmed
+        identity:
+          $ref: "#/components/schemas/OutputRunnerBinaryIdentityV1"
+        identityDigest:
+          type: string
+        confirmedBy:
+          type: string
+        confirmedAt:
+          type: string
+        id:
+          type: string
+        tenantId:
+          type: string
+        streamVersion:
+          type: number
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+    OutputAgentReadinessV1:
+      type: object
+      additionalProperties: false
+      required:
+        - agentId
+        - displayName
+        - scope
+        - support
+        - status
+        - checks
+      properties:
+        agentId:
+          anyOf:
+            - type: string
+              const: builtin
+            - type: string
+              const: claude-cli
+            - type: string
+              const: codex-cli
+            - type: string
+              const: workbuddy
+        displayName:
+          type: string
+        scope:
+          type: string
+          const: coding
+        support:
+          anyOf:
+            - type: string
+              const: supported
+            - type: string
+              const: not_supported
+        status:
+          anyOf:
+            - type: string
+              const: blocked
+            - type: string
+              const: unverified
+        checks:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutputAgentReadinessCheckV1"
+        configuration:
+          $ref: "#/components/schemas/OutputCodingRunnerConfigurationV1"
+    OutputAgentReadinessReportV1:
+      type: object
+      additionalProperties: false
+      required:
+        - workspaceId
+        - checkedAt
+        - agents
+      properties:
+        workspaceId:
+          type: string
+        checkedAt:
+          type: string
+        agents:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutputAgentReadinessV1"
     OutputPluginInstallation:
       type: object
       additionalProperties: false
@@ -7178,11 +7477,11 @@ components:
         status:
           anyOf:
             - type: string
-              const: active
-            - type: string
               const: failed
             - type: string
               const: installed
+            - type: string
+              const: active
             - type: string
               const: draining
             - type: string
@@ -7958,9 +8257,9 @@ components:
         pluginId:
           anyOf:
             - type: string
-              const: opc
-            - type: string
               const: coding
+            - type: string
+              const: opc
         effectClass:
           anyOf:
             - type: string
@@ -8005,17 +8304,17 @@ components:
     OutputCodingTaskStatusV2:
       anyOf:
         - type: string
-          const: active
+          const: waiting_approval
         - type: string
           const: needs_reconciliation
-        - type: string
-          const: waiting_approval
         - type: string
           const: completed
         - type: string
           const: failed
         - type: string
           const: cancelled
+        - type: string
+          const: active
         - type: string
           const: needs_human_decision
     OutputCodingTaskSummaryV2:
@@ -8127,41 +8426,6 @@ components:
           type: string
         updatedAt:
           type: string
-    OutputExternalCodingRunnerId:
-      anyOf:
-        - type: string
-          const: claude-cli
-        - type: string
-          const: codex-cli
-    OutputRunnerBinaryIdentityV1:
-      type: object
-      additionalProperties: false
-      required:
-        - version
-        - requestedPath
-        - realPath
-        - sha256
-        - device
-        - inode
-        - byteLength
-        - modifiedAtMs
-      properties:
-        version:
-          type: string
-        requestedPath:
-          type: string
-        realPath:
-          type: string
-        sha256:
-          type: string
-        device:
-          type: string
-        inode:
-          type: string
-        byteLength:
-          type: number
-        modifiedAtMs:
-          type: number
     OutputCodingRunnerViewV2:
       anyOf:
         - type: object
@@ -8270,48 +8534,6 @@ components:
           type: number
         modifiedAtMs:
           type: number
-    OutputCodingRunnerConfigurationV1:
-      type: object
-      additionalProperties: false
-      required:
-        - workspaceId
-        - runnerId
-        - status
-        - identity
-        - identityDigest
-        - confirmedBy
-        - confirmedAt
-        - id
-        - tenantId
-        - streamVersion
-        - createdAt
-        - updatedAt
-      properties:
-        workspaceId:
-          type: string
-        runnerId:
-          $ref: "#/components/schemas/OutputExternalCodingRunnerId"
-        status:
-          type: string
-          const: confirmed
-        identity:
-          $ref: "#/components/schemas/OutputRunnerBinaryIdentityV1"
-        identityDigest:
-          type: string
-        confirmedBy:
-          type: string
-        confirmedAt:
-          type: string
-        id:
-          type: string
-        tenantId:
-          type: string
-        streamVersion:
-          type: number
-        createdAt:
-          type: string
-        updatedAt:
-          type: string
     OutputCodingReconciliationEvidenceV2:
       type: object
       additionalProperties: false
@@ -8582,9 +8804,9 @@ components:
         status:
           anyOf:
             - type: string
-              const: needs_reconciliation
-            - type: string
               const: waiting_approval
+            - type: string
+              const: needs_reconciliation
             - type: string
               const: completed
             - type: string
@@ -8681,9 +8903,9 @@ components:
             status:
               anyOf:
                 - type: string
-                  const: needs_reconciliation
-                - type: string
                   const: waiting_approval
+                - type: string
+                  const: needs_reconciliation
                 - type: string
                   const: completed
                 - type: string

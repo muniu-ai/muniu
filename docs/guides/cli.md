@@ -20,9 +20,11 @@ node apps/cli/dist/index.js doctor
 node apps/cli/dist/index.js plugin list --json
 ```
 
-`doctor` 应显示“Host 已就绪”。上述三项不创建业务对象，也不探测模型连接。`doctor --fix` 会重新探测未就绪的模型连接，需要时再执行。
+`doctor` 应显示“Host 已就绪”，同时提示 Agent 调度条件尚未检查。上述三项不创建业务对象，也不探测模型连接。`doctor --fix` 会重新探测未就绪的模型连接，需要时再执行。
 
 CLI 默认连接 `http://127.0.0.1:7318`。`MN_API_URL` 可指定已经部署的其他 Host 地址，但不会启动服务或提供远端认证配置。本文使用本机默认地址。
+
+模型厂商、模型选择及工作区 Agent 检测见[模型与外部 Agent](agents-and-models.md)。
 
 ## 无模型密钥的首次练习
 

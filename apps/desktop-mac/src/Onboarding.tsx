@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type { ModelPresetV2 } from "@mn/contracts";
 import { ArrowLeft, ArrowRight, BriefcaseBusiness, Check, Code2, Eye, KeyRound, Rocket, ShieldCheck, Sparkles } from "lucide-react";
 import { AgentOsApiError, AgentOsClient } from "./api";
 import { ErrorState } from "./components/Status";
@@ -12,17 +13,14 @@ interface OnboardingProps {
 }
 
 const steps = ["选择视图", "启用插件", "连接模型", "开始工作"] as const;
-const presets = [
-  { id: "openai", name: "OpenAI", hint: "推荐用于通用推理与 Coding" },
-  { id: "anthropic", name: "Anthropic", hint: "适合长上下文与代码任务" },
-  { id: "deepseek", name: "DeepSeek", hint: "适合中文研究与代码任务" },
-] as const;
-
 export function Onboarding({ api, onComplete }: OnboardingProps) {
   const [step, setStep] = useState(0);
   const [viewMode, setViewMode] = useState<ViewMode>("business");
   const [plugins, setPlugins] = useState<readonly ProductPluginId[]>(["opc"]);
-  const [presetId, setPresetId] = useState("openai");
+  const [presets, setPresets] = useState<readonly ModelPresetV2[]>([]);
+  const [presetId, setPresetId] = useState("");
+  const [presetsLoading, setPresetsLoading] = useState(true);
+  const [presetsError, setPresetsError] = useState<string>();
   const [apiKey, setApiKey] = useState("");
   const [workspaceName, setWorkspaceName] = useState("我的业务");
   const [firstInput, setFirstInput] = useState("");
@@ -37,12 +35,22 @@ export function Onboarding({ api, onComplete }: OnboardingProps) {
     readonly traceId?: string;
   }>();
   const primaryPlugin = plugins[0] ?? "opc";
+  const loadPresets = useCallback(async () => {
+    setPresetsLoading(true); setPresetsError(undefined);
+    try {
+      const available = await api.modelPresets();
+      setPresets(available);
+      setPresetId(current => available.some(preset => preset.id === current) ? current : available[0]?.id ?? "");
+    } catch { setPresetsError("无法读取模型厂商，请重试。经营记录可以先跳过模型连接。"); }
+    finally { setPresetsLoading(false); }
+  }, [api]);
+  useEffect(() => { void loadPresets(); }, [loadPresets]);
   const canContinue = useMemo(() => {
     if (step === 1) return plugins.length > 0;
-    if (step === 2) return !plugins.includes("coding") || apiKey.trim().length > 0;
+    if (step === 2) return apiKey.trim().length > 0 ? presets.some(preset => preset.id === presetId) : !plugins.includes("coding");
     if (step === 3) return workspaceName.trim().length > 0 && (primaryPlugin !== "coding" || firstInput.trim().length > 0);
     return true;
-  }, [apiKey, firstInput, plugins, primaryPlugin, step, workspaceName]);
+  }, [apiKey, firstInput, plugins, presetId, presets, primaryPlugin, step, workspaceName]);
 
   function togglePlugin(pluginId: ProductPluginId) {
     setPlugins((current) => current.includes(pluginId)
@@ -132,10 +140,13 @@ export function Onboarding({ api, onComplete }: OnboardingProps) {
         {step === 2 && <section className="setup-screen" aria-labelledby="model-title">
           <div className="screen-heading"><KeyRound size={22} /><div><h2 id="model-title">连接你的模型</h2><p>{plugins.includes("coding") ? "Coding 需要可用模型。选择厂商并填写密钥。" : "经营记录无需模型，可直接继续。首次使用 Agent 时再连接模型。"}</p></div></div>
           <div className="preset-list">
-            {presets.map((preset) => <button key={preset.id} className={presetId === preset.id ? "selected" : ""} onClick={() => setPresetId(preset.id)} aria-pressed={presetId === preset.id}>
-              <span className="provider-dot">{preset.name.slice(0, 1)}</span><span><strong>{preset.name}</strong><small>{preset.hint}</small></span>{presetId === preset.id && <Check size={17} />}
+            {presets.map((preset) => <button key={preset.id} className={presetId === preset.id ? "selected" : ""} onClick={() => setPresetId(preset.id)} aria-label={preset.displayName} aria-pressed={presetId === preset.id}>
+              <span className="provider-dot">{preset.displayName.slice(0, 1)}</span><span><strong>{preset.displayName}</strong><small>{preset.suggestedModels.join(" · ")}</small></span>{presetId === preset.id && <Check size={17} />}
             </button>)}
           </div>
+          {presetsLoading && <p role="status">正在读取模型厂商…</p>}
+          {presetsError && <p role="alert">{presetsError}<button className="quiet-button" onClick={() => void loadPresets()}>重新读取</button></p>}
+          <p>这些连接供木牛内置 Agent 使用。Codex、Claude Code 等外部 Agent 在设置中单独检查和授权。</p>
           <label className="field"><span>API Key</span><input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} autoComplete="off" placeholder="密钥只保存在 macOS Keychain" /><small>不会写入配置文件、日志或导出物</small></label>
         </section>}
 

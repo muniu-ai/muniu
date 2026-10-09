@@ -34,3 +34,5 @@
 - 正式应用 SDK、应用独立数据库或研究候选已经整体上线。
 
 当前架构与边界见[架构说明](./architecture.md)和[ADR 0012](./adr/0012-application-boundaries.md)。发布需要补齐[技术与发布契约](./TECHNICAL_DESIGN.md)及对应平台的验收证据；历史未完成项不因文档整理而改变。
+
+模型接入新增 Kimi 中国区与 Qwen 百炼北京区，设置页和 `doctor --workspace` 可分项检查外部 Agent 调度条件。模型和外部账号的支持范围、未验证项见[模型与外部 Agent](guides/agents-and-models.md)及[验收记录](verification/agent-model-connectivity-2026-10-09.md)。

@@ -1,3 +1,6 @@
+import type { Principal } from "@mn/contracts";
+import { readAgentReadiness, type CodingAgentRuntimeReadiness } from "./agent-readiness.js";
+import { publicModelConnection, selectModelConnection, preferredModelConnectionId, setDefaultModelConnection } from "./model-connections.js";
 import { randomUUID } from "node:crypto";
 import { dispatchGoalRequest } from "./goals-api.js";
 import { GOAL_NAMESPACE, readGoalForAccounting, reconcileGoalUsage } from "./goals.js";
@@ -206,6 +209,7 @@ export interface AgentOsHostOptions {
   readonly protectedPayloadKeyProvider?: KeyProvider;
   /** Local hosts passively inspect same-node binaries; enterprise hosts require an injected trusted inspector. */
   readonly runnerIdentityInspector?: CodingRunnerIdentityInspector;
+  readonly agentRuntimeReadiness?: (scope: { readonly tenantId: string; readonly workspaceId: string }) => CodingAgentRuntimeReadiness | Promise<CodingAgentRuntimeReadiness>;
   /**
    * 企业部署从受信发布配置注入，并与 Worker handler module 的 supportedKinds 逐项核对。
    * 未配置时人工核对仍可终止或新建调用，但不能把未知结果标记完成。
@@ -1613,9 +1617,10 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         }
         const requestedModel = stringField(body, "modelBindingId", false);
         const connections = await projectionList<ModelConnection>(options.store, TENANT_ID, "modelConnection");
+        const preferredId = await options.store.transact(TENANT_ID, preferredModelConnectionId);
         const modelConnection = requestedModel
           ? connections.find((connection) => connection.id === requestedModel && connection.status === "ready")
-          : connections.find((connection) => connection.status === "ready" && connection.defaultForNewExecutions)
+          : connections.find((connection) => connection.status === "ready" && connection.id === preferredId)
             ?? connections.find((connection) => connection.status === "ready");
         if (!modelConnection) {
           throw new KernelError(
@@ -2206,7 +2211,8 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
       }
       if (url.pathname === "/v2/model-connections" && request.method === "GET") {
         const values = await projectionList<ModelConnection>(options.store, TENANT_ID, "modelConnection");
-        return json(values.map(({ secretRef: _secretRef, ...value }) => value), 200, traceId);
+        const preferredId = await options.store.transact(TENANT_ID, preferredModelConnectionId);
+        return json(values.map(value => publicModelConnection(value, preferredId)), 200, traceId);
       }
       if (url.pathname === "/v2/model-connections" && request.method === "POST") {
         const body = await readBody(request);
@@ -2231,8 +2237,22 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
             });
           },
         });
-        const { secretRef: _secretRef, ...publicConnection } = connection;
-        return json(publicConnection, 201, traceId);
+        return json(publicModelConnection(connection), 201, traceId);
+      }
+      const selectedModelMatch = url.pathname.match(/^\/v2\/model-connections\/([^/]+)\/model$/u);
+      if (selectedModelMatch && request.method === "POST") {
+        requireOrganizationRole(profile, ORGANIZATION_ROLES, ["organization_admin"]);
+        const body = await readBody(request);
+        if (Object.keys(body).some(key => !["expectedStreamVersion", "modelName"].includes(key)))
+          throw new KernelError("INVALID_BODY", "模型选择包含不支持的字段", "仅提交版本与所选模型");
+        const id = decodeURIComponent(selectedModelMatch[1]!);
+        const connection = await idempotentProjectionMutation({
+          store: options.store, tenantId: TENANT_ID, key: mutationKey as string,
+          scope: `http.modelConnection.select:${id}`, request: body, now,
+          work: transaction => selectModelConnection({ transaction, tenantId: TENANT_ID, actorId: ACTOR_ID,
+            connectionId: id, expectedStreamVersion: expectedVersion(body), modelName: stringField(body, "modelName")!, nextId }),
+        });
+        return json(publicModelConnection(connection, connection.id), 200, traceId);
       }
       const probeMatch = url.pathname.match(/^\/v2\/model-connections\/([^/]+)\/probe$/u);
       if (probeMatch && request.method === "POST") {
@@ -2243,7 +2263,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           throw new KernelError("INVALID_BODY", "makeDefault 必须为布尔值", "刷新模型连接后重试");
         }
         if (body.makeDefault === true) requireOrganizationRole(profile, ORGANIZATION_ROLES, ["organization_admin"]);
-        const connection = await idempotentAsyncOperation<ModelConnection>({
+        const connection = await idempotentAsyncOperation<import("@mn/contracts").ModelConnectionV2>({
           store: options.store, tenantId: TENANT_ID, actorId: ACTOR_ID, key: mutationKey as string,
           scope: `http.modelConnection.probe:${id}`, request: body, now, inFlight: inFlightAsyncMutations,
           work: async () => {
@@ -2254,24 +2274,15 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
             if (!preset) throw new KernelError("MODEL_PRESET_NOT_FOUND", "厂商预设不存在", "重新创建模型连接");
             const apiKey = await options.secretStore.read(current.secretRef);
             const discovered = await (options.modelProbe ?? defaultModelProbe)({ preset, apiKey });
+            if (current.defaultModel && (!discovered.models.includes(current.defaultModel) || !findModelPrice(current.presetId, current.defaultModel)))
+              throw new KernelError("MODEL_UNAVAILABLE", "原模型已不可用，已保留既有任务的模型绑定", "创建新的模型连接后选择可用模型");
             return options.store.transact(TENANT_ID, (transaction) => {
               const value = transaction.getProjection<ModelConnection>("modelConnection", id);
               if (!value) throw new KernelError("MODEL_CONNECTION_NOT_FOUND", "模型连接不存在", "刷新模型连接列表");
               if (value.streamVersion !== expected) throw new KernelStreamVersionConflictError(expected, value.streamVersion);
-              if (body.makeDefault === true) {
-                for (const previous of transaction.listProjections<ModelConnection>("modelConnection")) {
-                  if (previous.id === id || !previous.defaultForNewExecutions) continue;
-                  transaction.putProjection("modelConnection", previous.id, { ...previous, defaultForNewExecutions: false,
-                    streamVersion: previous.streamVersion + 1 });
-                  appendKernelEvent(transaction, { tenantId: TENANT_ID, aggregateType: "modelConnection", aggregateId: previous.id,
-                    expectedStreamVersion: previous.streamVersion, type: "model_connection.default_cleared", actorId: ACTOR_ID,
-                    generation: 0, correlationId: nextId("correlation"), publicPayload: { replacementId: id } });
-                }
-              }
               const next = {
-                ...value, discoveredModels: [...discovered.models], defaultModel: discovered.defaultModel,
+                ...value, discoveredModels: [...discovered.models], defaultModel: value.defaultModel || discovered.defaultModel,
                 status: "ready" as const, streamVersion: value.streamVersion + 1,
-                ...(body.makeDefault === true ? { defaultForNewExecutions: true } : {}),
               };
               transaction.putProjection("modelConnection", id, next);
               appendKernelEvent(transaction, {
@@ -2280,12 +2291,12 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
                 generation: 0, correlationId: nextId("correlation"),
                 publicPayload: { defaultModel: next.defaultModel, modelCount: next.discoveredModels.length },
               });
-              return next;
+              if (body.makeDefault === true) setDefaultModelConnection(transaction, { tenantId: TENANT_ID, actorId: ACTOR_ID, connectionId: id, nextId });
+              return publicModelConnection(next, preferredModelConnectionId(transaction));
             });
           },
         });
-        const { secretRef: _secretRef, ...publicConnection } = connection;
-        return json(publicConnection, 200, traceId);
+        return json(connection, 200, traceId);
       }
       if (url.pathname === "/v2/plugins/installations" && request.method === "GET") {
         const missingInstalledRuntime = !pluginInstaller
@@ -2500,6 +2511,32 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           },
         });
         return json(workspace, 200, traceId);
+      }
+      const agentReadinessMatch = url.pathname.match(/^\/v2\/workspaces\/([^/]+)\/agent-readiness$/u);
+      if (agentReadinessMatch && request.method === "GET") {
+        const workspaceId = decodeURIComponent(agentReadinessMatch[1]!);
+        const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId, "view");
+        let canExecute = false;
+        try { await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId, "operate"); canExecute = true; } catch { /* Read-only members can still see missing permissions. */ }
+        const principal = await projectionGet<Principal>(options.store, TENANT_ID, "principal", ACTOR_ID);
+        canExecute = canExecute && Boolean(principal && !principal.disabledAt);
+        const runnerPlugins: Partial<Record<"claude-cli" | "codex-cli", { status: "healthy" | "inactive" | "degraded" }>> = {};
+        for (const runnerId of ["claude-cli", "codex-cli"] as const) {
+          if (!workspace.activePluginIds.includes("coding") || !workspace.activePluginIds.includes(runnerPluginId(runnerId))) {
+            runnerPlugins[runnerId] = { status: "inactive" }; continue;
+          }
+          try { await requireRunnerPluginTool(TENANT_ID, workspace, runnerId); runnerPlugins[runnerId] = { status: "healthy" }; }
+          catch { runnerPlugins[runnerId] = { status: "degraded" }; }
+        }
+        let runtime: CodingAgentRuntimeReadiness = { worker: "unknown", sandbox: "unknown" };
+        try { runtime = await options.agentRuntimeReadiness?.({ tenantId: TENANT_ID, workspaceId }) ?? runtime; }
+        catch { runtime = { worker: "unknown", sandbox: "unknown" }; }
+        const connections = await projectionList<ModelConnection>(options.store, TENANT_ID, "modelConnection");
+        return json(await readAgentReadiness({ store: options.store, tenantId: TENANT_ID, workspaceId,
+          activePluginIds: workspace.activePluginIds, canExecute, runnerPlugins, runtime, checkedAt: now(),
+          modelReady: connections.some(connection => connection.status === "ready" && Boolean(findModelPrice(connection.presetId, connection.defaultModel))),
+          ...(runnerIdentityInspector ? { inspector: runnerIdentityInspector } : {}),
+        }), 200, traceId);
       }
       if (url.pathname === "/v2/plugins/coding/runners" && request.method === "GET") {
         const workspaceId = url.searchParams.get("workspaceId");

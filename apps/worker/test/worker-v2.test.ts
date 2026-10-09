@@ -562,6 +562,7 @@ test("BYOK 模型调用按三家厂商的固定协议发送且只解析文本", 
           model: "deepseek-chat",
           messages: modelRequest.messages,
           stream: false,
+          thinking: { type: "disabled" },
           max_tokens: 4096,
         });
         return Response.json({ choices: [{ message: { content: "DeepSeek 结果" } }] });

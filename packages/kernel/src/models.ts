@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import type { JsonObject } from "@mn/contracts";
 
 export interface InboxItem {
@@ -32,7 +33,7 @@ export interface ProviderPreset {
   readonly id: string;
   readonly displayName: string;
   readonly secretLabel: string;
-  readonly probeKind: "openai-compatible" | "anthropic";
+  readonly probeKind: "openai-compatible" | "anthropic" | "dashscope";
   readonly endpoint: string;
   readonly suggestedModels: readonly string[];
 }
@@ -51,7 +52,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     displayName: "Anthropic",
     secretLabel: "API Key",
     probeKind: "anthropic",
-    endpoint: "https://api.anthropic.com",
+    endpoint: "https://api.anthropic.com/v1",
     suggestedModels: ["claude-sonnet-4-5"],
   },
   {
@@ -59,8 +60,24 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     displayName: "DeepSeek",
     secretLabel: "API Key",
     probeKind: "openai-compatible",
-    endpoint: "https://api.deepseek.com",
-    suggestedModels: ["deepseek-v4-flash"],
+    endpoint: "https://api.deepseek.com/v1",
+    suggestedModels: ["deepseek-flash", "deepseek-v4-pro"],
+  },
+  {
+    id: "moonshot",
+    displayName: "Kimi（月之暗面，中国区）",
+    secretLabel: "开放平台 API Key",
+    probeKind: "openai-compatible",
+    endpoint: "https://api.moonshot.cn/v1",
+    suggestedModels: ["kimi-k2.6"],
+  },
+  {
+    id: "qwen",
+    displayName: "通义千问（百炼北京）",
+    secretLabel: "百炼北京地域 API Key",
+    probeKind: "dashscope",
+    endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    suggestedModels: ["qwen-plus", "qwen-flash", "qwen3.5-plus"],
   },
 ] as const;
 

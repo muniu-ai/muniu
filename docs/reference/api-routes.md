@@ -42,6 +42,8 @@ curl --fail-with-body --silent --show-error http://127.0.0.1:7318/v2/workspaces
 
 | 方法 | 路径 | operationId | 幂等键 | stream version |
 | --- | --- | --- | --- | --- |
+| `GET` | `/v2/workspaces/{workspaceId}/agent-readiness` | `getWorkspaceAgentReadiness` | — | — |
+| `POST` | `/v2/model-connections/{connectionId}/model` | `selectModelConnectionModel` | 必需 | 必需 |
 | `GET` | `/v2/plugins/opc/business` | `getOpcBusiness` | — | — |
 | `POST` | `/v2/plugins/opc/business/commands` | `commandOpcBusiness` | 必需 | 必需 |
 | `GET` | `/v2/workspaces/{workspaceId}/goals` | `listGoals` | — | — |

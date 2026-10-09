@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+import { preferredModelConnectionId } from "./model-connections.js";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { parseBusinessScopeV1, parseRfqModelOutputV1, parseSalesInquirySnapshotV1,
   type BusinessCandidateContentV1, type BusinessCandidateV1, type BusinessInquirySourcePortV1,
@@ -25,7 +26,7 @@ export async function createBusinessCandidate(input: CreateBusinessCandidateV2, 
   const model = await options.store.transact(scope.tenantId, tx => {
     assertBusinessCandidateMember(tx, { scope });
     const models = tx.listProjections<ModelConnection>("modelConnection").filter(item => item.tenantId === scope.tenantId && item.status === "ready");
-    return models.find(item => item.defaultForNewExecutions) ?? models[0];
+    return models.find(item => item.id === preferredModelConnectionId(tx)) ?? models[0];
   });
   if (!model) throw new KernelError("MODEL_CONNECTION_REQUIRED", "尚未连接可用模型", "连接自有模型后再生成询价候选");
   const price = findModelPrice(model.presetId, model.defaultModel);

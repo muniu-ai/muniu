@@ -1,3 +1,4 @@
+import type { AgentReadinessReportV1 } from "./agent-readiness.js";
 // SPDX-License-Identifier: Apache-2.0
 import type { AgentCatalogV2, CodingReconciliationDecisionV2, CodingReconciliationViewV2 } from "./api.js";
 import type { JsonObject, JsonValue } from "./json.js";
@@ -92,6 +93,7 @@ export interface MemorySummaryV2 {
 }
 export type MemoryViewV2 = Omit<MemoryRecord, "protectedPayloadRef"> & { readonly value: JsonObject };
 export interface ModelConnectionV2 {
+  readonly modelOptions: readonly { readonly modelName: string; readonly selectable: boolean; readonly reason?: string }[];
   readonly defaultForNewExecutions?: boolean;
   readonly id: string;
   readonly tenantId: string;
@@ -316,6 +318,8 @@ export interface ApiOutputsV2 {
   readonly listModelConnections: readonly ModelConnectionV2[];
   readonly createModelConnection: ModelConnectionV2;
   readonly probeModelConnection: ModelConnectionV2;
+  readonly selectModelConnectionModel: ModelConnectionV2;
+  readonly getWorkspaceAgentReadiness: AgentReadinessReportV1;
   readonly installPlugin: PluginInstallation;
   readonly listPluginInstallations: readonly (OfficialPluginV2 | PluginInstallation)[];
   readonly updatePlugin: PluginInstallation;

@@ -98,6 +98,21 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .model-connection-list article { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 12px; border: 1px solid #cfd5ce; border-radius: 9px; }
 .model-connection-list article > div { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .model-connection-list small { width: 100%; overflow-wrap: anywhere; color: var(--muted); }
+.model-connection-list .model-choice { display: grid; grid-template-columns: minmax(0, 1fr) auto; width: 100%; align-items: center; }
+.model-choice label, .model-choice small { grid-column: 1 / -1; }
+.model-choice select { min-width: 0; width: 100%; padding: 9px; border: 1px solid var(--line); border-radius: 8px; }
+.connectivity-heading, .runner-card > header, .runner-checks li > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.runner-card > header h3 { margin: 0; }
+.runner-checks { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.runner-checks li { border-bottom: 1px solid var(--line); padding-bottom: 10px; }
+.runner-checks li p { margin: 5px 0; }
+.runner-checks small, .runner-confirmed small { display: block; color: var(--muted); overflow-wrap: anywhere; }
+.runner-file-settings { margin-top: 12px; }
+.runner-file-settings summary { cursor: pointer; margin-bottom: 12px; }
+.runner-readiness-details { margin: 12px 0; }
+.runner-readiness-details summary { cursor: pointer; margin-bottom: 12px; }
+.runner-next-step { font-weight: 600; }
+.runner-confirmed { display: grid; gap: 5px; margin-top: 12px; }
 .check-row { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; }
 .check-row input { width: 17px; height: 17px; margin: 1px 0 0; accent-color: var(--accent); }
 .check-row span, .check-row strong, .check-row small { display: block; }

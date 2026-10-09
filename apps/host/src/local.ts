@@ -98,6 +98,7 @@ export async function startLocalAgentOsHost(options: StartLocalHostOptions = {})
     }
     const stopWorker = new AbortController();
     let workerFailure: unknown;
+    let workerStarted = false;
     let workerLoop = Promise.resolve();
     const host = await createAgentOsHost({
       ...business,
@@ -114,6 +115,10 @@ export async function startLocalAgentOsHost(options: StartLocalHostOptions = {})
       ...(options.pluginExecutionControl ? { pluginExecutionControl: options.pluginExecutionControl } : {}),
       ...(options.pluginProjections ? { pluginProjections: options.pluginProjections } : {}),
       ...(options.runnerIdentityInspector ? { runnerIdentityInspector: options.runnerIdentityInspector } : {}),
+      agentRuntimeReadiness: () => ({
+        worker: workerStarted && workerFailure === undefined && !stopWorker.signal.aborted ? "available" : "unavailable",
+        sandbox: process.platform === "darwin" ? "unknown" : "unavailable",
+      }),
       readiness: async () => {
         const base = await options.readiness?.() ?? { ready: true, issues: [] };
         const issues = [...base.issues, ...(maintenanceFailed ? [{
@@ -203,6 +208,7 @@ export async function startLocalAgentOsHost(options: StartLocalHostOptions = {})
         ...(business?.businessProvider ? ["business.action.execute"] : []),
         ...(business?.businessProvider.inquiries ? ["business.candidate.extract"] : [])],
     });
+    workerStarted = true;
     workerLoop = runWorkerLoop(worker, {
       signal: stopWorker.signal,
       ...(options.workerIdleDelayMs ? { idleDelayMs: options.workerIdleDelayMs } : {}),

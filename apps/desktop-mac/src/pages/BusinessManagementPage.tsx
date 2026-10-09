@@ -44,6 +44,7 @@ export function BusinessManagementPage({ api, workspaceId, initialTab = "overvie
   const [selectedOrderId, setSelectedOrderId] = useState<string>();
   const [loading, setLoading] = useState(true); const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>(); const [notice, setNotice] = useState<string>();
+  const [saveError, setSaveError] = useState<string>();
   const sequence = useRef(0); const epoch = useRef(0); const mounted = useRef(true);
   const pendingSave = useRef<{ readonly fingerprint: string; readonly expectedStreamVersion: number; readonly key: string } | undefined>(undefined);
   const apply = useCallback((next: BusinessManagementViewV1) => setView(current => !current || next.state.streamVersion >= current.state.streamVersion ? next : current), []);
@@ -59,13 +60,14 @@ export function BusinessManagementPage({ api, workspaceId, initialTab = "overvie
     const stop = api.watchWorkspaceEvents(workspaceId, () => { if (timer) clearTimeout(timer); timer = setTimeout(() => void refresh(), 150); });
     return () => { stop(); if (timer) clearTimeout(timer); };
   }, [api, refresh, workspaceId]);
-  function open(type: CommandType, defaults?: Defaults, id = makeId()) { pendingSave.current = undefined; setForm({ type, id, ...(defaults ? { defaults } : {}) }); setNotice(undefined); setError(undefined); }
+  function open(type: CommandType, defaults?: Defaults, id = makeId()) { pendingSave.current = undefined; setForm({ type, id, ...(defaults ? { defaults } : {}) }); setNotice(undefined); setError(undefined); setSaveError(undefined); }
+  function cancelForm() { pendingSave.current = undefined; setForm(undefined); setSaveError(undefined); }
   async function save(command: BusinessCommandV1, expectedStreamVersion: number) {
     if (!view || busy) return;
     const fingerprint = JSON.stringify({ workspaceId, command });
     if (pendingSave.current?.fingerprint !== fingerprint) pendingSave.current = { fingerprint, expectedStreamVersion, key: makeId() };
     const request = pendingSave.current;
-    setBusy(true); setError(undefined); setNotice(undefined); const startedEpoch = epoch.current;
+    setBusy(true); setError(undefined); setSaveError(undefined); setNotice(undefined); const startedEpoch = epoch.current;
     try {
       const next = await api.commandBusiness(workspaceId, request.expectedStreamVersion, command, request.key);
       if (!mounted.current || startedEpoch !== epoch.current) return;
@@ -73,27 +75,27 @@ export function BusinessManagementPage({ api, workspaceId, initialTab = "overvie
       apply(next); setForm(undefined); setNotice(`${labels[command.type]}已完成`); await refresh();
     } catch (caught) {
       if (!mounted.current || startedEpoch !== epoch.current) return;
-      if (caught instanceof AgentOsApiError && caught.status === 409) { pendingSave.current = undefined; setForm(undefined); await refresh(); setError("记录已被其他入口更新。请重新打开表单，核对最新内容后再提交。"); }
-      else if (caught instanceof AgentOsApiError && [403, 404].includes(caught.status)) { epoch.current += 1; setView(undefined); setError(message(caught)); }
-      else setError(message(caught));
+      if (caught instanceof AgentOsApiError && caught.status === 409) { pendingSave.current = undefined; setForm(undefined); await refresh(); setSaveError("记录已被其他入口更新。请重新打开表单，核对最新内容后再提交。"); }
+      else if (caught instanceof AgentOsApiError && [403, 404].includes(caught.status)) { epoch.current += 1; setView(undefined); setSaveError(message(caught)); }
+      else setSaveError(message(caught));
     } finally { if (mounted.current) setBusy(false); }
   }
   const state = view?.state;
   const customer = (id: string, version?: number) => state?.customers.slice().reverse().find(item => item.id === id && (version === undefined || item.version === version))?.name ?? "客户记录不可用";
   const service = (id: string, version: number) => state?.services.find(item => item.id === id && item.version === version)?.title ?? "产品记录不可用";
   const orderName = (id: string) => { const order = state?.orders.find(item => item.id === id); return order ? `${customer(order.customerId, order.customerVersion)} · ${service(order.serviceId, order.serviceVersion)}` : "订单记录不可用"; };
-  const chooseTab = (next: Tab) => { setTab(next); setForm(undefined); setNotice(undefined); };
+  const chooseTab = (next: Tab) => { setTab(next); cancelForm(); setNotice(undefined); };
   const selected = state?.orders.find(item => item.id === selectedOrderId);
   const recordDate = businessDateAt;
   return <div className="page-stack business-page">
     <header className="business-heading"><div><p className="eyebrow">OPC · 服务与项目型经营</p><h1>经营管理</h1><p>管理计划、客户、订单、交付与收支。当前工作区对应一个经营主体，金额使用人民币。</p></div><button className="secondary-button" onClick={onExplore}>机会验证</button></header>
     <nav className="business-tabs" aria-label="经营模块">{Object.entries(tabs).map(([key, label]) => <button key={key} aria-current={tab === key ? "page" : undefined} className={tab === key ? "active" : ""} onClick={() => chooseTab(key as Tab)}>{label}</button>)}</nav>
-    {error && <ErrorState title="经营记录未更新" detail={error} onRetry={() => void refresh()} />}
+    {(error || saveError) && <ErrorState title="经营记录未更新" detail={error ?? saveError!} onRetry={() => void refresh()} />}
     {notice && <p className="business-notice" role="status">{notice}</p>}
     {tab === "overview" && <section className="panel business-period"><div><h2>经营概览</h2><p>流水按发生日期统计；历史已收作为期初记录，不计入本期现金。</p></div><label>统计开始<input type="date" aria-label="统计开始" value={period.start} onChange={event => setPeriod({ ...period, start: event.target.value })} /></label><label>统计截止<input type="date" aria-label="统计截止" value={period.end} onChange={event => setPeriod({ ...period, end: event.target.value })} /></label><button className="secondary-button" onClick={() => setPeriod(currentPeriod())}>恢复本月</button></section>}
     {loading && !state && <Loading label="正在读取经营记录" />}
     {state && view && <>
-      {form && <BusinessForm key={`${form.type}:${form.id}`} form={form} state={state} busy={busy} onSave={save} onCancel={() => setForm(undefined)} />}
+      {form && <BusinessForm key={`${form.type}:${form.id}`} form={form} state={state} busy={busy} onSave={save} onCancel={cancelForm} />}
       {tab === "overview" && <>
 
         <Summary summary={view.summary} />

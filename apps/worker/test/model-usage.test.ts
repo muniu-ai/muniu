@@ -16,7 +16,7 @@ const payloads = {
     cache_read_input_tokens: 2, cache_creation_input_tokens: 0 } },
 };
 
-for (const presetId of Object.keys(payloads) as ByokProviderId[]) {
+for (const presetId of Object.keys(payloads) as (keyof typeof payloads)[]) {
   test(`${presetId} preserves provider token accounting and applies the output limit`, async () => {
     const invoke = createByokModelInvoker({ async fetch(_url, init) {
       const body = JSON.parse(String(init?.body));
@@ -120,4 +120,59 @@ test("the BYOK budget boundary persists usage and prevents another billed call a
   await assert.rejects(invokeBudgetedByokModel(options), /未结算/u);
   await assert.rejects(invokeBudgetedByokModel(options), /未结算/u);
   assert.equal(calls, 2);
+});
+
+
+test("Kimi and Qwen send actual chat completions with bounded non-thinking tool requests", async () => {
+  for (const provider of ["moonshot", "qwen"]) {
+    const invoke = createByokModelInvoker({ async fetch(url, init) {
+      assert.equal(String(url), provider === "moonshot" ? "https://api.moonshot.cn/v1/chat/completions"
+        : "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions");
+      assert.equal(new Headers(init?.headers).get("authorization"), "Bearer fixture-key");
+      const body = JSON.parse(String(init?.body));
+      assert.equal(body.stream, false);
+      assert.equal(body.max_tokens, 128);
+      assert.deepEqual(body.messages, request.messages);
+      assert.equal(body.tools[0].function.name, "mn_tool_1");
+      if (provider === "moonshot") assert.deepEqual(body.thinking, { type: "disabled" });
+      else assert.equal(body.enable_thinking, false);
+      return Response.json({ choices: [{ message: { content: "结果", tool_calls: [
+        { id: "tool-call", type: "function", function: { name: "mn_tool_1", arguments: '{"id":"record"}' } },
+      ] } }], usage: { prompt_tokens: 12, completion_tokens: 8, total_tokens: 20,
+        ...(provider === "moonshot" ? { cached_tokens: 2 } : { prompt_tokens_details: { cached_tokens: 2 } }) } });
+    } });
+    const response = await invoke({ ...input, presetId: provider as ByokProviderId,
+      model: provider === "moonshot" ? "kimi-k2.6" : "qwen-plus", request: { ...request, availableToolIds: ["fixture.read"] } });
+    assert.equal(response.text, "结果");
+    assert.deepEqual(response.toolCalls, [{ id: "tool-call", toolId: "fixture.read", arguments: { id: "record" } }]);
+    assert.deepEqual(response.usage, { inputTokens: 12, cachedInputTokens: 2, outputTokens: 8 });
+  }
+});
+
+test("Qwen quoting stays conservative and refuses unpriced models before any network request", async () => {
+  const quote = createByokModelQuoter({ fetch: async () => { throw new Error("must not send a paid probe"); } });
+  const result = await quote({ ...input, presetId: "qwen" as ByokProviderId, model: "qwen-plus" });
+  assert.equal(result.inputTokenLimitBasis, "conservative_utf8_estimate");
+  assert.ok(result.inputTokenLimit > 4096);
+  assert.equal(result.rates.currency, "CNY");
+  await assert.rejects(quote({ ...input, presetId: "qwen" as ByokProviderId, model: "qwen-unpriced" }), /价格/u);
+  await assert.rejects(quote({ ...input, presetId: "moonshot" as ByokProviderId, model: "kimi-k3" }), /价格/u);
+});
+
+test("new compatible providers reject unexpected cache writes and malformed cache counts", async () => {
+  for (const provider of ["moonshot", "qwen"]) for (const cache of [
+    { prompt_tokens_details: { cached_tokens: 20 } },
+    { prompt_tokens_details: "SECRET" },
+    { prompt_tokens_details: { cached_tokens: 2, cache_creation_input_tokens: 3 } },
+    { prompt_tokens_details: { cached_tokens: 2, cache_write_tokens: 3 } },
+    { cached_tokens: -1 },
+  ]) {
+    const invoke = createByokModelInvoker({ fetch: async () => Response.json({
+      choices: [{ message: { content: "SECRET" } }], usage: { prompt_tokens: 12, completion_tokens: 8, ...cache },
+    }) });
+    await assert.rejects(invoke({ ...input, presetId: provider as ByokProviderId }), error => {
+      assert.doesNotMatch(String(error), /SECRET/u);
+      return true;
+    });
+  }
 });

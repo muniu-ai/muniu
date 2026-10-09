@@ -44,6 +44,7 @@ import {
   type ByokModelInvoker,
   type ByokModelQuoter,
   type ByokProviderId,
+  isByokProviderId,
 } from "./model-invoker.js";
 import { createKernelToolApprovalPort, type ToolApprovalKernel } from "./approval.js";
 import {
@@ -1058,7 +1059,7 @@ function assertExecutionState(
 }
 
 function providerId(value: string): ByokProviderId {
-  if (value === "openai" || value === "deepseek" || value === "anthropic") return value;
+  if (isByokProviderId(value)) return value;
   throw new Error("模型厂商预设不受支持");
 }
 

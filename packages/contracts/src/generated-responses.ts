@@ -196,11 +196,11 @@ export const API_OUTPUT_SCHEMAS_V2: Readonly<Record<string, JsonObject>> = {
         "anyOf": [
           {
             "type": "string",
-            "const": "needs_reconciliation"
+            "const": "running"
           },
           {
             "type": "string",
-            "const": "running"
+            "const": "needs_reconciliation"
           },
           {
             "type": "string",
@@ -295,6 +295,12 @@ export const API_OUTPUT_SCHEMAS_V2: Readonly<Record<string, JsonObject>> = {
   },
   "probeModelConnection": {
     "$ref": "#/components/schemas/OutputModelConnectionV2"
+  },
+  "selectModelConnectionModel": {
+    "$ref": "#/components/schemas/OutputModelConnectionV2"
+  },
+  "getWorkspaceAgentReadiness": {
+    "$ref": "#/components/schemas/OutputAgentReadinessReportV1"
   },
   "installPlugin": {
     "$ref": "#/components/schemas/OutputPluginInstallation"
@@ -1467,14 +1473,6 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
     "anyOf": [
       {
         "type": "string",
-        "const": "accepted"
-      },
-      {
-        "type": "string",
-        "const": "needs_reconciliation"
-      },
-      {
-        "type": "string",
         "const": "running"
       },
       {
@@ -1483,11 +1481,19 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
       },
       {
         "type": "string",
+        "const": "needs_reconciliation"
+      },
+      {
+        "type": "string",
         "const": "failed"
       },
       {
         "type": "string",
         "const": "cancelled"
+      },
+      {
+        "type": "string",
+        "const": "accepted"
       },
       {
         "type": "string",
@@ -1820,11 +1826,11 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
         "anyOf": [
           {
             "type": "string",
-            "const": "opc"
+            "const": "coding"
           },
           {
             "type": "string",
-            "const": "coding"
+            "const": "opc"
           }
         ]
       },
@@ -2267,15 +2273,15 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
         "anyOf": [
           {
             "type": "string",
-            "const": "accepted"
-          },
-          {
-            "type": "string",
             "const": "completed"
           },
           {
             "type": "string",
             "const": "unknown"
+          },
+          {
+            "type": "string",
+            "const": "accepted"
           },
           {
             "type": "string",
@@ -2351,10 +2357,6 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
         "anyOf": [
           {
             "type": "string",
-            "const": "needs_reconciliation"
-          },
-          {
-            "type": "string",
             "const": "queued"
           },
           {
@@ -2364,6 +2366,10 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
           {
             "type": "string",
             "const": "waiting_approval"
+          },
+          {
+            "type": "string",
+            "const": "needs_reconciliation"
           },
           {
             "type": "string",
@@ -2459,15 +2465,15 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
         "anyOf": [
           {
             "type": "string",
-            "const": "needs_reconciliation"
-          },
-          {
-            "type": "string",
             "const": "queued"
           },
           {
             "type": "string",
             "const": "running"
+          },
+          {
+            "type": "string",
+            "const": "needs_reconciliation"
           },
           {
             "type": "string",
@@ -3526,10 +3532,6 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
     "anyOf": [
       {
         "type": "string",
-        "const": "needs_reconciliation"
-      },
-      {
-        "type": "string",
         "const": "queued"
       },
       {
@@ -3547,6 +3549,10 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
       {
         "type": "string",
         "const": "interrupted"
+      },
+      {
+        "type": "string",
+        "const": "needs_reconciliation"
       },
       {
         "type": "string",
@@ -4121,11 +4127,11 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
         "anyOf": [
           {
             "type": "string",
-            "const": "accepted"
+            "const": "proposed"
           },
           {
             "type": "string",
-            "const": "proposed"
+            "const": "accepted"
           },
           {
             "type": "string",
@@ -4195,11 +4201,11 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
         "anyOf": [
           {
             "type": "string",
-            "const": "accepted"
+            "const": "proposed"
           },
           {
             "type": "string",
-            "const": "proposed"
+            "const": "accepted"
           },
           {
             "type": "string",
@@ -4406,6 +4412,7 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
     "type": "object",
     "additionalProperties": false,
     "required": [
+      "modelOptions",
       "id",
       "tenantId",
       "presetId",
@@ -4416,6 +4423,37 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
       "streamVersion"
     ],
     "properties": {
+      "modelOptions": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "modelName",
+            "selectable"
+          ],
+          "properties": {
+            "modelName": {
+              "type": "string"
+            },
+            "selectable": {
+              "anyOf": [
+                {
+                  "type": "boolean",
+                  "const": false
+                },
+                {
+                  "type": "boolean",
+                  "const": true
+                }
+              ]
+            },
+            "reason": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "defaultForNewExecutions": {
         "anyOf": [
           {
@@ -4470,6 +4508,297 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
       }
     }
   },
+  "OutputAgentReadinessCheckV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "status",
+      "message"
+    ],
+    "properties": {
+      "id": {
+        "anyOf": [
+          {
+            "type": "string",
+            "const": "model"
+          },
+          {
+            "type": "string",
+            "const": "coding_plugin"
+          },
+          {
+            "type": "string",
+            "const": "runner_plugin"
+          },
+          {
+            "type": "string",
+            "const": "permission"
+          },
+          {
+            "type": "string",
+            "const": "confirmation"
+          },
+          {
+            "type": "string",
+            "const": "binary_identity"
+          },
+          {
+            "type": "string",
+            "const": "worker"
+          },
+          {
+            "type": "string",
+            "const": "sandbox"
+          },
+          {
+            "type": "string",
+            "const": "authentication"
+          },
+          {
+            "type": "string",
+            "const": "approval"
+          },
+          {
+            "type": "string",
+            "const": "adapter"
+          }
+        ]
+      },
+      "status": {
+        "anyOf": [
+          {
+            "type": "string",
+            "const": "unknown"
+          },
+          {
+            "type": "string",
+            "const": "passed"
+          },
+          {
+            "type": "string",
+            "const": "blocked"
+          },
+          {
+            "type": "string",
+            "const": "required"
+          }
+        ]
+      },
+      "message": {
+        "type": "string"
+      },
+      "action": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputExternalCodingRunnerId": {
+    "anyOf": [
+      {
+        "type": "string",
+        "const": "claude-cli"
+      },
+      {
+        "type": "string",
+        "const": "codex-cli"
+      }
+    ]
+  },
+  "OutputRunnerBinaryIdentityV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "version",
+      "requestedPath",
+      "realPath",
+      "sha256",
+      "device",
+      "inode",
+      "byteLength",
+      "modifiedAtMs"
+    ],
+    "properties": {
+      "version": {
+        "type": "string"
+      },
+      "requestedPath": {
+        "type": "string"
+      },
+      "realPath": {
+        "type": "string"
+      },
+      "sha256": {
+        "type": "string"
+      },
+      "device": {
+        "type": "string"
+      },
+      "inode": {
+        "type": "string"
+      },
+      "byteLength": {
+        "type": "number"
+      },
+      "modifiedAtMs": {
+        "type": "number"
+      }
+    }
+  },
+  "OutputCodingRunnerConfigurationV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "workspaceId",
+      "runnerId",
+      "status",
+      "identity",
+      "identityDigest",
+      "confirmedBy",
+      "confirmedAt",
+      "id",
+      "tenantId",
+      "streamVersion",
+      "createdAt",
+      "updatedAt"
+    ],
+    "properties": {
+      "workspaceId": {
+        "type": "string"
+      },
+      "runnerId": {
+        "$ref": "#/components/schemas/OutputExternalCodingRunnerId"
+      },
+      "status": {
+        "type": "string",
+        "const": "confirmed"
+      },
+      "identity": {
+        "$ref": "#/components/schemas/OutputRunnerBinaryIdentityV1"
+      },
+      "identityDigest": {
+        "type": "string"
+      },
+      "confirmedBy": {
+        "type": "string"
+      },
+      "confirmedAt": {
+        "type": "string"
+      },
+      "id": {
+        "type": "string"
+      },
+      "tenantId": {
+        "type": "string"
+      },
+      "streamVersion": {
+        "type": "number"
+      },
+      "createdAt": {
+        "type": "string"
+      },
+      "updatedAt": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputAgentReadinessV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "agentId",
+      "displayName",
+      "scope",
+      "support",
+      "status",
+      "checks"
+    ],
+    "properties": {
+      "agentId": {
+        "anyOf": [
+          {
+            "type": "string",
+            "const": "builtin"
+          },
+          {
+            "type": "string",
+            "const": "claude-cli"
+          },
+          {
+            "type": "string",
+            "const": "codex-cli"
+          },
+          {
+            "type": "string",
+            "const": "workbuddy"
+          }
+        ]
+      },
+      "displayName": {
+        "type": "string"
+      },
+      "scope": {
+        "type": "string",
+        "const": "coding"
+      },
+      "support": {
+        "anyOf": [
+          {
+            "type": "string",
+            "const": "supported"
+          },
+          {
+            "type": "string",
+            "const": "not_supported"
+          }
+        ]
+      },
+      "status": {
+        "anyOf": [
+          {
+            "type": "string",
+            "const": "blocked"
+          },
+          {
+            "type": "string",
+            "const": "unverified"
+          }
+        ]
+      },
+      "checks": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputAgentReadinessCheckV1"
+        }
+      },
+      "configuration": {
+        "$ref": "#/components/schemas/OutputCodingRunnerConfigurationV1"
+      }
+    }
+  },
+  "OutputAgentReadinessReportV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "workspaceId",
+      "checkedAt",
+      "agents"
+    ],
+    "properties": {
+      "workspaceId": {
+        "type": "string"
+      },
+      "checkedAt": {
+        "type": "string"
+      },
+      "agents": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputAgentReadinessV1"
+        }
+      }
+    }
+  },
   "OutputPluginInstallation": {
     "type": "object",
     "additionalProperties": false,
@@ -4504,15 +4833,15 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
         "anyOf": [
           {
             "type": "string",
-            "const": "active"
-          },
-          {
-            "type": "string",
             "const": "failed"
           },
           {
             "type": "string",
             "const": "installed"
+          },
+          {
+            "type": "string",
+            "const": "active"
           },
           {
             "type": "string",
@@ -5680,11 +6009,11 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
         "anyOf": [
           {
             "type": "string",
-            "const": "opc"
+            "const": "coding"
           },
           {
             "type": "string",
-            "const": "coding"
+            "const": "opc"
           }
         ]
       },
@@ -5754,15 +6083,11 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
     "anyOf": [
       {
         "type": "string",
-        "const": "active"
+        "const": "waiting_approval"
       },
       {
         "type": "string",
         "const": "needs_reconciliation"
-      },
-      {
-        "type": "string",
-        "const": "waiting_approval"
       },
       {
         "type": "string",
@@ -5775,6 +6100,10 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
       {
         "type": "string",
         "const": "cancelled"
+      },
+      {
+        "type": "string",
+        "const": "active"
       },
       {
         "type": "string",
@@ -5949,58 +6278,6 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
       }
     }
   },
-  "OutputExternalCodingRunnerId": {
-    "anyOf": [
-      {
-        "type": "string",
-        "const": "claude-cli"
-      },
-      {
-        "type": "string",
-        "const": "codex-cli"
-      }
-    ]
-  },
-  "OutputRunnerBinaryIdentityV1": {
-    "type": "object",
-    "additionalProperties": false,
-    "required": [
-      "version",
-      "requestedPath",
-      "realPath",
-      "sha256",
-      "device",
-      "inode",
-      "byteLength",
-      "modifiedAtMs"
-    ],
-    "properties": {
-      "version": {
-        "type": "string"
-      },
-      "requestedPath": {
-        "type": "string"
-      },
-      "realPath": {
-        "type": "string"
-      },
-      "sha256": {
-        "type": "string"
-      },
-      "device": {
-        "type": "string"
-      },
-      "inode": {
-        "type": "string"
-      },
-      "byteLength": {
-        "type": "number"
-      },
-      "modifiedAtMs": {
-        "type": "number"
-      }
-    }
-  },
   "OutputCodingRunnerViewV2": {
     "anyOf": [
       {
@@ -6154,63 +6431,6 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
       },
       "modifiedAtMs": {
         "type": "number"
-      }
-    }
-  },
-  "OutputCodingRunnerConfigurationV1": {
-    "type": "object",
-    "additionalProperties": false,
-    "required": [
-      "workspaceId",
-      "runnerId",
-      "status",
-      "identity",
-      "identityDigest",
-      "confirmedBy",
-      "confirmedAt",
-      "id",
-      "tenantId",
-      "streamVersion",
-      "createdAt",
-      "updatedAt"
-    ],
-    "properties": {
-      "workspaceId": {
-        "type": "string"
-      },
-      "runnerId": {
-        "$ref": "#/components/schemas/OutputExternalCodingRunnerId"
-      },
-      "status": {
-        "type": "string",
-        "const": "confirmed"
-      },
-      "identity": {
-        "$ref": "#/components/schemas/OutputRunnerBinaryIdentityV1"
-      },
-      "identityDigest": {
-        "type": "string"
-      },
-      "confirmedBy": {
-        "type": "string"
-      },
-      "confirmedAt": {
-        "type": "string"
-      },
-      "id": {
-        "type": "string"
-      },
-      "tenantId": {
-        "type": "string"
-      },
-      "streamVersion": {
-        "type": "number"
-      },
-      "createdAt": {
-        "type": "string"
-      },
-      "updatedAt": {
-        "type": "string"
       }
     }
   },
@@ -6621,11 +6841,11 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
         "anyOf": [
           {
             "type": "string",
-            "const": "needs_reconciliation"
+            "const": "waiting_approval"
           },
           {
             "type": "string",
-            "const": "waiting_approval"
+            "const": "needs_reconciliation"
           },
           {
             "type": "string",
@@ -6775,11 +6995,11 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
             "anyOf": [
               {
                 "type": "string",
-                "const": "needs_reconciliation"
+                "const": "waiting_approval"
               },
               {
                 "type": "string",
-                "const": "waiting_approval"
+                "const": "needs_reconciliation"
               },
               {
                 "type": "string",

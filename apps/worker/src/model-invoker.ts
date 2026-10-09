@@ -6,7 +6,7 @@ import { validateModelUsage, completeWithModelBudget, PersistentModelBudget, Exe
 import type { JsonObject } from "@mn/contracts";
 import { findModelPrice } from "@mn/kernel";
 
-export type ByokProviderId = "openai" | "deepseek" | "anthropic";
+export type ByokProviderId = "openai" | "deepseek" | "anthropic" | "moonshot" | "qwen";
 
 export interface ByokModelInvocation {
   readonly presetId: ByokProviderId;
@@ -70,6 +70,8 @@ const PROVIDER_ENDPOINTS: Readonly<Record<ByokProviderId, string>> = {
   openai: "https://api.openai.com/v1/responses",
   deepseek: "https://api.deepseek.com/chat/completions",
   anthropic: "https://api.anthropic.com/v1/messages",
+  moonshot: "https://api.moonshot.cn/v1/chat/completions",
+  qwen: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
 };
 
 export function createByokModelQuoter(options: ByokModelInvokerOptions = {}): ByokModelQuoter {
@@ -90,8 +92,9 @@ export function createByokModelQuoter(options: ByokModelInvokerOptions = {}): By
     delete body.stream;
     let inputTokenLimit: number;
     let inputTokenLimitBasis: ByokModelQuote["inputTokenLimitBasis"];
-    if (input.presetId === "deepseek") {
-      // No documented count endpoint. This is an estimate, not a tokenizer guarantee.
+    if (isChatCompletionProvider(input.presetId)) {
+      // Covers serialized text and tools when a verified full-request tokenizer is unavailable.
+      // This is a conservative estimate, not a tokenizer or billing guarantee.
       inputTokenLimit = Buffer.byteLength(JSON.stringify(body), "utf8") * 2 + 4096;
       inputTokenLimitBasis = "conservative_utf8_estimate";
     } else {
@@ -204,7 +207,7 @@ function requestOptions(
       }),
     };
   }
-  if (input.presetId === "deepseek") {
+  if (isChatCompletionProvider(input.presetId)) {
     return {
       ...common,
       headers: { ...common.headers, authorization: `Bearer ${input.apiKey}` },
@@ -212,6 +215,8 @@ function requestOptions(
         model: input.model,
         messages: providerMessages(input.request.messages),
         stream: false,
+        ...(input.presetId === "moonshot" || input.presetId === "deepseek" ? { thinking: { type: "disabled" } } : {}),
+        ...(input.presetId === "qwen" ? { enable_thinking: false } : {}),
         max_tokens: input.request.maxOutputTokens ?? 4096,
         ...(tools.length > 0 ? {
           tools: tools.map((tool) => ({
@@ -288,7 +293,17 @@ function extractUsage(provider: ByokProviderId, payload: unknown): ModelUsage | 
       usage = { inputTokens: tokenNumber(raw.input_tokens), outputTokens: tokenNumber(raw.output_tokens),
         cachedInputTokens: tokenNumber(isObject(raw.input_tokens_details) ? raw.input_tokens_details.cached_tokens ?? 0 : 0) };
     } else {
-      usage = { inputTokens: tokenNumber(raw.prompt_tokens), cachedInputTokens: tokenNumber(raw.prompt_cache_hit_tokens ?? 0),
+      if (raw.prompt_tokens_details !== undefined && !isObject(raw.prompt_tokens_details)) throw new TypeError();
+      const details = isObject(raw.prompt_tokens_details) ? raw.prompt_tokens_details : {};
+      if (tokenNumber(raw.cache_creation_input_tokens ?? 0) !== 0
+        || tokenNumber(details.cache_creation_input_tokens ?? 0) !== 0
+        || tokenNumber(details.cache_write_tokens ?? 0) !== 0) {
+        throw new ModelTransportError("模型返回了未启用的缓存写入用量，费用需要人工核对");
+      }
+      const cachedCounts = [raw.prompt_cache_hit_tokens, raw.cached_tokens, details.cached_tokens]
+        .filter(value => value !== undefined).map(tokenNumber);
+      if (new Set(cachedCounts).size > 1) throw new TypeError();
+      usage = { inputTokens: tokenNumber(raw.prompt_tokens), cachedInputTokens: cachedCounts[0] ?? 0,
         outputTokens: tokenNumber(raw.completion_tokens) };
       if (raw.prompt_cache_miss_tokens !== undefined
         && tokenNumber(raw.prompt_cache_miss_tokens) + usage.cachedInputTokens !== usage.inputTokens) throw new TypeError();
@@ -320,7 +335,7 @@ function extractText(provider: ByokProviderId, payload: unknown): string {
           : []);
     }).join("");
   }
-  if (provider === "deepseek") {
+  if (isChatCompletionProvider(provider)) {
     const choice = Array.isArray(payload.choices) ? payload.choices[0] : undefined;
     return isObject(choice) && isObject(choice.message) && typeof choice.message.content === "string"
       ? choice.message.content
@@ -345,7 +360,7 @@ function extractToolCalls(
     calls = Array.isArray(payload.output)
       ? payload.output.filter((item) => isObject(item) && item.type === "function_call")
       : [];
-  } else if (provider === "deepseek") {
+  } else if (isChatCompletionProvider(provider)) {
     const choice = Array.isArray(payload.choices) ? payload.choices[0] : undefined;
     const message = isObject(choice) && isObject(choice.message) ? choice.message : undefined;
     calls = message && Array.isArray(message.tool_calls) ? message.tool_calls : [];
@@ -356,7 +371,7 @@ function extractToolCalls(
   }
   const parsed = calls.map((value, index): ModelToolCall => {
     if (!isObject(value)) throw new ModelTransportError("模型厂商返回了无效工具调用");
-    if (provider === "deepseek") {
+    if (isChatCompletionProvider(provider)) {
       if (!isObject(value.function)) throw new ModelTransportError("模型厂商返回了无效工具调用");
       return toolCall(
         requiredText(value.id, `tool-${index + 1}`),
@@ -445,8 +460,16 @@ function requiredText(value: unknown, fallback?: string): string {
   throw new ModelTransportError("模型厂商返回了无效工具调用");
 }
 
+export function isByokProviderId(value: string): value is ByokProviderId {
+  return Object.hasOwn(PROVIDER_ENDPOINTS, value);
+}
+
+function isChatCompletionProvider(provider: ByokProviderId): boolean {
+  return provider === "deepseek" || provider === "moonshot" || provider === "qwen";
+}
+
 function assertInvocation(input: ByokModelInvocation): void {
-  if (!Object.hasOwn(PROVIDER_ENDPOINTS, input.presetId)) {
+  if (!isByokProviderId(input.presetId)) {
     throw new ModelTransportError("模型厂商预设不受支持");
   }
   if (!input.model.trim()) throw new ModelTransportError("模型名称不能为空");

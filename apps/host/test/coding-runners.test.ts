@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { access, chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import type { RunnerBinaryIdentityV1, RunnerBinaryInspectionV1 } from "@mn/contracts";
@@ -10,6 +13,7 @@ import {
   createAgentOsHost,
   type ModelSecretStore,
 } from "../src/index.js";
+import { localCodingRunnerIdentityInspector } from "../src/coding-runners.js";
 
 const VERSION = "1.2.3";
 const INSPECTION: RunnerBinaryInspectionV1 = {
@@ -22,6 +26,24 @@ const INSPECTION: RunnerBinaryInspectionV1 = {
   modifiedAtMs: 456,
 };
 const IDENTITY: RunnerBinaryIdentityV1 = { ...INSPECTION, version: VERSION };
+
+test("本地 Runner 被动检查提前拒绝包装脚本且不执行文件", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "muniu-runner-native-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const binary = join(directory, "runner");
+  const marker = join(directory, "executed");
+  await writeFile(binary, `#!/bin/sh\ntouch "${marker}"\n`);
+  await chmod(binary, 0o755);
+  for (const runnerId of ["codex-cli", "claude-cli"] as const) {
+    await assert.rejects(localCodingRunnerIdentityInspector.inspect(runnerId, binary),
+      (error: any) => error.code === "RUNNER_BINARY_INVALID" && /原生 macOS/u.test(error.message));
+  }
+  await assert.rejects(access(marker));
+  await writeFile(binary, Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0]));
+  const inspection = await localCodingRunnerIdentityInspector.inspect("codex-cli", binary);
+  assert.equal(inspection.byteLength, 8);
+  assert.equal("version" in inspection, false);
+});
 
 const secrets: ModelSecretStore = {
   async save(connectionId) { return `keychain://muniu.v2/${connectionId}`; },

@@ -16,7 +16,8 @@
   ask               在当前工作区提交问题
   inbox             查看审批、问题、失败和人工核对
   resume            恢复暂停或中断的执行
-  doctor --fix      检查连接与可安全修复项
+  doctor            检查 Host；指定工作区可检查 Agent 调度条件
+  model             列出模型厂商、连接并为新任务选择模型
   plugin            查看、安装、更新、启用、停用或运行插件命令
   opc               管理经营台账与机会验证
   code              管理 Coding 任务
@@ -60,6 +61,13 @@ Coding 仓库与任务：
   mn code repositories --workspace <工作区 ID>
   mn code repository --workspace <工作区 ID> --input /仓库绝对路径
   mn code task --workspace <工作区 ID> --repository <仓库名称或绝对路径> --input <任务描述>
+
+模型与 Agent 检测：
+  mn doctor --workspace <工作区 ID> --json
+  mn doctor --fix
+  mn model presets
+  mn model list
+  mn model select <连接 ID> --model <发现列表中的模型> --version <连接版本>
 
 外部 Coding Runner：
   生产 Worker 只接受官方原生安装的 macOS Mach-O CLI，不支持 npm/shebang wrapper

@@ -27,7 +27,8 @@ const HELP = `木牛 Agent OS 0.2
   ask               在当前工作区提交问题
   inbox             查看审批、问题、失败和人工核对
   resume            恢复暂停或中断的执行
-  doctor --fix      检查连接与可安全修复项
+  doctor            检查 Host；指定工作区可检查 Agent 调度条件
+  model             列出模型厂商、连接并为新任务选择模型
   plugin            查看、安装、更新、启用、停用或运行插件命令
   opc               管理经营台账与机会验证
   code              管理 Coding 任务
@@ -71,6 +72,13 @@ Coding 仓库与任务：
   mn code repositories --workspace <工作区 ID>
   mn code repository --workspace <工作区 ID> --input /仓库绝对路径
   mn code task --workspace <工作区 ID> --repository <仓库名称或绝对路径> --input <任务描述>
+
+模型与 Agent 检测：
+  mn doctor --workspace <工作区 ID> --json
+  mn doctor --fix
+  mn model presets
+  mn model list
+  mn model select <连接 ID> --model <发现列表中的模型> --version <连接版本>
 
 外部 Coding Runner：
   生产 Worker 只接受官方原生安装的 macOS Mach-O CLI，不支持 npm/shebang wrapper
@@ -533,7 +541,7 @@ async function resume(parsed: ParsedArguments, api: ApiClient): Promise<CliResul
 }
 
 async function doctor(parsed: ParsedArguments, api: ApiClient): Promise<CliResult> {
-  assertAllowedFlags(parsed, ["fix"]);
+  assertAllowedFlags(parsed, ["fix", "workspace"]);
   const [health, readiness] = await Promise.all([api.get(apiPath("getHealth", { })), api.readiness()]);
   const requested = parsed.flags.has("fix");
   const ready = typeof readiness === "object" && readiness !== null
@@ -574,12 +582,39 @@ async function doctor(parsed: ParsedArguments, api: ApiClient): Promise<CliResul
     : ready && issues.length === 0
       ? "Host 已就绪"
       : `Host 尚未就绪：${issues.length || "未识别"} 项问题`;
-  return { command: "doctor", data: { health, readiness, fix }, human };
+  const workspaceId = flag(parsed, "workspace");
+  const agents = workspaceId ? await api.get(apiPath("getWorkspaceAgentReadiness", { workspaceId })) : undefined;
+  const agentSummary = agents ? agents.agents.map(agent => `${agent.displayName}：${agent.status === "blocked" ? "暂不可调度" : "待任务验证"}\n${agent.checks.filter(check => check.status !== "passed").map(check => `  ${check.message}${check.action ? `；${check.action}` : ""}`).join("\n")}`).join("\n") : "Agent 调度条件尚未检查；使用 mn doctor --workspace <工作区 ID>";
+  return { command: "doctor", data: { health, readiness, fix, ...(agents ? { agents } : {}) }, human: `${human}\n${agentSummary}` };
 }
 
 function readinessIssues(value: unknown): readonly unknown[] {
   if (typeof value !== "object" || value === null || !("issues" in value) || !Array.isArray(value.issues)) return [];
   return value.issues;
+}
+
+async function model(parsed: ParsedArguments, api: ApiClient): Promise<CliResult> {
+  const operation = parsed.positional[0];
+  if (operation === "presets" || operation === "list") {
+    assertAllowedFlags(parsed, []);
+    if (parsed.positional.length !== 1) throw new CliUsageError("model list/presets 不接受额外参数");
+    if (operation === "presets") {
+      const data = await api.get(apiPath("listModelPresets", {}));
+      return { command: "model presets", data, human: data.map(preset => `${preset.displayName}（${preset.id}）`).join("\n") };
+    }
+    const data = await api.get(apiPath("listModelConnections", {}));
+    return { command: "model list", data, human: data.length ? data.map(connection => `${connection.displayName}（${connection.id}，版本 ${connection.streamVersion}）\n${connection.modelOptions.map(option => `  ${option.modelName}：${option.selectable ? "可选择" : option.reason}`).join("\n")}`).join("\n") : "尚无模型连接，请在桌面设置中连接模型" };
+  }
+  if (operation === "select") {
+    assertAllowedFlags(parsed, ["model", "version"]);
+    if (parsed.positional.length !== 2) throw new CliUsageError("model select 需要连接 ID");
+    if (!parsed.flags.has("version")) throw new CliUsageError("缺少 --version");
+    const data = await api.mutate(apiPath("selectModelConnectionModel", { connectionId: parsed.positional[1]! }), {
+      expectedStreamVersion: integerFlag(parsed, "version", 0), modelName: flag(parsed, "model", true)!,
+    });
+    return { command: "model select", data, human: `新任务将使用 ${data.defaultModel}；既有执行保持原模型绑定` };
+  }
+  throw new CliUsageError("model 仅支持 presets、list 或 select");
 }
 
 async function plugin(parsed: ParsedArguments, api: ApiClient): Promise<CliResult> {
@@ -1044,6 +1079,7 @@ export async function runCli(arguments_: readonly string[], dependencies: CliDep
       case "inbox": result = await inbox(parsed, api); break;
       case "resume": result = await resume(parsed, api); break;
       case "doctor": result = await doctor(parsed, api); break;
+      case "model": result = await model(parsed, api); break;
       case "plugin": result = await plugin(parsed, api); break;
       case "opc": result = await opc(parsed, api); break;
       case "code": result = await code(parsed, api); break;

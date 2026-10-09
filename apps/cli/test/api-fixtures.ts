@@ -21,7 +21,7 @@ export const codingTaskFixture = (value: Partial<ApiOutputsV2["createCodingTask"
 });
 export const modelFixture = (value: Partial<ApiOutputsV2["createModelConnection"]> = {}): ApiOutputsV2["createModelConnection"] => ({
   id: "connection-1", tenantId: "local", presetId: "deepseek", displayName: "DeepSeek", defaultModel: "deepseek-chat",
-  discoveredModels: ["deepseek-chat"], status: "ready", streamVersion: 1, ...value,
+  discoveredModels: ["deepseek-chat"], modelOptions: [{ modelName: "deepseek-chat", selectable: false }], status: "ready", streamVersion: 1, ...value,
 });
 export const executionFixture = (value: Partial<ApiOutputsV2["createTurn"]> = {}): ApiOutputsV2["createTurn"] => ({
   ...entity, id: "execution-1", workspaceId: "workspace-1", threadId: "thread-1", pluginId: "coding", agentDefinitionId: "coding.builtin",

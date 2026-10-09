@@ -34,7 +34,7 @@ node apps/cli/dist/index.js doctor
 node apps/cli/dist/index.js plugin list --json
 ```
 
-模型调用需要自备 API Key（BYOK）；通过 Desktop 向导录入，密钥存入 macOS Keychain。不要把密钥放在命令行参数或文档示例中。
+模型调用需要自备 API Key（BYOK）；通过 Desktop 向导录入，密钥存入 macOS Keychain。不要把密钥放在命令行参数或文档示例中。Kimi、Qwen 等厂商和外部 Agent 的接入范围见[模型与外部 Agent](docs/guides/agents-and-models.md)。
 
 ## 理解运行边界
 

@@ -63,5 +63,5 @@ test("默认模型连接显式切换，只影响新执行，不改写既有模�
   assert.equal((await store.transact("local", tx => tx.getProjection<any>("execution", original.id))).modelBindingId, first.id);
   await post(`/v2/model-connections/${first.id}/probe`, { expectedStreamVersion: 2, makeDefault: true });
   assert.equal((await submit()).modelBindingId, first.id);
-  assert.equal((await store.transact("local", tx => tx.getProjection<any>("modelConnection", second.id))).defaultForNewExecutions, false);
+  assert.equal((await store.transact("local", tx => tx.getProjection<any>("modelPreference", "default"))).connectionId, first.id);
 });

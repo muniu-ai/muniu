@@ -6,7 +6,7 @@ import { verifyEventIntegrity } from "./integrity.js";
 export const CORE_PROJECTION_NAMESPACES = [
   "tenant", "principal", "workspace", "membership", "thread", "execution", "authority",
   "approval", "inbox", "toolIntent", "toolAdmission", "job", "session-log-entry", "memory", "memoryTombstone",
-  "shareGrant", "modelConnection", "asset", "assetTombstone",
+  "shareGrant", "modelConnection", "modelPreference", "asset", "assetTombstone",
 ] as const;
 
 export type CoreProjectionNamespace = typeof CORE_PROJECTION_NAMESPACES[number];

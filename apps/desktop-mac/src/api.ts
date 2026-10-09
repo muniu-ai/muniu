@@ -125,6 +125,12 @@ export class AgentOsClient {
 
   modelPresets() { return this.request(apiPath("listModelPresets", {})); }
   modelConnections() { return this.request(apiPath("listModelConnections", {})); }
+  selectModelConnectionModel(connectionId: string, expectedStreamVersion: number, modelName: string) {
+    return this.request(apiPath("selectModelConnectionModel", { connectionId }), {
+      method: "POST", body: JSON.stringify({ expectedStreamVersion, modelName }),
+    });
+  }
+  agentReadiness(workspaceId: string) { return this.request(apiPath("getWorkspaceAgentReadiness", { workspaceId })); }
 
   probeModel(connectionId: string, expectedStreamVersion = 1, makeDefault = false) {
     return this.request(
@@ -139,7 +145,7 @@ export class AgentOsClient {
     });
   }
 
-  listWorkspaces() { return this.request(apiPath("listWorkspaces", { })); }
+  listWorkspaces(signal?: AbortSignal) { return this.request(apiPath("listWorkspaces", { }), signal ? { signal } : {}); }
   workspaceMembers(workspaceId: string) {
     return this.request(
       apiPath("listWorkspaceMembers", { workspaceId: workspaceId }),

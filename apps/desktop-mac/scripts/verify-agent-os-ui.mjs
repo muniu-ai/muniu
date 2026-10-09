@@ -9,7 +9,7 @@ import { chromium } from "playwright-core";
 import { businessDateAt } from "../../../packages/contracts/dist/index.js";
 
 const mode = process.argv[2] ?? "onboarding";
-if (!new Set(["onboarding", "opc", "coding", "goals", "business"]).has(mode)) throw new Error(`未知验证模式：${mode}`);
+if (!new Set(["onboarding", "opc", "coding", "goals", "business", "startup"]).has(mode)) throw new Error(`未知验证模式：${mode}`);
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const desktopDir = resolve(scriptDir, "..");
 const repoRoot = resolve(desktopDir, "..", "..");
@@ -60,7 +60,8 @@ try {
     requests.push({ method: request.method(), path: url.pathname, search: url.search, body });
   });
   page.setDefaultTimeout(12_000);
-  await page.goto(appUrl, { waitUntil: "domcontentloaded" });
+  if (mode === "startup") await verifyStartup(page, requests);
+  else await page.goto(appUrl, { waitUntil: "domcontentloaded" });
 
   if (mode === "onboarding") await verifyOnboarding(page, requests);
   if (mode === "opc") await verifyOpc(page, requests, apiUrl);
@@ -70,6 +71,7 @@ try {
   await page.getByTitle("技术配置").click();
   if (!await page.getByRole("button", { name: "设置", exact: true }).isVisible()) await page.getByTitle("技术配置").click();
   await page.getByRole("button", { name: "设置", exact: true }).click();
+  await verifyConnectivitySettings(page, requests);
   await page.getByRole("region", { name: "插件管理" }).waitFor({ state: "visible" });
   const manager = page.getByRole("region", { name: "插件管理" });
   const install = manager.getByRole("button", { name: "安装", exact: true });
@@ -114,6 +116,70 @@ try {
   if (process.env.MN_DESKTOP_E2E_KEEP_TEMP !== "1") await rm(temporaryRoot, { recursive: true, force: true });
 }
 
+async function verifyStartup(page, requestLog) {
+  const workspacesUrl = `${apiUrl}/v2/workspaces`;
+  await page.addInitScript(() => {
+    window.__startupSignals = [];
+    const originalFetch = window.fetch;
+    window.fetch = (input, init) => {
+      if (String(input).endsWith("/v2/workspaces")) window.__startupSignals.push(init?.signal);
+      return originalFetch(input, init);
+    };
+  });
+  let attempts = 0;
+  const unavailable = { code: "HOST_STARTING", message: "后台服务正在启动", action: "稍后重试", fieldIssues: [], traceId: "startup-fixture", retryable: true };
+  await page.route(workspacesUrl, route => {
+    attempts += 1;
+    if (attempts === 1) return route.abort("connectionrefused");
+    if (attempts < 4) return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify(unavailable) });
+    return route.continue();
+  });
+  await page.goto(appUrl, { waitUntil: "domcontentloaded" });
+  await page.getByRole("heading", { name: "经营管理", exact: true }).waitFor({ timeout: 6000 });
+  if (attempts < 4 || attempts > 6) throw new Error(`启动重试次数异常：${attempts}`);
+  if (requestLog.some(entry => entry.method === "POST")) throw new Error("启动重试不得重复写入操作");
+  if (!await page.evaluate(() => window.__startupSignals.some(signal => signal?.aborted))) throw new Error("卸载启动 effect 时未取消读取请求");
+  await page.unroute(workspacesUrl);
+
+  for (const [status, message, body] of [
+    [401, "工作区凭据已失效", { ...unavailable, message: "工作区凭据已失效" }],
+    [403, "没有权限读取工作区", { ...unavailable, message: "没有权限读取工作区" }],
+    [200, "Host 响应不符合公共契约", { data: { invalid: true } }],
+  ]) {
+    let rejected = 0;
+    await page.route(workspacesUrl, route => { rejected += 1; return route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) }); });
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.getByRole("alert").getByText(message, { exact: false }).waitFor();
+    const stoppedAt = rejected;
+    await page.waitForTimeout(750);
+    if (rejected !== stoppedAt) throw new Error(`启动时不得自动重试 ${status} 错误`);
+    await page.unroute(workspacesUrl);
+    await page.getByRole("alert").getByRole("button", { name: "重试", exact: true }).click();
+    await page.getByRole("heading", { name: "经营管理", exact: true }).waitFor();
+  }
+
+  let unavailableAttempts = 0;
+  await page.route(workspacesUrl, route => { unavailableAttempts += 1; return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify(unavailable) }); });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.getByRole("alert").waitFor({ timeout: 16000 });
+  const stoppedAt = unavailableAttempts;
+  await page.waitForTimeout(1000);
+  if (unavailableAttempts !== stoppedAt || stoppedAt > 7) throw new Error("后台服务持续不可用时启动重试必须有界");
+  await page.unroute(workspacesUrl);
+  await page.getByRole("alert").getByRole("button", { name: "重试", exact: true }).click();
+  await page.getByRole("heading", { name: "经营管理", exact: true }).waitFor();
+
+  const hangingRequests = [];
+  await page.route(workspacesUrl, route => { hangingRequests.push(route); });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.getByRole("alert").getByText("木牛后台服务响应超时", { exact: false }).waitFor({ timeout: 18000 });
+  if (hangingRequests.length > 2) throw new Error("网络悬挂时不得叠加未取消的启动请求");
+  await page.unroute(workspacesUrl);
+  await Promise.all(hangingRequests.map(route => route.abort().catch(() => undefined)));
+  await page.getByRole("alert").getByRole("button", { name: "重试", exact: true }).click();
+  await page.getByRole("heading", { name: "经营管理", exact: true }).waitFor();
+}
+
 async function verifyBusiness(page, requestLog) {
   await page.getByRole("button", { name: "继续" }).click();
   await expectText(page, "OPC 经营管理");
@@ -153,6 +219,12 @@ async function verifyBusiness(page, requestLog) {
       await editor.getByRole("button", { name: title, exact: true }).click();
       await page.getByRole("alert").waitFor();
       await observed;
+      await page.getByRole("alert").waitFor();
+      const refreshed = page.waitForResponse(response => new URL(response.url()).pathname === "/v2/plugins/opc/business" && response.ok());
+      await page.getByRole("alert").getByRole("button", { name: "重试", exact: true }).click();
+      await (await refreshed).finished();
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      if (!await page.getByRole("alert").isVisible()) throw new Error("读取成功不得清除尚未确认的保存错误");
     }
     const responsePromise = page.waitForResponse(response => new URL(response.url()).pathname === "/v2/plugins/opc/business/commands" && response.request().method() === "POST");
     await editor.getByRole("button", { name: title, exact: true }).click();
@@ -271,6 +343,76 @@ async function verifyBusiness(page, requestLog) {
   await page.setViewportSize({ width: 960, height: 640 });
   await assertViewportFit(page);
   await page.setViewportSize({ width: 1180, height: 760 });
+}
+
+async function verifyConnectivitySettings(page, requestLog) {
+  const connections = page.getByRole("region", { name: "模型连接管理" });
+  await connections.waitFor({ state: "visible" });
+  const provider = connections.getByLabel("模型厂商", { exact: true });
+  await provider.locator('option[value="moonshot"]').waitFor({ state: "attached" });
+  await provider.locator('option[value="qwen"]').waitFor({ state: "attached" });
+  if (mode === "onboarding") {
+    for (const presetId of ["moonshot", "qwen"]) {
+      await provider.selectOption(presetId);
+      await connections.getByLabel("新模型密钥", { exact: true }).fill("ui-fixture-model-key");
+      const probeResponse = page.waitForResponse(response => /\/v2\/model-connections\/[^/]+\/probe$/.test(new URL(response.url()).pathname));
+      await connections.getByRole("button", { name: "保存并用于新任务", exact: true }).click();
+      const response = await probeResponse;
+      if (!response.ok()) throw new Error(`${presetId} 连接未通过真实 Host fixture`);
+      await connections.getByRole("status").filter({ hasText: "模型已连接" }).waitFor();
+    }
+    const beforeModels = await hostData(apiUrl, "/v2/model-connections");
+    const qwen = beforeModels.find(connection => connection.presetId === "qwen");
+    const nextModel = qwen?.modelOptions.find(option => option.selectable && option.modelName !== qwen.defaultModel)?.modelName;
+    if (!qwen || !nextModel) throw new Error("Qwen fixture 缺少可选择模型");
+    const qwenCard = connections.getByRole("article", { name: `${qwen.displayName} 模型连接`, exact: true });
+    await qwenCard.getByLabel("为新任务选择模型", { exact: true }).selectOption(nextModel);
+    await qwenCard.getByRole("button", { name: "用于新任务", exact: true }).click();
+    await connections.getByRole("status").filter({ hasText: "已为新任务创建所选模型连接" }).waitFor();
+    const afterModels = await hostData(apiUrl, "/v2/model-connections");
+    const preserved = afterModels.find(connection => connection.id === qwen.id);
+    if (preserved?.defaultModel !== qwen.defaultModel || preserved.streamVersion !== qwen.streamVersion) throw new Error("切换模型改写了旧连接或授权版本");
+    if (!afterModels.some(connection => connection.id !== qwen.id && connection.defaultModel === nextModel && connection.defaultForNewExecutions)) {
+      throw new Error("所选 Qwen 模型未成为新任务默认连接");
+    }
+    const defaultResponse = page.waitForResponse(response => new URL(response.url()).pathname === `/v2/model-connections/${qwen.id}/model`);
+    await qwenCard.getByRole("button", { name: "设为默认连接", exact: true }).click();
+    if (!(await defaultResponse).ok()) throw new Error("将现有模型用于新任务未通过新连接接口");
+    await connections.getByRole("status").filter({ hasText: "已为新任务创建所选模型连接" }).waitFor();
+    const defaults = await hostData(apiUrl, "/v2/model-connections");
+    if (defaults.find(connection => connection.id === qwen.id)?.streamVersion !== qwen.streamVersion
+      || !defaults.some(connection => connection.id !== qwen.id && connection.defaultModel === qwen.defaultModel && connection.defaultForNewExecutions)) {
+      throw new Error("设为默认连接必须保留原连接并为新任务创建绑定");
+    }
+    if (await connections.getByLabel("新模型密钥", { exact: true }).inputValue()) throw new Error("连接成功后密钥仍在输入框中");
+    const localValues = await page.evaluate(() => JSON.stringify(localStorage));
+    if (localValues.includes("ui-fixture-model-key")) throw new Error("模型密钥被写入浏览器存储");
+  }
+  const readiness = page.getByRole("region", { name: "外部 Agent 调度检查" });
+  await readiness.waitFor({ state: "visible" });
+  await readiness.getByRole("heading", { name: "Codex CLI", exact: true }).waitFor();
+  await readiness.getByRole("heading", { name: "Claude Code", exact: true }).waitFor();
+  const codexReadiness = readiness.getByRole("region", { name: "Codex CLI 接入状态", exact: true });
+  await codexReadiness.getByText("查看检查项与处理步骤", { exact: true }).click();
+  await codexReadiness.getByText("CLI 登录态、模型权限与额度未验证", { exact: true }).waitFor();
+  await codexReadiness.getByText("执行服务", { exact: true }).waitFor();
+  await codexReadiness.getByText("隔离环境", { exact: true }).waitFor();
+  await codexReadiness.getByText("查看检查项与处理步骤", { exact: true }).click();
+  const workbuddy = readiness.getByRole("region", { name: "WorkBuddy 接入状态", exact: true });
+  await workbuddy.getByText("尚未接入", { exact: true }).waitFor();
+  if (await workbuddy.getByRole("button").count()) throw new Error("未适配的 WorkBuddy 不得提供启用或调度操作");
+  if ((await readiness.innerText()).includes("可调度")) throw new Error("未连接隔离 Worker 的 fixture 不得显示外部 Agent 可调度");
+  if (!requestLog.some(entry => entry.method === "GET" && /\/workspaces\/[^/]+\/agent-readiness$/.test(entry.path))) {
+    throw new Error("Agent 调度检查必须读取 Host 状态");
+  }
+  const before = requestLog.filter(entry => entry.method === "POST").length;
+  const refreshedReadiness = page.waitForResponse(response => /\/workspaces\/[^/]+\/agent-readiness$/.test(new URL(response.url()).pathname));
+  await readiness.getByRole("button", { name: "重新检查", exact: true }).click();
+  if (!(await refreshedReadiness).ok()) throw new Error("Agent 调度检查刷新失败");
+  await readiness.getByRole("button", { name: "重新检查", exact: true }).waitFor({ state: "visible" });
+  if (requestLog.filter(entry => entry.method === "POST").length !== before) throw new Error("只读调度检查不得创建执行或调用登录命令");
+  await readiness.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: join(temporaryRoot, "connectivity-settings.png") });
 }
 
 async function verifyGoals(page, requestLog) {
@@ -447,6 +589,14 @@ async function verifyOnboarding(page, requestLog) {
   await page.getByRole("button", { name: /Coding/ }).click();
   await page.getByRole("button", { name: "继续" }).click();
   await expectText(page, "连接你的模型");
+  if (!requestLog.some(entry => entry.method === "GET" && entry.path === "/v2/model-connections/presets")) {
+    throw new Error("首次设置必须读取 Host 的模型厂商列表");
+  }
+  const hostPresets = await hostData(apiUrl, "/v2/model-connections/presets");
+  for (const preset of hostPresets) {
+    await page.getByRole("button", { name: preset.displayName, exact: true }).waitFor({ state: "visible" });
+  }
+  await page.screenshot({ path: join(temporaryRoot, "model-presets.png") });
   const screenText = await page.locator("body").innerText();
   for (const forbidden of ["Provider ID", "Model ID", "Base URL", "wire format"]) {
     if (screenText.includes(forbidden)) throw new Error(`向导暴露了技术字段：${forbidden}`);
@@ -479,6 +629,9 @@ async function verifyOnboarding(page, requestLog) {
   if (initialized.status() !== 200) throw new Error(`受保护日志中的初始化失败：HTTP ${initialized.status()}`);
   await expectText(page, "设计师增长");
   await page.getByRole("heading", { name: "经营管理", exact: true }).waitFor();
+  if (!await page.getByRole("button", { name: "设置", exact: true }).isVisible()) {
+    throw new Error("经营视图必须直接显示设置入口");
+  }
   await page.getByRole("button", { name: "工作区" }).click();
   await expectText(page, "成员");
   await expectText(page, "本地所有者");
@@ -874,18 +1027,21 @@ async function verifyCoding(page, requestLog) {
   const codingCard = page.locator(".coding-card").filter({ hasText: "统一 Agent OS API" });
   await codingCard.getByText("高级执行设置").click();
   await codingCard.getByText("Harness 摘要").waitFor({ state: "visible" });
-  await page.getByRole("button", { name: "集成" }).click();
+  if (!await page.getByRole("button", { name: "集成", exact: true }).isVisible()) await page.getByTitle("技术配置").click();
+  await page.getByRole("button", { name: "集成", exact: true }).click();
   await expectText(page, "与 Host 同进程运行");
   await expectText(page, "不是安全沙箱");
   await expectText(page, "无法约束恶意插件直接使用进程能力");
-  const runnerCard = page.getByRole("region", { name: "Codex CLI 配置", exact: true });
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  const runnerCard = page.getByRole("region", { name: "Codex CLI 接入状态", exact: true });
+  await runnerCard.getByText("确认 Agent 可执行文件", { exact: true }).click();
   await runnerCard.getByLabel("可执行文件绝对路径", { exact: true }).fill(process.execPath);
   await runnerCard.getByRole("button", { name: "检查文件", exact: true }).click();
   await runnerCard.getByText("SHA-256", { exact: true }).waitFor({ state: "visible" });
   await runnerCard.getByLabel("已核实的版本", { exact: true }).fill("0.2.0-ui-fixture");
   await runnerCard.getByLabel("我已核对文件来源、版本和摘要", { exact: true }).check();
   await runnerCard.getByRole("button", { name: "确认使用此文件", exact: true }).click();
-  await runnerCard.getByText("已确认", { exact: true }).waitFor({ state: "visible" });
+  await runnerCard.getByText("文件已确认", { exact: true }).waitFor({ state: "visible" });
   await page.getByRole("button", { name: "Coding", exact: true }).click();
   await page.locator(".coding-card").filter({ hasText: "统一 Agent OS API" }).getByRole("button", { name: "打开任务" }).click();
   const selectedRunner = page.getByLabel("本轮执行方式", { exact: true });

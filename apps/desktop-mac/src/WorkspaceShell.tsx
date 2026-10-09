@@ -146,7 +146,7 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces, initi
   }
 
   function openInboxItem(item: InboxItemSummary) {
-    if (item.kind === "credential") { setTechnicalOpen(true); setPage("integrations"); return; }
+    if (item.kind === "credential") { setPage("settings"); return; }
     const target = item.navigation;
     if (!target) return;
     if (target.pluginId === "opc" && target.resourceRef?.namespace === "opc.opportunity") {
@@ -212,7 +212,7 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces, initi
           return <NavButton key={target} compact={sidebarCompact} active={page === target} label={surface.navigation.find((item) => item.routeId === entry.routeId)?.label ?? entry.title} icon={<Plug />} onClick={() => setPage(target)} />;
         }))}
       </nav>
-      <div className="technical-nav"><button className="technical-toggle" onClick={() => setTechnicalOpen((value) => !value)} title="技术配置"><span><Boxes size={17} />{!sidebarCompact && "技术配置"}</span>{!sidebarCompact && <ChevronDown className={technicalOpen ? "rotated" : ""} size={15} />}</button>{technicalOpen && <div><NavButton compact={sidebarCompact} active={page === "agents"} label="Agents" icon={<Bot />} onClick={() => setPage("agents")} /><NavButton compact={sidebarCompact} active={page === "integrations"} label="集成" icon={<Plug />} onClick={() => setPage("integrations")} /><NavButton compact={sidebarCompact} active={page === "settings"} label="设置" icon={<Settings />} onClick={() => setPage("settings")} /></div>}</div>
+      <div className="technical-nav"><button className="technical-toggle" onClick={() => setTechnicalOpen((value) => !value)} title="技术配置"><span><Boxes size={17} />{!sidebarCompact && "技术配置"}</span>{!sidebarCompact && <ChevronDown className={technicalOpen ? "rotated" : ""} size={15} />}</button>{technicalOpen && <div><NavButton compact={sidebarCompact} active={page === "agents"} label="Agents" icon={<Bot />} onClick={() => setPage("agents")} /><NavButton compact={sidebarCompact} active={page === "integrations"} label="集成" icon={<Plug />} onClick={() => setPage("integrations")} /></div>}<NavButton compact={sidebarCompact} active={page === "settings"} label="设置" icon={<Settings />} onClick={() => setPage("settings")} /></div>
       <footer className="sidebar-footer"><span className="connection-dot" />{!sidebarCompact && <span><strong>本地数据已连接</strong><small>遥测已关闭</small></span>}</footer>
     </aside>
 
@@ -250,7 +250,7 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces, initi
         {page === "deliverables" && <DeliverablesPage items={deliverables} onOpen={(item) => openProduct(item.pluginId)} />}
         {page === "activity" && <ActivityPage items={activity} professional={professional} />}
         {page === "agents" && <AgentsPage catalog={agentCatalog} />}
-        {page === "integrations" && <IntegrationsPage api={api} workspace={workspace} onChanged={updateWorkspace} />}
+        {page === "integrations" && <IntegrationsPage onOpenSettings={() => setPage("settings")} />}
         {page === "settings" && <div className="page-stack"><SettingsPage workspace={workspace} memories={memories} api={api} onModeChanged={updateWorkspace} onMemoriesChanged={() => void refreshCore()} /><PluginManager api={api} workspace={workspace} onChanged={updateWorkspace} /></div>}
         {surfaces.flatMap((surface) => (surface.ui?.pages ?? []).filter((entry) => page === `plugin:${surface.pluginId}:${entry.routeId}`).map((entry) => <PluginBoundary key={`${surface.pluginId}:${surface.version}:${entry.routeId}`} pluginName={surface.pluginId}><div className="page-stack"><h1>{entry.title}</h1>{entry.cards.map((card, index) => <PluginCard key={index} card={card} pluginId={surface.pluginId} workspaceId={workspace.id} api={api} />)}</div></PluginBoundary>))}
         {page === "home" && surfaces.flatMap((surface) => (surface.ui?.widgets ?? []).map((widget) => <PluginBoundary key={`${surface.pluginId}:${surface.version}:${widget.widgetId}`} pluginName={surface.pluginId}><PluginCard card={widget.card} pluginId={surface.pluginId} workspaceId={workspace.id} api={api} /></PluginBoundary>))}

@@ -200,7 +200,9 @@ export function SettingsPage({ workspace, memories, api, onModeChanged, onMemori
   async function decide(memory: MemorySummary, decision: "accept" | "reject") { await api.decideMemory(memory.id, memory.streamVersion, decision); onMemoriesChanged(); }
   async function revise(memory: MemorySummary, summary: string) { await api.reviseMemory(memory.id, memory.streamVersion, summary, memory.confidence); onMemoriesChanged(); }
   async function remove(memory: MemorySummary) { await api.deleteMemory(memory.id, memory.streamVersion, "用户在设置中确认删除"); onMemoriesChanged(); }
-  return <div className="page-stack"><PageTitle eyebrow="工作方式" title="设置" detail="视图只改变信息密度，不改变 API、事件或审批。" />
+  return <div className="page-stack"><PageTitle eyebrow="工作方式" title="设置" detail="管理模型连接、外部 Agent 接入和工作区偏好。" />
+    <ModelConnections api={api} professional={workspace.viewMode === "professional"} />
+    <RunnerConfiguration api={api} workspace={workspace} onChanged={onModeChanged} />
     <section className="panel settings-section"><PanelHeading title="信息密度" /><div className="segmented" role="group" aria-label="信息密度"><button className={workspace.viewMode === "business" ? "active" : ""} onClick={() => void setMode("business")}>经营视图</button><button className={workspace.viewMode === "professional" ? "active" : ""} onClick={() => void setMode("professional")}>专业视图</button></div><p>经营视图先显示成果、证据和下一步；专业视图原位展开执行细节。</p></section>
     <section className="panel settings-section"><PanelHeading title="记忆与偏好" /><div className="memory-list">{memories.map((memory) => <MemoryCard key={memory.id} memory={memory} professional={workspace.viewMode === "professional"} onDecide={decide} onRevise={revise} onDelete={remove} />)}</div>{memories.length === 0 && <EmptyState title="还没有记忆提案" detail="模型提炼的信息必须经你确认后才会成为记忆" />}</section>
     <section className="panel settings-section"><PanelHeading title="数据治理" /><div className="governance-note"><ShieldCheck size={20} /><p>跨插件默认不可见。共享前会提示：授权撤销后停止后续读取，但已经发送给模型或外部服务的数据无法召回。</p></div></section>
@@ -268,19 +270,18 @@ export function AgentsPage({ catalog }: { readonly catalog: AgentCatalog }) {
     </section>
   </div>;
 }
-export function IntegrationsPage({ api, workspace, onChanged }: { readonly api: AgentOsClient; readonly workspace: WorkspaceSummary; readonly onChanged: (workspace: WorkspaceSummary) => void }) {
+export function IntegrationsPage({ onOpenSettings }: { readonly onOpenSettings: () => void }) {
   return <div className="page-stack">
     <PageTitle eyebrow="受控连接" title="集成" detail="模型、外部 Runner 与产品插件分别授权，变更后重新确认。" />
-    <ModelConnections api={api} professional={workspace.viewMode === "professional"} />
     <section className="panel settings-section">
       <PanelHeading title="模型与 Runner" />
       <div className="governance-note"><ShieldCheck size={20} /><p>模型密钥只保存在 v2 Keychain。Claude 和 Codex Runner 会固定可执行文件的绝对路径、版本和摘要；文件变化后不会继续沿用原确认。</p></div>
+      <button className="secondary-button" onClick={onOpenSettings}>管理模型与外部 Agent</button>
     </section>
     <section className="panel settings-section">
       <PanelHeading title="插件信任边界" />
       <div className="governance-note"><AlertCircle size={20} /><p>生产插件与 Host 同进程运行，能获得宿主进程可见的能力，不是安全沙箱。Execution Authority 只能约束 Agent 和经内核调用的工具，无法约束恶意插件直接使用进程能力。只安装来源、签名、版本、权限和摘要均已核对的插件。</p></div>
     </section>
-    {workspace.activePluginIds.includes("coding") && <RunnerConfiguration api={api} workspace={workspace} onChanged={onChanged} />}
   </div>;
 }
 

@@ -44,6 +44,7 @@ export default defineConfig({
           { text: "机会验证", link: "/guides/opc" },
           { text: "Coding 研发任务", link: "/guides/coding" },
           { text: "目标与验收", link: "/guides/goals" },
+          { text: "模型与外部 Agent", link: "/guides/agents-and-models" },
           { text: "CLI 使用", link: "/guides/cli" },
           { text: "故障排查", link: "/troubleshooting" },
         ],

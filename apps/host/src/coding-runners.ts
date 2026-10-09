@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
+import { constants as fsConstants } from "node:fs";
+import { open } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 
 import {
@@ -21,12 +23,38 @@ export interface CodingRunnerIdentityInspector {
 }
 
 export const localCodingRunnerIdentityInspector: CodingRunnerIdentityInspector = {
-  inspect(runnerId, binaryPath) {
-    return runnerId === "claude-cli"
+  async inspect(runnerId, binaryPath) {
+    const inspection = await (runnerId === "claude-cli"
       ? inspectClaudeCli(binaryPath)
-      : inspectCodexCli(binaryPath);
+      : inspectCodexCli(binaryPath));
+    await assertNativeRunnerFormat(inspection);
+    return inspection;
   },
 };
+
+async function assertNativeRunnerFormat(inspection: RunnerBinaryInspectionV1): Promise<void> {
+  const handle = await open(inspection.realPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  try {
+    const header = Buffer.alloc(4);
+    const { bytesRead } = await handle.read(header, 0, 4, 0);
+    const info = await handle.stat();
+    if (!info.isFile() || (info.mode & 0o111) === 0
+      || String(info.dev) !== inspection.device || String(info.ino) !== inspection.inode
+      || info.size !== inspection.byteLength || info.mtimeMs !== inspection.modifiedAtMs) {
+      throw new KernelError("RUNNER_RECONFIRMATION_REQUIRED", "读取格式期间 Runner 文件身份发生变化", "重新检查并确认 CLI");
+    }
+    if (bytesRead !== 4 || !new Set([
+      0xfeedface, 0xcefaedfe, 0xfeedfacf, 0xcffaedfe,
+      0xcafebabe, 0xbebafeca, 0xcafebabf, 0xbfbafeca,
+    ]).has(header.readUInt32BE(0))) {
+      throw new KernelError("RUNNER_BINARY_INVALID",
+        "Runner 必须是原生 macOS Mach-O 制品；不支持 npm 或 shebang 包装器",
+        "选择官方原生 CLI 的可执行文件；格式检查不会运行该文件");
+    }
+  } finally {
+    await handle.close();
+  }
+}
 
 export function parseExternalCodingRunnerId(value: string): ExternalCodingRunnerId {
   if (value === "claude-cli" || value === "codex-cli") return value;
