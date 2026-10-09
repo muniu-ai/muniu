@@ -296,7 +296,27 @@ async function verifyOnboarding(page, requestLog) {
   await expectText(page, "创建第一个工作区");
   await page.getByLabel("工作区名称").fill("设计师增长");
   await page.getByLabel("第一条机会").fill("帮助独立设计师稳定获得高质量客户");
+  const setupUrl = `${apiUrl}/v2/setup`;
+  await page.route(setupUrl, route => route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({
+    code: "INTERNAL_ERROR", message: "服务暂时不可用", action: "稍后重试；若问题持续，请运行 mn doctor",
+    fieldIssues: [], traceId: "onboarding-setup-fixture", retryable: true,
+  }) }));
   await page.getByRole("button", { name: /进入工作台/ }).click();
+  await page.getByRole("alert").getByText("初始化设置未完成", { exact: true }).waitFor();
+  await page.getByText("故障详情", { exact: true }).click();
+  await expectText(page, "INTERNAL_ERROR");
+  await expectText(page, "onboarding-setup-fixture");
+  if (await page.evaluate(() => localStorage.getItem("muniu:v2:onboarding-complete")) !== null) {
+    throw new Error("初始化失败不得标记向导完成");
+  }
+  if (requestLog.some(entry => entry.method === "POST" && entry.path === "/v2/model-connections")) {
+    throw new Error("初始化失败不得继续创建模型连接");
+  }
+  await page.unroute(setupUrl);
+  const setupResponse = page.waitForResponse(response => response.url() === setupUrl && response.request().method() === "POST");
+  await page.getByRole("button", { name: /进入工作台/ }).click();
+  const initialized = await setupResponse;
+  if (initialized.status() !== 200) throw new Error(`受保护日志中的初始化失败：HTTP ${initialized.status()}`);
   await expectText(page, "设计师增长");
   await expectText(page, "今天");
   await page.getByRole("button", { name: "工作区" }).click();

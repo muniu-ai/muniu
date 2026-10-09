@@ -75,6 +75,62 @@ async function waitForCompletedTurn(host: AgentOsHost, path: string): Promise<an
   throw new Error(`Execution 未在测试时限内完成：${JSON.stringify(latest?.turns?.[0]?.execution)}`);
 }
 
+test("本地首次设置在受保护日志中提交一次事件与回执，重启后可幂等重放", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "mn-local-setup-"));
+  const options = { stateRoot: directory, port: 0, legacyDaemonProbe: async () => false,
+    secretStore: new FixtureSecrets(), protectedPayloadKeyProvider: new InMemoryKeyProvider(Buffer.alloc(32, 35)) };
+  let host: AgentOsHost | undefined;
+  let observer: DatabaseSync | undefined;
+  try {
+    host = await startLocalAgentOsHost(options);
+    observer = new DatabaseSync(join(directory, "state.sqlite3"), { readOnly: true });
+    const eventCount = () => Number(observer!.prepare("select count(*) as count from events").get()!.count);
+    const before = eventCount();
+    const first = await host.dispatch(jsonRequest("/v2/setup", {}, "local-setup"));
+    assert.equal(first.status, 200, JSON.stringify(await first.clone().json()));
+    const result = (await body(first)).data;
+    assert.deepEqual(result, { tenantId: "local", principalId: "local-owner" });
+    assert.equal(eventCount(), before + 2);
+    const source = observer.prepare("select event_id from events where event_type = 'api.mutation_completed'").get();
+    assert.ok(source);
+    const fact = observer.prepare("select causation_id, protected_payload_ref from events where event_type = 'projection.fact_committed' and causation_id = ?")
+      .get(String(source.event_id));
+    assert.ok(fact?.protected_payload_ref);
+    const receipt = observer.prepare("select response_json from idempotency where tenant_id = ? and idempotency_key = ?")
+      .get("local", "http.setup\0local-setup");
+    assert.deepEqual(JSON.parse(String(receipt?.response_json)), {
+      format: "muniu.projection.reference", protectedPayloadRef: fact.protected_payload_ref, streamVersion: 0,
+    });
+    const replay = await host.dispatch(jsonRequest("/v2/setup", {}, "local-setup"));
+    assert.equal(replay.status, 200);
+    assert.deepEqual((await body(replay)).data, result);
+    assert.equal(eventCount(), before + 2);
+    const changed = await host.dispatch(jsonRequest("/v2/setup", { changed: true }, "local-setup"));
+    assert.equal(changed.status, 409);
+    assert.equal(eventCount(), before + 2);
+    const repeated = await host.dispatch(jsonRequest("/v2/setup", {}, "local-setup-again"));
+    assert.equal(repeated.status, 200);
+    assert.deepEqual((await body(repeated)).data, result);
+    assert.equal(eventCount(), before + 4);
+    assert.deepEqual((await body(await host.dispatch(new Request("http://host.test/v2/workspaces")))).data, []);
+    assert.deepEqual((await body(await host.dispatch(new Request("http://host.test/v2/model-connections")))).data, []);
+    observer.close(); observer = undefined;
+    await host.close(); host = undefined;
+    host = await startLocalAgentOsHost(options);
+    observer = new DatabaseSync(join(directory, "state.sqlite3"), { readOnly: true });
+    const afterRestart = eventCount();
+    const restored = await host.dispatch(jsonRequest("/v2/setup", {}, "local-setup"));
+    assert.equal(restored.status, 200);
+    assert.deepEqual((await body(restored)).data, result);
+    assert.equal(eventCount(), afterRestart);
+    assert.equal(observer.prepare("select count(*) as count from events where event_type = 'api.mutation_completed'").get()!.count, 2);
+  } finally {
+    observer?.close();
+    await host?.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("Host 拒绝尚未验证完成的恢复目录，不创建密钥或启动 Worker", async t => {
   const directory = await mkdtemp(join(tmpdir(), "mn-pending-restore-"));
   t.after(() => rm(directory, { recursive: true, force: true }));

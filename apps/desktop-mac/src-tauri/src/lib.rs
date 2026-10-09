@@ -302,7 +302,24 @@ fn stop_managed_host(app: &tauri::AppHandle) {
 }
 
 fn v2_state_root(app: &tauri::AppHandle) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    Ok(v2_state_root_from_home(&app.path().home_dir()?))
+    let configured = std::env::var_os("MN_V2_STATE_ROOT").map(PathBuf::from);
+    Ok(resolve_v2_state_root(
+        &app.path().home_dir()?,
+        configured.as_deref(),
+    )?)
+}
+
+fn resolve_v2_state_root(home: &Path, configured: Option<&Path>) -> std::io::Result<PathBuf> {
+    match configured {
+        Some(root) if root.as_os_str().is_empty() || !root.is_absolute() => {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "MN_V2_STATE_ROOT 必须是非空绝对路径",
+            ))
+        }
+        Some(root) => Ok(root.to_path_buf()),
+        None => Ok(v2_state_root_from_home(home)),
+    }
 }
 
 fn v2_state_root_from_home(home: &Path) -> PathBuf {
@@ -376,7 +393,10 @@ fn redact_message(message: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_settings, redact_message, v2_state_root_from_home, DesktopSettings};
+    use super::{
+        normalize_settings, redact_message, resolve_v2_state_root, v2_state_root_from_home,
+        DesktopSettings,
+    };
 
     #[test]
     fn native_state_directory_is_private_and_rejects_symlinks() {
@@ -449,6 +469,38 @@ mod tests {
             v2_state_root_from_home(Path::new("/Users/test")),
             Path::new("/Users/test/.muniu/v2")
         );
+    }
+
+    #[test]
+    fn v2_state_root_defaults_to_home_when_unset() {
+        assert_eq!(
+            resolve_v2_state_root(Path::new("/Users/test"), None).unwrap(),
+            Path::new("/Users/test/.muniu/v2")
+        );
+    }
+
+    #[test]
+    fn v2_state_root_uses_explicit_absolute_override() {
+        assert_eq!(
+            resolve_v2_state_root(
+                Path::new("/Users/test"),
+                Some(Path::new("/tmp/muniu-packaged/state"))
+            )
+            .unwrap(),
+            Path::new("/tmp/muniu-packaged/state")
+        );
+    }
+
+    #[test]
+    fn v2_state_root_rejects_empty_and_relative_overrides() {
+        for configured in ["", " ", "state", "./state", "../state", "~/.muniu/v2"] {
+            assert_eq!(
+                resolve_v2_state_root(Path::new("/Users/test"), Some(Path::new(configured)))
+                    .unwrap_err()
+                    .kind(),
+                std::io::ErrorKind::InvalidInput
+            );
+        }
     }
 
     #[test]

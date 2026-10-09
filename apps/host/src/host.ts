@@ -1318,7 +1318,15 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           scope: "http.setup",
           request: body,
           now,
-          work: () => ({ tenantId: TENANT_ID, principalId: ACTOR_ID }),
+          work: (transaction) => {
+            const operationId = sha256(["http.setup", mutationKey]);
+            appendKernelEvent(transaction, {
+              tenantId: TENANT_ID, aggregateType: "apiMutation", aggregateId: operationId,
+              expectedStreamVersion: 0, type: "api.mutation_completed", actorId: ACTOR_ID,
+              generation: 0, correlationId: operationId, publicPayload: { requestDigest: sha256(body) },
+            });
+            return { tenantId: TENANT_ID, principalId: ACTOR_ID };
+          },
         });
         return json(result, 200, traceId);
       }

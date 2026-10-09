@@ -79,7 +79,7 @@ npm ci
 
 `verify:enterprise-fixture` 默认会启动 Docker Compose 中的真实依赖，并在结束时清理该 Compose 项目的容器与卷。只执行静态检查时使用 `npm run verify:enterprise-fixture -- --static`；该命令仍需要已构建的 workspace 和 Helm，其结果不能代替完整企业验证。
 
-UI fixture 使用真实 Host 路由和内存存储、测试密钥及模型模拟。UI 验收通过不等于真实模型、Keychain 或生产存储已经通过。需要真实 macOS Keychain 读回与撤销证据时执行 `npm run verify:local-keychain`，详见[架构](architecture.md)。
+UI fixture 使用真实 Host 路由、测试密钥及模型模拟；首次设置和目标流程使用临时 SQLite 与受保护投影日志，其他流程使用内存存储。UI 验收通过不等于真实模型或 macOS Keychain 已经通过。需要真实 macOS Keychain 读回与撤销证据时执行 `npm run verify:local-keychain`，详见[架构](architecture.md)。
 
 ### 最终门禁
 
@@ -111,6 +111,8 @@ cd ../../..
 ```
 
 sidecar 构建只支持 macOS，使用 Apple 的 `lipo` 和 `codesign`。`--smoke` 会启动真实 Host，使用临时状态目录和 `7318` 端口，并访问默认 macOS Keychain service；临时状态清理不代表清除了 Keychain 条目。执行前先正常退出占用该端口的开发 Host 或 Desktop。sidecar 文件生成在被忽略的 `apps/desktop-mac/src-tauri/binaries/`，不要提交。
+
+`npm run verify:mac-packaged-app` 通过 `MN_V2_STATE_ROOT` 隔离应用数据，保留系统 HOME 以访问 macOS Keychain；它会核对受管 Host 打开的数据库，再验证首次设置与同键重放。Desktop 要求该变量为非空绝对路径。此验证需要已构建并签名的应用和空闲的 `7318` 端口，临时数据目录不隔离 Keychain。
 
 记录实际执行命令、环境和通过、失败、未执行的状态。缺少依赖时说明原因，不把未执行写成通过。纯文档检查通过只能证明文档检查通过；不能据此宣称全量测试或发布门禁通过。
 

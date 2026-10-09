@@ -26,7 +26,13 @@ export function Onboarding({ api, onComplete }: OnboardingProps) {
   const [firstInput, setFirstInput] = useState("帮助独立设计师更稳定地获得高质量客户");
   const [runSample, setRunSample] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<{ readonly message: string; readonly action: string }>();
+  const [error, setError] = useState<{
+    readonly stage: string;
+    readonly message: string;
+    readonly action: string;
+    readonly code?: string;
+    readonly traceId?: string;
+  }>();
   const primaryPlugin = plugins[0] ?? "opc";
   const canContinue = useMemo(() => {
     if (step === 1) return plugins.length > 0;
@@ -44,20 +50,31 @@ export function Onboarding({ api, onComplete }: OnboardingProps) {
   async function finish() {
     setBusy(true);
     setError(undefined);
+    let stage = "初始化设置";
     try {
       await api.setup();
+      stage = "保存模型密钥";
       const connection = await api.connectModel(presetId, apiKey.trim());
+      stage = "验证模型连接";
       await api.probeModel(connection.id);
+      stage = "创建工作区";
       const workspace = await api.createWorkspace(workspaceName.trim(), viewMode, plugins);
+      stage = primaryPlugin === "opc" ? "创建首条机会" : "添加仓库";
       await api.createFirstObject(workspace.id, primaryPlugin, firstInput.trim());
-      if (runSample) await api.runReadOnlySample(workspace.id, primaryPlugin);
+      if (runSample) {
+        stage = "运行只读样例";
+        await api.runReadOnlySample(workspace.id, primaryPlugin);
+      }
+      stage = "保存设置";
       localStorage.setItem("muniu:v2:onboarding-complete", "1");
       onComplete(workspace);
     } catch (caught) {
       const detail = caught instanceof AgentOsApiError
         ? caught.detail
         : { message: "设置未完成", action: "检查 Host 是否运行，然后重试" };
-      setError({ message: detail.message, action: detail.action });
+      setError({ stage, message: detail.message, action: detail.action,
+        ...(caught instanceof AgentOsApiError ? { code: caught.detail.code, traceId: caught.detail.traceId } : {}),
+      });
     } finally {
       setBusy(false);
     }
@@ -125,7 +142,10 @@ export function Onboarding({ api, onComplete }: OnboardingProps) {
         </section>}
       </div>
 
-      {error && <ErrorState detail={error.message} action={error.action} />}
+      {error && <>
+        <ErrorState title={`${error.stage}未完成`} detail={error.message} action={error.action} />
+        {error.code && <details className="technical-details"><summary>故障详情</summary><p><small>错误码：<code>{error.code}</code><br />参考编号：<code>{error.traceId}</code></small></p></details>}
+      </>}
       <footer className="onboarding-actions">
         <button className="secondary-button" disabled={step === 0 || busy} onClick={() => setStep((current) => current - 1)}><ArrowLeft size={16} />上一步</button>
         {step < steps.length - 1

@@ -18,8 +18,8 @@ const appOrigin = process.env.MN_FIXTURE_APP_ORIGIN;
 const mode = process.env.MN_FIXTURE_MODE ?? "onboarding";
 if (!Number.isSafeInteger(port) || port <= 0 || !appOrigin) throw new Error("缺少真实 Host fixture 配置");
 
-const goalStateRoot = mode === "goals" ? await mkdtemp(join(tmpdir(), "muniu-goal-ui-")) : undefined;
-const store = goalStateRoot ? new SqliteStorage({ databaseFile: join(goalStateRoot, "state.sqlite3"), hmacKey: randomBytes(32) }) : new InMemoryKernelStore();
+const stateRoot = ["goals", "onboarding"].includes(mode) ? await mkdtemp(join(tmpdir(), `muniu-${mode}-ui-`)) : undefined;
+const store = stateRoot ? new SqliteStorage({ databaseFile: join(stateRoot, "state.sqlite3"), hmacKey: randomBytes(32) }) : new InMemoryKernelStore();
 const now = () => new Date().toISOString();
 const id = (kind) => `${kind}-${randomUUID()}`;
 const objects = new Map();
@@ -86,7 +86,7 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
     if (agentSimulation) clearInterval(agentSimulation);
     if (goalWorkerTimer) clearInterval(goalWorkerTimer);
     void host.close().finally(async () => {
-      if (goalStateRoot) { await store.close(); await rm(goalStateRoot, { recursive: true, force: true }); }
+      if (stateRoot) { await store.close(); await rm(stateRoot, { recursive: true, force: true }); }
       process.exit(0);
     });
   });

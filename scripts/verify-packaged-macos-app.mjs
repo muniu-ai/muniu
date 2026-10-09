@@ -2,57 +2,92 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const tauri = JSON.parse(readFileSync(path.join(root, "apps/desktop-mac/src-tauri/tauri.conf.json"), "utf8"));
-const bundleRoot = path.join(root, "apps/desktop-mac/src-tauri/target/universal-apple-darwin/release/bundle");
-const appPath = path.join(bundleRoot, "macos", `${tauri.productName}.app`);
-const executable = path.join(appPath, "Contents/MacOS/mniu-desktop");
-const hostSidecar = path.join(appPath, "Contents/MacOS/mn-host");
-const dmgPath = path.join(bundleRoot, "dmg", `Muniu_${tauri.version}_universal.dmg`);
-const isolatedHome = mkdtempSync(path.join(tmpdir(), "mn-v2-packaged-"));
-let output = "";
-
-if (listenerPid()) throw new Error("端口 7318 已被占用，无法隔离验证 mn-host");
-for (const file of [appPath, executable, hostSidecar, dmgPath]) {
-  if (!existsSync(file) || statSync(file).size <= 0) throw new Error(`发布物缺失：${file}`);
+export function packagedArtifacts(repositoryRoot, tauri) {
+  const bundleRoot = path.join(repositoryRoot, "apps/desktop-mac/src-tauri/target/universal-apple-darwin/release/bundle");
+  const appPath = path.join(bundleRoot, "macos", `${tauri.productName}.app`);
+  return { appPath, executable: path.join(appPath, "Contents/MacOS/muniu-desktop"),
+    hostSidecar: path.join(appPath, "Contents/MacOS/mn-host"),
+    dmgPath: path.join(bundleRoot, "dmg", `Muniu_${tauri.version}_universal.dmg`) };
 }
-for (const binary of [executable, hostSidecar]) {
-  execFileSync("lipo", [binary, "-verify_arch", "arm64", "x86_64"]);
+
+export function isolatedEnvironment(isolatedHome, inherited = process.env) {
+  // Isolate business data while retaining the user's HOME for the system Keychain.
+  // Desktop and Host honor this explicit root; lsof verifies the actual open file.
+  return { ...inherited, MN_V2_STATE_ROOT: path.join(isolatedHome, ".muniu", "v2") };
 }
-execFileSync("codesign", ["--verify", "--deep", "--strict", appPath]);
-execFileSync("hdiutil", ["verify", dmgPath]);
 
-const app = spawn(executable, [], {
-  cwd: root,
-  env: { ...process.env, HOME: isolatedHome },
-  stdio: ["ignore", "pipe", "pipe"],
-});
-app.stdout.on("data", (chunk) => { output += chunk.toString(); });
-app.stderr.on("data", (chunk) => { output += chunk.toString(); });
+export function assertIsolatedHost(childPid, database, inspect = execFileSync) {
+  try {
+    const expected = realpathSync(database);
+    const files = inspect("lsof", ["-a", "-p", String(childPid), "-Fn", "--", expected], { encoding: "utf8" });
+    const opened = files.split("\n").filter(line => line.startsWith("n")).map(line => realpathSync(line.slice(1)));
+    if (opened.includes(expected)) return;
+  } catch {}
+  throw new Error("无法确认受管 mn-host 使用隔离数据库，未发送首次设置请求");
+}
 
-try {
-  const health = await waitForHealth(app);
-  if (health?.data?.core?.status !== "healthy") throw new Error(`Host 健康响应无效：${JSON.stringify(health)}`);
-  const stateRoot = path.join(isolatedHome, ".muniu", "v2");
-  if (!existsSync(path.join(stateRoot, "state.sqlite3"))) throw new Error("mn-host 未使用隔离的 v2 状态根");
-  const legacy = await fetch("http://127.0.0.1:7318/v1");
-  if (legacy.status !== 404) throw new Error(`旧接口必须返回 404，实际为 ${legacy.status}`);
-  const childPid = managedHostPid(app.pid);
-  if (!childPid) throw new Error("mn-host 不是 Desktop 的受管子进程");
-  app.kill("SIGTERM");
-  await waitForExit(app);
-  await waitForShutdown(childPid);
-  process.stdout.write(`macOS 打包验证通过：desktop=${app.pid} host=${childPid}\n`);
-} catch (error) {
-  if (app.exitCode === null) app.kill("SIGKILL");
-  throw new Error(`${error instanceof Error ? error.message : String(error)}\n${output}`);
-} finally {
-  rmSync(isolatedHome, { recursive: true, force: true });
+export async function verifySetup(request = fetch) {
+  const options = { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": "mac-packaged-setup" }, body: "{}" };
+  let original;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const response = await request("http://127.0.0.1:7318/v2/setup", { ...options, signal: AbortSignal.timeout(5_000) });
+    if (response.status !== 200) throw new Error(`首次设置${attempt ? "重放" : "请求"}失败（HTTP ${response.status}）`);
+    const result = await response.json();
+    if (result?.data?.tenantId !== "local" || result?.data?.principalId !== "local-owner"
+      || (attempt && !isDeepStrictEqual(original, result.data))) throw new Error("首次设置或重放返回的身份无效");
+    original = result.data;
+  }
+}
+
+export async function verifyPackagedMacosApp() {
+  if (listenerPid()) throw new Error("端口 7318 已被占用，无法隔离验证 mn-host");
+  const tauri = JSON.parse(readFileSync(path.join(root, "apps/desktop-mac/src-tauri/tauri.conf.json"), "utf8"));
+  const { appPath, executable, hostSidecar, dmgPath } = packagedArtifacts(root, tauri);
+  for (const file of [appPath, executable, hostSidecar, dmgPath]) {
+    if (!existsSync(file) || statSync(file).size <= 0) throw new Error(`发布物缺失：${file}`);
+  }
+  for (const binary of [executable, hostSidecar]) execFileSync("lipo", [binary, "-verify_arch", "arm64", "x86_64"]);
+  execFileSync("codesign", ["--verify", "--deep", "--strict", appPath]);
+  execFileSync("hdiutil", ["verify", dmgPath]);
+
+  const isolatedHome = mkdtempSync(path.join(tmpdir(), "mn-v2-packaged-"));
+  let output = "", childPid = 0;
+  const app = spawn(executable, [], { cwd: root, env: isolatedEnvironment(isolatedHome), stdio: ["ignore", "pipe", "pipe"] });
+  app.stdout.on("data", chunk => { output += chunk.toString(); });
+  app.stderr.on("data", chunk => { output += chunk.toString(); });
+  app.once("error", error => { output += error.message; });
+  try {
+    const health = await waitForHealth(app);
+    if (health?.data?.core?.status !== "healthy") throw new Error(`Host 健康响应无效：${JSON.stringify(health)}`);
+    childPid = managedHostPid(app.pid);
+    if (!childPid || listenerPid().split("\n").some(pid => Number(pid) !== childPid)) throw new Error("mn-host 不是 Desktop 的受管监听进程");
+    assertIsolatedHost(childPid, path.join(isolatedHome, ".muniu", "v2", "state.sqlite3"));
+    await verifySetup();
+    const legacy = await fetch("http://127.0.0.1:7318/v1");
+    if (legacy.status !== 404) throw new Error(`旧接口必须返回 404，实际为 ${legacy.status}`);
+  } catch (error) {
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\n${output}`);
+  } finally {
+    childPid ||= app.pid ? managedHostPid(app.pid) : 0;
+    if (app.pid && app.exitCode === null && app.signalCode === null) {
+      app.kill("SIGTERM");
+      try { await waitForExit(app); } catch { app.kill("SIGKILL"); await waitForExit(app); }
+    }
+    if (childPid) {
+      await waitForShutdown(childPid);
+      rmSync(isolatedHome, { recursive: true, force: true });
+    } else {
+      process.stderr.write(`无法确认受管 Host 已退出，保留隔离目录：${isolatedHome}\n`);
+    }
+  }
+  process.stdout.write(`macOS 打包验证通过：desktop=${app.pid} host=${childPid} setup=200 replay=200\n`);
 }
 
 function listenerPid() {
@@ -74,7 +109,7 @@ function managedHostPid(parentPid) {
 async function waitForHealth(processHandle) {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
-    if (processHandle.exitCode !== null) throw new Error("Desktop 在 Host 就绪前退出");
+    if (!processHandle.pid || processHandle.exitCode !== null || processHandle.signalCode !== null) throw new Error("Desktop 在 Host 就绪前退出");
     try {
       const response = await fetch("http://127.0.0.1:7318/v2/health");
       if (response.ok) return response.json();
@@ -85,6 +120,7 @@ async function waitForHealth(processHandle) {
 }
 
 function waitForExit(processHandle) {
+  if (processHandle.exitCode !== null || processHandle.signalCode !== null) return Promise.resolve();
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("Desktop 未在 20 秒内退出")), 20_000);
     processHandle.once("exit", () => { clearTimeout(timer); resolve(); });
@@ -103,3 +139,5 @@ async function waitForShutdown(pid) {
   }
   throw new Error(`mn-host ${pid} 未随 Desktop 退出`);
 }
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await verifyPackagedMacosApp();
