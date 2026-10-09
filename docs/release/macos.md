@@ -13,6 +13,8 @@
 - ZIP：`Muniu_0.2.0_universal.zip`；
 - 自动更新：`bundle.createUpdaterArtifacts` 保持 `false`。
 
+品牌源文件为 `assets/brand/muniu-logo.png`。更新 Logo 后先执行 `node scripts/generate-brand-assets.mjs`，同步白底启动图标、各平台尺寸和网页资源。详见[品牌资源说明](https://github.com/muniu-ai/muniu/blob/main/assets/brand/README.md)。Tauri 的 `bundle.icon` 显式指定打包文件，托盘复用应用图标；不要仅替换某个 ICNS 或 PNG。
+
 只验证前端：
 
 ```bash
@@ -66,6 +68,7 @@ hdiutil verify "${DMG_PATH}"
 还要在一台干净 Mac 上从网络下载 DMG，核对 SHA-256，安装并完成四屏向导。验收应证明：
 
 - app 主二进制和 `mn-host` sidecar 的来源、架构与签名正确；
+- `Info.plist` 的 `CFBundleIconFile` 对应新图标，Finder、Dock 和应用内标志均显示指定 Logo；启动图标为白底；
 - 生产 CSP 只加载同源脚本；
 - 新状态写入 `~/.muniu/v2`，不读取或修改早期状态；
 - 同端口已有早期 daemon 时明确拒绝启动；

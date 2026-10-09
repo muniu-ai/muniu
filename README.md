@@ -1,5 +1,7 @@
 # 木牛 Agent OS 0.2
 
+<img src="docs/public/brand/app-icon.png" alt="木牛 Logo" width="96" />
+
 木牛是面向 macOS 本地使用和企业部署的 Agent 执行平台：把会话、模型调用、工具审批、成果与中断恢复放在同一套 Host 契约中。Desktop、CLI 和 API 提供不同入口；OPC 管理一人公司的经营计划、客户、订单、交付、收支与复盘，Coding 负责受控研发任务。
 
 ## 选择入口

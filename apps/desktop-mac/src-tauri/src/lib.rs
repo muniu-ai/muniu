@@ -223,7 +223,7 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open, &inbox, &capture, &separator, &quit])?;
 
-    TrayIconBuilder::with_id("main")
+    let mut tray = TrayIconBuilder::with_id("main")
         .tooltip("木牛 Agent OS")
         .menu(&menu)
         .show_menu_on_left_click(true)
@@ -241,8 +241,11 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
             }
             "quit" => app.exit(0),
             _ => {}
-        })
-        .build(app)?;
+        });
+    if let Some(icon) = app.default_window_icon() {
+        tray = tray.icon(icon.clone());
+    }
+    tray.build(app)?;
 
     Ok(())
 }

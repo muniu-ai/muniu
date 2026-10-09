@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { AgentOsApiError, AgentOsClient } from "./api";
 import { CommandPalette, type PaletteItem } from "./components/CommandPalette";
+import { BrandMark } from "./components/BrandMark";
 import { PluginBoundary } from "./components/PluginBoundary";
 import { PluginCard } from "./components/PluginSurface";
 import { PluginManager } from "./components/PluginManager";
@@ -195,7 +196,7 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces, initi
 
   return <div className={`app-shell ${sidebarCompact ? "sidebar-compact" : ""}`} data-view-mode={workspace.viewMode}>
     <aside className="sidebar" aria-label="主导航">
-      <header className="sidebar-brand"><span className="brand-mark small">木</span>{!sidebarCompact && <div><strong>木牛</strong><small>Agent OS</small></div>}<button className="icon-button sidebar-toggle" title={sidebarCompact ? "展开侧栏" : "收起侧栏"} onClick={() => setSidebarCompact((value) => !value)}>{sidebarCompact ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}</button></header>
+      <header className="sidebar-brand"><BrandMark small />{!sidebarCompact && <div><strong>木牛</strong><small>Agent OS</small></div>}<button className="icon-button sidebar-toggle" title={sidebarCompact ? "展开侧栏" : "收起侧栏"} onClick={() => setSidebarCompact((value) => !value)}>{sidebarCompact ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}</button></header>
       <button className="workspace-switcher" onClick={() => setPage("workspaces")}><span className="workspace-avatar">{workspace.name.slice(0, 1)}</span>{!sidebarCompact && <span><strong>{workspace.name}</strong><small>{workspace.viewMode === "business" ? "经营视图" : "专业视图"}</small></span>}{!sidebarCompact && <ChevronDown size={15} />}</button>
       <nav>
         <NavButton compact={sidebarCompact} active={page === "home"} label="首页" icon={<Home />} onClick={() => setPage("home")} />

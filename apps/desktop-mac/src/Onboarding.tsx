@@ -3,6 +3,7 @@ import type { ModelPresetV2 } from "@mn/contracts";
 import { ArrowLeft, ArrowRight, BriefcaseBusiness, Check, Code2, Eye, KeyRound, Rocket, ShieldCheck, Sparkles } from "lucide-react";
 import { AgentOsApiError, AgentOsClient } from "./api";
 import { ErrorState } from "./components/Status";
+import { BrandMark } from "./components/BrandMark";
 import type { ProductPluginId, ViewMode, WorkspaceSummary } from "./types";
 
 export type BusinessStart = "plan" | "customers" | "orders";
@@ -98,7 +99,7 @@ export function Onboarding({ api, onComplete }: OnboardingProps) {
   return <main className="onboarding-shell">
     <section className="onboarding-card" aria-labelledby="onboarding-title">
       <header className="onboarding-header">
-        <div className="brand-mark"><span>木</span></div>
+        <BrandMark />
         <div><p className="eyebrow">木牛 Agent OS</p><h1 id="onboarding-title">四步建立你的工作台</h1><p>先选适合你的视图。技术配置以后都能调整。</p></div>
       </header>
 

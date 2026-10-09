@@ -6,7 +6,9 @@ export default defineConfig({
   lang: "zh-CN",
   srcExclude: ["upstream-provenance/**"],
   cleanUrls: true,
+  head: [["link", { rel: "icon", type: "image/png", href: "/brand/app-icon.png" }]],
   themeConfig: {
+    logo: { src: "/brand/app-icon.png", alt: "木牛" },
     nav: [
       { text: "开始使用", link: "/quickstart" },
       { text: "开发", link: "/development" },

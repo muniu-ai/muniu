@@ -582,6 +582,8 @@ async function waitForHeldResponse(promise) {
 async function verifyOnboarding(page, requestLog) {
   await expectText(page, "四步建立你的工作台");
   await expectText(page, "你希望先看到什么");
+  await page.getByRole("img", { name: "木牛标志", exact: true }).evaluate(image => image.decode());
+  await page.screenshot({ path: join(temporaryRoot, "brand-onboarding.png") });
   await page.getByRole("button", { name: /专业视图/ }).click();
   await page.getByRole("button", { name: /经营视图/ }).click();
   await page.getByRole("button", { name: "继续" }).click();
@@ -629,6 +631,12 @@ async function verifyOnboarding(page, requestLog) {
   if (initialized.status() !== 200) throw new Error(`受保护日志中的初始化失败：HTTP ${initialized.status()}`);
   await expectText(page, "设计师增长");
   await page.getByRole("heading", { name: "经营管理", exact: true }).waitFor();
+  await page.getByRole("img", { name: "木牛标志", exact: true }).evaluate(image => image.decode());
+  await page.screenshot({ path: join(temporaryRoot, "brand-sidebar-expanded.png") });
+  await page.getByTitle("收起侧栏").click();
+  await assertViewportFit(page);
+  await page.screenshot({ path: join(temporaryRoot, "brand-sidebar-compact.png"), animations: "disabled" });
+  await page.getByTitle("展开侧栏").click();
   if (!await page.getByRole("button", { name: "设置", exact: true }).isVisible()) {
     throw new Error("经营视图必须直接显示设置入口");
   }

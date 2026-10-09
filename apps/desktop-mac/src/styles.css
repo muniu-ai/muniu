@@ -31,8 +31,9 @@ button { color: inherit; }
 button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, summary:focus-visible { outline: 3px solid rgba(224, 95, 54, 0.28); outline-offset: 2px; }
 
 .eyebrow { margin: 0 0 5px; color: var(--accent-dark); font-size: 11px; font-weight: 750; letter-spacing: .13em; text-transform: uppercase; }
-.brand-mark { display: grid; width: 50px; height: 50px; flex: 0 0 auto; place-items: center; border-radius: 16px; color: #fff; background: var(--sidebar); box-shadow: inset 0 0 0 1px rgba(255,255,255,.12); font-family: "Songti SC", serif; font-size: 23px; font-weight: 700; }
-.brand-mark.small { width: 34px; height: 34px; border-radius: 10px; color: #18251d; background: #f3efe3; font-size: 16px; }
+.brand-mark { display: grid; width: 50px; height: 50px; padding: 5px; flex: 0 0 auto; place-items: center; border-radius: 16px; background: #fff; box-shadow: inset 0 0 0 1px var(--line); }
+.brand-mark img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.brand-mark.small { width: 34px; height: 34px; padding: 3px; border-radius: 10px; }
 
 .primary-button, .secondary-button, .quiet-button, .danger-button, .icon-button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; border: 0; border-radius: 9px; cursor: pointer; font-weight: 680; transition: transform .15s ease, background .15s ease, opacity .15s ease; }
 .primary-button { min-height: 38px; padding: 0 15px; color: #fff; background: var(--accent); box-shadow: 0 5px 16px rgba(190, 68, 34, .18); }
