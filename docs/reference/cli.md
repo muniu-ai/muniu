@@ -18,7 +18,7 @@
   resume            恢复暂停或中断的执行
   doctor --fix      检查连接与可安全修复项
   plugin            查看、安装、更新、启用、停用或运行插件命令
-  opc               管理机会验证工作
+  opc               管理经营台账与机会验证
   code              管理 Coding 任务
   goal              管理目标、计划和成果验收
   backup            创建、校验或恢复本地加密备份
@@ -26,6 +26,11 @@
 全局参数：
   --json            输出稳定 JSON
   --help            显示帮助
+
+经营台账：
+  mn opc business show --workspace <工作区 ID> --json
+  mn opc business command --workspace <工作区 ID> --version <台账版本> --file <命令 JSON 文件> --json
+  mn opc business command --workspace <工作区 ID> --version <台账版本> --input '<命令 JSON>'
 
 目标与验收：
   mn goal list --workspace <工作区 ID>

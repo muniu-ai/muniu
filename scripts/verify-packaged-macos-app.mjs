@@ -46,6 +46,41 @@ export async function verifySetup(request = fetch) {
   }
 }
 
+export async function verifyBusinessManagement(request = fetch) {
+  const send = async (route, body, key) => {
+    const response = await request(`http://127.0.0.1:7318${route}`, {
+      ...(body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": key }, body: JSON.stringify(body) }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) throw new Error(`经营打包检查失败（HTTP ${response.status}）`);
+    return (await response.json()).data;
+  };
+  const workspace = await send("/v2/workspaces", { name: "打包经营检查", viewMode: "business", pluginIds: ["opc"] }, "packaged-business-workspace");
+  if (!workspace?.id) throw new Error("经营打包检查缺少工作区");
+  let view = await send(`/v2/plugins/opc/business?workspaceId=${encodeURIComponent(workspace.id)}`);
+  if (view?.state?.streamVersion !== 0) throw new Error("经营打包检查必须从空台账开始");
+  const commands = [
+    { type: "customer.record", customerId: "packaged-customer", name: "合成客户", source: "打包样本", need: "设计服务" },
+    { type: "service.record", serviceId: "packaged-service", title: "设计服务", currency: "CNY", priceMinor: "100000", inScope: ["视觉设计"], outOfScope: ["印刷"], acceptanceCriteria: ["客户确认设计稿"] },
+    { type: "order.record", orderId: "packaged-order", customerId: "packaged-customer", serviceId: "packaged-service", serviceVersion: 1, quantity: 1, agreedAmountMinor: "100000", contractedOn: "2026-10-01", dueOn: "2026-10-20", sourceRef: "合成合同", opening: { asOf: "2026-10-01", receivedMinor: "40000", deliveredPercent: 50, accepted: false, sourceRef: "合成期初核对" } },
+    { type: "payment.record", paymentId: "packaged-payment", orderId: "packaged-order", amountMinor: "30000", receivedOn: "2026-10-02", sourceRef: "合成收款凭据" },
+    { type: "refund.record", refundId: "packaged-refund", paymentId: "packaged-payment", amountMinor: "10000", refundedOn: "2026-10-03", reason: "客户调整范围", sourceRef: "合成退款凭据" },
+    { type: "order.adjust", adjustmentId: "packaged-adjustment", orderId: "packaged-order", amountDeltaMinor: "-10000", effectiveOn: "2026-10-03", reason: "双方确认调减价款", sourceRef: "合成变更确认" },
+    { type: "review.record", reviewId: "packaged-review", period: { start: "2026-10-01", end: "2026-10-04" }, explanation: "本期现金与期初数分别记录", nextDecisions: ["跟进剩余交付和回款"] },
+  ];
+  for (const [index, command] of commands.entries()) {
+    const body = { workspaceId: workspace.id, expectedStreamVersion: view.state.streamVersion, command };
+    const key = `packaged-business-command-${index}`;
+    view = await send("/v2/plugins/opc/business/commands", body, key);
+    const replay = await send("/v2/plugins/opc/business/commands", body, key);
+    if (!isDeepStrictEqual(view, replay)) throw new Error("经营命令重试未返回原结果");
+  }
+  const restored = await send(`/v2/plugins/opc/business?workspaceId=${encodeURIComponent(workspace.id)}`);
+  if (restored?.state?.streamVersion !== commands.length || restored.summary.outstandingMinor !== "30000"
+    || restored.summary.netCashFlowMinor !== "20000" || restored.state.reviews.length !== 1
+    || restored.summary.orders[0]?.deliveredPercent !== 50) throw new Error("经营台账的期初、部分收款、退款或复盘结果不一致");
+}
+
 export async function verifyPackagedMacosApp() {
   if (listenerPid()) throw new Error("端口 7318 已被占用，无法隔离验证 mn-host");
   const tauri = JSON.parse(readFileSync(path.join(root, "apps/desktop-mac/src-tauri/tauri.conf.json"), "utf8"));
@@ -70,6 +105,7 @@ export async function verifyPackagedMacosApp() {
     if (!childPid || listenerPid().split("\n").some(pid => Number(pid) !== childPid)) throw new Error("mn-host 不是 Desktop 的受管监听进程");
     assertIsolatedHost(childPid, path.join(isolatedHome, ".muniu", "v2", "state.sqlite3"));
     await verifySetup();
+    await verifyBusinessManagement();
     const legacy = await fetch("http://127.0.0.1:7318/v1");
     if (legacy.status !== 404) throw new Error(`旧接口必须返回 404，实际为 ${legacy.status}`);
   } catch (error) {
@@ -87,7 +123,7 @@ export async function verifyPackagedMacosApp() {
       process.stderr.write(`无法确认受管 Host 已退出，保留隔离目录：${isolatedHome}\n`);
     }
   }
-  process.stdout.write(`macOS 打包验证通过：desktop=${app.pid} host=${childPid} setup=200 replay=200\n`);
+  process.stdout.write(`macOS 打包验证通过：desktop=${app.pid} host=${childPid} setup=200 replay=200 business=passed\n`);
 }
 
 function listenerPid() {

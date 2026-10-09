@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { AgentOsClient } from "./api";
-import { Onboarding } from "./Onboarding";
+import { Onboarding, type BusinessStart } from "./Onboarding";
 import { WorkspaceShell } from "./WorkspaceShell";
 import { ErrorState, Loading } from "./components/Status";
 import type { WorkspaceSummary } from "./types";
@@ -12,6 +12,7 @@ export default function App() {
   const [showOnboarding, setShowOnboarding] = useState(() => localStorage.getItem("muniu:v2:onboarding-complete") !== "1");
   const [workspaces, setWorkspaces] = useState<readonly WorkspaceSummary[]>([]);
   const [workspace, setWorkspace] = useState<WorkspaceSummary>();
+  const [businessStart, setBusinessStart] = useState<BusinessStart>();
   const [error, setError] = useState<string>();
 
   useEffect(() => {
@@ -28,9 +29,9 @@ export default function App() {
   }, [api, showOnboarding]);
 
   if (showOnboarding) {
-    return <Onboarding api={api} onComplete={(created) => { setWorkspaces([created]); setWorkspace(created); setShowOnboarding(false); }} />;
+    return <Onboarding api={api} onComplete={(created, start) => { setWorkspaces([created]); setWorkspace(created); setBusinessStart(start); setShowOnboarding(false); }} />;
   }
   if (checking) return <main className="boot-screen"><Loading label="正在打开工作台" /></main>;
   if (error || !workspace) return <main className="boot-screen"><ErrorState detail={error ?? "没有可用工作区"} action="运行 mn doctor --fix 后重试" onRetry={() => location.reload()} /></main>;
-  return <WorkspaceShell api={api} initialWorkspace={workspace} initialWorkspaces={workspaces} />;
+  return <WorkspaceShell api={api} initialWorkspace={workspace} initialWorkspaces={workspaces} initialBusinessTab={businessStart} />;
 }

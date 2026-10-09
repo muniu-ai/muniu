@@ -12,6 +12,7 @@ import type { PluginManifestV1 } from "./plugin.js";
 import type { WorkspacePluginSurfaceV1 } from "./plugin-surfaces.js";
 import type { BusinessActionV1 } from "./business-effects.js";
 import type { BusinessCandidateContentV1, BusinessCandidateV1 } from "./business-candidates.js";
+import type { BusinessManagementViewV1 } from "./business-management.js";
 
 export interface HostHealthV2 {
   readonly core: { readonly status: "healthy" };
@@ -257,6 +258,8 @@ export type CodingRunnerViewV2 =
 
 /** JSON extension points are explicit; every fixed Host operation has a concrete DTO. */
 export interface ApiOutputsV2 {
+  readonly getOpcBusiness: BusinessManagementViewV1;
+  readonly commandOpcBusiness: BusinessManagementViewV1;
   readonly listGoals: readonly GoalV2[];
   readonly createGoal: GoalDetailV2;
   readonly getGoal: GoalDetailV2;

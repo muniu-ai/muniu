@@ -109,6 +109,7 @@ import {
   workspaceHome,
 } from "./product-state.js";
 import { executeOpcCommand } from "./opc-api.js";
+import { businessPeriod, commandOpcBusiness, readOpcBusiness } from "./business-management.js";
 import {
   hydrateOpcOpportunity,
   validateOpcCommandSources,
@@ -1209,6 +1210,28 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
       const tenantPlugins = tenantRuntime.plugins;
       const pluginInstaller = tenantRuntime.installer;
       await pluginInstaller?.synchronize?.();
+      if (url.pathname === "/v2/plugins/opc/business" || url.pathname === "/v2/plugins/opc/business/commands") {
+        if (!protectedJournal) throw new KernelError("BUSINESS_PROTECTED_STORAGE_REQUIRED", "经营台账需要受保护的事件存储", "配置受保护存储后重试");
+        const reading = request.method === "GET" && url.pathname === "/v2/plugins/opc/business";
+        if (!reading && !(request.method === "POST" && url.pathname.endsWith("/commands"))) return notFound(traceId);
+        const queryKeys = [...url.searchParams.keys()];
+        if ((!reading && queryKeys.length) || queryKeys.some(key => !["workspaceId", "periodStart", "periodEnd"].includes(key))
+          || new Set(queryKeys).size !== queryKeys.length)
+          throw new KernelError("INVALID_BODY", "经营接口查询参数无效", "只提供一次 workspaceId 和成对的统计起止日期");
+        const body = reading ? undefined : await readBoundedJsonBody(request, { maxBytes: 128 * 1024 });
+        if (body && (Object.keys(body).some(key => !["workspaceId", "expectedStreamVersion", "command"].includes(key)) || !Object.hasOwn(body, "command")))
+          throw new KernelError("INVALID_BODY", "经营命令包含未声明或缺失的字段", "提交 workspaceId、expectedStreamVersion 和 command");
+        const workspaceId = body ? stringField(body, "workspaceId")! : url.searchParams.get("workspaceId");
+        if (!workspaceId) throw new KernelError("INVALID_BODY", "缺少 workspaceId", "选择工作区后重试");
+        const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId, reading ? "view" : "operate");
+        if (!workspace.activePluginIds.includes("opc")) throw new KernelError("PLUGIN_NOT_ACTIVE", "工作区尚未启用 OPC", "先启用 OPC 经营管理");
+        await ensurePluginsActive(TENANT_ID, workspace, tenantRuntime, ACTOR_ID);
+        const scoped = { store: options.store, tenantId: TENANT_ID, workspaceId, principalId: ACTOR_ID, now };
+        const result = reading
+          ? await readOpcBusiness(scoped, businessPeriod(url.searchParams.get("periodStart"), url.searchParams.get("periodEnd"), now()))
+          : await commandOpcBusiness({ ...scoped, expectedStreamVersion: expectedVersion(body!), command: body!.command, idempotencyKey: mutationKey as string });
+        return json(result, 200, traceId);
+      }
       if (/^\/v2\/workspaces\/[^/]+\/goals$/u.test(url.pathname) || url.pathname.startsWith("/v2/goals/")) {
         if (!protectedJournal || !options.cas || !options.protectedPayloadKeyProvider) throw new KernelError("GOAL_PROTECTED_STORAGE_REQUIRED", "目标需要受保护的事件存储", "配置受保护存储后重试");
         const result = await dispatchGoalRequest({ request, store: options.store, kernel, cas: options.cas, keyProvider: options.protectedPayloadKeyProvider,

@@ -18,7 +18,7 @@ const appOrigin = process.env.MN_FIXTURE_APP_ORIGIN;
 const mode = process.env.MN_FIXTURE_MODE ?? "onboarding";
 if (!Number.isSafeInteger(port) || port <= 0 || !appOrigin) throw new Error("缺少真实 Host fixture 配置");
 
-const stateRoot = ["goals", "onboarding"].includes(mode) ? await mkdtemp(join(tmpdir(), `muniu-${mode}-ui-`)) : undefined;
+const stateRoot = ["goals", "onboarding", "business"].includes(mode) ? await mkdtemp(join(tmpdir(), `muniu-${mode}-ui-`)) : undefined;
 const store = stateRoot ? new SqliteStorage({ databaseFile: join(stateRoot, "state.sqlite3"), hmacKey: randomBytes(32) }) : new InMemoryKernelStore();
 const now = () => new Date().toISOString();
 const id = (kind) => `${kind}-${randomUUID()}`;
@@ -56,7 +56,7 @@ const host = await createAgentOsHost({
   }),
 });
 
-if (mode !== "onboarding") await seedWorkspace(mode);
+if (!["onboarding", "business"].includes(mode)) await seedWorkspace(mode);
 const simulatedExecutions = new Set();
 const agentSimulation = mode === "opc"
   ? setInterval(() => void simulateOpcAgent(), 50)

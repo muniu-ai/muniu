@@ -20,11 +20,13 @@ export function createOpcPluginDefinition(
     trustBoundary: "process_equivalent",
     contributions: {
       routes: [
+        { id: "opc.business", path: "/opc/business" },
         { id: "opc.opportunities", path: "/opc/opportunities" },
         { id: "opc.opportunity", path: "/opc/opportunity" },
       ],
       navigation: [
-        { id: "opc.navigation.opportunities", label: "机会验证", routeId: "opc.opportunities", order: 20 },
+        { id: "opc.navigation.business", label: "经营管理", routeId: "opc.business", order: 20 },
+        { id: "opc.navigation.opportunities", label: "机会验证", routeId: "opc.opportunities", order: 21 },
       ],
       widgets: [
         { id: "opc.widget.today", slot: "home", title: "今日验证行动" },

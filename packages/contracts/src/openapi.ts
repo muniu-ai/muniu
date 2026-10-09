@@ -3,6 +3,7 @@ import type { JsonObject } from "./json.js";
 import { API_OUTPUT_COMPONENTS_V2, API_OUTPUT_SCHEMAS_V2 } from "./generated-responses.js";
 import type { ApiOutputsV2 } from "./api-outputs.js";
 import { goalMutationSchema } from "./goal-api-schema.js";
+import { businessMutationSchema } from "./business-api-schema.js";
 
 type HttpMethod = "get" | "post" | "put" | "patch" | "delete";
 
@@ -15,6 +16,8 @@ export interface ApiOperationV2 {
 }
 
 export const API_OPERATIONS_V2 = [
+  { method: "get", path: "/v2/plugins/opc/business", operationId: "getOpcBusiness", mutation: false, versioned: false },
+  { method: "post", path: "/v2/plugins/opc/business/commands", operationId: "commandOpcBusiness", mutation: true, versioned: true },
   { method: "get", path: "/v2/workspaces/{workspaceId}/goals", operationId: "listGoals", mutation: false, versioned: false },
   { method: "post", path: "/v2/workspaces/{workspaceId}/goals", operationId: "createGoal", mutation: true, versioned: false },
   { method: "get", path: "/v2/goals/{goalId}", operationId: "getGoal", mutation: false, versioned: false },
@@ -164,6 +167,7 @@ export function createOpenApiDocument(): JsonObject {
     if (["listActivity", "getGoal"].includes(operation.operationId)) parameters.push({ in: "query", name: "workspaceId", required: true, schema: { type: "string" } });
     if (operation.operationId === "listMemories") parameters.push({ in: "query", name: "namespace", required: false, schema: { type: "string" } });
     if ([
+      "getOpcBusiness",
       "listCodingRunners",
       "listOpcOpportunities",
       "getOpcOpportunity",
@@ -177,6 +181,10 @@ export function createOpenApiDocument(): JsonObject {
         required: true,
         schema: { type: "string" },
       });
+    }
+    if (operation.operationId === "getOpcBusiness") {
+      for (const name of ["periodStart", "periodEnd"]) parameters.push({ in: "query", name, required: false,
+        schema: { type: "string", format: "date" } });
     }
     paths[operation.path] ??= {};
     paths[operation.path]![operation.method] = {
@@ -548,6 +556,7 @@ export function createOpenApiDocument(): JsonObject {
 }
 
 function mutationSchema(operationId: string, versioned: boolean): JsonObject {
+  if (operationId === "commandOpcBusiness") return businessMutationSchema();
   const goalSchema = goalMutationSchema(operationId);
   if (goalSchema) return goalSchema;
   if (operationId === "createBusinessCandidate") return { $ref: "#/components/schemas/CreateBusinessCandidateMutation" };

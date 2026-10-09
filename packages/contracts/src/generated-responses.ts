@@ -2,6 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 import type { JsonObject } from "./json.js";
 export const API_OUTPUT_SCHEMAS_V2: Readonly<Record<string, JsonObject>> = {
+  "getOpcBusiness": {
+    "$ref": "#/components/schemas/OutputBusinessManagementViewV1"
+  },
+  "commandOpcBusiness": {
+    "$ref": "#/components/schemas/OutputBusinessManagementViewV1"
+  },
   "listGoals": {
     "type": "array",
     "items": {
@@ -426,6 +432,941 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
       "$ref": "#/components/schemas/OutputJsonValue"
     }
   },
+  "OutputBusinessPeriodV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "start",
+      "end"
+    ],
+    "properties": {
+      "start": {
+        "type": "string"
+      },
+      "end": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputBusinessPlanV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "revision",
+      "title",
+      "period",
+      "targetCustomer",
+      "valueProposition",
+      "focus",
+      "resources",
+      "reviewOn",
+      "recordedBy",
+      "recordedAt"
+    ],
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "revision": {
+        "type": "number"
+      },
+      "title": {
+        "type": "string"
+      },
+      "period": {
+        "$ref": "#/components/schemas/OutputBusinessPeriodV1"
+      },
+      "targetCustomer": {
+        "type": "string"
+      },
+      "valueProposition": {
+        "type": "string"
+      },
+      "focus": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "resources": {
+        "type": "string"
+      },
+      "reviewOn": {
+        "type": "string"
+      },
+      "recordedBy": {
+        "type": "string"
+      },
+      "recordedAt": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputBusinessCustomerV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "version",
+      "name",
+      "source",
+      "need",
+      "recordedBy",
+      "recordedAt"
+    ],
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "version": {
+        "type": "number"
+      },
+      "name": {
+        "type": "string"
+      },
+      "source": {
+        "type": "string"
+      },
+      "need": {
+        "type": "string"
+      },
+      "contact": {
+        "type": "string"
+      },
+      "followUpOn": {
+        "type": "string"
+      },
+      "recordedBy": {
+        "type": "string"
+      },
+      "recordedAt": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputBusinessServiceV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "version",
+      "title",
+      "currency",
+      "priceMinor",
+      "inScope",
+      "outOfScope",
+      "acceptanceCriteria",
+      "recordedBy",
+      "recordedAt"
+    ],
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "version": {
+        "type": "number"
+      },
+      "title": {
+        "type": "string"
+      },
+      "currency": {
+        "type": "string",
+        "const": "CNY"
+      },
+      "priceMinor": {
+        "type": "string"
+      },
+      "inScope": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "outOfScope": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "acceptanceCriteria": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "recordedBy": {
+        "type": "string"
+      },
+      "recordedAt": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputBusinessQuoteV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "customerId",
+      "customerVersion",
+      "serviceId",
+      "serviceVersion",
+      "quantity",
+      "discountMinor",
+      "totalMinor",
+      "validUntil",
+      "dueOn",
+      "recordedBy",
+      "recordedAt"
+    ],
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "customerId": {
+        "type": "string"
+      },
+      "customerVersion": {
+        "type": "number"
+      },
+      "serviceId": {
+        "type": "string"
+      },
+      "serviceVersion": {
+        "type": "number"
+      },
+      "quantity": {
+        "type": "number"
+      },
+      "discountMinor": {
+        "type": "string"
+      },
+      "totalMinor": {
+        "type": "string"
+      },
+      "validUntil": {
+        "type": "string"
+      },
+      "dueOn": {
+        "type": "string"
+      },
+      "notes": {
+        "type": "string"
+      },
+      "recordedBy": {
+        "type": "string"
+      },
+      "recordedAt": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputBusinessOpeningV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "asOf",
+      "receivedMinor",
+      "deliveredPercent",
+      "accepted",
+      "sourceRef"
+    ],
+    "properties": {
+      "asOf": {
+        "type": "string"
+      },
+      "receivedMinor": {
+        "type": "string"
+      },
+      "deliveredPercent": {
+        "type": "number"
+      },
+      "accepted": {
+        "anyOf": [
+          {
+            "type": "boolean",
+            "const": false
+          },
+          {
+            "type": "boolean",
+            "const": true
+          }
+        ]
+      },
+      "sourceRef": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputBusinessOrderV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "customerId",
+      "customerVersion",
+      "serviceId",
+      "serviceVersion",
+      "quantity",
+      "agreedAmountMinor",
+      "contractedOn",
+      "dueOn",
+      "sourceRef",
+      "recordedBy",
+      "recordedAt"
+    ],
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "customerId": {
+        "type": "string"
+      },
+      "customerVersion": {
+        "type": "number"
+      },
+      "serviceId": {
+        "type": "string"
+      },
+      "serviceVersion": {
+        "type": "number"
+      },
+      "quantity": {
+        "type": "number"
+      },
+      "agreedAmountMinor": {
+        "type": "string"
+      },
+      "contractedOn": {
+        "type": "string"
+      },
+      "dueOn": {
+        "type": "string"
+      },
+      "sourceRef": {
+        "type": "string"
+      },
+      "quoteId": {
+        "type": "string"
+      },
+      "opening": {
+        "$ref": "#/components/schemas/OutputBusinessOpeningV1"
+      },
+      "recordedBy": {
+        "type": "string"
+      },
+      "recordedAt": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputBusinessOrderAdjustmentV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "orderId",
+      "amountDeltaMinor",
+      "effectiveOn",
+      "reason",
+      "sourceRef",
+      "recordedBy",
+      "recordedAt"
+    ],
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "orderId": {
+        "type": "string"
+      },
+      "amountDeltaMinor": {
+        "type": "string"
+      },
+      "effectiveOn": {
+        "type": "string"
+      },
+      "dueOn": {
+        "type": "string"
+      },
+      "reason": {
+        "type": "string"
+      },
+      "sourceRef": {
+        "type": "string"
+      },
+      "recordedBy": {
+        "type": "string"
+      },
+      "recordedAt": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputBusinessDeliveryV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "orderId",
+      "title",
+      "deliveredOn",
+      "artifactRef",
+      "progressPercent",
+      "recordedBy",
+      "recordedAt"
+    ],
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "orderId": {
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      },
+      "deliveredOn": {
+        "type": "string"
+      },
+      "artifactRef": {
+        "type": "string"
+      },
+      "progressPercent": {
+        "type": "number"
+      },
+      "notes": {
+        "type": "string"
+      },
+      "recordedBy": {
+        "type": "string"
+      },
+      "recordedAt": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputBusinessAcceptanceV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "orderId",
+      "deliveryIds",
+      "acceptedOn",
+      "customerConfirmationRef",
+      "complete",
+      "recordedBy",
+      "recordedAt"
+    ],
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "orderId": {
+        "type": "string"
+      },
+      "deliveryIds": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "acceptedOn": {
+        "type": "string"
+      },
+      "customerConfirmationRef": {
+        "type": "string"
+      },
+      "complete": {
+        "anyOf": [
+          {
+            "type": "boolean",
+            "const": false
+          },
+          {
+            "type": "boolean",
+            "const": true
+          }
+        ]
+      },
+      "recordedBy": {
+        "type": "string"
+      },
+      "recordedAt": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputBusinessPaymentV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "orderId",
+      "amountMinor",
+      "receivedOn",
+      "sourceRef",
+      "recordedBy",
+      "recordedAt"
+    ],
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "orderId": {
+        "type": "string"
+      },
+      "amountMinor": {
+        "type": "string"
+      },
+      "receivedOn": {
+        "type": "string"
+      },
+      "sourceRef": {
+        "type": "string"
+      },
+      "recordedBy": {
+        "type": "string"
+      },
+      "recordedAt": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputBusinessPaymentReversalV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "paymentId",
+      "reversedOn",
+      "reason",
+      "sourceRef",
+      "recordedBy",
+      "recordedAt"
+    ],
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "paymentId": {
+        "type": "string"
+      },
+      "reversedOn": {
+        "type": "string"
+      },
+      "reason": {
+        "type": "string"
+      },
+      "sourceRef": {
+        "type": "string"
+      },
+      "recordedBy": {
+        "type": "string"
+      },
+      "recordedAt": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputBusinessRefundV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "orderId",
+      "amountMinor",
+      "refundedOn",
+      "reason",
+      "sourceRef",
+      "recordedBy",
+      "recordedAt"
+    ],
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "orderId": {
+        "type": "string"
+      },
+      "paymentId": {
+        "type": "string"
+      },
+      "amountMinor": {
+        "type": "string"
+      },
+      "refundedOn": {
+        "type": "string"
+      },
+      "reason": {
+        "type": "string"
+      },
+      "sourceRef": {
+        "type": "string"
+      },
+      "recordedBy": {
+        "type": "string"
+      },
+      "recordedAt": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputBusinessExpenseV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "category",
+      "description",
+      "amountMinor",
+      "paidOn",
+      "sourceRef",
+      "recordedBy",
+      "recordedAt"
+    ],
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "orderId": {
+        "type": "string"
+      },
+      "category": {
+        "type": "string"
+      },
+      "description": {
+        "type": "string"
+      },
+      "amountMinor": {
+        "type": "string"
+      },
+      "paidOn": {
+        "type": "string"
+      },
+      "sourceRef": {
+        "type": "string"
+      },
+      "recordedBy": {
+        "type": "string"
+      },
+      "recordedAt": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputBusinessOrderBalanceV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "orderId",
+      "agreedAmountMinor",
+      "receivedMinor",
+      "refundedMinor",
+      "netReceivedMinor",
+      "outstandingMinor",
+      "dueOn",
+      "overdue",
+      "delivered",
+      "deliveredPercent",
+      "accepted"
+    ],
+    "properties": {
+      "orderId": {
+        "type": "string"
+      },
+      "agreedAmountMinor": {
+        "type": "string"
+      },
+      "receivedMinor": {
+        "type": "string"
+      },
+      "refundedMinor": {
+        "type": "string"
+      },
+      "netReceivedMinor": {
+        "type": "string"
+      },
+      "outstandingMinor": {
+        "type": "string"
+      },
+      "dueOn": {
+        "type": "string"
+      },
+      "overdue": {
+        "anyOf": [
+          {
+            "type": "boolean",
+            "const": false
+          },
+          {
+            "type": "boolean",
+            "const": true
+          }
+        ]
+      },
+      "delivered": {
+        "anyOf": [
+          {
+            "type": "boolean",
+            "const": false
+          },
+          {
+            "type": "boolean",
+            "const": true
+          }
+        ]
+      },
+      "deliveredPercent": {
+        "type": "number"
+      },
+      "accepted": {
+        "anyOf": [
+          {
+            "type": "boolean",
+            "const": false
+          },
+          {
+            "type": "boolean",
+            "const": true
+          }
+        ]
+      }
+    }
+  },
+  "OutputBusinessSummaryV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "currency",
+      "sourceStreamVersion",
+      "cashReceivedMinor",
+      "cashRefundedMinor",
+      "cashExpensesMinor",
+      "netCashFlowMinor",
+      "contractedMinor",
+      "outstandingMinor",
+      "overdueMinor",
+      "orders"
+    ],
+    "properties": {
+      "currency": {
+        "type": "string",
+        "const": "CNY"
+      },
+      "period": {
+        "$ref": "#/components/schemas/OutputBusinessPeriodV1"
+      },
+      "sourceStreamVersion": {
+        "type": "number"
+      },
+      "cashReceivedMinor": {
+        "type": "string"
+      },
+      "cashRefundedMinor": {
+        "type": "string"
+      },
+      "cashExpensesMinor": {
+        "type": "string"
+      },
+      "netCashFlowMinor": {
+        "type": "string"
+      },
+      "contractedMinor": {
+        "type": "string"
+      },
+      "outstandingMinor": {
+        "type": "string"
+      },
+      "overdueMinor": {
+        "type": "string"
+      },
+      "orders": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputBusinessOrderBalanceV1"
+        }
+      }
+    }
+  },
+  "OutputBusinessReviewV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "period",
+      "sourceStreamVersion",
+      "summary",
+      "explanation",
+      "nextDecisions",
+      "recordedBy",
+      "recordedAt"
+    ],
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "period": {
+        "$ref": "#/components/schemas/OutputBusinessPeriodV1"
+      },
+      "sourceStreamVersion": {
+        "type": "number"
+      },
+      "summary": {
+        "$ref": "#/components/schemas/OutputBusinessSummaryV1"
+      },
+      "explanation": {
+        "type": "string"
+      },
+      "nextDecisions": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "recordedBy": {
+        "type": "string"
+      },
+      "recordedAt": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputBusinessStateV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "schemaVersion",
+      "workspaceId",
+      "currency",
+      "streamVersion",
+      "plans",
+      "customers",
+      "services",
+      "quotes",
+      "orders",
+      "adjustments",
+      "deliveries",
+      "acceptances",
+      "payments",
+      "paymentReversals",
+      "refunds",
+      "expenses",
+      "reviews"
+    ],
+    "properties": {
+      "schemaVersion": {
+        "type": "number",
+        "const": 1
+      },
+      "workspaceId": {
+        "type": "string"
+      },
+      "currency": {
+        "type": "string",
+        "const": "CNY"
+      },
+      "streamVersion": {
+        "type": "number"
+      },
+      "plans": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputBusinessPlanV1"
+        }
+      },
+      "customers": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputBusinessCustomerV1"
+        }
+      },
+      "services": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputBusinessServiceV1"
+        }
+      },
+      "quotes": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputBusinessQuoteV1"
+        }
+      },
+      "orders": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputBusinessOrderV1"
+        }
+      },
+      "adjustments": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputBusinessOrderAdjustmentV1"
+        }
+      },
+      "deliveries": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputBusinessDeliveryV1"
+        }
+      },
+      "acceptances": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputBusinessAcceptanceV1"
+        }
+      },
+      "payments": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputBusinessPaymentV1"
+        }
+      },
+      "paymentReversals": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputBusinessPaymentReversalV1"
+        }
+      },
+      "refunds": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputBusinessRefundV1"
+        }
+      },
+      "expenses": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputBusinessExpenseV1"
+        }
+      },
+      "reviews": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputBusinessReviewV1"
+        }
+      }
+    }
+  },
+  "OutputBusinessManagementViewV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "state",
+      "summary"
+    ],
+    "properties": {
+      "state": {
+        "$ref": "#/components/schemas/OutputBusinessStateV1"
+      },
+      "summary": {
+        "$ref": "#/components/schemas/OutputBusinessSummaryV1"
+      }
+    }
+  },
   "OutputGoalDeliverableSpecV2": {
     "type": "object",
     "additionalProperties": false,
@@ -526,6 +1467,10 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
     "anyOf": [
       {
         "type": "string",
+        "const": "accepted"
+      },
+      {
+        "type": "string",
         "const": "needs_reconciliation"
       },
       {
@@ -543,10 +1488,6 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
       {
         "type": "string",
         "const": "cancelled"
-      },
-      {
-        "type": "string",
-        "const": "accepted"
       },
       {
         "type": "string",
@@ -1326,15 +2267,15 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
         "anyOf": [
           {
             "type": "string",
+            "const": "accepted"
+          },
+          {
+            "type": "string",
             "const": "completed"
           },
           {
             "type": "string",
             "const": "unknown"
-          },
-          {
-            "type": "string",
-            "const": "accepted"
           },
           {
             "type": "string",
@@ -2001,9 +2942,9 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
     "type": "object",
     "additionalProperties": false,
     "required": [
+      "description",
       "version",
       "displayName",
-      "description",
       "license",
       "permissions",
       "packageSha256",
@@ -2012,13 +2953,13 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
       "trustBoundary"
     ],
     "properties": {
+      "description": {
+        "type": "string"
+      },
       "version": {
         "type": "string"
       },
       "displayName": {
-        "type": "string"
-      },
-      "description": {
         "type": "string"
       },
       "license": {
@@ -3180,11 +4121,11 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
         "anyOf": [
           {
             "type": "string",
-            "const": "proposed"
+            "const": "accepted"
           },
           {
             "type": "string",
-            "const": "accepted"
+            "const": "proposed"
           },
           {
             "type": "string",
@@ -3254,11 +4195,11 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
         "anyOf": [
           {
             "type": "string",
-            "const": "proposed"
+            "const": "accepted"
           },
           {
             "type": "string",
-            "const": "accepted"
+            "const": "proposed"
           },
           {
             "type": "string",
@@ -4453,8 +5394,8 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
     "type": "object",
     "additionalProperties": false,
     "required": [
-      "workspaceId",
       "title",
+      "workspaceId",
       "id",
       "streamVersion",
       "createdAt",
@@ -4469,14 +5410,14 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
       "interviews"
     ],
     "properties": {
+      "title": {
+        "type": "string"
+      },
       "workspaceId": {
         "type": "string"
       },
       "decision": {
         "$ref": "#/components/schemas/OutputDecision"
-      },
-      "title": {
-        "type": "string"
       },
       "id": {
         "type": "string"

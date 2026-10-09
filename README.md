@@ -1,6 +1,6 @@
 # 木牛 Agent OS 0.2
 
-木牛是面向 macOS 本地使用和企业部署的 Agent 执行平台：把会话、模型调用、工具审批、成果与中断恢复放在同一套 Host 契约中。Desktop、CLI 和 API 提供不同入口；OPC 负责机会验证，Coding 负责受控研发任务。
+木牛是面向 macOS 本地使用和企业部署的 Agent 执行平台：把会话、模型调用、工具审批、成果与中断恢复放在同一套 Host 契约中。Desktop、CLI 和 API 提供不同入口；OPC 管理一人公司的经营计划、客户、订单、交付、收支与复盘，Coding 负责受控研发任务。
 
 ## 选择入口
 
@@ -15,7 +15,7 @@
 
 ## 从源码启动 macOS Desktop
 
-准备 Node.js `22.19.x`、npm `11.10.1`、Git、Rust `1.88.0` 和 Apple 构建工具。完成桌面首次设置还需要可用的模型 API Key；暂时没有密钥时，可先按 [CLI 使用指南](docs/guides/cli.md)检查 Host 和创建工作区。完整前置条件见[快速开始](docs/quickstart.md)。
+准备 Node.js `22.19.x`、npm `11.10.1`、Git、Rust `1.88.0` 和 Apple 构建工具。OPC 基础经营记录不需要模型；使用 Agent 或 Coding 时再提供可用的模型 API Key。完整前置条件见[快速开始](docs/quickstart.md)。
 
 ```bash
 git clone https://github.com/muniu-ai/muniu.git
@@ -25,7 +25,7 @@ npm run build:host-sidecar
 npm run tauri:dev -w @mn/desktop-mac
 ```
 
-Desktop 启动本机 Host，默认地址为 `http://127.0.0.1:7318`，状态目录为 `~/.muniu/v2`。首次设置选择视图、启用插件、连接模型并创建工作区。经营视图与专业视图只改变信息密度。
+Desktop 启动本机 Host，默认地址为 `http://127.0.0.1:7318`，状态目录为 `~/.muniu/v2`。首次设置选择视图、启用插件并创建工作区，OPC 可以跳过模型连接。经营视图与专业视图只改变信息密度。
 
 保持 Desktop 运行，在仓库根目录的另一个终端执行只读检查：
 
@@ -39,7 +39,7 @@ node apps/cli/dist/index.js plugin list --json
 ## 理解运行边界
 
 - `apps/host` 是唯一组合根，装配领域无关的 Kernel、Runtime、存储和产品插件。[架构说明](docs/architecture.md)解释依赖方向与事实归属。
-- OPC 支持机会发现、研究、访谈、反证和人工决策；不会自动外联、发送报价或收款。Coding 在规格、检查和审批约束下执行变更。
+- [OPC 经营管理](docs/guides/business.md)首版面向服务和项目型业务，提供人民币业务台账，保留机会验证子流程；外联、报价发送与资金执行需由负责人另行处理。Coding 在规格、检查和审批约束下执行变更。
 - 工具承诺先持久化再执行；外部副作用结果未知时进入人工核对，不自动重放。
 - 生产插件与宿主进程权限等价，是可信代码。插件签名不提供恶意代码隔离；需要沙箱的 Coding 执行在沙箱不可用时停止。
 - 企业控制存储使用 PostgreSQL、S3 与 Vault/KMS。源码功能、测试通过和生产发布是不同状态，具体范围见[能力与验证状态](docs/status.md)。

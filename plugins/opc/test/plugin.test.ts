@@ -47,3 +47,14 @@ test("官方 OPC 插件声明成果导向 Skill，且只注册公开网页读取
   ) as { reviewRequired: boolean };
   assert.equal(result.reviewRequired, true);
 });
+
+
+test("OPC 以经营管理为主入口并保留机会验证子流程", () => {
+  const definition = createOpcPluginDefinition({ service: new OpcService({ repository: new InMemoryOpcRepository() }) });
+  const navigation = definition.contributions.navigation;
+  assert.equal(navigation[0]?.label, "经营管理");
+  assert.equal(navigation[0]?.routeId, "opc.business");
+  assert.ok(definition.contributions.routes.some(route => route.id === "opc.business" && route.path === "/opc/business"));
+  assert.ok(navigation.some(item => item.label === "机会验证" && item.routeId === "opc.opportunities"));
+  assert.ok(definition.contributions.agents.some(agent => agent.id === "opc.opportunity-validator"));
+});

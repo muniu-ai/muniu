@@ -6,9 +6,10 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
+import { businessDateAt } from "../../../packages/contracts/dist/index.js";
 
 const mode = process.argv[2] ?? "onboarding";
-if (!new Set(["onboarding", "opc", "coding", "goals"]).has(mode)) throw new Error(`未知验证模式：${mode}`);
+if (!new Set(["onboarding", "opc", "coding", "goals", "business"]).has(mode)) throw new Error(`未知验证模式：${mode}`);
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const desktopDir = resolve(scriptDir, "..");
 const repoRoot = resolve(desktopDir, "..", "..");
@@ -47,7 +48,7 @@ try {
   await waitForHttp(appUrl);
   browser = await chromium.launch({ executablePath: chromeExecutable(), headless: true });
   const context = await browser.newContext({ viewport: { width: 1180, height: 760 } });
-  if (mode !== "onboarding") {
+  if (!["onboarding", "business"].includes(mode)) {
     await context.addInitScript(() => localStorage.setItem("muniu:v2:onboarding-complete", "1"));
   }
   page = await context.newPage();
@@ -65,6 +66,7 @@ try {
   if (mode === "opc") await verifyOpc(page, requests, apiUrl);
   if (mode === "coding") await verifyCoding(page, requests);
   if (mode === "goals") await verifyGoals(page, requests);
+  if (mode === "business") await verifyBusiness(page, requests);
   await page.getByTitle("技术配置").click();
   if (!await page.getByRole("button", { name: "设置", exact: true }).isVisible()) await page.getByTitle("技术配置").click();
   await page.getByRole("button", { name: "设置", exact: true }).click();
@@ -110,6 +112,165 @@ try {
   await browser?.close().catch(() => undefined);
   for (const child of children.reverse()) child.kill("SIGTERM");
   if (process.env.MN_DESKTOP_E2E_KEEP_TEMP !== "1") await rm(temporaryRoot, { recursive: true, force: true });
+}
+
+async function verifyBusiness(page, requestLog) {
+  await page.getByRole("button", { name: "继续" }).click();
+  await expectText(page, "OPC 经营管理");
+  await page.getByRole("button", { name: "继续" }).click();
+  await page.getByRole("button", { name: "继续" }).click();
+  await page.getByLabel("工作区名称").fill("设计经营工作室");
+  await page.getByLabel("已有客户", { exact: true }).check();
+  await page.getByRole("button", { name: /进入工作台/ }).click();
+  await page.getByRole("heading", { name: "经营管理", exact: true }).waitFor();
+  if (requestLog.some(entry => entry.method === "POST" && ["/v2/model-connections", "/v2/plugins/opc/opportunities"].includes(entry.path))) {
+    throw new Error("手工经营入门不得强制连接模型或创建机会");
+  }
+  const today = businessDateAt(new Date().toISOString());
+  const monthStart = `${today.slice(0, 7)}-01`;
+  const historicalDate = new Date(`${monthStart}T00:00:00.000Z`);
+  historicalDate.setUTCDate(0);
+  const previous = historicalDate.toISOString().slice(0, 10);
+  const navigate = name => page.getByRole("navigation", { name: "经营模块" }).getByRole("button", { name, exact: true }).click();
+  async function form(trigger, title, fields = {}, selections = {}, checks = [], loseResponse = false) {
+    await page.getByRole("button", { name: trigger, exact: true }).first().click();
+    const editor = page.getByRole("form", { name: title, exact: true });
+    for (const [name, value] of Object.entries(fields)) await editor.locator(`[name="${name}"]`).fill(value);
+    for (const [name, value] of Object.entries(selections)) await editor.locator(`select[name="${name}"]`).selectOption(value);
+    for (const name of checks) await editor.locator(`input[name="${name}"]`).check();
+    let originalRequest;
+    if (loseResponse) {
+      let committed;
+      await page.route(`${apiUrl}/v2/plugins/opc/business/commands`, async route => {
+        if (originalRequest) return route.continue();
+        originalRequest = { key: route.request().headers()["idempotency-key"], body: route.request().postDataJSON() };
+        const response = await route.fetch();
+        if (!response.ok()) throw new Error(`${title}模拟丢失响应前未成功保存`);
+        committed = (await response.json()).data;
+        await route.abort("failed");
+      });
+      const observed = page.waitForResponse(async response => new URL(response.url()).pathname === "/v2/plugins/opc/business" && response.ok() && committed && (await response.json()).data.state.streamVersion >= committed.state.streamVersion);
+      await editor.getByRole("button", { name: title, exact: true }).click();
+      await page.getByRole("alert").waitFor();
+      await observed;
+    }
+    const responsePromise = page.waitForResponse(response => new URL(response.url()).pathname === "/v2/plugins/opc/business/commands" && response.request().method() === "POST");
+    await editor.getByRole("button", { name: title, exact: true }).click();
+    const response = await responsePromise;
+    if (!response.ok()) throw new Error(`${title}失败：HTTP ${response.status()} ${JSON.stringify(await response.json())}`);
+    if (originalRequest && (response.request().headers()["idempotency-key"] !== originalRequest.key || JSON.stringify(response.request().postDataJSON()) !== JSON.stringify(originalRequest.body))) throw new Error(`${title}丢失响应后必须重放原请求`);
+    const result = (await response.json()).data;
+    await editor.waitFor({ state: "hidden" });
+    if (loseResponse) await page.unroute(`${apiUrl}/v2/plugins/opc/business/commands`);
+    return result;
+  }
+  await navigate("经营计划");
+  await form("新增经营计划", "保存经营计划", { title: "十月设计经营", start: monthStart, end: today, targetCustomer: "独立顾问", valueProposition: "交付可直接使用的品牌设计", focus: "完成两笔订单\n核对收支", resources: "每周四十小时", reviewOn: today });
+  await navigate("客户");
+  await page.getByRole("button", { name: "新增客户", exact: true }).click();
+  const customerEditor = page.getByRole("form", { name: "保存客户", exact: true });
+  for (const [name, value] of Object.entries({ name: "青禾顾问", source: "客户转介绍", need: "品牌设计", contact: "fixture-contact", followUpOn: today })) await customerEditor.locator(`[name="${name}"]`).fill(value);
+  const commandUrl = `${apiUrl}/v2/plugins/opc/business/commands`;
+  let droppedCustomerRequest;
+  let committedCustomer;
+  await page.route(commandUrl, async route => {
+    if (route.request().postDataJSON()?.command?.type !== "customer.record" || droppedCustomerRequest) return route.continue();
+    droppedCustomerRequest = { key: route.request().headers()["idempotency-key"], body: route.request().postDataJSON() };
+    const response = await route.fetch();
+    if (!response.ok()) throw new Error("模拟丢失响应前，客户必须已由真实 Host 保存");
+    committedCustomer = (await response.json()).data;
+    await route.abort("failed");
+  });
+  const observedCommittedVersion = page.waitForResponse(async response => {
+    if (new URL(response.url()).pathname !== "/v2/plugins/opc/business" || !response.ok() || !committedCustomer) return false;
+    return (await response.json()).data.state.streamVersion >= committedCustomer.state.streamVersion;
+  });
+  await customerEditor.getByRole("button", { name: "保存客户", exact: true }).click();
+  await page.getByRole("alert").waitFor();
+  await observedCommittedVersion;
+  const replayPromise = page.waitForResponse(response => new URL(response.url()).pathname === "/v2/plugins/opc/business/commands" && response.request().method() === "POST");
+  await customerEditor.getByRole("button", { name: "保存客户", exact: true }).click();
+  const replay = await replayPromise;
+  let result = (await replay.json()).data;
+  if (!replay.ok() || result.state.customers.length !== 1 || replay.request().headers()["idempotency-key"] !== droppedCustomerRequest.key || replay.request().postDataJSON().expectedStreamVersion !== droppedCustomerRequest.body.expectedStreamVersion) throw new Error("响应丢失后重试必须复用提交身份及原版本，不得追加客户修订");
+  await customerEditor.waitFor({ state: "hidden" });
+  await page.unroute(commandUrl);
+  const customerId = result.state.customers[0].id;
+  await page.getByRole("button", { name: "更新客户", exact: true }).click();
+  const staleEditor = page.getByRole("form", { name: "保存客户", exact: true });
+  const observedExternalRevision = page.waitForResponse(async response => new URL(response.url()).pathname === "/v2/plugins/opc/business" && response.ok() && (await response.json()).data.state.customers.length === 2);
+  void observedExternalRevision.catch(() => undefined);
+  const externalUpdate = await fetch(commandUrl, { method: "POST", headers: { "content-type": "application/json", "Idempotency-Key": crypto.randomUUID() }, body: JSON.stringify({ workspaceId: result.state.workspaceId, expectedStreamVersion: result.state.streamVersion, command: { type: "customer.record", customerId, name: "青禾顾问", source: "客户转介绍", need: "客户刚确认的新需求", contact: "fixture-contact", followUpOn: today } }) });
+  if (!externalUpdate.ok) throw new Error(`并发客户更新未保存成功：${externalUpdate.status} ${JSON.stringify(await externalUpdate.json())}`);
+  await observedExternalRevision;
+  const staleSave = page.waitForResponse(response => new URL(response.url()).pathname === "/v2/plugins/opc/business/commands" && response.request().method() === "POST");
+  await staleEditor.getByRole("button", { name: "保存客户", exact: true }).click();
+  if ((await staleSave).status() !== 409) throw new Error("表单打开后发生并发更新，旧内容保存必须报告版本冲突");
+  await staleEditor.waitFor({ state: "hidden" });
+  await page.getByRole("button", { name: "更新客户", exact: true }).click();
+  if (await page.getByRole("form", { name: "保存客户", exact: true }).locator('[name="need"]').inputValue() !== "客户刚确认的新需求") throw new Error("版本冲突后重开表单必须显示最新客户内容");
+  await page.getByRole("form", { name: "保存客户", exact: true }).getByRole("button", { name: "取消", exact: true }).click();
+  await navigate("产品与服务");
+  result = await form("新增产品或服务", "发布产品版本", { title: "品牌设计服务", price: "1000.00", inScope: "标志与使用说明", outOfScope: "印刷制作", acceptanceCriteria: "客户确认最终设计" });
+  const product = result.state.services[0];
+  const service = JSON.stringify([product.id, product.version]);
+  await navigate("报价与订单");
+  result = await form("新增报价", "生成报价", { quantity: "1", discount: "0", validUntil: today, dueOn: today }, { customerId, service });
+  const quoteId = result.state.quotes[0].id;
+  result = await form("登记客户确认", "确认成交", { confirmedOn: today, sourceRef: "客户确认邮件 fixture-quote" }, { quoteId });
+  const orderId = result.state.orders[0].id;
+  await navigate("交付与验收");
+  result = await form("记录交付", "记录交付", { title: "完整品牌设计", deliveredOn: today, progressPercent: "100", artifactRef: "设计附件 fixture-artifact" }, { orderId });
+  await form("登记客户验收", "登记客户验收", { acceptedOn: today, customerConfirmationRef: "客户验收邮件 fixture-acceptance" }, { orderId }, ["deliveryIds", "complete"]);
+  await navigate("收支记录");
+  result = await form("登记收款", "登记收款", { amount: "1000", receivedOn: today, sourceRef: "收款凭证 fixture-original" }, { orderId });
+  result = await form("冲销错误记录", "冲销错误收款", { reversedOn: today, reason: "原凭证登记错误", sourceRef: "纠错依据 fixture-reversal" }, { paymentId: result.state.payments[0].id }, [], true);
+  if (result.state.paymentReversals.length !== 1) throw new Error("冲销重试不得重复记录资金纠错");
+  result = await form("登记收款", "登记收款", { amount: "1000", receivedOn: today, sourceRef: "收款凭证 fixture-corrected" }, { orderId });
+  const paymentId = result.state.payments.at(-1).id;
+  await form("登记费用", "登记费用", { category: "外包成本", description: "图形协作", amount: "100", paidOn: today, sourceRef: "支出凭证 fixture-expense" }, { orderId });
+  await form("登记退款", "登记退款", { amount: "100", refundedOn: today, reason: "范围调整退还差额", sourceRef: "退款凭证 fixture-refund" }, { refundSource: JSON.stringify(["payment", paymentId]) });
+  await navigate("报价与订单");
+  await page.getByRole("button", { name: "查看订单详情", exact: true }).click();
+  await form("调整订单金额或期限", "记录订单调整", { amountDelta: "-100", effectiveOn: today, reason: "双方确认减少范围", sourceRef: "变更确认 fixture-adjustment" }, { orderId });
+  result = await form("登记已有订单", "登记已有订单", { quantity: "1", agreedAmount: "1000", contractedOn: `${previous.slice(0, 7)}-01`, dueOn: today, sourceRef: "原合同 fixture-contract", asOf: previous, openingReceived: "400", openingDelivered: "50", openingSourceRef: "期初凭证 fixture-opening" }, { customerId, service });
+  const oldOrderId = result.state.orders.at(-1).id;
+  await expectText(page, "历史已收 ¥400.00，已交付 50%");
+  await page.getByText(/历史已收 ¥400.00，已交付 50%/u).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: join(temporaryRoot, "business-existing-order.png"), fullPage: true });
+  await navigate("交付与验收");
+  await form("记录交付", "记录交付", { title: "已有订单剩余设计", deliveredOn: today, progressPercent: "50", artifactRef: "补充交付 fixture-remaining" }, { orderId: oldOrderId });
+  await form("登记客户验收", "登记客户验收", { acceptedOn: today, customerConfirmationRef: "旧单验收 fixture-old-acceptance" }, { orderId: oldOrderId }, ["deliveryIds", "complete"]);
+  await navigate("收支记录");
+  await form("登记收款", "登记收款", { amount: "600", receivedOn: today, sourceRef: "尾款凭证 fixture-tail" }, { orderId: oldOrderId });
+  await navigate("周期复盘");
+  result = await form("新增周期复盘", "保存周期复盘", { start: monthStart, end: today, explanation: "两笔订单已验收，核对本期收支和历史已收", nextDecisions: "保留服务范围\n下期跟进客户" });
+  const snapshot = result.state.reviews.at(-1).summary;
+  for (const [key, expected] of Object.entries({ cashReceivedMinor: "160000", cashRefundedMinor: "10000", cashExpensesMinor: "10000", netCashFlowMinor: "140000", outstandingMinor: "0" })) {
+    if (snapshot[key] !== expected) throw new Error(`经营复盘 ${key} 应为 ${expected}，实际 ${snapshot[key]}`);
+  }
+  if (snapshot.orders.some(order => !order.accepted || order.deliveredPercent !== 100)) throw new Error("两个订单均应完成交付及客户验收");
+  await expectText(page, "¥1400.00");
+  await page.getByText("两笔订单已验收，核对本期收支和历史已收", { exact: true }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: join(temporaryRoot, "business-review.png"), fullPage: true });
+  await page.reload();
+  await page.getByRole("heading", { name: "经营管理", exact: true }).waitFor();
+  await navigate("周期复盘");
+  await expectText(page, "两笔订单已验收，核对本期收支和历史已收");
+  await expectText(page, "¥1400.00");
+  await navigate("经营总览");
+  historicalDate.setUTCDate(historicalDate.getUTCDate() - 1);
+  await page.getByLabel("统计开始", { exact: true }).fill(`${previous.slice(0, 7)}-01`);
+  await page.getByLabel("统计截止", { exact: true }).fill(historicalDate.toISOString().slice(0, 10));
+  await page.getByRole("alert").waitFor();
+  if (!await page.getByLabel("统计截止", { exact: true }).isVisible()) throw new Error("查询失败后必须能纠正统计期间");
+  await page.getByRole("button", { name: "恢复本月", exact: true }).click();
+  await expectText(page, "¥1400.00");
+  await page.getByRole("alert").waitFor({ state: "hidden" });
+  await page.screenshot({ path: join(temporaryRoot, "business-overview.png"), fullPage: true });
+  await page.setViewportSize({ width: 960, height: 640 });
+  await assertViewportFit(page);
+  await page.setViewportSize({ width: 1180, height: 760 });
 }
 
 async function verifyGoals(page, requestLog) {
@@ -295,7 +456,6 @@ async function verifyOnboarding(page, requestLog) {
   await page.getByRole("button", { name: "继续" }).click();
   await expectText(page, "创建第一个工作区");
   await page.getByLabel("工作区名称").fill("设计师增长");
-  await page.getByLabel("第一条机会").fill("帮助独立设计师稳定获得高质量客户");
   const setupUrl = `${apiUrl}/v2/setup`;
   await page.route(setupUrl, route => route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({
     code: "INTERNAL_ERROR", message: "服务暂时不可用", action: "稍后重试；若问题持续，请运行 mn doctor",
@@ -318,7 +478,7 @@ async function verifyOnboarding(page, requestLog) {
   const initialized = await setupResponse;
   if (initialized.status() !== 200) throw new Error(`受保护日志中的初始化失败：HTTP ${initialized.status()}`);
   await expectText(page, "设计师增长");
-  await expectText(page, "今天");
+  await page.getByRole("heading", { name: "经营管理", exact: true }).waitFor();
   await page.getByRole("button", { name: "工作区" }).click();
   await expectText(page, "成员");
   await expectText(page, "本地所有者");
@@ -344,7 +504,8 @@ async function verifyOnboarding(page, requestLog) {
 
 async function verifyOpc(page, requestLog, hostUrl) {
   await expectText(page, "首页");
-  await page.getByRole("button", { name: "OPC" }).click();
+  await page.getByRole("button", { name: "经营管理", exact: true }).click();
+  await page.getByRole("button", { name: "机会验证", exact: true }).click();
   await expectText(page, "方案待验证");
   await expectText(page, "支持证据");
   await expectText(page, "反证");
@@ -587,7 +748,8 @@ async function verifyOpc(page, requestLog, hostUrl) {
   if (remainingMemories.length !== 0) throw new Error("删除后的记忆仍存在于查询投影");
   if ((await page.locator("body").innerText()).includes("目标客户明确重视可预测的获客节奏")) throw new Error("删除后的记忆仍暴露原内容");
   await page.getByRole("button", { name: "专业视图" }).click();
-  await page.getByRole("button", { name: "OPC" }).click();
+  await page.getByRole("button", { name: "经营管理", exact: true }).click();
+  await page.getByRole("button", { name: "机会验证", exact: true }).click();
   await page.getByRole("button", { name: "查看档案" }).click();
   await expectText(page, "机会 ID");
   await expectText(page, "事件版本");

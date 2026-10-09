@@ -46,6 +46,7 @@
     "build:desktop": "npm run build -w @mn/desktop-mac",
     "typecheck:desktop": "npm run typecheck -w @mn/desktop-mac",
     "verify:onboarding-ui": "npm run verify:onboarding-ui -w @mn/desktop-mac",
+    "verify:business-ui": "npm run verify:business-ui -w @mn/desktop-mac",
     "verify:local-keychain": "npm run build -w @mn/storage && npm run build -w @mn/host && node scripts/verify-local-keychain.mjs",
     "verify:opc-ui": "npm run verify:opc-ui -w @mn/desktop-mac",
     "verify:coding-ui": "npm run verify:coding-ui -w @mn/desktop-mac",

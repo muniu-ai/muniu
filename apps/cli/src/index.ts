@@ -29,7 +29,7 @@ const HELP = `木牛 Agent OS 0.2
   resume            恢复暂停或中断的执行
   doctor --fix      检查连接与可安全修复项
   plugin            查看、安装、更新、启用、停用或运行插件命令
-  opc               管理机会验证工作
+  opc               管理经营台账与机会验证
   code              管理 Coding 任务
   goal              管理目标、计划和成果验收
   backup            创建、校验或恢复本地加密备份
@@ -37,6 +37,11 @@ const HELP = `木牛 Agent OS 0.2
 全局参数：
   --json            输出稳定 JSON
   --help            显示帮助
+
+经营台账：
+  mn opc business show --workspace <工作区 ID> --json
+  mn opc business command --workspace <工作区 ID> --version <台账版本> --file <命令 JSON 文件> --json
+  mn opc business command --workspace <工作区 ID> --version <台账版本> --input '<命令 JSON>'
 
 目标与验收：
   mn goal list --workspace <工作区 ID>
@@ -835,6 +840,7 @@ const OPC_DOMAIN_COMMANDS = new Set([
 ]);
 
 async function opc(parsed: ParsedArguments, api: ApiClient): Promise<CliResult> {
+  if (parsed.positional[0] === "business") return opcBusiness({ ...parsed, positional: parsed.positional.slice(1) }, api);
   assertAllowedFlags(parsed, ["workspace", "version", "input"]);
   const operation = parsed.positional[0] ?? "list";
   const workspaceId = flag(parsed, "workspace", true)!;
@@ -883,6 +889,34 @@ async function opc(parsed: ParsedArguments, api: ApiClient): Promise<CliResult> 
     input,
   });
   return { command: "opc", data, human: "机会已推进，证据、反证和下一步已更新" };
+}
+
+async function opcBusiness(parsed: ParsedArguments, api: ApiClient): Promise<CliResult> {
+  const operation = parsed.positional[0] ?? "show";
+  if (parsed.positional.length > 1) throw new CliUsageError("opc business 不接受额外位置参数");
+  const workspaceId = flag(parsed, "workspace", true)!;
+  if (operation === "show") {
+    assertAllowedFlags(parsed, ["workspace", "period-start", "period-end"]);
+    const periodStart = flag(parsed, "period-start"), periodEnd = flag(parsed, "period-end");
+    if (Boolean(periodStart) !== Boolean(periodEnd)) throw new CliUsageError("--period-start 与 --period-end 必须一起提供");
+    const data = await api.get(apiPath("getOpcBusiness", {}, { workspaceId, periodStart, periodEnd }));
+    return { command: "opc business show", data, human: JSON.stringify(data, null, 2) };
+  }
+  if (operation !== "command") throw new CliUsageError("opc business 支持 show 或 command");
+  assertAllowedFlags(parsed, ["workspace", "version", "input", "file"]);
+  flag(parsed, "version", true);
+  const expectedStreamVersion = integerFlag(parsed, "version", 0);
+  const file = flag(parsed, "file"), inline = flag(parsed, "input");
+  if (Boolean(file) === Boolean(inline)) throw new CliUsageError("--file 与 --input 必须且只能提供一项");
+  let command: unknown;
+  try {
+    const content = file ? await readFile(file, "utf8") : inline!;
+    if (Buffer.byteLength(content) > 128 * 1024) throw new Error("oversized command");
+    command = JSON.parse(content);
+  } catch { throw new CliUsageError("经营命令必须是有效 JSON，且不超过 128 KiB"); }
+  if (!command || typeof command !== "object" || Array.isArray(command)) throw new CliUsageError("经营命令必须为 JSON 对象");
+  const data = await api.mutate(apiPath("commandOpcBusiness", {}), { workspaceId, expectedStreamVersion, command });
+  return { command: "opc business command", data, human: `经营台账已更新，版本 ${data.state.streamVersion}` };
 }
 
 async function backup(

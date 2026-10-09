@@ -13,6 +13,12 @@ async function helpers() {
   return import(script.href);
 }
 
+test("经营打包门禁不能把接口缺失视为健康", async () => {
+  const { verifyBusinessManagement } = await helpers();
+  assert.equal(typeof verifyBusinessManagement, "function");
+  await assert.rejects(verifyBusinessManagement(async () => Response.json({ error: { code: "NOT_FOUND" } }, { status: 404 })), /经营.*404/u);
+});
+
 test("打包检查覆盖业务数据目录，并保留系统 HOME 与 Keychain", async () => {
   const { packagedArtifacts, isolatedEnvironment } = await helpers();
   assert.equal(path.basename(packagedArtifacts("/repo", { productName: "木牛", version: "0.2.0" }).executable), "muniu-desktop");

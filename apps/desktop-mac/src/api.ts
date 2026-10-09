@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { apiPath, matchApiOperation, parseApiResponse, type ApiPath, type JsonApiOperationIdV2, type ApiOutputsV2 } from "@mn/contracts/client";
-import type { CodingRunnerId, ExternalCodingRunnerId, ConfirmCodingRunnerMutationBodyV2, GoalBudgetV2, GoalDeliverableSpecV2, GoalDetailV2, GoalResourceRefV2 } from "@mn/contracts";
+import type { BusinessCommandV1, BusinessPeriodV1, CodingRunnerId, ExternalCodingRunnerId, ConfirmCodingRunnerMutationBodyV2, GoalBudgetV2, GoalDeliverableSpecV2, GoalDetailV2, GoalResourceRefV2 } from "@mn/contracts";
 import type {
   AgentThreadSummary,
   ApiFailure,
@@ -27,6 +27,12 @@ function idempotencyKey(): string {
 }
 
 export class AgentOsClient {
+  business(workspaceId: string, period?: BusinessPeriodV1) {
+    return this.request(apiPath("getOpcBusiness", {}, { workspaceId, ...(period ? { periodStart: period.start, periodEnd: period.end } : {}) }));
+  }
+  commandBusiness(workspaceId: string, expectedStreamVersion: number, command: BusinessCommandV1, requestKey?: string) {
+    return this.request(apiPath("commandOpcBusiness", {}), { method: "POST", ...(requestKey ? { headers: { "Idempotency-Key": requestKey } } : {}), body: JSON.stringify({ workspaceId, expectedStreamVersion, command }) });
+  }
   goals(workspaceId: string) { return this.request(apiPath("listGoals", { workspaceId })); }
   goal(workspaceId: string, goalId: string) { return this.request(apiPath("getGoal", { goalId }, { workspaceId })); }
   createGoal(workspaceId: string, input: { threadId: string; objective: string; resourceRefs: readonly GoalResourceRefV2[]; budget: GoalBudgetV2; deliverables: readonly GoalDeliverableSpecV2[] }) {

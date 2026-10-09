@@ -571,3 +571,34 @@ pre { overflow: auto; padding: 10px; border-radius: 7px; color: #dce5dc; backgro
 .goal-criterion input { margin-top: 5px; }
 .goal-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 24px; }
 @media (max-width: 1100px) { .goal-layout { grid-template-columns: minmax(0, 1fr); } }
+
+.business-heading, .business-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.business-heading h1 { margin: 3px 0 8px; font-size: 26px; }
+.business-heading p, .business-hint { color: var(--muted); font-size: 12px; line-height: 1.6; }
+.business-heading > button { flex-shrink: 0; }
+.business-tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--line); padding-bottom: 10px; }
+.business-tabs button { background: transparent; color: var(--muted); border: 0; padding: 9px 12px; border-radius: 8px; cursor: pointer; font-size: 12px; }
+.business-tabs button.active { color: #205c43; background: #e3ede4; font-weight: 650; }
+.business-toolbar h2, .business-page h2 { font-size: 17px; margin: 0; }
+.business-toolbar > div, .business-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.business-records { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+.business-records article { min-width: 0; border: 1px solid var(--line); background: white; border-radius: 12px; padding: 18px; }
+.business-records h3 { margin: 0 0 10px; font-size: 15px; overflow-wrap: anywhere; }
+.business-records h3 small { display: block; margin-top: 7px; color: var(--muted); font-size: 11px; font-weight: 400; }
+.business-records p, .business-records dd, .business-order-detail p, .business-records li { font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; white-space: pre-line; }
+.business-records dl { display: grid; grid-template-columns: 75px minmax(0, 1fr); gap: 8px; font-size: 12px; }
+.business-records dt { color: var(--muted); }.business-records dd { margin: 0; }
+.business-records button, .business-actions button { border: 1px solid var(--line); color: #315f46; background: #f4f7f2; border-radius: 7px; padding: 7px 10px; cursor: pointer; font-size: 12px; }
+.business-notice { padding: 12px 16px; color: #315f46; background: #e9f2e7; border-radius: 10px; font-size: 13px; }
+.business-form-panel > p, .business-period p { color: var(--muted); font-size: 12px; }
+.business-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 15px; margin: 18px 0; }
+.business-fields .field, .business-fields fieldset { min-width: 0; }
+.business-fields select, .business-period input { border: 1px solid var(--line); background: white; padding: 9px; border-radius: 7px; width: 100%; min-width: 0; font: inherit; font-size: 12px; }
+.business-fields fieldset, .business-start { border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+.business-fields legend, .business-start legend { font-size: 12px; color: var(--muted); }.business-start .check-row { margin: 8px 0; }
+.business-form-panel form > footer { display: flex; justify-content: flex-end; gap: 10px; }
+.business-period { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; }.business-period > div { flex: 1; min-width: 200px; }.business-period label { font-size: 11px; display: grid; gap: 6px; }
+.business-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.business-metrics > div { background: #fff; border: 1px solid var(--line); padding: 16px; border-radius: 10px; min-width: 0; }.business-metrics small { display: block; color: var(--muted); font-size: 11px; }.business-metrics strong { display: block; margin-top: 8px; font-size: 23px; font-weight: 600; overflow-wrap: anywhere; }.business-metrics.compact { grid-template-columns: repeat(2, minmax(0, 1fr)); }.business-metrics.compact strong { font-size: 16px; }
+.business-table-wrap { max-width: 100%; overflow-x: auto; background: white; border: 1px solid var(--line); border-radius: 10px; }.business-table-wrap table { border-collapse: collapse; width: 100%; font-size: 12px; }.business-table-wrap caption { text-align: left; padding: 12px; color: var(--muted); }.business-table-wrap th, .business-table-wrap td { padding: 12px; text-align: left; border-bottom: 1px solid var(--line); }.business-table-wrap td:first-child { min-width: 150px; }
+@media (max-width: 1000px) { .business-fields { grid-template-columns: 1fr; }.business-heading { align-items: flex-start; }.business-toolbar { align-items: flex-start; flex-direction: column; } }

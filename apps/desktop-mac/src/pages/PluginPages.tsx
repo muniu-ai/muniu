@@ -31,7 +31,7 @@ export function OpcPage({ api, workspaceId, items, selectedId, onSelect, loading
   readonly onChanged: () => Promise<void>;
 }) {
   if (selectedId) return <OpcDetailPage api={api} workspaceId={workspaceId} opportunityId={selectedId} viewMode={viewMode} onBack={() => onSelect(undefined)} onChanged={onChanged} />;
-  return <div className="page-stack"><PageTitle eyebrow="机会验证" title="OPC" detail="把想法推进到证据、反证、最小收费方案和人工决策。" />
+  return <div className="page-stack"><PageTitle eyebrow="OPC · 经营探索" title="机会验证" detail="把想法推进到证据、反证、最小收费方案和人工决策。已有客户和订单可直接进入经营管理。" />
     {loading && <Loading label="正在读取机会" />}{error && <ErrorState title="OPC 已降级" detail={error} action="核心页面和 Coding 不受影响" onRetry={onRetry} />}
     {!loading && !error && items.length === 0 && <EmptyState title="还没有机会" detail="在顶部快速捕获中写下一句话，木牛会生成可审阅机会" />}
     {!loading && !error && items.map((opportunity) => <article className="opportunity-card" key={opportunity.id}>

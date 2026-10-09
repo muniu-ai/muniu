@@ -57,6 +57,36 @@ curl --fail --silent --show-error http://127.0.0.1:7318/v2/workspaces
 
 ## 为脚本或 Agent 读取状态
 
+经营台账通过独立命令读取；机会验证的 `opc list` 仍只列出机会：
+
+```bash
+node apps/cli/dist/index.js opc business show --workspace "$WORKSPACE_ID" --json
+```
+
+经营变更通过 `opc business command` 提交 JSON 文件。先读取 `data.state.streamVersion`，再以 `--version` 提交该版本，避免覆盖其他入口刚保存的变化：
+
+```bash
+node apps/cli/dist/index.js opc business command \
+  --workspace "$WORKSPACE_ID" --version 0 \
+  --file business-command.json --json
+```
+
+其中 `0` 只适用于空台账。`business-command.json` 的结构可参考新增客户命令：
+
+```json
+{
+  "type": "customer.record",
+  "customerId": "customer-example",
+  "name": "练习客户",
+  "source": "人工练习",
+  "need": "设计一份项目介绍"
+}
+```
+
+这会写入练习记录，不是真实客户证据。命令种类、金额单位及必填字段由 [OpenAPI](../reference/openapi.md)中 `commandOpcBusiness` 的请求体定义。需要按期间查询时，同时提供 `--period-start` 和 `--period-end`。经营事实写入要求已授权的人员身份，Agent 身份不能确认成交或资金记录。
+
+## JSON 输出
+
 在命令末尾添加 `--json`：
 
 ```bash

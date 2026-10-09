@@ -14,6 +14,7 @@
     "verify:coding-ui": "node scripts/verify-agent-os-ui.mjs coding",
     "verify:goals-ui": "node scripts/verify-agent-os-ui.mjs goals",
     "verify:onboarding-ui": "node scripts/verify-agent-os-ui.mjs onboarding",
+    "verify:business-ui": "node scripts/verify-agent-os-ui.mjs business",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "node scripts/build-macos-release.mjs",

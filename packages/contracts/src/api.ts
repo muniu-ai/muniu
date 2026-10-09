@@ -1,4 +1,11 @@
 import type { JsonObject, JsonValue } from "./json.js";
+import type { BusinessCommandV1 } from "./business-management.js";
+
+export interface CommandOpcBusinessMutationV2 {
+  readonly workspaceId: string;
+  readonly expectedStreamVersion: number;
+  readonly command: BusinessCommandV1;
+}
 
 export interface FieldIssue {
   readonly field: string;
@@ -143,6 +150,8 @@ export interface CodingReconciliationViewV2 {
 }
 
 export const CORE_API_ROUTES = [
+  "/v2/plugins/opc/business",
+  "/v2/plugins/opc/business/commands",
   "/v2/workspaces/{workspaceId}/goals",
   "/v2/goals/{goalId}",
   "/v2/goals/{goalId}/plan-revisions",

@@ -17,12 +17,14 @@ import {
 } from "./pages/CorePages";
 import { CodingPage, OpcPage } from "./pages/PluginPages";
 import { GoalsPage } from "./pages/GoalsPage";
+import { BusinessManagementPage } from "./pages/BusinessManagementPage";
+import type { BusinessStart } from "./Onboarding";
 import type {
   ActivitySummary, AgentCatalog, CodingRepositorySummary, CodingTaskSummary, DeliverableSummary, HomeSummary, MemorySummary,
   InboxItemSummary, OpportunitySummary, PluginHealth, ProductPluginId, WorkspaceMemberSummary, WorkspaceSummary,
 } from "./types";
 
-type PageId = "home" | "goals" | "workspaces" | "inbox" | "deliverables" | "activity" | "agents" | "integrations" | "settings" | "opc" | "coding" | `plugin:${string}`;
+type PageId = "home" | "goals" | "workspaces" | "inbox" | "deliverables" | "activity" | "agents" | "integrations" | "settings" | "opc" | "opc-validation" | "coding" | `plugin:${string}`;
 
 const emptyHome: HomeSummary = { todayActions: [], blockers: [], approvals: [], recentDeliverables: [] };
 const emptyAgentCatalog: AgentCatalog = { agents: [], skills: [] };
@@ -43,12 +45,13 @@ interface WorkspaceShellProps {
   readonly api: AgentOsClient;
   readonly initialWorkspace: WorkspaceSummary;
   readonly initialWorkspaces: readonly WorkspaceSummary[];
+  readonly initialBusinessTab?: BusinessStart;
 }
 
-export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces }: WorkspaceShellProps) {
+export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces, initialBusinessTab }: WorkspaceShellProps) {
   const [workspace, setWorkspace] = useState(initialWorkspace);
   const [workspaces, setWorkspaces] = useState(initialWorkspaces);
-  const [page, setPage] = useState<PageId>("home");
+  const [page, setPage] = useState<PageId>(initialBusinessTab || (initialWorkspace.viewMode === "business" && initialWorkspace.activePluginIds.includes("opc")) ? "opc" : "home");
   const [sidebarCompact, setSidebarCompact] = useState(false);
   const [technicalOpen, setTechnicalOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -135,7 +138,8 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces }: Wor
   }, []);
 
   function openProduct(pluginId: string) {
-    if (pluginId === "opc" || pluginId === "coding") { setPage(pluginId); return; }
+    if (pluginId === "opc") { setPage("opc-validation"); return; }
+    if (pluginId === "coding") { setPage("coding"); return; }
     const route = surfaces.find((surface) => surface.pluginId === pluginId)?.ui?.pages[0];
     if (route) setPage(`plugin:${pluginId}:${route.routeId}`);
     else { setPage("deliverables"); setNotice("成果所属插件没有可用页面，请在设置中检查插件状态"); }
@@ -146,7 +150,7 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces }: Wor
     const target = item.navigation;
     if (!target) return;
     if (target.pluginId === "opc" && target.resourceRef?.namespace === "opc.opportunity") {
-      setSelectedOpportunityId(target.resourceRef.resourceId); setPage("opc");
+      setSelectedOpportunityId(target.resourceRef.resourceId); setPage("opc-validation");
     } else if (target.pluginId === "coding" && target.resourceRef?.namespace === "coding.task") {
       setSelectedCodingTaskId(target.resourceRef.resourceId); setPage("coding");
     } else openProduct(target.pluginId);
@@ -156,7 +160,7 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces }: Wor
     { id: "home", kind: "命令", title: "打开首页", action: () => setPage("home") },
     { id: "inbox", kind: "命令", title: "打开收件箱", detail: `${home.approvals.length} 项待处理`, action: () => setPage("inbox") },
     ...surfaces.flatMap((surface) => (surface.ui?.pages ?? []).map((entry) => ({ id: `plugin:${surface.pluginId}:${entry.routeId}`, kind: "命令" as const, title: entry.title, action: () => setPage(`plugin:${surface.pluginId}:${entry.routeId}`) }))),
-    ...opportunities.map((item) => ({ id: `opportunity:${item.id}`, kind: "机会" as const, title: item.title, detail: item.nextAction, action: () => { setSelectedOpportunityId(item.id); setPage("opc"); } })),
+    ...opportunities.map((item) => ({ id: `opportunity:${item.id}`, kind: "机会" as const, title: item.title, detail: item.nextAction, action: () => { setSelectedOpportunityId(item.id); setPage("opc-validation"); } })),
     ...codingTasks.map((item) => ({ id: `task:${item.id}`, kind: "Coding 任务" as const, title: item.title, detail: item.status, action: () => { setSelectedCodingTaskId(item.id); setPage("coding"); } })),
     ...deliverables.map((item) => ({ id: `deliverable:${item.id}`, kind: "成果" as const, title: item.title, detail: item.outcome, action: () => openProduct(item.pluginId) })),
     ...agentCatalog.skills.map((skill) => ({ id: `skill:${skill.id}`, kind: "Skill" as const, title: skill.title, detail: skill.expectedOutcome, action: () => setPage("agents") })),
@@ -169,7 +173,7 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces }: Wor
     try {
       await api.capture(workspace.id, capturePlugin, value, repositoryId);
       setCaptureText(""); setNotice(capturePlugin === "opc" ? "机会已生成，等待你审阅" : "Coding 任务已生成，等待你审阅");
-      if (capturePlugin === "opc") { await refreshOpc(); setPage("opc"); }
+      if (capturePlugin === "opc") { await refreshOpc(); setPage("opc-validation"); }
       else { await refreshCoding(); setPage("coding"); }
       await refreshCore();
     } catch (error) { setNotice(safeMessage(error)); }
@@ -178,7 +182,7 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces }: Wor
 
   function selectWorkspace(next: WorkspaceSummary) {
     setCaptureRepositoryId(undefined); setCodingRepositories([]);
-    setWorkspace(next); setCapturePlugin(productPlugins(next.activePluginIds)[0]); setSelectedOpportunityId(undefined); setSelectedCodingTaskId(undefined); setPage("home");
+    setWorkspace(next); setCapturePlugin(productPlugins(next.activePluginIds)[0]); setSelectedOpportunityId(undefined); setSelectedCodingTaskId(undefined); setPage(next.viewMode === "business" && next.activePluginIds.includes("opc") ? "opc" : "home");
   }
 
   function updateWorkspace(next: WorkspaceSummary) {
@@ -201,7 +205,7 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces }: Wor
         <NavButton compact={sidebarCompact} active={page === "deliverables"} label="成果" icon={<FileCheck2 />} onClick={() => setPage("deliverables")} />
         <NavButton compact={sidebarCompact} active={page === "activity"} label="活动" icon={<Activity />} onClick={() => setPage("activity")} />
         {!sidebarCompact && <p className="nav-label">已启用插件</p>}
-        {workspace.activePluginIds.includes("opc") && <NavButton compact={sidebarCompact} active={page === "opc"} label="OPC" icon={<BriefcaseBusiness />} onClick={() => setPage("opc")} status={health.find((item) => item.pluginId === "opc")?.status} />}
+        {workspace.activePluginIds.includes("opc") && <NavButton compact={sidebarCompact} active={page === "opc" || page === "opc-validation"} label="经营管理" icon={<BriefcaseBusiness />} onClick={() => setPage("opc")} status={health.find((item) => item.pluginId === "opc")?.status} />}
         {workspace.activePluginIds.includes("coding") && <NavButton compact={sidebarCompact} active={page === "coding"} label="Coding" icon={<Code2 />} onClick={() => setPage("coding")} status={health.find((item) => item.pluginId === "coding")?.status} />}
         {surfaces.flatMap((surface) => (surface.ui?.pages ?? []).map((entry) => {
           const target: PageId = `plugin:${surface.pluginId}:${entry.routeId}`;
@@ -221,7 +225,7 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces }: Wor
         <span className="view-chip">{professional ? "专业视图" : "经营视图"}</span>
         <button className="avatar-button" title="本地所有者">本</button>
       </header>
-      <section className="quick-capture" aria-label="快速捕获">
+      {page !== "opc" && <section className="quick-capture" aria-label="快速捕获">
         <span className="capture-icon"><Zap size={17} /></span>
         <input value={captureText} disabled={!capturePlugin} onChange={(event) => setCaptureText(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void submitCapture(); }} placeholder={!capturePlugin ? "先在工作区启用 OPC 或 Coding" : capturePlugin === "opc" ? "记下一条机会、客户原话或反证" : "描述一个 Coding 任务"} />
         <select aria-label="捕获类型" value={capturePlugin ?? ""} disabled={capturePlugins.length === 0} onChange={(event) => setCapturePlugin(event.target.value as ProductPluginId)}>{capturePlugins.map((pluginId) => <option key={pluginId} value={pluginId}>{pluginLabel(pluginId)}</option>)}</select>
@@ -230,17 +234,17 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces }: Wor
           {repositories.map(item => <option key={item.id} value={item.id}>{repositories.filter(other => other.name === item.name).length > 1 ? `${item.name} · ${item.rootRealPath}` : item.name}</option>)}
         </select>}
         <button className="primary-button" disabled={!captureReady} onClick={() => void submitCapture()}><Plus size={15} />{captureBusy ? "正在保存" : "捕获"}</button>
-      </section>
+      </section>}
       {notice && <div className="toast" role="status"><Sparkles size={15} />{notice}<button onClick={() => setNotice(undefined)}>关闭</button></div>}
       {degraded.length > 0 && <div className="degraded-banner" role="status">{degraded.map((item) => `${pluginLabel(item.pluginId)} 已降级`).join("，")}。首页、收件箱和设置仍可使用。</div>}
       <div className="page-scroll">
         {coreLoading && page === "home" && <Loading />}
         {coreError && page === "home" && <ErrorState detail={coreError} action="检查 Host 后重试" onRetry={() => void refreshCore()} />}
-        {!coreLoading && !coreError && page === "home" && <HomePage summary={home} onNavigate={(target) => setPage(target as PageId)} />}
+        {!coreLoading && !coreError && page === "home" && <HomePage summary={home} onNavigate={(target) => setPage(target === "opc" ? "opc-validation" : target as PageId)} />}
         {page === "workspaces" && <WorkspacesPage workspaces={workspaces} currentId={workspace.id} members={members} onSelect={selectWorkspace} />}
         {page === "goals" && <GoalsPage key={workspace.id} api={api} workspaceId={workspace.id} onOpenThread={thread => {
           if (thread.pluginId === "coding") { setSelectedCodingTaskId(thread.resourceRef?.resourceId); setPage("coding"); }
-          else { setSelectedOpportunityId(thread.resourceRef?.resourceId); setPage("opc"); }
+          else { setSelectedOpportunityId(thread.resourceRef?.resourceId); setPage("opc-validation"); }
         }} />}
         {page === "inbox" && <InboxPage workspaceId={workspace.id} summary={home} api={api} onChanged={refreshCore} onOpen={openInboxItem} />}
         {page === "deliverables" && <DeliverablesPage items={deliverables} onOpen={(item) => openProduct(item.pluginId)} />}
@@ -250,7 +254,8 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces }: Wor
         {page === "settings" && <div className="page-stack"><SettingsPage workspace={workspace} memories={memories} api={api} onModeChanged={updateWorkspace} onMemoriesChanged={() => void refreshCore()} /><PluginManager api={api} workspace={workspace} onChanged={updateWorkspace} /></div>}
         {surfaces.flatMap((surface) => (surface.ui?.pages ?? []).filter((entry) => page === `plugin:${surface.pluginId}:${entry.routeId}`).map((entry) => <PluginBoundary key={`${surface.pluginId}:${surface.version}:${entry.routeId}`} pluginName={surface.pluginId}><div className="page-stack"><h1>{entry.title}</h1>{entry.cards.map((card, index) => <PluginCard key={index} card={card} pluginId={surface.pluginId} workspaceId={workspace.id} api={api} />)}</div></PluginBoundary>))}
         {page === "home" && surfaces.flatMap((surface) => (surface.ui?.widgets ?? []).map((widget) => <PluginBoundary key={`${surface.pluginId}:${surface.version}:${widget.widgetId}`} pluginName={surface.pluginId}><PluginCard card={widget.card} pluginId={surface.pluginId} workspaceId={workspace.id} api={api} /></PluginBoundary>))}
-        {page === "opc" && <PluginBoundary pluginName="OPC"><OpcPage api={api} workspaceId={workspace.id} items={opportunities} selectedId={selectedOpportunityId} onSelect={setSelectedOpportunityId} loading={opcLoading} error={opcError} viewMode={workspace.viewMode} onRetry={() => void refreshOpc()} onChanged={async () => { await Promise.all([refreshOpc(), refreshCore()]); }} /></PluginBoundary>}
+        {page === "opc" && <PluginBoundary pluginName="OPC"><BusinessManagementPage key={workspace.id} api={api} workspaceId={workspace.id} initialTab={workspace.id === initialWorkspace.id ? initialBusinessTab : undefined} onExplore={() => { setSelectedOpportunityId(undefined); setPage("opc-validation"); }} /></PluginBoundary>}
+        {page === "opc-validation" && <PluginBoundary pluginName="OPC"><button className="quiet-button" onClick={() => setPage("opc")}>返回经营管理</button><OpcPage api={api} workspaceId={workspace.id} items={opportunities} selectedId={selectedOpportunityId} onSelect={setSelectedOpportunityId} loading={opcLoading} error={opcError} viewMode={workspace.viewMode} onRetry={() => void refreshOpc()} onChanged={async () => { await Promise.all([refreshOpc(), refreshCore()]); }} /></PluginBoundary>}
         {page === "coding" && <PluginBoundary pluginName="Coding"><CodingPage key={workspace.id} api={api} workspaceId={workspace.id} repositories={repositories} onRepositoriesChanged={refreshCoding} items={codingTasks} selectedId={selectedCodingTaskId} onSelect={setSelectedCodingTaskId} loading={codingLoading} error={codingError} viewMode={workspace.viewMode} onRetry={() => void refreshCoding()} /></PluginBoundary>}
       </div>
     </main>

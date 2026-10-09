@@ -4,9 +4,11 @@ import { AgentOsApiError, AgentOsClient } from "./api";
 import { ErrorState } from "./components/Status";
 import type { ProductPluginId, ViewMode, WorkspaceSummary } from "./types";
 
+export type BusinessStart = "plan" | "customers" | "orders";
+
 interface OnboardingProps {
   readonly api: AgentOsClient;
-  readonly onComplete: (workspace: WorkspaceSummary) => void;
+  readonly onComplete: (workspace: WorkspaceSummary, businessStart?: BusinessStart) => void;
 }
 
 const steps = ["选择视图", "启用插件", "连接模型", "开始工作"] as const;
@@ -23,7 +25,8 @@ export function Onboarding({ api, onComplete }: OnboardingProps) {
   const [presetId, setPresetId] = useState("openai");
   const [apiKey, setApiKey] = useState("");
   const [workspaceName, setWorkspaceName] = useState("我的业务");
-  const [firstInput, setFirstInput] = useState("帮助独立设计师更稳定地获得高质量客户");
+  const [firstInput, setFirstInput] = useState("");
+  const [businessStart, setBusinessStart] = useState<BusinessStart>("plan");
   const [runSample, setRunSample] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<{
@@ -36,10 +39,10 @@ export function Onboarding({ api, onComplete }: OnboardingProps) {
   const primaryPlugin = plugins[0] ?? "opc";
   const canContinue = useMemo(() => {
     if (step === 1) return plugins.length > 0;
-    if (step === 2) return apiKey.trim().length > 0;
-    if (step === 3) return workspaceName.trim().length > 0 && firstInput.trim().length > 0;
+    if (step === 2) return !plugins.includes("coding") || apiKey.trim().length > 0;
+    if (step === 3) return workspaceName.trim().length > 0 && (primaryPlugin !== "coding" || firstInput.trim().length > 0);
     return true;
-  }, [apiKey, firstInput, plugins.length, step, workspaceName]);
+  }, [apiKey, firstInput, plugins, primaryPlugin, step, workspaceName]);
 
   function togglePlugin(pluginId: ProductPluginId) {
     setPlugins((current) => current.includes(pluginId)
@@ -53,21 +56,25 @@ export function Onboarding({ api, onComplete }: OnboardingProps) {
     let stage = "初始化设置";
     try {
       await api.setup();
-      stage = "保存模型密钥";
-      const connection = await api.connectModel(presetId, apiKey.trim());
-      stage = "验证模型连接";
-      await api.probeModel(connection.id);
+      if (apiKey.trim()) {
+        stage = "保存模型密钥";
+        const connection = await api.connectModel(presetId, apiKey.trim());
+        stage = "验证模型连接";
+        await api.probeModel(connection.id);
+      }
       stage = "创建工作区";
       const workspace = await api.createWorkspace(workspaceName.trim(), viewMode, plugins);
-      stage = primaryPlugin === "opc" ? "创建首条机会" : "添加仓库";
-      await api.createFirstObject(workspace.id, primaryPlugin, firstInput.trim());
+      if (primaryPlugin === "coding") {
+        stage = "添加仓库";
+        await api.createFirstObject(workspace.id, primaryPlugin, firstInput.trim());
+      }
       if (runSample) {
         stage = "运行只读样例";
         await api.runReadOnlySample(workspace.id, primaryPlugin);
       }
       stage = "保存设置";
       localStorage.setItem("muniu:v2:onboarding-complete", "1");
-      onComplete(workspace);
+      onComplete(workspace, plugins.includes("opc") ? businessStart : undefined);
     } catch (caught) {
       const detail = caught instanceof AgentOsApiError
         ? caught.detail
@@ -98,7 +105,7 @@ export function Onboarding({ api, onComplete }: OnboardingProps) {
           <div className="screen-heading"><Eye size={22} /><div><h2 id="view-title">你希望先看到什么</h2><p>两种视图使用同一数据和操作，随时可以切换。</p></div></div>
           <div className="choice-grid two">
             <button className={`choice-card ${viewMode === "business" ? "selected" : ""}`} onClick={() => setViewMode("business")} aria-pressed={viewMode === "business"}>
-              <BriefcaseBusiness size={24} /><strong>经营视图</strong><p>先看机会、证据、决定和下一步。隐藏内部技术名称。</p><span>适合专注业务推进</span>
+              <BriefcaseBusiness size={24} /><strong>经营视图</strong><p>先看客户、订单、交付和收支。按业务安排下一步。</p><span>适合专注业务推进</span>
             </button>
             <button className={`choice-card ${viewMode === "professional" ? "selected" : ""}`} onClick={() => setViewMode("professional")} aria-pressed={viewMode === "professional"}>
               <Code2 size={24} /><strong>专业视图</strong><p>原位展开执行、事件、预算和工具详情。</p><span>适合调试与治理</span>
@@ -110,7 +117,7 @@ export function Onboarding({ api, onComplete }: OnboardingProps) {
           <div className="screen-heading"><Sparkles size={22} /><div><h2 id="plugin-title">选择现在要做的事</h2><p>官方插件已随应用安装，只在这个工作区启用。</p></div></div>
           <div className="choice-grid two">
             <button className={`choice-card ${plugins.includes("opc") ? "selected" : ""}`} onClick={() => togglePlugin("opc")} aria-pressed={plugins.includes("opc")}>
-              <BriefcaseBusiness size={24} /><strong>OPC 机会验证</strong><p>发现机会、整理证据、准备访谈并形成最小收费方案。</p><span>不自动外联、发布或收款</span>
+              <BriefcaseBusiness size={24} /><strong>OPC 经营管理</strong><p>制定经营计划，管理客户、产品、报价、订单、交付与收支。</p><span>服务与项目型业务；机会验证作为探索入口</span>
             </button>
             <button className={`choice-card ${plugins.includes("coding") ? "selected" : ""}`} onClick={() => togglePlugin("coding")} aria-pressed={plugins.includes("coding")}>
               <Code2 size={24} />
@@ -123,7 +130,7 @@ export function Onboarding({ api, onComplete }: OnboardingProps) {
         </section>}
 
         {step === 2 && <section className="setup-screen" aria-labelledby="model-title">
-          <div className="screen-heading"><KeyRound size={22} /><div><h2 id="model-title">连接你的模型</h2><p>选择厂商并填写密钥。木牛会探测连接并选择默认模型。</p></div></div>
+          <div className="screen-heading"><KeyRound size={22} /><div><h2 id="model-title">连接你的模型</h2><p>{plugins.includes("coding") ? "Coding 需要可用模型。选择厂商并填写密钥。" : "经营记录无需模型，可直接继续。首次使用 Agent 时再连接模型。"}</p></div></div>
           <div className="preset-list">
             {presets.map((preset) => <button key={preset.id} className={presetId === preset.id ? "selected" : ""} onClick={() => setPresetId(preset.id)} aria-pressed={presetId === preset.id}>
               <span className="provider-dot">{preset.name.slice(0, 1)}</span><span><strong>{preset.name}</strong><small>{preset.hint}</small></span>{presetId === preset.id && <Check size={17} />}
@@ -136,8 +143,13 @@ export function Onboarding({ api, onComplete }: OnboardingProps) {
           <div className="screen-heading"><Rocket size={22} /><div><h2 id="workspace-title">创建第一个工作区</h2><p>会话按工作区和业务对象组织，不按聊天时间堆叠。</p></div></div>
           <div className="form-stack">
             <label className="field"><span>工作区名称</span><input value={workspaceName} onChange={(event) => setWorkspaceName(event.target.value)} placeholder="例如 独立设计师增长" /></label>
-            <label className="field"><span>{primaryPlugin === "opc" ? "第一条机会" : "第一个仓库或任务"}</span><textarea value={firstInput} onChange={(event) => setFirstInput(event.target.value)} rows={3} /><small>木牛会生成可审阅对象，不会直接执行高风险操作</small></label>
-            <label className="check-row"><input type="checkbox" checked={runSample} onChange={(event) => setRunSample(event.target.checked)} /><span><strong>运行只读样例</strong><small>确认模型和插件可以工作，不会修改外部数据</small></span></label>
+            {plugins.includes("opc") && <fieldset className="business-start"><legend>从哪里开始</legend>
+              <label className="check-row"><input type="radio" name="business-start" checked={businessStart === "plan"} onChange={() => setBusinessStart("plan")} /><span><strong>探索新业务</strong><small>先明确经营方向，按需开展机会验证</small></span></label>
+              <label className="check-row"><input type="radio" name="business-start" checked={businessStart === "customers"} onChange={() => setBusinessStart("customers")} aria-label="已有客户" /><span><strong>已有客户</strong><small>登记客户需求，准备产品和正式报价</small></span></label>
+              <label className="check-row"><input type="radio" name="business-start" checked={businessStart === "orders"} onChange={() => setBusinessStart("orders")} /><span><strong>已有订单</strong><small>根据原合同录入交付义务、历史已收和未结款项</small></span></label>
+            </fieldset>}
+            {primaryPlugin === "coding" && <label className="field"><span>第一个仓库</span><input value={firstInput} onChange={(event) => setFirstInput(event.target.value)} placeholder="本机仓库的绝对路径" /></label>}
+            <label className="check-row"><input type="checkbox" checked={runSample} onChange={(event) => setRunSample(event.target.checked)} /><span><strong>检查插件启用状态</strong><small>只记录本地检查，不调用模型或访问外部数据</small></span></label>
           </div>
         </section>}
       </div>
