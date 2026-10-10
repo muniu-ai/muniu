@@ -22,7 +22,7 @@ export function RunnerConfiguration({ api, workspace, onChanged }: {
   useEffect(() => { setReport(undefined); void load(); return () => { requestSequence.current += 1; }; }, [load]);
   return <section className="panel settings-section" aria-label="外部 Agent 调度检查">
     <div className="connectivity-heading"><h2>外部 Agent 调度检查</h2><button className="secondary-button" disabled={loading} onClick={() => void load()}>{loading ? "正在检查…" : "重新检查"}</button></div>
-    <p>这些执行方式用于编程任务。木牛内置 Agent 使用上方模型连接；Codex 和 Claude Code 使用各自的登录与配置。</p>
+    <p>经营与研发任务都可选择内置 Agent 或外部 CLI。内置 Agent 使用木牛模型连接；Codex 和 Claude Code 使用各自的账户和模型。</p>
     <p>检查只读取木牛配置和已确认文件，不启动 Agent、不执行登录或生成任务。安装应用、确认文件和具备执行条件是不同状态。</p>
     {error && <p role="alert">{error}</p>}
     {report && <>
@@ -34,7 +34,7 @@ export function RunnerConfiguration({ api, workspace, onChanged }: {
 }
 
 const checkLabels: Readonly<Record<AgentReadinessV1["checks"][number]["id"], string>> = {
-  coding_plugin: "编程能力", runner_plugin: "Agent 插件", permission: "木牛授权", confirmation: "文件确认",
+  task_plugin: "任务能力", runner_plugin: "Agent 插件", permission: "木牛授权", confirmation: "文件确认",
   binary_identity: "文件一致性", worker: "执行服务", sandbox: "隔离环境", authentication: "Agent 登录",
   approval: "任务审批", adapter: "木牛适配", model: "模型连接",
 };
@@ -47,7 +47,7 @@ function RunnerCard({ api, workspace, agent, onChanged, onConfirmed }: {
   const runnerId: ExternalCodingRunnerId | undefined = agent.agentId === "codex-cli" || agent.agentId === "claude-cli" ? agent.agentId : undefined;
   const configuration = agent.configuration;
   const enabled = runnerId !== undefined && workspace.activePluginIds.includes(`runner-${runnerId}`);
-  const codingEnabled = workspace.activePluginIds.includes("coding");
+  const codingEnabled = workspace.activePluginIds.some(id => id === "coding" || id === "opc");
   const firstIssue = agent.checks.find(check => check.status === "blocked") ?? agent.checks.find(check => check.status === "unknown");
   const [path, setPath] = useState("");
   const [version, setVersion] = useState("");

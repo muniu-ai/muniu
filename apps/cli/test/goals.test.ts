@@ -71,3 +71,17 @@ test("goal acceptance preserves item digests and reviewed criteria from the inpu
   });
   assert.deepEqual(body, { ...payload, workspaceId: "workspace-1", expectedStreamVersion: 8 });
 });
+
+
+test("goal plan defaults to quality-first automatic selection and supports a CLI without BYOK", async () => {
+  for (const runner of ["auto", "claude-cli"]) {
+    let body: any;
+    await runCli(["goal", "plan", "g", "--workspace", "w", "--version", "1", "--runner", runner, "--json"], {
+      io: { stdout() {}, stderr() {} }, fetch: async (input, init) => {
+        body = await new Request(input, init).json();
+        return Response.json({}, { status: 409 });
+      },
+    });
+    assert.deepEqual(body, { workspaceId: "w", expectedStreamVersion: 1, scheduling: { runnerId: runner, strategy: "quality" } });
+  }
+});

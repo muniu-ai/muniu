@@ -1,3 +1,6 @@
+import { invokeBusinessRunner } from "./business-runner.js";
+import { resolveExecutionModel } from "./execution-model.js";
+import { ControlledCodingSandbox } from "./coding.js";
 import { randomUUID } from "node:crypto";
 
 import type {
@@ -660,10 +663,7 @@ export function createKernelAgentTurnHandler(
         if (!authority) throw new Error("Execution Authority 不存在");
         const thread = transaction.getProjection<Thread>("thread", execution.threadId);
         if (!thread) throw new Error("Thread 不存在");
-        const model = transaction.getProjection<StoredModelConnection>(
-          "modelConnection",
-          execution.modelBindingId,
-        );
+        const model = resolveExecutionModel(transaction, execution);
         if (!model) throw new Error("模型连接不存在");
         return { execution, authority, thread, model };
       });
@@ -671,10 +671,11 @@ export function createKernelAgentTurnHandler(
         ? await options.resolvePluginWorker?.(state.execution) : undefined;
       const pluginAgent = pluginWorker?.agents.find((agent) => agent.id === state.execution.agentDefinitionId);
       assertExecutionState(job, state.execution, state.authority, state.thread, state.model, pluginAgent?.id);
-      if (!acceptsSecretReference(state.model.secretRef)) {
+      const external = state.execution.runnerId === "codex-cli" || state.execution.runnerId === "claude-cli";
+      if (!external && !acceptsSecretReference(state.model.secretRef)) {
         throw new Error("模型密钥引用不属于当前运行环境");
       }
-      const provider = providerId(state.model.presetId);
+      const provider = external ? undefined : providerId(state.model.presetId);
       const tenantScope = AgentScope.tenant(job.tenantId, state.execution.generation, options.scopeContext);
       try {
       const executionScope = tenantScope
@@ -684,7 +685,7 @@ export function createKernelAgentTurnHandler(
       const promptId = `${state.execution.pluginId}.outcome`;
       const memoryPromptId = `${state.execution.pluginId}.memory`;
       const llmId = `byok:${state.model.id}`;
-      const hasPublicWebTool = state.execution.pluginId === "opc"
+      const hasPublicWebTool = !external && state.execution.pluginId === "opc"
         && state.authority.toolIds.includes("opc.public-web.read")
         && options.opcPublicWebReader !== undefined;
       executionScope.register("prompt", {
@@ -716,6 +717,13 @@ export function createKernelAgentTurnHandler(
       executionScope.register("llm", {
         id: llmId,
         complete: async (request, context) => {
+          if (external) {
+            if (!options.codingSandboxRoot || options.codingCommandExecutor) throw new Error("当前部署未提供经营 CLI 隔离环境");
+            return invokeBusinessRunner({ execution: state.execution, authority: state.authority, request, store: runtimeStore, runtime: agentStore,
+              signal: context.signal, sandbox: new ControlledCodingSandbox({ root: options.codingSandboxRoot, executable: options.codingSandboxExecutable ?? "/usr/bin/sandbox-exec" }),
+              approval: createKernelToolApprovalPort({ tenantId: job.tenantId, actorId: state.execution.executionPrincipalId, kernel: approvalKernel, store: runtimeStore,
+                ...(options.approvalPollIntervalMs ? { pollIntervalMs: options.approvalPollIntervalMs } : {}) }) });
+          }
           let apiKey: string;
           try {
             apiKey = await options.secretStore.read(state.model.secretRef);
@@ -724,7 +732,7 @@ export function createKernelAgentTurnHandler(
           }
           try {
             return await invokeBudgetedByokModel({ input: {
-              presetId: provider,
+              presetId: provider!,
               model: state.model.defaultModel,
               apiKey,
               request,

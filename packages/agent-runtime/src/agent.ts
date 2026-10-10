@@ -79,7 +79,7 @@ export class AgentRuntimeError extends Error {
 }
 
 export class RuntimeControlError extends AgentRuntimeError {
-  constructor(readonly status: "cancelled" | "paused" | "interrupted") {
+  constructor(readonly status: "cancelled" | "paused" | "interrupted" | "needs_reconciliation") {
     super(`执行已进入 ${status} 状态`);
     this.name = "RuntimeControlError";
   }

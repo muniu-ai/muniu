@@ -4,7 +4,7 @@ import { publicModelConnection, selectModelConnection, preferredModelConnectionI
 import { randomUUID } from "node:crypto";
 import { dispatchGoalRequest } from "./goals-api.js";
 import { GOAL_NAMESPACE, readGoalForAccounting, reconcileGoalUsage } from "./goals.js";
-import { createHostGoalRuntime } from "./goal-runtime.js";
+import { createHostGoalRuntime, assertGoalExecutionResources } from "./goal-runtime.js";
 import type { GoalV2 } from "@mn/contracts";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import { Context } from "@deepseek-ai/cordis";
@@ -1240,7 +1240,14 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         if (!protectedJournal || !options.cas || !options.protectedPayloadKeyProvider) throw new KernelError("GOAL_PROTECTED_STORAGE_REQUIRED", "目标需要受保护的事件存储", "配置受保护存储后重试");
         const result = await dispatchGoalRequest({ request, store: options.store, kernel, cas: options.cas, keyProvider: options.protectedPayloadKeyProvider,
           protectedJournal, now, id: nextId, tenantId: TENANT_ID, principalId: ACTOR_ID,
-          definitions: [tenantPlugins.definition("opc"), tenantPlugins.definition("coding")].filter((value): value is PluginDefinitionV1 => Boolean(value)),
+          validateRunner: async (workspaceId, runnerId) => {
+            const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId, "operate");
+            await requireRunnerPluginTool(TENANT_ID, workspace, runnerId);
+            const configuration = await requireConfirmedCodingRunner(options.store, TENANT_ID, workspaceId, runnerId);
+            const inspection = await inspectCodingRunner(runnerIdentityInspector, runnerId, configuration.identity.requestedPath);
+            if (Object.entries(inspection).some(([key, value]) => configuration.identity[key as keyof typeof configuration.identity] !== value)) throw new KernelError("RUNNER_RECONFIRMATION_REQUIRED", "CLI 文件身份已变化", "重新确认 CLI");
+          },
+          definitions: [tenantPlugins.definition("opc"), tenantPlugins.definition("coding"), tenantPlugins.definition("runner-codex-cli"), tenantPlugins.definition("runner-claude-cli")].filter((value): value is PluginDefinitionV1 => Boolean(value)),
           ...(typeof mutationKey === "string" ? { mutationKey } : {}) });
         if (result) return json(result.data, result.status, traceId);
       }
@@ -1741,7 +1748,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         const execution = await projectionGet<Execution>(options.store, TENANT_ID, "execution", executionId);
         if (!execution) throw new KernelError("EXECUTION_NOT_FOUND", "执行不存在", "刷新执行列表");
         await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, execution.workspaceId, "operate");
-        if (await options.store.transact(TENANT_ID, tx => tx.listProjections<GoalV2>(GOAL_NAMESPACE).some(goal => goal.executionRef?.executionId === execution.id))) {
+        if (!["follow_up", "steer"].includes(String(body.command)) && await options.store.transact(TENANT_ID, tx => tx.listProjections<GoalV2>(GOAL_NAMESPACE).some(goal => goal.executionRef?.executionId === execution.id))) {
           throw new KernelError("GOAL_EXECUTION_ENTRY_REQUIRED", "此执行由固定目标计划管理", "通过目标入口刷新或取消执行");
         }
         if (execution.pluginId === "industry") {
@@ -1777,6 +1784,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
                   "刷新执行状态；已结束的执行请提交新的 turn",
                 );
               }
+              assertGoalExecutionResources(transaction, current);
               const timestamp = now();
               enqueueRuntimeInbox(transaction, {
                 executionId,
@@ -2522,7 +2530,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         canExecute = canExecute && Boolean(principal && !principal.disabledAt);
         const runnerPlugins: Partial<Record<"claude-cli" | "codex-cli", { status: "healthy" | "inactive" | "degraded" }>> = {};
         for (const runnerId of ["claude-cli", "codex-cli"] as const) {
-          if (!workspace.activePluginIds.includes("coding") || !workspace.activePluginIds.includes(runnerPluginId(runnerId))) {
+          if (!workspace.activePluginIds.some(id => id === "coding" || id === "opc") || !workspace.activePluginIds.includes(runnerPluginId(runnerId))) {
             runnerPlugins[runnerId] = { status: "inactive" }; continue;
           }
           try { await requireRunnerPluginTool(TENANT_ID, workspace, runnerId); runnerPlugins[runnerId] = { status: "healthy" }; }
@@ -2544,8 +2552,8 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           throw new KernelError("INVALID_BODY", "缺少 workspaceId", "选择工作区后重试");
         }
         const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId, "view");
-        if (!workspace.activePluginIds.includes("coding")) {
-          throw new KernelError("PLUGIN_NOT_ACTIVE", "工作区尚未启用 Coding", "先启用 Coding 插件");
+        if (!workspace.activePluginIds.some(id => id === "coding" || id === "opc")) {
+          throw new KernelError("PLUGIN_NOT_ACTIVE", "工作区尚未启用任务插件", "先启用经营或研发插件");
         }
         return json(await listCodingRunners(options.store, TENANT_ID, workspaceId), 200, traceId);
       }
@@ -2559,8 +2567,8 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         }
         const workspaceId = stringField(body, "workspaceId")!;
         const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId, "owner");
-        if (!workspace.activePluginIds.includes("coding")) {
-          throw new KernelError("PLUGIN_NOT_ACTIVE", "工作区尚未启用 Coding", "先启用 Coding 插件");
+        if (!workspace.activePluginIds.some(id => id === "coding" || id === "opc")) {
+          throw new KernelError("PLUGIN_NOT_ACTIVE", "工作区尚未启用任务插件", "先启用经营或研发插件");
         }
         const runnerId = parseExternalCodingRunnerId(decodeURIComponent(runnerInspectionMatch[1]!));
         await requireRunnerPluginTool(TENANT_ID, workspace, runnerId);
@@ -2593,8 +2601,8 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         }
         const workspaceId = stringField(body, "workspaceId")!;
         const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId, "owner");
-        if (!workspace.activePluginIds.includes("coding")) {
-          throw new KernelError("PLUGIN_NOT_ACTIVE", "工作区尚未启用 Coding", "先启用 Coding 插件");
+        if (!workspace.activePluginIds.some(id => id === "coding" || id === "opc")) {
+          throw new KernelError("PLUGIN_NOT_ACTIVE", "工作区尚未启用任务插件", "先启用经营或研发插件");
         }
         const runnerId = parseExternalCodingRunnerId(decodeURIComponent(runnerConfirmationMatch[1]!));
         await requireRunnerPluginTool(TENANT_ID, workspace, runnerId);
@@ -3015,7 +3023,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
       try {
         const tenantRuntime = await runtimeForTenant(tenantId);
         const runtime = createHostGoalRuntime({ store: options.store, kernel, cas: options.cas, keyProvider: options.protectedPayloadKeyProvider,
-          protectedJournal, now, id: nextId, definitions: [tenantRuntime.plugins.definition("opc"), tenantRuntime.plugins.definition("coding")].filter((value): value is PluginDefinitionV1 => Boolean(value)) });
+          protectedJournal, now, id: nextId, definitions: [tenantRuntime.plugins.definition("opc"), tenantRuntime.plugins.definition("coding"), tenantRuntime.plugins.definition("runner-codex-cli"), tenantRuntime.plugins.definition("runner-claude-cli")].filter((value): value is PluginDefinitionV1 => Boolean(value)) });
         const detail = await readGoalForAccounting({ store: options.store, tenantId, goalId: goal.id });
         const scope = { tenantId, workspaceId: goal.workspaceId, principalId: goal.authorization?.principalId ?? goal.principalId };
         try {

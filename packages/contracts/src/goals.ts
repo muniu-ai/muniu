@@ -1,5 +1,26 @@
 // SPDX-License-Identifier: Apache-2.0
-import type { ResourceRef, ToolEffectClass } from "./models.js";
+import type { CodingRunnerId, ResourceRef, ToolEffectClass } from "./models.js";
+
+export interface AgentSchedulingRequestV2 {
+  readonly runnerId: "auto" | CodingRunnerId;
+  readonly strategy: "quality" | "balanced" | "cost";
+  readonly modelBindingId?: string;
+  readonly expectedValueMinorUnits?: string;
+  readonly timeCostMinorUnitsPerHour?: string;
+}
+export interface AgentSchedulingCandidateV2 {
+  readonly id: string; readonly label: string; readonly runnerId: CodingRunnerId; readonly modelBindingId: string;
+  readonly fingerprint: string; readonly currency: string; readonly samples: number; readonly accepted: number;
+  readonly qualityLowerBound: number; readonly evidence: "observed" | "insufficient";
+  readonly expectedCostMinorUnits: string | null; readonly expectedDurationMs: number;
+  readonly expectedTotalCostMinorUnits: string | null; readonly expectedNetValueMinorUnits: string | null;
+  readonly roiBasisPoints: number | null; readonly eligible: boolean; readonly reasons: readonly string[];
+}
+export interface AgentSchedulingDecisionV2 {
+  readonly algorithm: "quality-roi-v1"; readonly request: AgentSchedulingRequestV2;
+  readonly selectedId: string; readonly candidates: readonly AgentSchedulingCandidateV2[];
+  readonly taskClass: string; readonly evidenceDigest: string;
+}
 
 export interface GoalResourceRefV2 extends ResourceRef { readonly streamVersion: number }
 export interface GoalBudgetV2 {
@@ -25,7 +46,9 @@ export interface GoalPlanProposalV2 {
   readonly modelBindingId: string;
   readonly modelConnectionStreamVersion: number;
   readonly model: string;
-  readonly runnerId: "builtin";
+  readonly runnerId: CodingRunnerId;
+  readonly runnerBinding?: { readonly configurationStreamVersion: number; readonly identityDigest: string };
+  readonly scheduling?: AgentSchedulingDecisionV2;
   readonly toolIds: readonly string[];
   readonly dataScopes: readonly ResourceRef[];
   readonly autoAllowedEffects: readonly ToolEffectClass[];

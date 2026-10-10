@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
+import { scheduleGoal } from "./goal-scheduling.js";
+import type { AgentSchedulingRequestV2 } from "@mn/contracts";
 import type { GoalBudgetV2, GoalDeliverableSpecV2, GoalResourceRefV2 } from "@mn/contracts";
 import { KernelError } from "@mn/kernel";
-import { acceptGoalDelivery, cancelGoal, createGoal, getGoal, getGoalForCoordination, listGoals, proposeGoalPlan, startGoal } from "./goals.js";
+import { acceptGoalDelivery, recordExternalGoalUsage, cancelGoal, createGoal, getGoal, getGoalForCoordination, listGoals, replayGoalPlan, proposeGoalPlan, startGoal } from "./goals.js";
 import { createHostGoalRuntime, goalThreadResources, type HostGoalRuntimeOptions } from "./goal-runtime.js";
 import { readBoundedJsonBody } from "./http-body.js";
 
@@ -51,16 +53,36 @@ export async function dispatchGoalRequest(options: GoalRequestOptions): Promise<
   const goalId = text(decodeURIComponent(item![1]!)), expectedStreamVersion = integer(body.expectedStreamVersion);
   const base = { ...service, goalId, expectedStreamVersion, idempotencyKey };
   if (item![2] === "plan-revisions") {
-    object(body, ["workspaceId", "expectedStreamVersion", "modelBindingId"]);
+    object(body, ["workspaceId", "expectedStreamVersion", "modelBindingId", "scheduling"]);
+    const selection = body.scheduling === undefined ? undefined : scheduling(body.scheduling);
+    if ((body.modelBindingId === undefined) === (selection === undefined)) invalid();
+    const planRequest = selection ? { scheduling: selection } : { modelBindingId: text(body.modelBindingId) };
+    const replay = await replayGoalPlan(base, planRequest);
+    if (replay) return { status: 200, data: replay };
     const detail = await getGoal(base);
-    const proposal = await options.store.transact(scope.tenantId, tx => runtime.proposal(tx, detail.goal, text(body.modelBindingId)));
-    return { status: 200, data: await proposeGoalPlan({ ...base, proposal, planRequest: { modelBindingId: text(body.modelBindingId) } }) };
+    const unavailableRunners: string[] = [];
+    if (selection) await Promise.all((["codex-cli", "claude-cli"] as const).map(async runnerId => {
+      try { if (!options.validateRunner) throw new Error("No trusted runner inspector"); await options.validateRunner(scope.workspaceId, runnerId); }
+      catch { unavailableRunners.push(runnerId); }
+    }));
+    const proposal = await options.store.transact(scope.tenantId, tx => {
+      if (!selection) return runtime.proposal(tx, detail.goal, text(body.modelBindingId));
+      const decision = scheduleGoal(tx, detail.goal, selection, options.now(), unavailableRunners);
+      const chosen = decision.candidates.find(candidate => candidate.id === decision.selectedId)!;
+      return { ...runtime.proposal(tx, detail.goal, chosen.modelBindingId, chosen.runnerId), scheduling: decision };
+    });
+    if (proposal.runnerId !== "builtin") await options.validateRunner?.(scope.workspaceId, proposal.runnerId);
+    return { status: 200, data: await proposeGoalPlan({ ...base, proposal, planRequest }) };
   }
   if (item![2] === "commands") {
     const command = text(body.command);
-    object(body, command === "start" ? ["workspaceId", "expectedStreamVersion", "command", "planRevisionId", "planDigest"] : ["workspaceId", "expectedStreamVersion", "command"]);
+    object(body, command === "record_external_usage" ? ["workspaceId", "expectedStreamVersion", "command", "usage", "source"] : command === "start" ? ["workspaceId", "expectedStreamVersion", "command", "planRevisionId", "planDigest"] : ["workspaceId", "expectedStreamVersion", "command"]);
     const detail = await (command === "start" ? getGoal(base) : getGoalForCoordination(base));
-    const prepared = { ...base, ...await runtime.service(scope, command === "start" ? detail : undefined, command === "start") };
+    const prepared = { ...base, ...await runtime.service(scope, (command === "start" || command === "record_external_usage") ? detail : undefined, command === "start") };
+    if (command === "record_external_usage") {
+      const value = object(body.usage, ["tokens", "costMinorUnits", "currency"]);
+      return { status: 200, data: await recordExternalGoalUsage({ ...prepared, usage: { tokens: integer(value.tokens), costMinorUnits: text(value.costMinorUnits), currency: text(value.currency, 3) }, source: text(body.source, 2000) }) };
+    }
     if (command === "start") return { status: 200, data: await startGoal({ ...prepared, planRevisionId: text(body.planRevisionId), planDigest: text(body.planDigest) }) };
     if (command === "refresh") return { status: 200, data: await runtime.refresh(prepared) };
     if (command === "cancel") return { status: 200, data: await cancelGoal(prepared) };
@@ -71,4 +93,12 @@ export async function dispatchGoalRequest(options: GoalRequestOptions): Promise<
     const item = object(value, ["key", "digest", "reviewedCriterionIds"]);
     return { key: text(item.key), digest: text(item.digest), reviewedCriterionIds: array(item.reviewedCriterionIds, 20).map(value => text(value)) };
   }) }) };
+}
+
+function scheduling(value: unknown): AgentSchedulingRequestV2 {
+  const input = object(value, ["runnerId", "strategy", "modelBindingId", "expectedValueMinorUnits", "timeCostMinorUnitsPerHour"]);
+  if (!["auto", "builtin", "codex-cli", "claude-cli"].includes(String(input.runnerId)) || !["quality", "balanced", "cost"].includes(String(input.strategy))) invalid();
+  for (const key of ["expectedValueMinorUnits", "timeCostMinorUnitsPerHour"]) if (input[key] !== undefined && (typeof input[key] !== "string" || !/^(0|[1-9][0-9]{0,17})$/u.test(input[key] as string))) invalid();
+  if (input.modelBindingId !== undefined) text(input.modelBindingId);
+  return input as unknown as AgentSchedulingRequestV2;
 }

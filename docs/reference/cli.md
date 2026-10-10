@@ -37,10 +37,11 @@
   mn goal list --workspace <工作区 ID>
   mn goal show <目标 ID> --workspace <工作区 ID>
   mn goal create --workspace <工作区 ID> --file <目标 JSON 文件>
-  mn goal plan <目标 ID> --workspace <工作区 ID> --version <目标版本> --model <模型连接 ID>
+  mn goal plan <目标 ID> --workspace <工作区 ID> --version <目标版本> [--runner auto|builtin|codex-cli|claude-cli] [--strategy quality|balanced|cost] [--model <连接 ID>]
   mn goal start <目标 ID> --workspace <工作区 ID> --version <目标版本> --plan <计划 ID> --plan-digest <计划摘要>
   mn goal refresh <目标 ID> --workspace <工作区 ID> --version <目标版本>
   mn goal cancel <目标 ID> --workspace <工作区 ID> --version <目标版本>
+  mn goal usage <目标 ID> --workspace <工作区 ID> --version <目标版本> --file <用量 JSON 文件>
   mn goal accept <目标 ID> --workspace <工作区 ID> --version <目标版本> --file <验收 JSON 文件>
 
 备份示例：

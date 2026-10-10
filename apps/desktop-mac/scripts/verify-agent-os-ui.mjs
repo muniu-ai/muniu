@@ -1213,11 +1213,18 @@ async function verifyTasks(page, requestLog) {
   const composer = page.getByRole("form", { name: "委派新任务" });
   const executionModel = composer.getByLabel("执行模型", { exact: true });
   await executionModel.locator('option').nth(1).waitFor({ state: "attached" });
+  if (await composer.getByLabel("任务执行者").inputValue() !== "auto" || await composer.getByLabel("调度偏好").inputValue() !== "quality") throw new Error("任务未默认采用质量优先自动推荐");
   const initialModel = await executionModel.inputValue();
   const selectedPlanModel = await executionModel.locator('option').evaluateAll((items, initial) => items.find(item => item.value !== initial).value, initialModel);
   await executionModel.selectOption(selectedPlanModel);
   await composer.getByLabel("任务目标", { exact: true }).fill("规划下月经营，分析现金流与交付安排");
   await composer.getByLabel("验收要求", { exact: true }).fill("区分事实和建议\n说明资料缺口");
+  await composer.getByLabel("任务执行者").selectOption("claude-cli");
+  if (await executionModel.count()) throw new Error("手动选择 CLI 不应要求木牛模型连接");
+  await composer.getByText(/使用 CLI 自有账户和模型/u).waitFor();
+  if (!await composer.getByRole("button", { name: "准备执行计划", exact: true }).isEnabled()) throw new Error("外部 CLI 应允许先提交计划，交由 Host 检查身份");
+  await composer.getByLabel("任务执行者").selectOption("auto");
+  if (await executionModel.inputValue() !== selectedPlanModel) throw new Error("切换 CLI 不应丢失模型偏好");
   await composer.getByLabel("添加文本资料").setInputFiles({ name: "不可读.pdf", mimeType: "application/pdf", buffer: Buffer.from("fixture") });
   await composer.getByRole("alert").filter({ hasText: "目前支持 UTF-8" }).waitFor();
   await composer.getByLabel("添加文本资料").setInputFiles({ name: "交付约束.md", mimeType: "text/markdown", buffer: Buffer.from("现有客户优先；资料不是执行授权。") });
@@ -1241,7 +1248,8 @@ async function verifyTasks(page, requestLog) {
   await composer.getByRole("button", { name: "继续准备", exact: true }).click();
   await page.getByRole("button", { name: "确认计划并启动", exact: true }).waitFor();
   await page.unroute(`${apiUrl}/v2/workspaces/*/goals`);
-  if (await page.getByLabel("执行模型连接", { exact: true }).inputValue() !== selectedPlanModel) throw new Error("计划审阅显示的模型与委派时选择的模型不一致");
+  if (await page.getByRole("region", { name: "目标详情" }).getByLabel("执行模型", { exact: true }).inputValue() !== selectedPlanModel) throw new Error("计划审阅显示的模型与委派时选择的模型不一致");
+  await page.getByRole("region", { name: "调度依据" }).waitFor();
   if (requestLog.some(item => item.path.endsWith("/turns"))) throw new Error("计划审阅之前不得开始执行");
   const created = requestLog.filter(item => item.method === "POST" && /\/workspaces\/[^/]+\/goals$/.test(item.path));
   if (created.length !== 2 || created[0].key !== created[1].key || JSON.stringify(created[0].body) !== JSON.stringify(created[1].body) || !created[0].body.objective.includes("现有客户优先")) throw new Error("资料未进入唯一任务");

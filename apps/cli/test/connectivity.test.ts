@@ -8,7 +8,7 @@ test("doctor workspace reports Agent checks independently of Host health", async
   const result = await runCli(["doctor", "--workspace", "w1", "--json"], { io: { stdout: line => output.push(line), stderr: line => output.push(line) },
     fetch: async (input, init) => {
       const path = new URL(new Request(input, init).url).pathname; paths.push(path);
-      const data = path.endsWith("agent-readiness") ? { workspaceId: "w1", checkedAt: "2026-10-09T00:00:00.000Z", agents: [{ agentId: "workbuddy", displayName: "WorkBuddy", scope: "coding", support: "not_supported", status: "blocked", checks: [{ id: "adapter", status: "blocked", message: "尚未接入" }] }] }
+      const data = path.endsWith("agent-readiness") ? { workspaceId: "w1", checkedAt: "2026-10-09T00:00:00.000Z", agents: [{ agentId: "workbuddy", displayName: "WorkBuddy", scope: "workspace", support: "not_supported", status: "blocked", checks: [{ id: "adapter", status: "blocked", message: "尚未接入" }] }] }
         : path.endsWith("health") ? { core: { status: "healthy" }, plugins: [] } : { ready: true, issues: [] };
       return Response.json({ data, traceId: "test" });
     },

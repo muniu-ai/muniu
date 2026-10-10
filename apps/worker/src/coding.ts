@@ -2,6 +2,8 @@
 import { appendKernelEvent } from "@mn/kernel";
 
 import { spawn } from "node:child_process";
+import { homedir } from "node:os";
+import { resolveExecutionModel } from "./execution-model.js";
 import { createHash, randomBytes } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { PersistentExecutionBudget, ExecutionBudgetExceededError } from "@mn/agent-runtime";
@@ -915,7 +917,7 @@ export function createCodingReconciliationVerificationWorkerHandler(
         ? transaction.getProjection<VersionedRepository>("coding.repository", run.repositoryId)
         : undefined;
       const model = execution
-        ? transaction.getProjection<StoredModelConnection>("modelConnection", execution.modelBindingId)
+        ? resolveExecutionModel(transaction, execution)
         : undefined;
       const runnerConfiguration = execution && run && run.runnerId !== "builtin"
         ? transaction.getProjection<CodingRunnerConfigurationV1>(
@@ -1285,10 +1287,7 @@ async function loadCodingState(
       task.repositoryId,
     );
     if (!repository) throw new Error("Coding Repository 不存在");
-    const model = transaction.getProjection<StoredModelConnection>(
-      "modelConnection",
-      execution.modelBindingId,
-    );
+    const model = resolveExecutionModel(transaction, execution);
     if (!model) throw new Error("模型连接不存在");
     const runnerId = execution.runnerId ?? "builtin";
     const workspace = runnerId === "builtin"
@@ -2048,7 +2047,7 @@ class ExternalCodingRunner implements ManagedCodingRunner {
   }
 }
 
-function createExternalRunnerAdapter(input: {
+export function createExternalRunnerAdapter(input: {
   readonly runnerId: ExternalCodingRunnerId;
   readonly identity: RunnerBinaryIdentityV1;
   readonly launch: ExternalRunnerLaunch;
@@ -2461,7 +2460,7 @@ interface BuiltinRunnerOptions {
   readonly now: () => string;
 }
 
-class ControlledCodingSandbox {
+export class ControlledCodingSandbox {
   readonly #root: string;
   readonly #executable: string;
   readonly #executor?: CodingCommandExecutor;
@@ -2808,13 +2807,22 @@ class ControlledCodingSandbox {
     ], signal);
   }
 
+  async createTaskDirectory(): Promise<string> {
+    const root = await this.#initialize();
+    const taskRoot = await mkdtemp(join(root, "business-"));
+    await mkdir(join(taskRoot, "repository"), { mode: 0o700 });
+    await mkdir(join(taskRoot, "tmp"), { mode: 0o700 });
+    return realpath(join(taskRoot, "repository"));
+  }
+
   async externalLauncher(
     repositoryPath: string,
+    businessArtifact?: StagedRunnerArtifact,
   ): Promise<ExternalRunnerLaunch> {
     const root = await this.#initialize();
     const candidateRoot = await this.#candidateRoot(repositoryPath);
     const actualRepository = await realpath(repositoryPath);
-    const profile = this.#profile(candidateRoot, true);
+    const profile = businessArtifact ? this.#businessProfile(candidateRoot, businessArtifact.rootPath) : this.#profile(candidateRoot, true);
     const supervision = await this.#createRunnerSupervision(root);
     const launch = ((spec: ExternalRunnerSpawnSpec) => {
       if (spec.cwd !== actualRepository || !isAbsolute(spec.executable) || spec.shell !== false) {
@@ -3110,6 +3118,17 @@ class ControlledCodingSandbox {
     }, { signal, timeoutMs: CONTROLLED_GIT_TIMEOUT_MS });
   }
 
+  #businessProfile(taskRoot: string, runnerRoot: string): string {
+    const readPaths = ["/System", "/usr", "/bin", "/sbin", "/Library", "/private/etc", "/private/preboot", "/private/var/db/dyld", "/dev", taskRoot, runnerRoot];
+    const authPaths = [join(homedir(), ".codex/auth.json"), join(homedir(), ".claude.json"), join(homedir(), ".claude/.credentials.json")];
+    return ["(version 1)", "(deny default)", "(allow process*)", "(allow sysctl-read)",
+      '(allow file-read* (literal "/"))', "(allow file-read-metadata)", "(allow network*)", "(allow mach-lookup)",
+      ...readPaths.map(path => `(allow file-read* file-map-executable (subpath "${schemeString(path)}"))`),
+      ...authPaths.map(path => `(allow file-read-data (literal "${schemeString(path)}"))`),
+      `(allow file-write* (subpath "${schemeString(taskRoot)}"))`,
+      '(allow file-write* (literal "/dev/null"))'].join("\n");
+  }
+
   #profile(candidateRoot: string, allowNetwork: boolean): string {
     return [
       "(version 1)",
@@ -3166,10 +3185,7 @@ async function persistReconciliationVerification(input: {
       "coding.repository",
       input.repository.id,
     );
-    const model = transaction.getProjection<StoredModelConnection>(
-      "modelConnection",
-      input.execution.modelBindingId,
-    );
+    const model = resolveExecutionModel(transaction, input.execution);
     const runnerConfiguration = transaction.getProjection<CodingRunnerConfigurationV1>(
       CODING_RUNNER_CONFIGURATION_NAMESPACE,
       input.runnerConfiguration.id,

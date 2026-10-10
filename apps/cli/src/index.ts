@@ -48,10 +48,11 @@ const HELP = `木牛 Agent OS 0.2
   mn goal list --workspace <工作区 ID>
   mn goal show <目标 ID> --workspace <工作区 ID>
   mn goal create --workspace <工作区 ID> --file <目标 JSON 文件>
-  mn goal plan <目标 ID> --workspace <工作区 ID> --version <目标版本> --model <模型连接 ID>
+  mn goal plan <目标 ID> --workspace <工作区 ID> --version <目标版本> [--runner auto|builtin|codex-cli|claude-cli] [--strategy quality|balanced|cost] [--model <连接 ID>]
   mn goal start <目标 ID> --workspace <工作区 ID> --version <目标版本> --plan <计划 ID> --plan-digest <计划摘要>
   mn goal refresh <目标 ID> --workspace <工作区 ID> --version <目标版本>
   mn goal cancel <目标 ID> --workspace <工作区 ID> --version <目标版本>
+  mn goal usage <目标 ID> --workspace <工作区 ID> --version <目标版本> --file <用量 JSON 文件>
   mn goal accept <目标 ID> --workspace <工作区 ID> --version <目标版本> --file <验收 JSON 文件>
 
 备份示例：
@@ -304,7 +305,7 @@ async function goal(parsed: ParsedArguments, api: ApiClient): Promise<CliResult>
     const data = await api.mutate(apiPath("createGoal", { workspaceId: flag(parsed, "workspace", true)! }), await goalFile(parsed));
     return { command, data, human: `已创建目标：${data.goal.id}` };
   }
-  if (!["show", "plan", "start", "refresh", "cancel", "accept"].includes(action)) throw new CliUsageError("goal 支持 list、show、create、plan、start、refresh、cancel、accept");
+  if (!["show", "plan", "start", "refresh", "cancel", "accept", "usage"].includes(action)) throw new CliUsageError("goal 支持 list、show、create、plan、start、refresh、cancel、accept、usage");
   const goalId = parsed.positional[1];
   if (!goalId) throw new CliUsageError("缺少目标 ID");
   if (action === "show") {
@@ -318,9 +319,19 @@ async function goal(parsed: ParsedArguments, api: ApiClient): Promise<CliResult>
   const workspaceId = flag(parsed, "workspace", true)!;
   const base = { workspaceId, expectedStreamVersion };
   if (action === "plan") {
-    assertAllowedFlags(parsed, ["workspace", "version", "model"]);
-    const data = await api.mutate(apiPath("proposeGoalPlan", { goalId }), { ...base, modelBindingId: flag(parsed, "model", true)! });
+    assertAllowedFlags(parsed, ["workspace", "version", "model", "runner", "strategy", "value", "time-cost"]);
+    const runnerId = flag(parsed, "runner") ?? (flag(parsed, "model") ? "builtin" : "auto");
+    const strategy = flag(parsed, "strategy") ?? "quality";
+    if (!["auto", "builtin", "codex-cli", "claude-cli"].includes(runnerId) || !["quality", "balanced", "cost"].includes(strategy)) throw new CliUsageError("runner 或 strategy 无效");
+    const model = flag(parsed, "model"), value = flag(parsed, "value"), timeCost = flag(parsed, "time-cost");
+    const data = await api.mutate(apiPath("proposeGoalPlan", { goalId }), { ...base, scheduling: { runnerId, strategy,
+      ...(model ? { modelBindingId: model } : {}), ...(value ? { expectedValueMinorUnits: value } : {}), ...(timeCost ? { timeCostMinorUnitsPerHour: timeCost } : {}) } });
     return { command, data, human: JSON.stringify(data, null, 2) };
+  }
+  if (action === "usage") {
+    assertAllowedFlags(parsed, ["workspace", "version", "file"]);
+    const data = await api.mutate(apiPath("commandGoal", { goalId }), { ...await goalFile(parsed), ...base, command: "record_external_usage" });
+    return { command, data, human: `目标状态：${data.goal.status}` };
   }
   if (action === "accept") {
     assertAllowedFlags(parsed, ["workspace", "version", "file"]);

@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import type { GoalDetailV2, GoalStatusV2, GoalV2, ModelConnectionV2, Thread } from "@mn/contracts";
+import type { AgentSchedulingRequestV2, GoalDetailV2, GoalStatusV2, GoalV2, ModelConnectionV2, Thread } from "@mn/contracts";
 import { AgentOsApiError, type AgentOsClient } from "../api";
 import { ResultText } from "../components/ResultText";
 import { TaskComposer } from "../components/TaskComposer";
 import { ThreadAgentPanel } from "../components/ThreadAgentPanel";
 import type { CodingRepositorySummary } from "../types";
 import { EmptyState, ErrorState, Loading } from "../components/Status";
+
+import { SchedulingControls, SchedulingDecision, ExternalUsageForm, runnerLabel } from "../components/AgentScheduling";
 
 const labels: Record<GoalStatusV2, string> = { draft: "草稿", awaiting_authorization: "待确认计划", running: "执行中", waiting_approval: "等待审批",
   needs_reconciliation: "待核对", failed: "未完成", awaiting_acceptance: "待验收", accepted: "已验收", cancelled: "已取消" };
@@ -31,7 +33,7 @@ export function GoalsPage({ api, workspaceId, onOpenThread, pluginIds, repositor
   const [objective, setObjective] = useState("");
   const [criteria, setCriteria] = useState("");
   const [threadId, setThreadId] = useState("");
-  const [modelId, setModelId] = useState("");
+  const [selection, setSelection] = useState<AgentSchedulingRequestV2>({ runnerId: "auto", strategy: "quality" });
   const [currency, setCurrency] = useState("CNY");
   const [tokens, setTokens] = useState("100000");
   const [cost, setCost] = useState("5000");
@@ -68,7 +70,7 @@ export function GoalsPage({ api, workspaceId, onOpenThread, pluginIds, repositor
     return () => { active = false; };
   }, [refreshList]);
   useEffect(() => { pageRef.current?.closest(".page-scroll")?.scrollTo({ top: 0 }); }, [detail?.goal.id]);
-  useEffect(() => { setModelId(detail?.plan?.modelBindingId ?? ""); }, [detail?.goal.id, detail?.plan?.id]);
+  useEffect(() => { setSelection(detail?.plan?.scheduling?.request ?? (detail?.plan ? { runnerId: detail.plan.runnerId, strategy: "quality", modelBindingId: detail.plan.modelBindingId } : { runnerId: "auto", strategy: "quality" })); }, [detail?.goal.id, detail?.plan?.id]);
   useEffect(() => { setReviewed(new Set()); }, [detail?.goal.id, detail?.deliverySet?.digest]);
   useEffect(() => {
     const goalId = detail?.goal.id;
@@ -94,7 +96,7 @@ export function GoalsPage({ api, workspaceId, onOpenThread, pluginIds, repositor
     return () => { active = false; stop(); if (timer) clearTimeout(timer); };
   }, [api, workspaceId, detail?.goal.id, refreshGoals]);
   const selectedThreadId = threads.find(thread => thread.id === threadId)?.id ?? threads[0]?.id ?? "";
-  const selectedModelId = models.find(model => model.id === modelId)?.id ?? models.find(model => model.id === detail?.plan?.modelBindingId)?.id ?? models.find(model => model.defaultForNewExecutions)?.id ?? models[0]?.id ?? "";
+  const planDirty = Boolean(detail?.plan && JSON.stringify(selection) !== JSON.stringify(detail.plan.scheduling?.request ?? { runnerId: detail.plan.runnerId, strategy: "quality", modelBindingId: detail.plan.modelBindingId }));
   async function perform(work: () => Promise<GoalDetailV2>, goalId = detail?.goal.id) {
     if (busy) return;
     const epoch = goalId ? readEpochs.current.get(goalId) ?? 0 : undefined;
@@ -160,12 +162,13 @@ export function GoalsPage({ api, workspaceId, onOpenThread, pluginIds, repositor
         <p>额度：{(Number(detail.goal.budget.maxCostMinorUnits) / 100).toFixed(2)} {detail.goal.budget.currency} · {detail.goal.budget.maxTokens} tokens · {detail.goal.budget.maxDurationMs / 60_000} 分钟</p>
         {detail.goal.reservation && <p>用量：{detail.goal.reservation.status === "settled" ? `${detail.goal.reservation.actual?.costMinorUnits ?? "0"} 分 ${detail.goal.budget.currency}，${detail.goal.reservation.actual?.tokens ?? 0} tokens` : detail.goal.reservation.status === "unknown" ? "待核对，额度继续保留" : "已预留"}</p>}
         <h3>验收标准</h3>{detail.goal.deliverables.map(spec => <div key={spec.key}><strong>{spec.title}{spec.required ? "（必需）" : "（可选）"}</strong><ul>{spec.criteria.map(criterion => <li key={criterion.id}>{criterion.description}</li>)}</ul></div>)}
-        {!detail.goal.executionRef && <div className="field"><label htmlFor="goal-model">执行模型连接</label><select id="goal-model" value={selectedModelId} disabled={busy || !models.length} onChange={event => setModelId(event.target.value)}>
-          {!models.length && <option value="">先在集成中连接模型</option>}{models.map(model => <option key={model.id} value={model.id} disabled={model.billingCurrency !== detail.goal.budget.currency}>{model.displayName} · {model.defaultModel}{model.billingCurrency !== detail.goal.budget.currency ? "（币种不符）" : ""}</option>)}</select></div>}
-        {detail.plan && !detail.goal.executionRef && selectedModelId !== detail.plan.modelBindingId && <p className="inline-error">模型已变更，请重新生成计划后确认。</p>}
-        {detail.plan && <div className="goal-plan"><h3>执行计划</h3><p>{thread?.subject ?? "关联任务"} · {detail.plan.pluginId === "coding" ? "研发" : detail.plan.agentDefinitionId === "opc.business-assistant" ? "经营助手" : "机会验证"} · {detail.plan.model}</p><p>由木牛内置 Agent 执行；按已确认的目标交付成果，再逐项验收。经营分析不会自动修改账目；研发变更需要经过检查与审批。</p>
+        {!detail.goal.executionRef && <SchedulingControls value={selection} onChange={setSelection} models={models} disabled={busy} currency={detail.goal.budget.currency} onSettings={onSettings} />}
+        {planDirty && !detail.goal.executionRef && <p className="inline-error">调度选择已变更，请重新生成计划后确认。</p>}
+        {detail.plan && <div className="goal-plan"><h3>执行计划</h3><p>{thread?.subject ?? "关联任务"} · {detail.plan.pluginId === "coding" ? "研发" : detail.plan.agentDefinitionId === "opc.business-assistant" ? "经营助手" : "机会验证"} · {detail.plan.model}</p><p>由{runnerLabel(detail.plan.runnerId)}执行；按已确认的目标交付成果，再逐项验收。经营分析不会自动修改账目；研发变更需要经过检查与审批。</p>
+          {detail.plan.scheduling && <SchedulingDecision decision={detail.plan.scheduling} />}
           <details><summary>计划权限与版本</summary><dl><dt>计划版本</dt><dd>{detail.plan.revision}</dd><dt>工具</dt><dd>{detail.plan.toolIds.join("、") || "无"}</dd><dt>数据范围</dt><dd>{detail.plan.dataScopes.map(scope => `${scope.namespace}: ${scope.resourceId}`).join("、")}</dd><dt>计划摘要</dt><dd>{detail.plan.digest}</dd></dl></details></div>}
-        {detail.goal.executionRef && thread && <ThreadAgentPanel key={detail.goal.id} api={api} workspaceId={workspaceId} pluginId={thread.pluginId as "opc" | "coding"} threadId={thread.id} resourceId={thread.resourceRef?.resourceId} goalExecution={{ executionId: detail.goal.executionRef.executionId, canControl: ["running", "waiting_approval"].includes(detail.goal.status) }} />}
+        {detail.goal.executionRef && thread && <ThreadAgentPanel key={detail.goal.id} api={api} workspaceId={workspaceId} pluginId={thread.pluginId as "opc" | "coding"} threadId={thread.id} resourceId={thread.resourceRef?.resourceId} goalExecution={{ executionId: detail.goal.executionRef.executionId, canControl: ["running", "waiting_approval"].includes(detail.goal.status), onCancel: () => perform(() => api.commandGoal(detail, "cancel")) }} />}
+        {detail.plan?.runnerId !== "builtin" && detail.goal.reasonCode === "GOAL_USAGE_UNKNOWN" && <ExternalUsageForm key={detail.goal.id} detail={detail} disabled={busy} onSave={(usage, source) => void perform(() => api.recordExternalUsage(detail, usage, source))} />}
         {detail.deliverySet && <section aria-label="成果验收"><h3>成果与检查</h3><p>先查看任务成果，再确认各项内容标准。程序检查不代替内容判断。</p>
           {detail.deliverySet.items.map(output => { const spec = detail.goal.deliverables.find(item => item.key === output.key); return <article className="goal-output" key={output.key}><strong>{spec?.title ?? output.key}</strong>
             <ResultText text={output.preview} /><a className="quiet-button" download="木牛任务成果.md" href={`data:text/markdown;charset=utf-8,${encodeURIComponent(output.preview)}`}>下载成果</a>
@@ -180,8 +183,8 @@ export function GoalsPage({ api, workspaceId, onOpenThread, pluginIds, repositor
             detail.deliverySet!.items.map(output => ({ key: output.key, digest: output.digest, reviewedCriterionIds: detail.goal.deliverables.find(spec => spec.key === output.key)!.criteria.filter(criterion => reviewed.has(JSON.stringify([output.key, criterion.id]))).map(criterion => criterion.id) }))))}>接收成果</button>}
         </section>}
         <div className="goal-actions">{thread?.resourceRef && <button className="secondary-button" onClick={() => onOpenThread(thread)}>查看业务对象</button>}
-          {["draft", "awaiting_authorization"].includes(detail.goal.status) && <button className="secondary-button" disabled={busy || !selectedModelId} onClick={() => void perform(() => api.planGoal(detail, selectedModelId))}>生成计划</button>}
-          {detail.goal.status === "awaiting_authorization" && detail.plan && <button className="primary-button" disabled={busy || selectedModelId !== detail.plan.modelBindingId} onClick={() => void perform(() => api.commandGoal(detail, "start"))}>确认计划并启动</button>}
+          {["draft", "awaiting_authorization"].includes(detail.goal.status) && <button className="secondary-button" disabled={busy} onClick={() => void perform(() => api.planGoal(detail, selection))}>生成计划</button>}
+          {detail.goal.status === "awaiting_authorization" && detail.plan && <button className="primary-button" disabled={busy || planDirty} onClick={() => void perform(() => api.commandGoal(detail, "start"))}>确认计划并启动</button>}
           {detail.goal.executionRef && <button className="secondary-button" disabled={busy} onClick={() => void perform(() => api.commandGoal(detail, "refresh"))}>更新执行状态</button>}
           {!["accepted", "cancelled"].includes(detail.goal.status) && <button className="secondary-button" disabled={busy} onClick={() => void perform(() => api.commandGoal(detail, "cancel"))}>取消任务</button>}
         </div>

@@ -47,7 +47,7 @@ import {
 
 const NOW = "2026-09-04T12:00:00.000Z";
 const SANDBOX_AVAILABLE = process.platform === "darwin";
-type RunnerFixtureTerminal = "completed" | "unknown" | "hang" | "stdin_closed" | "malicious_git";
+type RunnerFixtureTerminal = "business" | "completed" | "unknown" | "hang" | "stdin_closed" | "malicious_git";
 
 test("Runner 监督器在 Worker 控制管道硬断开后终止进程组并留下不可复用证明", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "muniu-runner-supervisor-"));
@@ -102,10 +102,15 @@ test("Runner 监督器在 Worker 控制管道硬断开后终止进程组并留�
   );
 });
 
-test("Worker 在可恢复候选仓库中显式执行 Claude CLI，且不调用 BYOK 模型", {
+test("Worker 在可恢复候选仓库中执行 Claude CLI，无需配置 BYOK 模型", {
   skip: !SANDBOX_AVAILABLE,
 }, async (t) => {
   const fixture = await externalFixture(t, "completed");
+  await fixture.store.transact("local", tx => {
+    const execution = tx.getProjection<Execution>("execution", "execution-1")!;
+    tx.putProjection("execution", execution.id, { ...execution, modelBindingId: "runner:claude-cli" });
+    tx.deleteProjection("modelConnection", "model-1");
+  });
   const polling = fixture.worker.pollOnce();
 
   const runnerApproval = await waitForApproval(fixture.store, []);
@@ -835,6 +840,59 @@ async function drainDeferredCleanup(fixture: {
   }
 }
 
+for (const runnerId of ["codex-cli", "claude-cli"] as const) {
+  test(`经营目标通过 ${runnerId} 交付答复，无需 BYOK 或代码仓库`, { skip: !SANDBOX_AVAILABLE }, async t => {
+    const f = await externalFixture(t, "business", runnerId);
+    await asBusiness(f.store, runnerId);
+    const polling = f.worker.pollOnce();
+    const approval = await waitForApproval(f.store, []);
+    await f.kernel.decideApproval("local", "local-owner", "approve-business", approval.id, approval.streamVersion, "approve_once");
+    const result = await polling;
+    assert.equal(result.status, "completed", JSON.stringify(result));
+    assert.equal(f.modelCalls(), 0);
+    const records = await new KernelProjectionRuntimeStore({ store: f.store, tenantId: "local" }).readExecution("execution-1");
+    assert.ok(records.some(record => record.type === "model/response" && record.payload.text === "business report"));
+    assert.ok(records.findIndex(record => record.type === "model/request") < records.findIndex(record => record.type === "tool/started"));
+    assert.ok(records.some(record => record.type === "tool/result"));
+    assert.equal(await readFile(join(f.repositoryPath, "message.txt"), "utf8"), "old value\n");
+  });
+}
+
+test("经营 CLI 缺少终态时保持待核对，后续 Worker 轮询不重放", { skip: !SANDBOX_AVAILABLE }, async t => {
+  const f = await externalFixture(t, "unknown", "codex-cli");
+  await asBusiness(f.store, "codex-cli");
+  const polling = f.worker.pollOnce();
+  const approval = await waitForApproval(f.store, []);
+  await f.kernel.decideApproval("local", "local-owner", "approve-business", approval.id, approval.streamVersion, "approve_once");
+  assert.equal((await polling).status, "needs_reconciliation");
+  const records = await new KernelProjectionRuntimeStore({ store: f.store, tenantId: "local" }).readExecution("execution-1");
+  assert.ok(records.some(record => record.type === "tool/outcome_unknown"));
+  assert.equal((await f.worker.pollOnce()).status, "idle");
+  assert.equal(f.modelCalls(), 0);
+});
+
+test("拒绝经营 CLI 审批不会启动外部进程", { skip: !SANDBOX_AVAILABLE }, async t => {
+  const f = await externalFixture(t, "business", "claude-cli");
+  await asBusiness(f.store, "claude-cli");
+  const polling = f.worker.pollOnce();
+  const approval = await waitForApproval(f.store, []);
+  await f.kernel.decideApproval("local", "local-owner", "deny-business", approval.id, approval.streamVersion, "deny");
+  assert.equal((await polling).status, "failed");
+  const records = await new KernelProjectionRuntimeStore({ store: f.store, tenantId: "local" }).readExecution("execution-1");
+  assert.equal(records.some(record => record.type === "tool/started"), false);
+});
+
+async function asBusiness(store: SqliteStorage, runnerId: ExternalCodingRunnerId) {
+  await store.transact("local", tx => {
+      const execution = tx.getProjection<Execution>("execution", "execution-1")!;
+      const thread = tx.getProjection<Thread>("thread", "thread-1")!;
+      const workspace = tx.getProjection<Workspace>("workspace", "workspace-1")!;
+      tx.putProjection("execution", execution.id, { ...execution, pluginId: "opc", agentDefinitionId: "opc.business-assistant", modelBindingId: `runner:${runnerId}` });
+      tx.putProjection("thread", thread.id, { ...thread, pluginId: "opc", resourceRef: undefined });
+      tx.putProjection("workspace", workspace.id, { ...workspace, activePluginIds: ["opc", `runner-${runnerId}`] });
+    });
+ }
+
 async function externalFixture(
   t: test.TestContext,
   terminal: RunnerFixtureTerminal,
@@ -1359,7 +1417,9 @@ async function compileRunnerBinary(
   const session = runnerId === "claude-cli"
     ? '{"type":"system","subtype":"init","session_id":"claude-session-fixture"}'
     : '{"type":"thread.started","thread_id":"codex-session-fixture"}';
-  const result = runnerId === "claude-cli"
+  const result = terminal === "business" ? (runnerId === "claude-cli"
+    ? '{"type":"result","subtype":"success","is_error":false,"result":"business report"}'
+    : '{"type":"item.completed","item":{"type":"agent_message","text":"business report"}}\n{"type":"turn.completed"}') : runnerId === "claude-cli"
     ? terminal === "completed" || terminal === "stdin_closed" || terminal === "malicious_git"
       ? '{"type":"result","is_error":false}'
       : '{"type":"assistant","message":"done without terminal"}'
@@ -1372,9 +1432,12 @@ async function compileRunnerBinary(
     "#include <string.h>",
     "#include <sys/stat.h>",
     "#include <unistd.h>",
+    "#include <stdlib.h>",
     "int main(int argc, char **argv) {",
     `  if (argc > 1 && strcmp(argv[1], "--version") == 0) { fputs(${JSON.stringify(`${version}\n`)}, stdout); return 0; }`,
     terminal === "stdin_closed" ? "  close(STDIN_FILENO); usleep(200000);" : "",
+    terminal === "business" ? `  if (fopen(${JSON.stringify(join(binaryPath, "..", "source", "message.txt"))}, "r")) return 99;` : "",
+
     `  FILE *message = fopen("message.txt", "w"); if (!message) return 2; fputs(${JSON.stringify(`${value}\n`)}, message); fclose(message);`,
     "  FILE *added = fopen(\"added.txt\", \"w\"); if (!added) return 3; fputs(\"created by runner\\n\", added); fclose(added);",
     terminal === "malicious_git" ? [

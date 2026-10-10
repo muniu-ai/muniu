@@ -27,8 +27,9 @@ test("OPC 工作区也能看到 Agent 适用范围与尚未接入的 WorkBuddy",
   assert.equal(report.workspaceId, "workspace");
   assert.equal(report.checkedAt, checkedAt);
   assert.deepEqual(report.agents.map(agent => agent.agentId), ["builtin", "codex-cli", "claude-cli", "workbuddy"]);
-  assert.ok(report.agents.every(agent => agent.status === "blocked" && agent.scope === "coding"));
-  assert.equal(report.agents[0]!.checks.find(check => check.id === "coding_plugin")?.status, "blocked");
+  assert.ok(report.agents.every(agent => agent.scope === "workspace"));
+  assert.equal(report.agents[0]!.status, "unverified");
+  assert.equal(report.agents[0]!.checks.find(check => check.id === "task_plugin")?.status, "passed");
   const workbuddy = report.agents.find(agent => agent.agentId === "workbuddy")!;
   assert.equal(workbuddy.support, "not_supported");
   assert.match(workbuddy.checks[0]!.message, /尚未接入/u);
@@ -59,15 +60,13 @@ test("权限、插件健康、Worker 与 sandbox 的阻断信息分别保留", (
   assert.equal(checks.find(check => check.id === "sandbox")?.status, "unknown");
 });
 
-test("缺少木牛模型连接时内置与外部 Coding Agent 均显示阻断", () => {
+test("外部 CLI 使用自身模型连接，经营工作区不因缺少 BYOK 而阻断", () => {
   const report = evaluateCodingAgentReadiness({ ...common, modelReady: false, configurations: [configuration()],
     binaryChecks: { "codex-cli": { status: "passed", message: "文件身份匹配" } },
     runtime: { worker: "available", sandbox: "available" } });
-  for (const agentId of ["builtin", "codex-cli"]) {
-    const agent = report.agents.find(entry => entry.agentId === agentId)!;
-    assert.equal(agent.status, "blocked");
-    assert.equal(agent.checks.find(check => check.id === "model")?.status, "blocked");
-  }
+  assert.equal(report.agents[0]!.status, "blocked");
+  assert.equal(report.agents.find(agent => agent.agentId === "codex-cli")!.status, "unverified");
+  assert.equal(report.agents.find(agent => agent.agentId === "codex-cli")!.checks.some(check => check.id === "model"), false);
 });
 
 test("只检查当前工作区已经确认且摘要有效的二进制，不扫描其他路径", async () => {

@@ -52,7 +52,7 @@ export async function readAgentReadiness(input: CodingAgentReadinessInput & {
   await Promise.all(EXTERNAL_CODING_RUNNER_IDS.map(async runnerId => {
     const configuration = confirmedConfiguration(input, configurations, runnerId);
     if (!configuration
-      || !input.activePluginIds.includes("coding")
+      || !input.activePluginIds.some(id => id === "coding" || id === "opc")
       || !input.activePluginIds.includes(runnerPluginId(runnerId))
       || input.runnerPlugins[runnerId]?.status !== "healthy") return;
     if (!input.inspector) {
@@ -80,10 +80,10 @@ export function evaluateCodingAgentReadiness(input: CodingAgentReadinessInput & 
 }): AgentReadinessReportV1 {
   const baseChecks: readonly Check[] = [
     {
-      id: "coding_plugin",
-      status: input.activePluginIds.includes("coding") ? "passed" : "blocked",
-      message: input.activePluginIds.includes("coding") ? "工作区已启用 Coding" : "工作区尚未启用 Coding",
-      ...(!input.activePluginIds.includes("coding") ? { action: "启用 Coding 后创建代码任务；外部 Agent 当前仅用于 Coding" } : {}),
+      id: "task_plugin",
+      status: input.activePluginIds.some(id => id === "coding" || id === "opc") ? "passed" : "blocked",
+      message: input.activePluginIds.some(id => id === "coding" || id === "opc") ? "工作区已启用任务插件" : "工作区尚未启用经营或研发插件",
+      ...(!input.activePluginIds.some(id => id === "coding" || id === "opc") ? { action: "启用经营或研发插件后创建任务" } : {}),
     },
     {
       id: "permission", status: input.canExecute ? "passed" : "blocked",
@@ -93,15 +93,15 @@ export function evaluateCodingAgentReadiness(input: CodingAgentReadinessInput & 
     {
       id: "model", status: input.modelReady ? "passed" : "blocked",
       message: input.modelReady ? "木牛已有通过探测且配置价格的模型连接" : "木牛尚无通过探测且配置价格的模型连接",
-      action: "Coding 编排需要木牛模型连接；外部 Agent 还需使用自己的模型账号",
+      action: "内置 Agent 使用木牛模型连接；外部 CLI 使用自己的模型账号",
     },
     availabilityCheck("worker", input.runtime?.worker ?? "unknown"),
     availabilityCheck("sandbox", input.runtime?.sandbox ?? "unknown"),
   ];
   const builtin = agent("builtin", "木牛内置 Agent", [
     ...baseChecks,
-    { id: "approval", status: "required", message: "具体任务仍需模型连接、仓库和工具策略检查",
-      action: "创建 Coding 任务并查看执行记录；需要批准的操作会进入待办" },
+    { id: "approval", status: "required", message: "具体任务仍需资料范围和工具策略检查",
+      action: "创建任务并查看执行记录；需要批准的操作会进入待办" },
   ]);
   const externals = EXTERNAL_CODING_RUNNER_IDS.map(runnerId => {
     const configuration = confirmedConfiguration(input, input.configurations, runnerId);
@@ -109,7 +109,7 @@ export function evaluateCodingAgentReadiness(input: CodingAgentReadinessInput & 
     const pluginState = input.runnerPlugins[runnerId]?.status;
     const pluginHealthy = pluginActive && pluginState === "healthy";
     const checks: Check[] = [
-      ...baseChecks,
+      ...baseChecks.filter(check => check.id !== "model"),
       { id: "runner_plugin", status: pluginHealthy ? "passed" : "blocked",
         message: !pluginActive ? "工作区尚未启用对应 Runner 插件"
           : pluginState === "missing_tool" ? "Runner 插件缺少受控执行工具"
@@ -124,9 +124,9 @@ export function evaluateCodingAgentReadiness(input: CodingAgentReadinessInput & 
         action: "启用插件并确认安装文件后重新检查；不支持 npm 或 shebang 包装器",
       }) },
       { id: "authentication", status: "unknown", message: "CLI 登录态、模型权限与额度未验证",
-        action: "在 CLI 中完成登录，再通过已批准的 Coding 任务验证；木牛的模型密钥不会自动传给外部 Agent" },
+        action: "在 CLI 中完成登录，再通过已批准的任务验证；木牛的模型密钥不会自动传给外部 Agent" },
       { id: "approval", status: "required", message: "每次调用仍需中央工具策略和批准",
-        action: "在 Coding 对话中显式选择该 Agent，检查执行记录和待批准事项" },
+        action: "在任务计划中选择该 Agent，检查执行记录和待批准事项" },
     ];
     return agent(runnerId, runnerId === "codex-cli" ? "Codex CLI" : "Claude Code", checks, configuration);
   });
@@ -134,7 +134,7 @@ export function evaluateCodingAgentReadiness(input: CodingAgentReadinessInput & 
     workspaceId: input.workspaceId,
     checkedAt: input.checkedAt,
     agents: [builtin, ...externals.sort((left, right) => left.agentId === "codex-cli" ? -1 : right.agentId === "codex-cli" ? 1 : 0), {
-      agentId: "workbuddy", displayName: "WorkBuddy", scope: "coding", support: "not_supported", status: "blocked",
+      agentId: "workbuddy", displayName: "WorkBuddy", scope: "workspace", support: "not_supported", status: "blocked",
       checks: [{ id: "adapter", status: "blocked", message: "木牛尚未接入 WorkBuddy",
         action: "WorkBuddy 桌面与 CodeBuddy Code 是不同接入对象；企业 Managed Agents 需要独立 API 适配与账号授权" }],
     }],
@@ -147,7 +147,7 @@ function agent(
   checks: readonly Check[],
   configuration?: CodingRunnerConfigurationV1,
 ): AgentReadinessV1 {
-  return { agentId, displayName, scope: "coding", support: "supported",
+  return { agentId, displayName, scope: "workspace", support: "supported",
     status: checks.some(check => check.status === "blocked") ? "blocked" : "unverified", checks,
     ...(configuration ? { configuration } : {}) };
 }

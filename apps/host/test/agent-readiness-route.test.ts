@@ -23,7 +23,8 @@ test("Agent diagnostics are readable in business workspaces and do not claim ins
     assert.equal(report.agents.every((agent: any) => agent.status === "blocked"), true);
     assert.equal(report.agents.find((agent: any) => agent.agentId === "workbuddy").support, "not_supported");
     const codex = report.agents.find((agent: any) => agent.agentId === "codex-cli");
-    assert.equal(codex.checks.find((check: any) => check.id === "model").status, "blocked");
+    assert.equal(codex.checks.some((check: any) => check.id === "model"), false);
+    assert.equal(report.agents.find((agent: any) => agent.agentId === "builtin").checks.find((check: any) => check.id === "model").status, "blocked");
     assert.equal(codex.checks.find((check: any) => check.id === "authentication").status, "unknown");
     await store.transact("local", tx => {
       const principal = tx.getProjection<any>("principal", "local-owner");

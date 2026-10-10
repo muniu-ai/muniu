@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import type { Execution, ExecutionAuthority, GoalBudgetV2, GoalDeliverableSpecV2, GoalDeliveryAcceptanceV2, GoalDeliverySetV2, GoalDetailV2, GoalExecutionObservationV2, GoalOutputRefV2, GoalPlanProposalV2, GoalPlanRevisionV2, GoalResourceRefV2, GoalUsageV2, GoalV2, Job, Principal, Thread, Workspace, WorkspaceMembership } from "@mn/contracts";
-import { appendKernelEvent, KernelError, sha256, type KernelStore, type KernelTransaction } from "@mn/kernel";
+import { appendKernelEvent, hasUnsettledToolCalls, KernelError, sha256, type KernelStore, type KernelTransaction } from "@mn/kernel";
 import type { ContentAddressedStorage, KeyProvider } from "@mn/storage";
 
 export interface GoalScope { readonly tenantId: string; readonly workspaceId: string; readonly principalId: string }
@@ -232,18 +232,27 @@ export async function listGoals(options: GoalServiceOptions): Promise<readonly G
     authorized(tx, options); return tx.listProjections<GoalV2>(GOAL_NAMESPACE).filter(goal => goal.tenantId === options.tenantId && goal.workspaceId === options.workspaceId);
   });
 }
+export async function replayGoalPlan(options: GoalMutationOptions, input: unknown): Promise<GoalDetailV2 | undefined> {
+  protect(options); mutationKey(options.idempotencyKey);
+  return options.store.transact(options.tenantId, tx => {
+    current(tx, options);
+    const saved = prior(tx, `goal.plan_proposed:${options.workspaceId}:${options.principalId}:${options.goalId}`, options.idempotencyKey, sha256({ input, expectedStreamVersion: options.expectedStreamVersion }));
+    return saved ? mutationResponse(tx, options, "plan_proposed", saved) : undefined;
+  });
+}
+
 export async function proposeGoalPlan(options: GoalMutationOptions & { readonly proposal: GoalPlanProposalV2;
   /** Host-derived public intent; execution configuration remains authoritative in proposal. */
-  readonly planRequest?: { readonly modelBindingId: string } }): Promise<GoalDetailV2> {
+  readonly planRequest?: { readonly modelBindingId?: string; readonly scheduling?: import("@mn/contracts").AgentSchedulingRequestV2 } }): Promise<GoalDetailV2> {
   const proposal = copy(options.proposal);
-  const planRequest = options.planRequest ? copy({ modelBindingId: options.planRequest.modelBindingId }) : undefined;
-  if (planRequest && (!planRequest.modelBindingId?.trim() || planRequest.modelBindingId !== proposal.modelBindingId)) fail("GOAL_PLAN_INVALID", "计划请求与执行配置不一致");
+  const planRequest = options.planRequest ? copy(options.planRequest) : undefined;
+  if (planRequest?.modelBindingId && !planRequest.scheduling && planRequest.modelBindingId !== proposal.modelBindingId) fail("GOAL_PLAN_INVALID", "计划请求与执行配置不一致");
   return mutate(options, "plan_proposed", planRequest ?? proposal, (tx, detail) => {
     const { goal } = detail; open(goal);
     if (goal.executionRef || goal.reservation) fail("GOAL_PLAN_IN_PROGRESS", "已派发计划不能替换");
     const thread = tx.getProjection<Thread>("thread", goal.threadId);
     if (!thread || thread.streamVersion !== proposal.threadStreamVersion || thread.pluginId !== proposal.pluginId
-      || !["opc", "coding"].includes(proposal.pluginId) || proposal.runnerId !== "builtin" || !proposal.agentDefinitionId?.trim()
+      || !["opc", "coding"].includes(proposal.pluginId) || !["builtin", "codex-cli", "claude-cli"].includes(proposal.runnerId) || !proposal.agentDefinitionId?.trim()
       || !proposal.pluginVersion?.trim() || !proposal.modelBindingId?.trim() || !proposal.model?.trim() || !integer(proposal.modelConnectionStreamVersion, 1)
       || !/^[a-f0-9]{64}$/u.test(proposal.domainInputDigest)
       || !Array.isArray(proposal.toolIds) || !Array.isArray(proposal.dataScopes) || !Array.isArray(proposal.autoAllowedEffects)) fail("GOAL_PLAN_INVALID", "计划执行配置无效或会话已变化");
@@ -302,6 +311,25 @@ function checkOutputs(tx: KernelTransaction, options: GoalServiceOptions, goal: 
   return goal.deliverables.filter(item => item.required).every(item => outputs.some(output => output.key === item.key))
     && outputs.every(output => output.checks.every((check: GoalOutputRefV2["checks"][number]) => check.status === "passed"));
 }
+export async function recordExternalGoalUsage(options: GoalMutationOptions & { readonly usage: GoalUsageV2; readonly source: string }): Promise<GoalDetailV2> {
+  usage(options.usage);
+  if (!options.source?.trim() || options.source.length > 2000) fail("GOAL_USAGE_SOURCE_REQUIRED", "填写账单或订阅分摊依据");
+  return mutate(options, "external_usage_recorded", { usage: options.usage, source: options.source }, (tx, detail) => {
+    const plan = planRequired(detail), goal = detail.goal;
+    if (authorized(tx, options).workspaceRole !== "owner") fail("FORBIDDEN", "仅工作区所有者可以核对外部用量");
+    if (plan.runnerId === "builtin" || !goal.executionRef) fail("GOAL_EXTERNAL_USAGE_INVALID", "此目标没有外部 CLI 执行");
+    const execution = executionAt(tx, goal, plan);
+    if (!["completed", "failed", "cancelled"].includes(execution.status) || hasUnsettledToolCalls(tx, execution.id)) fail("GOAL_EXECUTION_PENDING", "先核对外部执行结果，再登记用量");
+    if (options.usage.currency !== goal.budget.currency) fail("GOAL_BUDGET_CURRENCY_MISMATCH", "账单币种与目标预算不一致");
+    if (tx.getProjection("goal.externalUsage", execution.id) || goal.reservation?.status === "settled") fail("GOAL_USAGE_CONFLICT", "本次执行的用量已固定，不能覆盖");
+    tx.putProjection("goal.externalUsage", execution.id, { executionId: execution.id, goalId: goal.id, tenantId: options.tenantId, workspaceId: options.workspaceId,
+      usage: options.usage, source: options.source, recordedBy: options.principalId, createdAt: options.now(), streamVersion: 1 });
+    appendKernelEvent(tx, { tenantId: options.tenantId, aggregateType: "goal.externalUsage", aggregateId: execution.id, expectedStreamVersion: 0,
+      type: "goal.external_usage_recorded", actorId: options.principalId, generation: execution.generation, correlationId: options.id("goal-usage"), publicPayload: { workspaceId: options.workspaceId, goalId: goal.id } });
+    return observeState(tx, options, detail);
+  });
+}
+
 export async function advanceGoal(options: GoalMutationOptions): Promise<GoalDetailV2> {
   return mutate(options, "observed", {}, (tx, detail) => observeState(tx, options, detail));
 }

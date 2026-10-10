@@ -15,6 +15,9 @@ import { GOAL_NAMESPACE } from "../src/goals.js";
 import { assertGoalExecutionResources } from "../src/goal-runtime.js";
 import { captureOpportunity, captureCodingRepository, captureCodingTask } from "../src/product-state.js";
 import { createOpcModelContextReader } from "../src/opc-model-context.js";
+import { confirmCodingRunner } from "../src/coding-runners.js";
+
+const runnerInspection = { requestedPath: "/opt/fixture/codex", realPath: "/opt/fixture/codex", sha256: "b".repeat(64), device: "1", inode: "2", byteLength: 100, modifiedAtMs: 100 };
 
 async function fixture(t: test.TestContext, goalPollIntervalMs = 60_000) {
   const root = await mkdtemp(join(tmpdir(), "mn-goal-host-"));
@@ -23,9 +26,9 @@ async function fixture(t: test.TestContext, goalPollIntervalMs = 60_000) {
   const store = new SqliteStorage({ databaseFile: join(root, "state.sqlite"), hmacKey: Buffer.alloc(32, 72) });
   const secretStore = { async save() { return "keychain://muniu.v2/goal-fixture"; }, async read() { return "fixture"; } };
   const allocated: string[] = [];
-  const host = await createAgentOsHost({ id: kind => { allocated.push(kind); return `${kind}-${randomUUID()}`; }, goalPollIntervalMs, store, cas, protectedPayloadKeyProvider: keyProvider, secretStore });
+  const host = await createAgentOsHost({ id: kind => { allocated.push(kind); return `${kind}-${randomUUID()}`; }, goalPollIntervalMs, store, cas, protectedPayloadKeyProvider: keyProvider, secretStore, runnerIdentityInspector: { async inspect() { return runnerInspection; } } });
   t.after(async () => { await host.close(); await store.close(); await rm(root, { recursive: true, force: true }); });
-  const workspace = await host.kernel.createWorkspace("local", "local-owner", randomUUID(), { name: "目标验收", viewMode: "business", pluginIds: ["opc", "coding"] });
+  const workspace = await host.kernel.createWorkspace("local", "local-owner", randomUUID(), { name: "目标验收", viewMode: "business", pluginIds: ["opc", "coding", "runner-codex-cli"] });
   const opportunity = await captureOpportunity({ store, tenantId: "local", workspaceId: workspace.id, actorId: "local-owner", now: () => new Date().toISOString(), id: kind => `${kind}-${randomUUID()}`, idempotencyKey: "opportunity", expectedStreamVersion: 0, input: "为独立开发者整理需求验证问题" });
   const thread = (await store.transact("local", tx => tx.listProjections<Thread>("thread").find(item => item.resourceRef?.resourceId === opportunity.id)))!;
   const model = await host.kernel.saveModelConnection("local", "local-owner", randomUUID(), { presetId: "deepseek", displayName: "测试连接", secretRef: "keychain://muniu.v2/goal-fixture", defaultModel: "deepseek-v4-flash", discoveredModels: ["deepseek-v4-flash"] });
@@ -37,6 +40,37 @@ async function fixture(t: test.TestContext, goalPollIntervalMs = 60_000) {
   const create = () => send(`/v2/workspaces/${workspace.id}/goals`, { threadId: thread.id, objective: "整理现有机会资料中的待验证问题", resourceRefs: [], budget: { maxTokens: 1000, maxCostMinorUnits: "50", currency: "CNY", maxDurationMs: 60_000 }, deliverables: [{ key: "report", title: "机会分析", required: true, criteria: [{ id: "sources", description: "说明证据及仍待验证的问题" }] }] });
   return { root, host, store, allocated, cas, keyProvider, secretStore, workspace, thread, model, opportunity, send, create };
 }
+
+test("经营目标可固定 CLI 身份并启动，不要求借用木牛模型；重试不重新调度", async t => {
+  const f = await fixture(t);
+  await f.store.transact("local", transaction => confirmCodingRunner({ transaction, tenantId: "local", workspaceId: f.workspace.id, actorId: "local-owner", runnerId: "codex-cli", expectedStreamVersion: 0, expectedVersion: "fixture", expectedSha256: runnerInspection.sha256, inspection: runnerInspection, occurredAt: new Date().toISOString(), correlationId: randomUUID() }));
+  const created = await f.create(), path = `/v2/goals/${created.body.data.goal.id}`;
+  const input = { workspaceId: f.workspace.id, expectedStreamVersion: 1, scheduling: { runnerId: "codex-cli", strategy: "quality" } };
+  const planned = await f.send(`${path}/plan-revisions`, input, "cli-plan");
+  assert.equal(planned.status, 200, JSON.stringify(planned.body));
+  assert.equal(planned.body.data.plan.runnerId, "codex-cli");
+  assert.equal(planned.body.data.plan.modelBindingId, "runner:codex-cli");
+  assert.ok(planned.body.data.plan.runnerBinding.identityDigest);
+  assert.deepEqual(planned.body.data.plan.toolIds, ["runner.codex.execute"]);
+  const started = await f.send(`${path}/commands`, { workspaceId: f.workspace.id, expectedStreamVersion: 2, command: "start", planRevisionId: planned.body.data.plan.id, planDigest: planned.body.data.plan.digest });
+  assert.equal(started.status, 200, JSON.stringify(started.body));
+  assert.deepEqual((await f.send(`${path}/plan-revisions`, input, "cli-plan")).body.data, planned.body.data);
+  const usage = { workspaceId: f.workspace.id, expectedStreamVersion: started.body.data.goal.streamVersion, command: "record_external_usage", usage: { tokens: 20, costMinorUnits: "12", currency: "CNY" }, source: "CLI 账单条目 fixture-1" };
+  assert.ok((await f.send(`${path}/commands`, usage)).status >= 400, "运行中不能核销用量");
+  await f.store.transact("local", tx => {
+    const execution = tx.getProjection<Execution>("execution", started.body.data.goal.executionRef.executionId)!;
+    tx.putProjection("execution", execution.id, { ...execution, status: "failed", streamVersion: execution.streamVersion + 1 });
+    appendKernelEvent(tx, { tenantId: "local", aggregateType: "execution", aggregateId: execution.id, expectedStreamVersion: execution.streamVersion, type: "fixture.failed", actorId: "local-owner", generation: execution.generation, correlationId: randomUUID(), publicPayload: {} });
+  });
+  const recorded = await f.send(`${path}/commands`, usage, "external-bill");
+  assert.equal(recorded.status, 200, JSON.stringify(recorded.body));
+  assert.deepEqual(recorded.body.data.goal.reservation.actual, usage.usage);
+  assert.equal(recorded.body.data.goal.status, "failed");
+  assert.deepEqual((await f.send(`${path}/commands`, usage, "external-bill")).body.data, recorded.body.data);
+  const changed = await f.send(`${path}/commands`, { ...usage, expectedStreamVersion: recorded.body.data.goal.streamVersion, usage: { ...usage.usage, costMinorUnits: "0" } });
+  assert.ok(changed.status >= 400, "同一账单不可悄悄覆盖");
+
+});
 
 async function start(f: Awaited<ReturnType<typeof fixture>>, created: Awaited<ReturnType<Awaited<ReturnType<typeof fixture>>["create"]>>) {
   assert.equal(created.status, 201, JSON.stringify(created.body));
@@ -57,6 +91,20 @@ function worker(f: Awaited<ReturnType<typeof fixture>>, modelInvoker: ByokModelI
     }),
   } });
 }
+
+test("CLI 配置变化不改写重试返回的计划，但阻止旧计划启动", async t => {
+  const f = await fixture(t);
+  await f.store.transact("local", transaction => confirmCodingRunner({ transaction, tenantId: "local", workspaceId: f.workspace.id, actorId: "local-owner", runnerId: "codex-cli", expectedStreamVersion: 0, expectedVersion: "fixture", expectedSha256: runnerInspection.sha256, inspection: runnerInspection, occurredAt: new Date().toISOString(), correlationId: randomUUID() }));
+  const created = await f.create(), path = `/v2/goals/${created.body.data.goal.id}`;
+  const input = { workspaceId: f.workspace.id, expectedStreamVersion: 1, scheduling: { runnerId: "codex-cli", strategy: "quality" } };
+  const planned = await f.send(`${path}/plan-revisions`, input, "frozen-cli-plan");
+  assert.equal(planned.status, 200, JSON.stringify(planned.body));
+  await f.store.transact("local", transaction => confirmCodingRunner({ transaction, tenantId: "local", workspaceId: f.workspace.id, actorId: "local-owner", runnerId: "codex-cli", expectedStreamVersion: 1, expectedVersion: "fixture", expectedSha256: runnerInspection.sha256, inspection: runnerInspection, occurredAt: new Date().toISOString(), correlationId: randomUUID() }));
+  assert.deepEqual((await f.send(`${path}/plan-revisions`, input, "frozen-cli-plan")).body.data, planned.body.data);
+  const started = await f.send(`${path}/commands`, { workspaceId: f.workspace.id, expectedStreamVersion: 2, command: "start", planRevisionId: planned.body.data.plan.id, planDigest: planned.body.data.plan.digest });
+  assert.ok(started.status >= 400);
+  assert.equal((await f.store.transact("local", tx => tx.listProjections("job"))).length, 0);
+});
 
 test("Host 目标计划冻结当前模型与最小权限，开始在同一事务绑定唯一 Job", async t => {
   const f = await fixture(t);
@@ -275,4 +323,19 @@ test("经营任务使用独立经营助手，执行不新增机会或改写经�
   assert.equal(refreshed.body.data.goal.status, "awaiting_acceptance");
   assert.match(refreshed.body.data.deliverySet.items[0].preview, /经营建议/u);
   assert.deepEqual(await f.store.transact("local", tx => ({ opportunities: tx.listProjections("opc.opportunity"), business: tx.listProjections("opc.business") })), before);
+});
+
+test("固定目标允许执行中补充说明，保持原计划与额度且禁止绕过目标重启", async t => {
+  const f = await fixture(t), current = await start(f, await f.create());
+  await f.store.transact("local", tx => {
+    const execution = tx.getProjection<Execution>("execution", current.detail.goal.executionRef.executionId)!;
+    tx.putProjection("execution", execution.id, { ...execution, status: "running", streamVersion: execution.streamVersion + 1 });
+    appendKernelEvent(tx, { tenantId: "local", aggregateType: "execution", aggregateId: execution.id, expectedStreamVersion: execution.streamVersion, type: "fixture.running", actorId: "local-owner", generation: execution.generation, correlationId: randomUUID(), publicPayload: {} });
+  });
+  const execution = await f.store.transact("local", tx => tx.getProjection<Execution>("execution", current.detail.goal.executionRef.executionId)!);
+  const sent = await f.send(`/v2/executions/${execution.id}/commands`, { expectedStreamVersion: execution.streamVersion, command: "steer", message: "标出缺少证据的部分" });
+  assert.equal(sent.status, 202, JSON.stringify(sent.body));
+  assert.equal(sent.body.data.authorityId, execution.authorityId);
+  assert.equal(sent.body.data.runnerId, execution.runnerId);
+  assert.ok((await f.send(`/v2/executions/${execution.id}/commands`, { expectedStreamVersion: sent.body.data.streamVersion, command: "resume" })).status >= 400);
 });

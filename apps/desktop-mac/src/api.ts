@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { apiPath, matchApiOperation, parseApiResponse, type ApiPath, type JsonApiOperationIdV2, type ApiOutputsV2 } from "@mn/contracts/client";
-import type { BusinessCommandV1, BusinessPeriodV1, CodingRunnerId, ExternalCodingRunnerId, ConfirmCodingRunnerMutationBodyV2, GoalBudgetV2, GoalDeliverableSpecV2, GoalDetailV2, GoalResourceRefV2 } from "@mn/contracts";
+import type { AgentSchedulingRequestV2, GoalUsageV2, BusinessCommandV1, BusinessPeriodV1, CodingRunnerId, ExternalCodingRunnerId, ConfirmCodingRunnerMutationBodyV2, GoalBudgetV2, GoalDeliverableSpecV2, GoalDetailV2, GoalResourceRefV2 } from "@mn/contracts";
 import type {
   AgentThreadSummary,
   ApiFailure,
@@ -38,15 +38,20 @@ export class AgentOsClient {
   createGoal(workspaceId: string, input: { threadId: string; objective: string; resourceRefs: readonly GoalResourceRefV2[]; budget: GoalBudgetV2; deliverables: readonly GoalDeliverableSpecV2[] }, requestKey?: string) {
     return this.request(apiPath("createGoal", { workspaceId }), { method: "POST", ...(requestKey ? { headers: { "Idempotency-Key": requestKey } } : {}), body: JSON.stringify(input) });
   }
-  planGoal(detail: GoalDetailV2, modelBindingId: string, requestKey?: string) {
+  planGoal(detail: GoalDetailV2, selection: string | AgentSchedulingRequestV2, requestKey?: string) {
     return this.request(apiPath("proposeGoalPlan", { goalId: detail.goal.id }), { method: "POST", ...(requestKey ? { headers: { "Idempotency-Key": requestKey } } : {}), body: JSON.stringify({
-      workspaceId: detail.goal.workspaceId, expectedStreamVersion: detail.goal.streamVersion, modelBindingId,
+      workspaceId: detail.goal.workspaceId, expectedStreamVersion: detail.goal.streamVersion, ...(typeof selection === "string" ? { modelBindingId: selection } : { scheduling: selection }),
     }) });
   }
   commandGoal(detail: GoalDetailV2, command: "start" | "refresh" | "cancel") {
     return this.request(apiPath("commandGoal", { goalId: detail.goal.id }), { method: "POST", body: JSON.stringify({
       workspaceId: detail.goal.workspaceId, expectedStreamVersion: detail.goal.streamVersion, command,
       ...(command === "start" && detail.plan ? { planRevisionId: detail.plan.id, planDigest: detail.plan.digest } : {}),
+    }) });
+  }
+  recordExternalUsage(detail: GoalDetailV2, usage: GoalUsageV2, source: string) {
+    return this.request(apiPath("commandGoal", { goalId: detail.goal.id }), { method: "POST", body: JSON.stringify({
+      workspaceId: detail.goal.workspaceId, expectedStreamVersion: detail.goal.streamVersion, command: "record_external_usage", usage, source,
     }) });
   }
   acceptGoal(detail: GoalDetailV2, items: readonly { key: string; digest: string; reviewedCriterionIds: readonly string[] }[]) {

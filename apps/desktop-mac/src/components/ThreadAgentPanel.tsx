@@ -13,7 +13,7 @@ interface ThreadAgentPanelProps {
   readonly pluginId: "opc" | "coding";
   readonly resourceId?: string;
   readonly threadId?: string;
-  readonly goalExecution?: { readonly executionId: string; readonly canControl: boolean };
+  readonly goalExecution?: { readonly executionId: string; readonly canControl: boolean; readonly onCancel: () => Promise<void> };
   readonly professional?: boolean;
 }
 
@@ -129,7 +129,8 @@ export function ThreadAgentPanel({ api, workspaceId, pluginId, resourceId, threa
     if (!latestExecution || sending || (goalExecution && !goalExecution.canControl)) return;
     setSending(true);
     try {
-      await api.executionCommand(latestExecution, command, command === "steer" ? message.trim() : undefined);
+      if (goalExecution && command === "cancel") await goalExecution.onCancel();
+      else await api.executionCommand(latestExecution, command, command === "steer" ? message.trim() : undefined);
       if (command === "steer") setMessage("");
       await loadConversation();
     } catch (caught) { await loadConversation(); setError(agentErrorMessage(caught)); }

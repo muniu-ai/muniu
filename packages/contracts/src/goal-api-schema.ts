@@ -14,8 +14,12 @@ export function goalMutationSchema(operationId: string): JsonObject | undefined 
     budget: object(["maxTokens", "maxCostMinorUnits", "currency", "maxDurationMs"], { maxTokens: { type: "integer", minimum: 1 }, maxCostMinorUnits: { type: "string", pattern: "^(0|[1-9][0-9]{0,23})$" }, currency: { type: "string", pattern: "^[A-Z]{3}$" }, maxDurationMs: { type: "integer", minimum: 1 } }),
     deliverables: array(object(["key", "title", "required", "criteria"], { key: string, title: string, required: { type: "boolean" }, criteria: array(criterion, 1, 20) }), 1, 1),
   });
-  if (operationId === "proposeGoalPlan") return object(["workspaceId", "expectedStreamVersion", "modelBindingId"], { ...base, modelBindingId: string });
+  const minor = { type: "string", pattern: "^(0|[1-9][0-9]{0,17})$" };
+  if (operationId === "proposeGoalPlan") return { ...object(["workspaceId", "expectedStreamVersion"], { ...base, modelBindingId: string,
+    scheduling: object(["runnerId", "strategy"], { runnerId: { enum: ["auto", "builtin", "codex-cli", "claude-cli"] }, strategy: { enum: ["quality", "balanced", "cost"] }, modelBindingId: string, expectedValueMinorUnits: minor, timeCostMinorUnitsPerHour: minor }),
+  }), oneOf: [{ required: ["modelBindingId"] }, { required: ["scheduling"] }] };
   if (operationId === "commandGoal") return { oneOf: [
+    object(["workspaceId", "expectedStreamVersion", "command", "usage", "source"], { ...base, command: { const: "record_external_usage" }, source: { type: "string", minLength: 1, maxLength: 2000 }, usage: object(["tokens", "costMinorUnits", "currency"], { tokens: version, costMinorUnits: minor, currency: { type: "string", pattern: "^[A-Z]{3}$" } }) }),
     object(["workspaceId", "expectedStreamVersion", "command", "planRevisionId", "planDigest"], { ...base, command: { const: "start" }, planRevisionId: string, planDigest: string }),
     object(["workspaceId", "expectedStreamVersion", "command"], { ...base, command: { enum: ["refresh", "cancel"] } }),
   ] };

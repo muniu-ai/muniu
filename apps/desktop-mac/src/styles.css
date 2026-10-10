@@ -699,3 +699,17 @@ pre { overflow: auto; padding: 10px; border-radius: 7px; color: #dce5dc; backgro
 
 .goals-page { animation: none; }
 .task-composer-footer { position: sticky; bottom: -20px; background: var(--surface); padding: 14px 0; z-index: 1; border-top: 1px solid var(--line); box-shadow: 0 -10px 20px rgba(255,255,255,.94); }
+
+.agent-scheduling { border: 1px solid var(--border, #d9dfda); border-radius: 14px; padding: 18px; margin: 18px 0; min-width: 0; }
+.agent-scheduling legend { padding: 0 8px; font-weight: 700; }
+.scheduling-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; }
+.scheduling-fields label { display: flex; flex-direction: column; gap: 8px; font-size: 14px; }
+.scheduling-fields select, .scheduling-fields input { width: 100%; padding: 10px; border: 1px solid #d9dfda; border-radius: 8px; background: #fff; color: #202a25; }
+.agent-scheduling p, .scheduling-decision p, .external-usage p { font-size: 14px; line-height: 1.6; color: #5b6961; }
+.scheduling-table { overflow-x: auto; }
+.scheduling-table table { border-collapse: collapse; width: 100%; font-size: 13px; }
+.scheduling-table th, .scheduling-table td { padding: 12px; text-align: left; border-bottom: 1px solid #d9dfda; min-width: 95px; }
+.scheduling-table caption { text-align: left; padding: 8px 0; color: #5b6961; }
+.scheduling-table .selected { background: #edf7f0; }
+.external-usage { border: 1px solid #d3ad76; background: #fffbf3; padding: 18px; border-radius: 14px; }
+.external-usage button { margin-top: 14px; }

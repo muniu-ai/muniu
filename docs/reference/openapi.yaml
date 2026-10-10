@@ -789,7 +789,6 @@ paths:
               required:
                 - workspaceId
                 - expectedStreamVersion
-                - modelBindingId
               properties:
                 workspaceId: &a13
                   type: string
@@ -799,6 +798,34 @@ paths:
                   type: integer
                   minimum: 0
                 modelBindingId: *a13
+                scheduling:
+                  type: object
+                  additionalProperties: false
+                  required:
+                    - runnerId
+                    - strategy
+                  properties:
+                    runnerId:
+                      enum:
+                        - auto
+                        - builtin
+                        - codex-cli
+                        - claude-cli
+                    strategy:
+                      enum:
+                        - quality
+                        - balanced
+                        - cost
+                    modelBindingId: *a13
+                    expectedValueMinorUnits: &a14
+                      type: string
+                      pattern: ^(0|[1-9][0-9]{0,17})$
+                    timeCostMinorUnitsPerHour: *a14
+              oneOf:
+                - required:
+                    - modelBindingId
+                - required:
+                    - scheduling
       responses:
         "200":
           description: 成功
@@ -852,10 +879,10 @@ paths:
                     - workspaceId
                     - expectedStreamVersion
                     - command
-                    - planRevisionId
-                    - planDigest
+                    - usage
+                    - source
                   properties:
-                    workspaceId: &a14
+                    workspaceId: &a16
                       type: string
                       minLength: 1
                       maxLength: 200
@@ -863,9 +890,41 @@ paths:
                       type: integer
                       minimum: 0
                     command:
+                      const: record_external_usage
+                    source:
+                      type: string
+                      minLength: 1
+                      maxLength: 2000
+                    usage:
+                      type: object
+                      additionalProperties: false
+                      required:
+                        - tokens
+                        - costMinorUnits
+                        - currency
+                      properties:
+                        tokens: *a15
+                        costMinorUnits:
+                          type: string
+                          pattern: ^(0|[1-9][0-9]{0,17})$
+                        currency:
+                          type: string
+                          pattern: ^[A-Z]{3}$
+                - type: object
+                  additionalProperties: false
+                  required:
+                    - workspaceId
+                    - expectedStreamVersion
+                    - command
+                    - planRevisionId
+                    - planDigest
+                  properties:
+                    workspaceId: *a16
+                    expectedStreamVersion: *a15
+                    command:
                       const: start
-                    planRevisionId: *a14
-                    planDigest: *a14
+                    planRevisionId: *a16
+                    planDigest: *a16
                 - type: object
                   additionalProperties: false
                   required:
@@ -873,7 +932,7 @@ paths:
                     - expectedStreamVersion
                     - command
                   properties:
-                    workspaceId: *a14
+                    workspaceId: *a16
                     expectedStreamVersion: *a15
                     command:
                       enum:
@@ -934,15 +993,15 @@ paths:
                 - criteriaVersion
                 - items
               properties:
-                workspaceId: &a16
+                workspaceId: &a17
                   type: string
                   minLength: 1
                   maxLength: 200
                 expectedStreamVersion:
                   type: integer
                   minimum: 0
-                deliverySetId: *a16
-                criteriaVersion: *a16
+                deliverySetId: *a17
+                criteriaVersion: *a17
                 items:
                   type: array
                   items:
@@ -953,11 +1012,11 @@ paths:
                       - digest
                       - reviewedCriterionIds
                     properties:
-                      key: *a16
-                      digest: *a16
+                      key: *a17
+                      digest: *a17
                       reviewedCriterionIds:
                         type: array
-                        items: *a16
+                        items: *a17
                         minItems: 1
                         maxItems: 20
                   minItems: 1
@@ -1565,7 +1624,7 @@ paths:
                   - data
                   - traceId
                 properties:
-                  data: &a17
+                  data: &a18
                     $ref: "#/components/schemas/OutputReadinessV2"
                   traceId:
                     type: string
@@ -1590,7 +1649,7 @@ paths:
                   - data
                   - traceId
                 properties:
-                  data: *a17
+                  data: *a18
                   traceId:
                     type: string
       x-muniu-versioned: false
@@ -1700,7 +1759,7 @@ paths:
                 - viewMode
                 - pluginIds
               properties:
-                name: &a18
+                name: &a19
                   type: string
                   minLength: 1
                 viewMode:
@@ -1709,7 +1768,7 @@ paths:
                     - professional
                 pluginIds:
                   type: array
-                  items: *a18
+                  items: *a19
               additionalProperties: false
       responses:
         "201":
@@ -2129,18 +2188,18 @@ paths:
                 - subject
                 - pluginId
               properties:
-                subject: &a19
+                subject: &a20
                   type: string
                   minLength: 1
-                pluginId: *a19
+                pluginId: *a20
                 resourceRef:
                   type: object
                   required:
                     - namespace
                     - resourceId
                   properties:
-                    namespace: *a19
-                    resourceId: *a19
+                    namespace: *a20
+                    resourceId: *a20
                   additionalProperties: false
               additionalProperties: false
       responses:
@@ -2350,7 +2409,7 @@ paths:
                   - data
                   - traceId
                 properties:
-                  data: &a20
+                  data: &a21
                     $ref: "#/components/schemas/OutputExecution"
                   traceId:
                     type: string
@@ -2365,7 +2424,7 @@ paths:
                   - data
                   - traceId
                 properties:
-                  data: *a20
+                  data: *a21
                   traceId:
                     type: string
         "400":
@@ -2851,12 +2910,12 @@ paths:
                 - sourceEventId
                 - value
               properties:
-                workspaceId: &a21
+                workspaceId: &a22
                   type: string
                   minLength: 1
-                namespace: *a21
-                resourceId: *a21
-                sourceEventId: *a21
+                namespace: *a22
+                resourceId: *a22
+                sourceEventId: *a22
                 scopeType:
                   enum:
                     - workspace
@@ -2870,9 +2929,9 @@ paths:
                 value:
                   type: object
                   additionalProperties: true
-                expiresAt: *a21
-                derivedFromMemoryId: *a21
-                derivedViaShareGrantId: *a21
+                expiresAt: *a22
+                derivedFromMemoryId: *a22
+                derivedViaShareGrantId: *a22
               additionalProperties: false
       responses:
         "201":
@@ -3132,10 +3191,10 @@ paths:
                 - toNamespace
                 - expectedStreamVersion
               properties:
-                memoryId: &a22
+                memoryId: &a23
                   type: string
                   minLength: 1
-                toNamespace: *a22
+                toNamespace: *a23
                 expectedStreamVersion:
                   type: integer
                   minimum: 0
@@ -3312,10 +3371,10 @@ paths:
                     - anthropic
                     - moonshot
                     - qwen
-                apiKey: &a23
+                apiKey: &a24
                   type: string
                   minLength: 1
-                displayName: *a23
+                displayName: *a24
               additionalProperties: false
       responses:
         "201":
@@ -3419,10 +3478,10 @@ paths:
                 - pluginId
                 - version
               properties:
-                pluginId: &a24
+                pluginId: &a25
                   type: string
                   minLength: 1
-                version: *a24
+                version: *a25
               additionalProperties: false
       responses:
         "201":
@@ -4456,7 +4515,7 @@ paths:
                   - data
                   - traceId
                 properties:
-                  data: &a25
+                  data: &a26
                     $ref: "#/components/schemas/OutputCodingReconciliationResultV2"
                   traceId:
                     type: string
@@ -4471,7 +4530,7 @@ paths:
                   - data
                   - traceId
                 properties:
-                  data: *a25
+                  data: *a26
                   traceId:
                     type: string
         "400":
@@ -5377,6 +5436,143 @@ components:
           type: string
         reasonCode:
           type: string
+    OutputAgentSchedulingRequestV2:
+      type: object
+      additionalProperties: false
+      required:
+        - runnerId
+        - strategy
+      properties:
+        runnerId:
+          anyOf:
+            - type: string
+              const: builtin
+            - type: string
+              const: claude-cli
+            - type: string
+              const: codex-cli
+            - type: string
+              const: auto
+        strategy:
+          anyOf:
+            - type: string
+              const: quality
+            - type: string
+              const: balanced
+            - type: string
+              const: cost
+        modelBindingId:
+          type: string
+        expectedValueMinorUnits:
+          type: string
+        timeCostMinorUnitsPerHour:
+          type: string
+    OutputAgentSchedulingCandidateV2:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - label
+        - runnerId
+        - modelBindingId
+        - fingerprint
+        - currency
+        - samples
+        - accepted
+        - qualityLowerBound
+        - evidence
+        - expectedCostMinorUnits
+        - expectedDurationMs
+        - expectedTotalCostMinorUnits
+        - expectedNetValueMinorUnits
+        - roiBasisPoints
+        - eligible
+        - reasons
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        runnerId:
+          anyOf:
+            - type: string
+              const: builtin
+            - type: string
+              const: claude-cli
+            - type: string
+              const: codex-cli
+        modelBindingId:
+          type: string
+        fingerprint:
+          type: string
+        currency:
+          type: string
+        samples:
+          type: number
+        accepted:
+          type: number
+        qualityLowerBound:
+          type: number
+        evidence:
+          anyOf:
+            - type: string
+              const: observed
+            - type: string
+              const: insufficient
+        expectedCostMinorUnits:
+          anyOf:
+            - type: "null"
+            - type: string
+        expectedDurationMs:
+          type: number
+        expectedTotalCostMinorUnits:
+          anyOf:
+            - type: "null"
+            - type: string
+        expectedNetValueMinorUnits:
+          anyOf:
+            - type: "null"
+            - type: string
+        roiBasisPoints:
+          anyOf:
+            - type: "null"
+            - type: number
+        eligible:
+          anyOf:
+            - type: boolean
+              const: false
+            - type: boolean
+              const: true
+        reasons:
+          type: array
+          items:
+            type: string
+    OutputAgentSchedulingDecisionV2:
+      type: object
+      additionalProperties: false
+      required:
+        - algorithm
+        - request
+        - selectedId
+        - candidates
+        - taskClass
+        - evidenceDigest
+      properties:
+        algorithm:
+          type: string
+          const: quality-roi-v1
+        request:
+          $ref: "#/components/schemas/OutputAgentSchedulingRequestV2"
+        selectedId:
+          type: string
+        candidates:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutputAgentSchedulingCandidateV2"
+        taskClass:
+          type: string
+        evidenceDigest:
+          type: string
     OutputResourceRef:
       type: object
       additionalProperties: false
@@ -5469,9 +5665,9 @@ components:
         pluginId:
           anyOf:
             - type: string
-              const: coding
-            - type: string
               const: opc
+            - type: string
+              const: coding
         pluginVersion:
           type: string
         pluginPackageSha256:
@@ -5485,8 +5681,26 @@ components:
         model:
           type: string
         runnerId:
-          type: string
-          const: builtin
+          anyOf:
+            - type: string
+              const: builtin
+            - type: string
+              const: claude-cli
+            - type: string
+              const: codex-cli
+        runnerBinding:
+          type: object
+          additionalProperties: false
+          required:
+            - configurationStreamVersion
+            - identityDigest
+          properties:
+            configurationStreamVersion:
+              type: number
+            identityDigest:
+              type: string
+        scheduling:
+          $ref: "#/components/schemas/OutputAgentSchedulingDecisionV2"
         toolIds:
           type: array
           items:
@@ -7281,7 +7495,7 @@ components:
             - type: string
               const: model
             - type: string
-              const: coding_plugin
+              const: task_plugin
             - type: string
               const: runner_plugin
             - type: string
@@ -7416,7 +7630,7 @@ components:
           type: string
         scope:
           type: string
-          const: coding
+          const: workspace
         support:
           anyOf:
             - type: string
@@ -8259,9 +8473,9 @@ components:
         pluginId:
           anyOf:
             - type: string
-              const: coding
-            - type: string
               const: opc
+            - type: string
+              const: coding
         effectClass:
           anyOf:
             - type: string

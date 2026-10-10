@@ -38,6 +38,7 @@ CLI 帮助、API 路由表、OpenAPI 和内置插件目录由源码生成。改�
 - [OPC 经营管理体系](./proposals/opc-business-management-2026-10-09.md)：完整经营领域、曾鸣著作依据及产品实施分期。
 - [工程验收记录](./verification/application-boundaries-2026-09-28.md)：查看对应提交的实际检查及未完成项。
 - [仓库登记体验验证](./verification/repository-registration-ux-2026-10-10.md)：快速登记、原生文件夹选择和重试检查。
+- [统一 Agent 调度](./proposals/roi-agent-scheduling-2026-10-10.md)与[验证记录](./verification/roi-agent-scheduling-2026-10-10.md)：质量优先、CLI 费用核对和本机安装结果。
 - [工业询价专项](./industry-delivery/README.md)：双仓库参考应用、合成样本和发布门禁；它不是首次使用木牛的前置条件。
 
 ## 如何判断一份资料的适用范围

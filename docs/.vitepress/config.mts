@@ -61,6 +61,7 @@ export default defineConfig({
           { text: "架构决策", link: "/adr/" },
           { text: "OPC 经营管理体系", link: "/proposals/opc-business-management-2026-10-09" },
           { text: "多 Agent、多模型提案", link: "/proposals/agent-os-multi-agent-optimization-2026-10-09" },
+          { text: "统一 Agent 调度", link: "/proposals/roi-agent-scheduling-2026-10-10" },
           { text: "目标编排复用审查", link: "/verification/agent-os-s0-reuse-2026-10-09" },
           { text: "目标与验收验证", link: "/verification/agent-os-s1-2026-10-09" },
         ],
@@ -91,6 +92,7 @@ export default defineConfig({
           { text: "签名与公证", link: "/release/apple-developer-id" },
           { text: "工程验收记录", link: "/verification/application-boundaries-2026-09-28" },
           { text: "仓库登记体验验证", link: "/verification/repository-registration-ux-2026-10-10" },
+          { text: "统一 Agent 调度验证", link: "/verification/roi-agent-scheduling-2026-10-10" },
         ],
       },
       {

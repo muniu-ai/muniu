@@ -1693,6 +1693,235 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
       }
     }
   },
+  "OutputAgentSchedulingRequestV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "runnerId",
+      "strategy"
+    ],
+    "properties": {
+      "runnerId": {
+        "anyOf": [
+          {
+            "type": "string",
+            "const": "builtin"
+          },
+          {
+            "type": "string",
+            "const": "claude-cli"
+          },
+          {
+            "type": "string",
+            "const": "codex-cli"
+          },
+          {
+            "type": "string",
+            "const": "auto"
+          }
+        ]
+      },
+      "strategy": {
+        "anyOf": [
+          {
+            "type": "string",
+            "const": "quality"
+          },
+          {
+            "type": "string",
+            "const": "balanced"
+          },
+          {
+            "type": "string",
+            "const": "cost"
+          }
+        ]
+      },
+      "modelBindingId": {
+        "type": "string"
+      },
+      "expectedValueMinorUnits": {
+        "type": "string"
+      },
+      "timeCostMinorUnitsPerHour": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputAgentSchedulingCandidateV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "label",
+      "runnerId",
+      "modelBindingId",
+      "fingerprint",
+      "currency",
+      "samples",
+      "accepted",
+      "qualityLowerBound",
+      "evidence",
+      "expectedCostMinorUnits",
+      "expectedDurationMs",
+      "expectedTotalCostMinorUnits",
+      "expectedNetValueMinorUnits",
+      "roiBasisPoints",
+      "eligible",
+      "reasons"
+    ],
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "label": {
+        "type": "string"
+      },
+      "runnerId": {
+        "anyOf": [
+          {
+            "type": "string",
+            "const": "builtin"
+          },
+          {
+            "type": "string",
+            "const": "claude-cli"
+          },
+          {
+            "type": "string",
+            "const": "codex-cli"
+          }
+        ]
+      },
+      "modelBindingId": {
+        "type": "string"
+      },
+      "fingerprint": {
+        "type": "string"
+      },
+      "currency": {
+        "type": "string"
+      },
+      "samples": {
+        "type": "number"
+      },
+      "accepted": {
+        "type": "number"
+      },
+      "qualityLowerBound": {
+        "type": "number"
+      },
+      "evidence": {
+        "anyOf": [
+          {
+            "type": "string",
+            "const": "observed"
+          },
+          {
+            "type": "string",
+            "const": "insufficient"
+          }
+        ]
+      },
+      "expectedCostMinorUnits": {
+        "anyOf": [
+          {
+            "type": "null"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "expectedDurationMs": {
+        "type": "number"
+      },
+      "expectedTotalCostMinorUnits": {
+        "anyOf": [
+          {
+            "type": "null"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "expectedNetValueMinorUnits": {
+        "anyOf": [
+          {
+            "type": "null"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "roiBasisPoints": {
+        "anyOf": [
+          {
+            "type": "null"
+          },
+          {
+            "type": "number"
+          }
+        ]
+      },
+      "eligible": {
+        "anyOf": [
+          {
+            "type": "boolean",
+            "const": false
+          },
+          {
+            "type": "boolean",
+            "const": true
+          }
+        ]
+      },
+      "reasons": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "OutputAgentSchedulingDecisionV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "algorithm",
+      "request",
+      "selectedId",
+      "candidates",
+      "taskClass",
+      "evidenceDigest"
+    ],
+    "properties": {
+      "algorithm": {
+        "type": "string",
+        "const": "quality-roi-v1"
+      },
+      "request": {
+        "$ref": "#/components/schemas/OutputAgentSchedulingRequestV2"
+      },
+      "selectedId": {
+        "type": "string"
+      },
+      "candidates": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputAgentSchedulingCandidateV2"
+        }
+      },
+      "taskClass": {
+        "type": "string"
+      },
+      "evidenceDigest": {
+        "type": "string"
+      }
+    }
+  },
   "OutputResourceRef": {
     "type": "object",
     "additionalProperties": false,
@@ -1826,11 +2055,11 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
         "anyOf": [
           {
             "type": "string",
-            "const": "coding"
+            "const": "opc"
           },
           {
             "type": "string",
-            "const": "opc"
+            "const": "coding"
           }
         ]
       },
@@ -1853,8 +2082,39 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
         "type": "string"
       },
       "runnerId": {
-        "type": "string",
-        "const": "builtin"
+        "anyOf": [
+          {
+            "type": "string",
+            "const": "builtin"
+          },
+          {
+            "type": "string",
+            "const": "claude-cli"
+          },
+          {
+            "type": "string",
+            "const": "codex-cli"
+          }
+        ]
+      },
+      "runnerBinding": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "configurationStreamVersion",
+          "identityDigest"
+        ],
+        "properties": {
+          "configurationStreamVersion": {
+            "type": "number"
+          },
+          "identityDigest": {
+            "type": "string"
+          }
+        }
+      },
+      "scheduling": {
+        "$ref": "#/components/schemas/OutputAgentSchedulingDecisionV2"
       },
       "toolIds": {
         "type": "array",
@@ -4528,7 +4788,7 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
           },
           {
             "type": "string",
-            "const": "coding_plugin"
+            "const": "task_plugin"
           },
           {
             "type": "string",
@@ -4742,7 +5002,7 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
       },
       "scope": {
         "type": "string",
-        "const": "coding"
+        "const": "workspace"
       },
       "support": {
         "anyOf": [
@@ -6012,11 +6272,11 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
         "anyOf": [
           {
             "type": "string",
-            "const": "coding"
+            "const": "opc"
           },
           {
             "type": "string",
-            "const": "opc"
+            "const": "coding"
           }
         ]
       },
