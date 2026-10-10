@@ -4,7 +4,7 @@ import type { BusinessContextTargetV2, BusinessObjectContextV2, GoalResourceRefV
 import { AgentOsApiError, type AgentOsClient } from "../api";
 
 type Extraction = Awaited<ReturnType<AgentOsClient["assetExtraction"]>>;
-type Source = { readonly ref: GoalResourceRefV2; readonly extraction?: Extraction; readonly business?: BusinessObjectContextV2; readonly error?: string };
+type Source = { readonly ref: GoalResourceRefV2; readonly extraction?: Extraction; readonly business?: BusinessObjectContextV2; readonly stale?: boolean; readonly error?: string };
 
 export function GoalSources({ api, workspaceId, resourceRefs }: {
   readonly api: AgentOsClient; readonly workspaceId: string; readonly resourceRefs: readonly GoalResourceRefV2[];
@@ -24,9 +24,10 @@ export function GoalSources({ api, workspaceId, resourceRefs }: {
       try {
         const target = businessTarget(ref);
         if (target) {
-          const business = await api.businessContext(workspaceId, target);
+          const business = await api.businessContext(workspaceId, target, ref);
           if (business.sourceRef.resourceId !== ref.resourceId || business.sourceRef.streamVersion !== ref.streamVersion || business.sourceRef.digest !== ref.digest) return { ref, error: "资料版本已变化，请重新关联并审阅任务计划。" };
-          return { ref, business };
+          const current = await api.businessContext(workspaceId, target);
+          return { ref, business, stale: current.sourceRef.streamVersion !== ref.streamVersion || current.sourceRef.digest !== ref.digest };
         }
         const extraction = await api.assetExtraction(ref.resourceId);
         if (extraction.assetRef.resourceId !== ref.resourceId || extraction.assetRef.streamVersion !== ref.streamVersion || extraction.assetRef.digest !== ref.digest) {
@@ -70,16 +71,16 @@ export function GoalSources({ api, workspaceId, resourceRefs }: {
     {loading && <p role="status">正在核对资料来源…</p>}
     {sources.map(source => <article className="goal-output" key={`${source.ref.namespace}:${source.ref.resourceId}`}>
       {source.business ? <>
-        <strong>{source.business.title}</strong><p>事实版本 {source.ref.streamVersion} · 业务事实以经营记录为准。</p>
-        <button type="button" className="secondary-button" aria-label={`查看业务资料：${source.business.title}`} onClick={() => setPreview(current => current === source.ref.resourceId ? undefined : source.ref.resourceId)}>查看业务资料</button>
-        {preview === source.ref.resourceId && <pre className="goal-preview">{source.business.content}</pre>}
+        <strong>{source.business.title}</strong>{source.stale&&<p role="status">当前业务事实已更新。以下保留任务选入时的版本，继续修改经营记录前需重新核验。</p>}<p>事实版本 {source.ref.streamVersion} · 业务事实以经营记录为准。</p>
+        <button type="button" className="secondary-button" aria-label={`查看业务资料：${source.business.title}`} onClick={() => setPreview(current => current === `${source.ref.namespace}:${source.ref.resourceId}` ? undefined : `${source.ref.namespace}:${source.ref.resourceId}`)}>查看业务资料</button>
+        {preview === `${source.ref.namespace}:${source.ref.resourceId}` && <pre className="goal-preview">{source.business.content}</pre>}
       </> : source.extraction ? <>
         <strong>{source.extraction.fileName}</strong><span className="pill">{source.extraction.status === "complete" ? "已解析" : source.extraction.status === "partial" ? "部分解析" : "无法读取"}</span>
         <p>版本 {source.ref.streamVersion} · {source.extraction.blocks.length} 个文字片段</p>
         {source.extraction.issues.map((issue, index) => <p key={index}>{issue.message}</p>)}
-        <div className="goal-actions"><button type="button" className="secondary-button" aria-label={`查看摘录：${source.extraction.fileName}`} onClick={() => setPreview(current => current === source.ref.resourceId ? undefined : source.ref.resourceId)}>查看摘录</button>
+        <div className="goal-actions"><button type="button" className="secondary-button" aria-label={`查看摘录：${source.extraction.fileName}`} onClick={() => setPreview(current => current === `${source.ref.namespace}:${source.ref.resourceId}` ? undefined : `${source.ref.namespace}:${source.ref.resourceId}`)}>查看摘录</button>
           <button type="button" className="secondary-button" aria-label={`下载原文：${source.extraction.fileName}`} disabled={Boolean(downloading)} onClick={() => void download(source)}>{downloading === source.ref.resourceId ? "正在读取…" : "下载原文"}</button></div>
-        {preview === source.ref.resourceId && <div>{source.extraction.blocks.slice(0, 20).map(block => <div key={block.id}><small>{sourceLocation(block.locator)}</small><pre className="goal-preview">{block.text}</pre></div>)}
+        {preview === `${source.ref.namespace}:${source.ref.resourceId}` && <div>{source.extraction.blocks.slice(0, 20).map(block => <div key={block.id}><small>{sourceLocation(block.locator)}</small><pre className="goal-preview">{block.text}</pre></div>)}
           {source.extraction.blocks.length > 20 && <p>此处仅展示前 20 个片段，可下载原文核对其余内容。</p>}</div>}
       </> : <p role="alert">{source.error}<button type="button" className="quiet-button" onClick={() => void refresh()}>重新核对资料</button></p>}
     </article>)}
@@ -97,6 +98,6 @@ function sourceError(error: unknown): string {
 
 function businessTarget(ref: GoalResourceRefV2): BusinessContextTargetV2 | undefined {
   const kind = ref.namespace.replace("opc.business.", "");
-  if (ref.namespace === `opc.business.${kind}` && ["customer", "order", "delivery", "review"].includes(kind)) return { kind: kind as BusinessContextTargetV2["kind"], resourceId: ref.resourceId };
+  if (ref.namespace === `opc.business.${kind}` && ["customer", "service", "quote", "order", "delivery", "review"].includes(kind)) return { kind: kind as BusinessContextTargetV2["kind"], resourceId: ref.resourceId };
   return undefined;
 }

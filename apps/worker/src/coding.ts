@@ -1,4 +1,5 @@
 import { prepareBoundedModelRequest } from "./context-selection.js";
+import { remainingCodingRepairs, reserveCodingRepairBudget } from './coding-budget.js';
 import { assertExecutionContextSources, type ContextSourceValidator } from "./execution-context.js";
 // SPDX-License-Identifier: Apache-2.0
 import { appendKernelEvent } from "@mn/kernel";
@@ -477,6 +478,7 @@ function assertCodingInvocation(tx: KernelTransaction, state: CodingState, job: 
 function finalizeCodingRuntime(tx: KernelTransaction, records: readonly RuntimeRecord[], state: CodingState,
   job: StoredJob, context: CodingWorkerJobContext, occurredAt: string,
   assertResources?: (transaction: KernelTransaction, execution: Execution) => void, validateSource?: ContextSourceValidator): void | (() => void) {
+  reserveCodingRepairBudget(tx, state.execution, records, occurredAt);
   if (records.some(record => record.type === "model/request" || record.type === "model/reserved" || record.type === "tool/started"
     || record.type === "job/started" || record.type === "subagent/reserved"
     || (record.type === "execution/status" && record.payload.status === "completed"))) {
@@ -753,7 +755,8 @@ function createCodingTurnHandler(options: CodingExecutionWorkerOptions) {
           selectedRunnerId: runnerId,
           externalRunnerConfirmed: runnerId !== "builtin",
           limits: { maxDurationMs: await budget.remainingMilliseconds(),
-            maxRepairAttempts: Math.max(0, CODING_DEFAULT_LIMITS.maxRepairAttempts - await budget.counter("coding_repair")) },
+            maxRepairAttempts: await (async () => { const used = await budget.counter('coding_repair');
+              return store.transact(job.tenantId, tx => remainingCodingRepairs(tx, state.execution, CODING_DEFAULT_LIMITS.maxRepairAttempts, used)); })() },
           beforeRepair: async repair => {
             try {
               await budget.remainingMilliseconds();

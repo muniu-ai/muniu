@@ -45,7 +45,30 @@ mn business context customer CUSTOMER_ID --workspace WORKSPACE_ID --json
 
 `--key` 是这次上传的请求标识。响应丢失时保持文件、工作区和标识不变，重新运行同一命令；CLI 不自动重发。省略时按既有约定生成随机请求标识。提取结果保留 `complete`、`partial` 或 `unreadable` 状态、遗漏说明与页码、段落或单元格位置，提取成功不代表 Agent 已阅读全部资料。
 
-业务上下文支持 `customer`、`order`、`delivery` 和 `review`，返回当前授权下的事实正文与版本引用。资料或经营记录变化后，应重新读取并审阅计划；读取上下文不修改经营台账。已有 `mn opc business show` 和 `command` 保持原语义。
+业务上下文支持 `customer`、`service`、`quote`、`order`、`delivery` 和 `review`，返回当前授权下的事实正文与版本引用。资料或经营记录变化后，应重新读取并审阅计划；读取上下文不修改经营台账。`service` 选择当前服务版本，`quote` 保留报价固定的服务版本；历史回源同时传入 `--version <事实版本>` 与 `--digest <来源摘要>`。报价接受使用 `quote.confirm`，订单生效另用 `order.activate`，客户验收与实际收款也分别登记。
+
+## 成果决定、返工与经营候选
+
+`goal create` 的 `deliverables` 可包含多个交付项，每项使用独立的 `key`、名称与验收标准。`goal show` 返回当前成果、逐项决定和历史版本。
+
+```bash
+mn goal delivery-decide GOAL_ID --workspace WORKSPACE_ID --version 5 --file decisions.json --key DECISION_REQUEST --json
+mn goal rework-preview GOAL_ID --workspace WORKSPACE_ID --version 6 --decision DECISION_ID --key PREVIEW_REQUEST --json
+mn goal rework GOAL_ID --workspace WORKSPACE_ID --version 6 --preview PREVIEW_ID --preview-digest PREVIEW_DIGEST --key REWORK_REQUEST --json
+```
+
+逐项决定文件包含 `deliverySetId`、`criteriaVersion` 和非空 `items`。每项固定 `key`、`digest`，选择 `accept` 时附 `reviewedCriterionIds`；选择 `request_changes` 时附 `failedCriterionIds` 与 `instruction`；选择 `defer` 时可附 `reason`。未提交的成果保留原决定。返工预览返回受影响步骤、沿用成果、剩余额度及原期限，核对后再确认；新修订不会覆盖历史成果和费用。
+
+成果的 `businessProposals` 列出可审阅的经营建议，创建候选时只引用该成果与候选标识。Host 生成字段差异、依据和经营影响，CLI 不提交任意业务命令来伪造候选。
+
+```bash
+mn business candidate create --workspace WORKSPACE_ID --goal GOAL_ID --plan PLAN_ID --delivery-set SET_ID --output OUTPUT_KEY --output-digest OUTPUT_DIGEST --proposal PROPOSAL_KEY --key CANDIDATE_REQUEST --json
+mn business candidate list --workspace WORKSPACE_ID --json
+mn business candidate show CANDIDATE_ID --workspace WORKSPACE_ID --json
+mn business candidate decide CANDIDATE_ID --workspace WORKSPACE_ID --version 1 --business-version 9 --candidate-digest CANDIDATE_DIGEST --preview-digest PREVIEW_DIGEST --decision apply --key APPLY_REQUEST --json
+```
+
+采纳前核对字段变化及 `availability`。过期候选需要重新核验；`reject` 只拒绝建议。以上变更支持 `--key`，响应丢失时保持全部参数和键不变重试。
 
 ## 本地开发
 

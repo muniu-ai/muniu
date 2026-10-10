@@ -1,0 +1,11 @@
+// SPDX-License-Identifier: Apache-2.0
+import { renderToStaticMarkup } from 'react-dom/server';
+import { DeliveryDecisionForm, buildDeliveryDecisions } from '../../src/components/DeliveryDecisionForm';
+import { ReworkPreview } from '../../src/components/ReworkPreview';
+import { BusinessCandidateReview } from '../../src/components/BusinessCandidateReview';
+export { buildDeliveryDecisions };
+export const specs = [{key:'report',title:'研究报告',required:true,criteria:[{id:'source',description:'每项结论有来源'},{id:'scope',description:'覆盖约定范围'}]}, {key:'quote',title:'报价方案',required:true,criteria:[{id:'price',description:'价格依据准确'}]}];
+export const outputs = specs.map(spec => ({key:spec.key,digest:`digest-${spec.key}`,checks:[{checkId:'check',status:'passed',evidenceRefs:[]}],preview:'成果内容',resourceRef:{namespace:'asset',resourceId:spec.key,streamVersion:1}}));
+export function formMarkup() { return renderToStaticMarkup(<DeliveryDecisionForm specs={specs} outputs={outputs as any} onSubmit={() => undefined} />); }
+export function previewMarkup() { return renderToStaticMarkup(<ReworkPreview preview={{round:2,affectedNodeIds:['repair'],reusedNodeIds:['research'],retainedDeliverableKeys:['quote'],remainingBudget:{maxCostMinorUnits:'450',currency:'CNY',maxTokens:1200,maxDurationMs:120000},deadlineAt:'2026-10-12T00:00:00Z',additionalWork:['仅补充来源'],authorization:{requiresApproval:true,reasons:['新增资料范围']},plan:{nodes:[{id:'repair',title:'修订研究报告'},{id:'research',title:'已完成资料研究'}],deliverables:specs}} as any} onConfirm={() => undefined} onCancel={() => undefined} />); }
+export function candidateMarkup(apply=false) { return renderToStaticMarkup(<BusinessCandidateReview detail={{candidate:{proposal:{title:'报价候选',rationale:'依据已授权服务版本',evidenceRefs:[]},changes:[{path:'total',label:'报价金额',before:null,after:'5000 <script>'}],impact:{currency:'CNY',quoteTotalMinor:'5000',contractedDeltaMinor:'0',outstandingDeltaMinor:'0',cashReceivedDeltaMinor:'0'},sourceRefs:[{namespace:'opc.business.service',resourceId:'service-v1',streamVersion:3}],origin:{goalId:'goal',planRevisionId:'plan',deliverySetId:'delivery',outputKey:'quote'}},decision:null,availability:{apply,reject:true,staleReasons:apply?[]:['服务版本已更新']}} as any} onDecide={() => undefined} />); }

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { canonicalJson, type GoalBudgetV2, type GoalDeliverableSpecV2, type GoalResourceRefV2, type GoalTeamPlanProposalV2,
-  type ResourceRef, type TeamAgentCapabilityV1, type TeamAgentNodeV1, type TeamPlanLimitsV1, type TeamPlanNodeV1, type ToolEffectClass } from "@mn/contracts";
+  type GoalCoordinatedPlanProposalV2, type GoalSinglePlanProposalV2, type ResourceRef, type TeamAgentCapabilityV1, type TeamAgentNodeV1, type TeamPlanLimitsV1, type TeamPlanNodeV1, type ToolEffectClass } from "@mn/contracts";
 import { validateGoalBudget } from "./goal-rules.js";
 import { getTeamTemplate, TEAM_DEFAULT_LIMITS } from "./templates.js";
 
@@ -14,7 +14,8 @@ export interface TeamPlanValidationContext {
   readonly capabilities: readonly TeamAgentCapabilityV1[];
   readonly authority: { readonly toolIds: readonly string[]; readonly dataScopes: readonly ResourceRef[]; readonly autoAllowedEffects: readonly ToolEffectClass[] };
   readonly workspaceLimits?: Partial<TeamPlanLimitsV1>;
-  readonly cumulative?: { readonly nodes: number; readonly attempts: number; readonly reworkRounds: number; readonly delegationDepth: number };
+  readonly cumulative?: { readonly nodes: number; readonly nodeIds?: readonly string[]; readonly attempts: number; readonly reworkRounds: number; readonly delegationDepth: number };
+  readonly reusedNodeIds?: readonly string[];
   readonly sandboxAvailable?: boolean;
 }
 function fail(code: string, message: string): never { throw new TeamPlanValidationError(code, message); }
@@ -44,15 +45,18 @@ function graph(nodes: readonly TeamPlanNodeV1[]): { nodes: Map<string, TeamPlanN
   }
   return { nodes: map, order };
 }
-function limits(plan: GoalTeamPlanProposalV2, context: TeamPlanValidationContext): void {
+function limits(plan: GoalCoordinatedPlanProposalV2, context: TeamPlanValidationContext): void {
   for (const name of Object.keys(TEAM_DEFAULT_LIMITS) as (keyof TeamPlanLimitsV1)[]) {
     const workspace = context.workspaceLimits?.[name] ?? TEAM_DEFAULT_LIMITS[name], value = plan.limits?.[name];
     if (!integer(workspace) || !integer(value, ["maxDelegationDepth", "maxReworkRounds"].includes(name) ? 0 : 1)
       || value > Math.min(workspace, TEAM_DEFAULT_LIMITS[name])) fail("TEAM_LIMIT_EXCEEDED", "计划超过工作区执行上限");
   }
   const used = context.cumulative ?? { nodes: 0, attempts: 0, reworkRounds: 0, delegationDepth: 1 };
-  if (Object.values(used).some(value => !integer(value)) || used.nodes + plan.nodes.length > plan.limits.maxNodes
-    || used.attempts + plan.nodes.filter(node => node.kind === "agent").length > plan.limits.maxAttempts
+  if (context.reusedNodeIds && (new Set(context.reusedNodeIds).size !== context.reusedNodeIds.length
+    || context.reusedNodeIds.some(id => !plan.nodes.some(node => node.id === id && node.kind === 'agent')))) fail('TEAM_REUSE_INVALID', '只能显式沿用已核验的执行节点');
+  if ([used.nodes, used.attempts, used.reworkRounds, used.delegationDepth].some(value => !integer(value))
+    || used.nodes + plan.nodes.filter(node => !context.reusedNodeIds?.includes(node.id)).length > plan.limits.maxNodes
+    || used.attempts + plan.nodes.filter(node => node.kind === "agent" && !context.reusedNodeIds?.includes(node.id)).length > plan.limits.maxAttempts
     || used.reworkRounds > plan.limits.maxReworkRounds || used.delegationDepth > plan.limits.maxDelegationDepth) fail("TEAM_LIMIT_EXCEEDED", "累计节点、尝试或返工已超过上限");
 }
 function inputs(node: TeamPlanNodeV1, nodes: Map<string, TeamPlanNodeV1>, context: TeamPlanValidationContext): void {
@@ -68,7 +72,7 @@ function inputs(node: TeamPlanNodeV1, nodes: Map<string, TeamPlanNodeV1>, contex
   }
   if (node.kind === "agent" && node.id !== "review" && node.dependsOn.some(dependency => !node.inputs.some(input => input.kind === "node_output" && input.nodeId === dependency))) fail("TEAM_INPUT_DENIED", "节点缺少前置成果输入");
 }
-function executor(node: TeamAgentNodeV1, plan: GoalTeamPlanProposalV2, context: TeamPlanValidationContext): TeamAgentCapabilityV1 {
+function executor(node: TeamAgentNodeV1, plan: GoalCoordinatedPlanProposalV2, context: TeamPlanValidationContext): TeamAgentCapabilityV1 {
   const value = node.executor;
   if (!value || value.domainInputDigest !== plan.domainInputDigest || value.threadStreamVersion !== plan.threadStreamVersion
     || !key(value.pluginVersion) || !key(value.agentDefinitionId) || !key(value.modelBindingId) || typeof value.model !== "string" || !value.model.trim()
@@ -83,7 +87,7 @@ function executor(node: TeamAgentNodeV1, plan: GoalTeamPlanProposalV2, context: 
     || (capability.isolation === "required_sandbox" && context.sandboxAvailable !== true)) fail("TEAM_CAPABILITY_DENIED", "节点超出能力声明或隔离条件");
   if (!subset(value.toolIds, context.authority.toolIds) || !subset(value.autoAllowedEffects, context.authority.autoAllowedEffects)
     || value.dataScopes.some(scope => !scope?.namespace || !scope.resourceId || !context.authority.dataScopes.some(parent => scopeWithin(scope, parent)))) fail("TEAM_AUTHORITY_DENIED", "子节点权限不能超出父授权");
-  if (capability.costControl !== "hard_limit") fail("TEAM_BUDGET_UNCONTROLLED", "此计划需要可强制控制费用的执行者");
+  if (plan.kind === 'team-v1' && capability.costControl !== "hard_limit") fail("TEAM_BUDGET_UNCONTROLLED", "此计划需要可强制控制费用的执行者");
   return capability;
 }
 function review(node: TeamAgentNodeV1, nodes: Map<string, TeamPlanNodeV1>, capability: TeamAgentCapabilityV1): void {
@@ -142,15 +146,32 @@ export function assertTeamPlan(plan: GoalTeamPlanProposalV2, context: TeamPlanVa
     try { validateGoalBudget(node.budget); } catch { fail("TEAM_BUDGET_INVALID", "节点预算无效"); }
     // V1 execution uses the remaining shared deadline; no separate per-node timer is promised.
     if (node.budget.currency !== context.budget.currency || node.budget.maxDurationMs !== context.budget.maxDurationMs) fail("TEAM_BUDGET_INVALID", "节点必须使用目标预算币种和统一期限");
-    totalTokens += BigInt(node.budget.maxTokens); totalCost += BigInt(node.budget.maxCostMinorUnits);
+    if (!context.reusedNodeIds?.includes(node.id)) { totalTokens += BigInt(node.budget.maxTokens); totalCost += BigInt(node.budget.maxCostMinorUnits); }
   }
   if (totalTokens > BigInt(context.budget.maxTokens) || totalCost > BigInt(context.budget.maxCostMinorUnits)) fail("TEAM_BUDGET_INVALID", "节点预算总额超过目标预算");
   deliveries(plan, nodes, context);
   return { topologicalOrder: Object.freeze(order) };
 }
+/** One original executor; Host verifies the prior plan, current runner identity and remaining aggregate allowance. */
+export function assertSinglePlan(plan: GoalSinglePlanProposalV2, context: TeamPlanValidationContext): { readonly topologicalOrder: readonly string[] } {
+  if (plan.kind !== 'single-v2' || !digest(plan.domainInputDigest) || !integer(plan.threadStreamVersion, 1)
+    || plan.nodes.length !== 1 || plan.nodes[0]!.id !== 'execute' || plan.nodes[0]!.kind !== 'agent'
+    || plan.nodes[0]!.dependsOn.length || plan.nodes[0]!.review) fail('GOAL_SINGLE_PLAN_INVALID', '单执行者返工只能包含原执行者节点');
+  const node = plan.nodes[0]! as TeamAgentNodeV1, map = graph(plan.nodes).nodes;
+  limits(plan, context); inputs(node, map, context); executor(node, plan, context);
+  validateGoalBudget(context.budget); validateGoalBudget(node.budget);
+  if (node.executor.pluginId !== plan.pluginId || node.budget.currency !== context.budget.currency || node.budget.maxTokens > context.budget.maxTokens
+    || BigInt(node.budget.maxCostMinorUnits) > BigInt(context.budget.maxCostMinorUnits) || node.budget.maxDurationMs !== context.budget.maxDurationMs
+    || !node.outputs.length || new Set(node.outputs.map(output => output.key)).size !== node.outputs.length
+    || plan.deliverableBindings.length > 20 || new Set(plan.deliverableBindings.map(binding => binding.deliverableKey)).size !== plan.deliverableBindings.length
+    || context.deliverables.filter(spec => spec.required).some(spec => !plan.deliverableBindings.some(binding => binding.deliverableKey === spec.key))
+    || plan.deliverableBindings.some(binding => binding.nodeId !== 'execute' || !context.deliverables.some(spec => spec.key === binding.deliverableKey)
+      || !node.outputs.some(output => output.key === binding.outputKey && ['artifact', 'analysis'].includes(output.kind)))) fail('GOAL_SINGLE_PLAN_INVALID', '单执行者返工的成果或预算无效');
+  return { topologicalOrder: ['execute'] };
+}
 export type TeamNodeProgress = "pending" | "running" | "completed" | "failed" | "cancelled" | "needs_reconciliation";
 /** Completed means a current, verified result; unknown results can never become retry candidates here. */
-export function readyTeamNodes(plan: GoalTeamPlanProposalV2, states: Readonly<Record<string, TeamNodeProgress>>, control: "running" | "paused" | "cancelled" = "running"): readonly TeamPlanNodeV1[] {
+export function readyTeamNodes(plan: GoalCoordinatedPlanProposalV2, states: Readonly<Record<string, TeamNodeProgress>>, control: "running" | "paused" | "cancelled" = "running"): readonly TeamPlanNodeV1[] {
   if (control !== "running" || plan.nodes.some(node => !states[node.id] || ["failed", "cancelled", "needs_reconciliation"].includes(states[node.id]!))) return [];
   let slots = plan.limits.maxParallelNodes - plan.nodes.filter(node => node.kind === "agent" && states[node.id] === "running").length;
   return plan.nodes.filter(node => {

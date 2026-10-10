@@ -32,6 +32,27 @@ export const API_OUTPUT_SCHEMAS_V2: Readonly<Record<string, JsonObject>> = {
   "acceptGoalDelivery": {
     "$ref": "#/components/schemas/OutputGoalResponseV2"
   },
+  "decideGoalDelivery": {
+    "$ref": "#/components/schemas/OutputGoalResponseV2"
+  },
+  "previewGoalRework": {
+    "$ref": "#/components/schemas/OutputGoalReworkPreviewV2"
+  },
+  "reworkGoal": {
+    "$ref": "#/components/schemas/OutputGoalResponseV2"
+  },
+  "listOpcBusinessCandidates": {
+    "$ref": "#/components/schemas/OutputOpcBusinessCandidateListV2"
+  },
+  "createOpcBusinessCandidate": {
+    "$ref": "#/components/schemas/OutputOpcBusinessCandidateDetailV2"
+  },
+  "getOpcBusinessCandidate": {
+    "$ref": "#/components/schemas/OutputOpcBusinessCandidateDetailV2"
+  },
+  "decideOpcBusinessCandidate": {
+    "$ref": "#/components/schemas/OutputOpcBusinessCandidateDetailV2"
+  },
   "listTeamTemplates": {
     "type": "array",
     "items": {
@@ -500,7 +521,15 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
         "anyOf": [
           {
             "type": "string",
+            "const": "service"
+          },
+          {
+            "type": "string",
             "const": "review"
+          },
+          {
+            "type": "string",
+            "const": "quote"
           },
           {
             "type": "string",
@@ -751,6 +780,38 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
       }
     }
   },
+  "OutputBusinessQuoteConfirmationV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "quoteId",
+      "confirmedOn",
+      "sourceRef",
+      "recordedBy",
+      "recordedAt"
+    ],
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "quoteId": {
+        "type": "string"
+      },
+      "confirmedOn": {
+        "type": "string"
+      },
+      "sourceRef": {
+        "type": "string"
+      },
+      "recordedBy": {
+        "type": "string"
+      },
+      "recordedAt": {
+        "type": "string"
+      }
+    }
+  },
   "OutputBusinessOpeningV1": {
     "type": "object",
     "additionalProperties": false,
@@ -837,6 +898,9 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
         "type": "string"
       },
       "quoteId": {
+        "type": "string"
+      },
+      "quoteConfirmationId": {
         "type": "string"
       },
       "opening": {
@@ -1382,6 +1446,12 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
         "type": "array",
         "items": {
           "$ref": "#/components/schemas/OutputBusinessQuoteV1"
+        }
+      },
+      "quoteConfirmations": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputBusinessQuoteConfirmationV1"
         }
       },
       "orders": {
@@ -2129,6 +2199,10 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
       "createdAt": {
         "type": "string"
       },
+      "outputFormat": {
+        "type": "string",
+        "const": "items-v1"
+      },
       "domainInputDigest": {
         "type": "string"
       },
@@ -2252,6 +2326,42 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
         "type": "array",
         "items": {
           "$ref": "#/components/schemas/OutputGoalResourceRefV2"
+        }
+      },
+      "businessProposals": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "key",
+            "title",
+            "commandType"
+          ],
+          "properties": {
+            "key": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "commandType": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "const": "quote.create"
+                },
+                {
+                  "type": "string",
+                  "const": "delivery.record"
+                },
+                {
+                  "type": "string",
+                  "const": "review.record"
+                }
+              ]
+            }
+          }
         }
       },
       "checks": {
@@ -2398,6 +2508,10 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
       "autoAllowedEffects"
     ],
     "properties": {
+      "outputFormat": {
+        "type": "string",
+        "const": "items-v1"
+      },
       "domainInputDigest": {
         "type": "string"
       },
@@ -2955,6 +3069,10 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
       "createdAt": {
         "type": "string"
       },
+      "outputFormat": {
+        "type": "string",
+        "const": "items-v1"
+      },
       "kind": {
         "type": "string",
         "const": "team-v1"
@@ -3015,45 +3133,1043 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
       }
     }
   },
-  "OutputGoalTeamDetailV2": {
+  "OutputGoalSinglePlanRevisionV2": {
     "type": "object",
     "additionalProperties": false,
     "required": [
-      "goal",
-      "plan",
-      "deliverySet"
+      "id",
+      "goalId",
+      "threadId",
+      "revision",
+      "inputVersion",
+      "criteriaVersion",
+      "budget",
+      "resourceRefs",
+      "deliverables",
+      "digest",
+      "createdAt",
+      "kind",
+      "pluginId",
+      "domainInputDigest",
+      "threadStreamVersion",
+      "nodes",
+      "deliverableBindings",
+      "limits"
     ],
     "properties": {
-      "goal": {
-        "$ref": "#/components/schemas/OutputGoalV2"
+      "id": {
+        "type": "string"
       },
-      "plan": {
-        "$ref": "#/components/schemas/OutputGoalTeamPlanRevisionV2"
+      "goalId": {
+        "type": "string"
       },
-      "deliverySet": {
+      "threadId": {
+        "type": "string"
+      },
+      "revision": {
+        "type": "number"
+      },
+      "inputVersion": {
+        "type": "number"
+      },
+      "criteriaVersion": {
+        "type": "string"
+      },
+      "budget": {
+        "$ref": "#/components/schemas/OutputGoalBudgetV2"
+      },
+      "resourceRefs": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputGoalResourceRefV2"
+        }
+      },
+      "deliverables": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputGoalDeliverableSpecV2"
+        }
+      },
+      "digest": {
+        "type": "string"
+      },
+      "createdAt": {
+        "type": "string"
+      },
+      "kind": {
+        "type": "string",
+        "const": "single-v2"
+      },
+      "outputFormat": {
+        "type": "string",
+        "const": "items-v1"
+      },
+      "pluginId": {
         "anyOf": [
           {
-            "type": "null"
+            "type": "string",
+            "const": "opc"
           },
           {
-            "$ref": "#/components/schemas/OutputGoalDeliverySetV2"
+            "type": "string",
+            "const": "coding"
           }
         ]
       },
-      "runId": {
+      "domainInputDigest": {
         "type": "string"
+      },
+      "threadStreamVersion": {
+        "type": "number"
+      },
+      "nodes": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputTeamPlanNodeV1"
+        }
+      },
+      "deliverableBindings": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputTeamDeliverableBindingV1"
+        }
+      },
+      "limits": {
+        "$ref": "#/components/schemas/OutputTeamPlanLimitsV1"
+      }
+    }
+  },
+  "OutputGoalCoordinatedPlanV2": {
+    "anyOf": [
+      {
+        "$ref": "#/components/schemas/OutputGoalTeamPlanRevisionV2"
+      },
+      {
+        "$ref": "#/components/schemas/OutputGoalSinglePlanRevisionV2"
+      }
+    ]
+  },
+  "OutputGoalDeliveryItemDecisionV2": {
+    "anyOf": [
+      {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "digest",
+          "decision",
+          "reviewedCriterionIds"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string",
+            "const": "accept"
+          },
+          "reviewedCriterionIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "digest",
+          "decision",
+          "failedCriterionIds",
+          "instruction"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string",
+            "const": "request_changes"
+          },
+          "failedCriterionIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "instruction": {
+            "type": "string"
+          }
+        }
+      },
+      {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "digest",
+          "decision"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string",
+            "const": "defer"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      }
+    ]
+  },
+  "OutputGoalDeliveryDecisionV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "goalId",
+      "deliverySetId",
+      "criteriaVersion",
+      "principalId",
+      "decidedAt",
+      "goalStreamVersion",
+      "items"
+    ],
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "goalId": {
+        "type": "string"
+      },
+      "deliverySetId": {
+        "type": "string"
+      },
+      "criteriaVersion": {
+        "type": "string"
+      },
+      "principalId": {
+        "type": "string"
+      },
+      "decidedAt": {
+        "type": "string"
+      },
+      "goalStreamVersion": {
+        "type": "number"
+      },
+      "items": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputGoalDeliveryItemDecisionV2"
+        }
+      }
+    }
+  },
+  "OutputGoalOutputReuseV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "nodeId",
+      "sourcePlanRevisionId",
+      "sourceNodeId",
+      "sourceAttemptId",
+      "inputDigest",
+      "outputs"
+    ],
+    "properties": {
+      "nodeId": {
+        "type": "string"
+      },
+      "sourcePlanRevisionId": {
+        "type": "string"
+      },
+      "sourceNodeId": {
+        "type": "string"
+      },
+      "sourceAttemptId": {
+        "type": "string"
+      },
+      "inputDigest": {
+        "type": "string"
+      },
+      "outputs": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputGoalOutputRefV2"
+        }
+      }
+    }
+  },
+  "OutputGoalReworkV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "goalId",
+      "sourcePlanRevisionId",
+      "sourceDeliverySetId",
+      "decisionId",
+      "planRevisionId",
+      "round",
+      "createdAt",
+      "affectedNodeIds",
+      "reuses",
+      "retainedOutputs"
+    ],
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "goalId": {
+        "type": "string"
+      },
+      "sourcePlanRevisionId": {
+        "type": "string"
+      },
+      "sourceDeliverySetId": {
+        "type": "string"
+      },
+      "decisionId": {
+        "type": "string"
+      },
+      "planRevisionId": {
+        "type": "string"
+      },
+      "round": {
+        "type": "number"
+      },
+      "createdAt": {
+        "type": "string"
+      },
+      "affectedNodeIds": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "reuses": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputGoalOutputReuseV2"
+        }
+      },
+      "retainedOutputs": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "sourceDeliverySetId",
+            "key",
+            "outputDigest",
+            "output"
+          ],
+          "properties": {
+            "sourceDeliverySetId": {
+              "type": "string"
+            },
+            "key": {
+              "type": "string"
+            },
+            "outputDigest": {
+              "type": "string"
+            },
+            "output": {
+              "$ref": "#/components/schemas/OutputGoalOutputRefV2"
+            }
+          }
+        }
+      }
+    }
+  },
+  "OutputGoalDeliveryReviewStateV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "decisions",
+      "reworks",
+      "history"
+    ],
+    "properties": {
+      "decisions": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputGoalDeliveryDecisionV2"
+        }
+      },
+      "reworks": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputGoalReworkV2"
+        }
+      },
+      "history": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "planRevisionId",
+            "revision",
+            "deliverySet"
+          ],
+          "properties": {
+            "planRevisionId": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "number"
+            },
+            "deliverySet": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/OutputGoalDeliverySetV2"
+                }
+              ]
+            },
+            "usage": {
+              "$ref": "#/components/schemas/OutputGoalUsageV2"
+            }
+          }
+        }
       }
     }
   },
   "OutputGoalResponseV2": {
     "anyOf": [
       {
-        "$ref": "#/components/schemas/OutputGoalTeamDetailV2"
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "goal",
+          "plan",
+          "deliverySet"
+        ],
+        "properties": {
+          "goal": {
+            "$ref": "#/components/schemas/OutputGoalV2"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/OutputGoalCoordinatedPlanV2"
+          },
+          "deliverySet": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/OutputGoalDeliverySetV2"
+              }
+            ]
+          },
+          "runId": {
+            "type": "string"
+          },
+          "deliveryReview": {
+            "$ref": "#/components/schemas/OutputGoalDeliveryReviewStateV2"
+          }
+        }
       },
       {
-        "$ref": "#/components/schemas/OutputGoalDetailV2"
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "goal",
+          "plan",
+          "deliverySet"
+        ],
+        "properties": {
+          "goal": {
+            "$ref": "#/components/schemas/OutputGoalV2"
+          },
+          "plan": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/OutputGoalPlanRevisionV2"
+              }
+            ]
+          },
+          "deliverySet": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/OutputGoalDeliverySetV2"
+              }
+            ]
+          },
+          "deliveryReview": {
+            "$ref": "#/components/schemas/OutputGoalDeliveryReviewStateV2"
+          }
+        }
       }
     ]
+  },
+  "OutputGoalReworkPreviewV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "goalId",
+      "sourcePlanRevisionId",
+      "sourceDeliverySetId",
+      "decisionId",
+      "expectedGoalStreamVersion",
+      "round",
+      "affectedNodeIds",
+      "reusedNodeIds",
+      "retainedDeliverableKeys",
+      "remainingBudget",
+      "deadlineAt",
+      "additionalWork",
+      "authorization",
+      "plan",
+      "digest",
+      "createdAt"
+    ],
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "goalId": {
+        "type": "string"
+      },
+      "sourcePlanRevisionId": {
+        "type": "string"
+      },
+      "sourceDeliverySetId": {
+        "type": "string"
+      },
+      "decisionId": {
+        "type": "string"
+      },
+      "expectedGoalStreamVersion": {
+        "type": "number"
+      },
+      "round": {
+        "type": "number"
+      },
+      "affectedNodeIds": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "reusedNodeIds": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "retainedDeliverableKeys": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "remainingBudget": {
+        "$ref": "#/components/schemas/OutputGoalBudgetV2"
+      },
+      "deadlineAt": {
+        "type": "string"
+      },
+      "additionalWork": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "authorization": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "requiresApproval",
+          "reasons"
+        ],
+        "properties": {
+          "requiresApproval": {
+            "anyOf": [
+              {
+                "type": "boolean",
+                "const": false
+              },
+              {
+                "type": "boolean",
+                "const": true
+              }
+            ]
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "plan": {
+        "$ref": "#/components/schemas/OutputGoalCoordinatedPlanV2"
+      },
+      "digest": {
+        "type": "string"
+      },
+      "createdAt": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputOpcBusinessCandidateOriginV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "goalId",
+      "planRevisionId",
+      "deliverySetId",
+      "outputKey",
+      "outputDigest"
+    ],
+    "properties": {
+      "goalId": {
+        "type": "string"
+      },
+      "planRevisionId": {
+        "type": "string"
+      },
+      "deliverySetId": {
+        "type": "string"
+      },
+      "outputKey": {
+        "type": "string"
+      },
+      "outputDigest": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputOpcBusinessCandidateCommandV2": {
+    "anyOf": [
+      {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "type",
+          "quoteId",
+          "customerId",
+          "serviceId",
+          "serviceVersion",
+          "quantity",
+          "discountMinor",
+          "validUntil",
+          "dueOn"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "quote.create"
+          },
+          "quoteId": {
+            "type": "string"
+          },
+          "customerId": {
+            "type": "string"
+          },
+          "serviceId": {
+            "type": "string"
+          },
+          "serviceVersion": {
+            "type": "number"
+          },
+          "quantity": {
+            "type": "number"
+          },
+          "discountMinor": {
+            "type": "string"
+          },
+          "validUntil": {
+            "type": "string"
+          },
+          "dueOn": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          }
+        }
+      },
+      {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "type",
+          "deliveryId",
+          "orderId",
+          "title",
+          "deliveredOn",
+          "artifactRef",
+          "progressPercent"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "delivery.record"
+          },
+          "deliveryId": {
+            "type": "string"
+          },
+          "orderId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "deliveredOn": {
+            "type": "string"
+          },
+          "artifactRef": {
+            "type": "string"
+          },
+          "progressPercent": {
+            "type": "number"
+          },
+          "notes": {
+            "type": "string"
+          }
+        }
+      },
+      {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "type",
+          "reviewId",
+          "period",
+          "explanation",
+          "nextDecisions"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "review.record"
+          },
+          "reviewId": {
+            "type": "string"
+          },
+          "period": {
+            "$ref": "#/components/schemas/OutputBusinessPeriodV1"
+          },
+          "explanation": {
+            "type": "string"
+          },
+          "nextDecisions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    ]
+  },
+  "OutputOpcBusinessProposalV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "key",
+      "title",
+      "rationale",
+      "command",
+      "evidenceRefs"
+    ],
+    "properties": {
+      "key": {
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      },
+      "rationale": {
+        "type": "string"
+      },
+      "command": {
+        "$ref": "#/components/schemas/OutputOpcBusinessCandidateCommandV2"
+      },
+      "evidenceRefs": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputGoalResourceRefV2"
+        }
+      }
+    }
+  },
+  "OutputOpcBusinessCandidateChangeV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "path",
+      "label",
+      "before",
+      "after"
+    ],
+    "properties": {
+      "path": {
+        "type": "string"
+      },
+      "label": {
+        "type": "string"
+      },
+      "before": {
+        "$ref": "#/components/schemas/OutputJsonValue"
+      },
+      "after": {
+        "$ref": "#/components/schemas/OutputJsonValue"
+      }
+    }
+  },
+  "OutputOpcBusinessCandidateImpactV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "currency",
+      "contractedDeltaMinor",
+      "outstandingDeltaMinor",
+      "cashReceivedDeltaMinor"
+    ],
+    "properties": {
+      "currency": {
+        "type": "string",
+        "const": "CNY"
+      },
+      "quoteTotalMinor": {
+        "type": "string"
+      },
+      "contractedDeltaMinor": {
+        "type": "string"
+      },
+      "outstandingDeltaMinor": {
+        "type": "string"
+      },
+      "cashReceivedDeltaMinor": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputOpcBusinessCandidateV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "schemaVersion",
+      "id",
+      "tenantId",
+      "workspaceId",
+      "origin",
+      "proposal",
+      "sourceRefs",
+      "businessStreamVersion",
+      "changes",
+      "impact",
+      "previewDigest",
+      "digest",
+      "createdAt",
+      "createdBy"
+    ],
+    "properties": {
+      "schemaVersion": {
+        "type": "string",
+        "const": "1"
+      },
+      "id": {
+        "type": "string"
+      },
+      "tenantId": {
+        "type": "string"
+      },
+      "workspaceId": {
+        "type": "string"
+      },
+      "origin": {
+        "$ref": "#/components/schemas/OutputOpcBusinessCandidateOriginV2"
+      },
+      "proposal": {
+        "$ref": "#/components/schemas/OutputOpcBusinessProposalV2"
+      },
+      "sourceRefs": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputGoalResourceRefV2"
+        }
+      },
+      "businessStreamVersion": {
+        "type": "number"
+      },
+      "changes": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputOpcBusinessCandidateChangeV2"
+        }
+      },
+      "impact": {
+        "$ref": "#/components/schemas/OutputOpcBusinessCandidateImpactV2"
+      },
+      "previewDigest": {
+        "type": "string"
+      },
+      "digest": {
+        "type": "string"
+      },
+      "createdAt": {
+        "type": "string"
+      },
+      "createdBy": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputOpcBusinessCandidateDecisionV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "candidateId",
+      "candidateDigest",
+      "decision",
+      "decidedBy",
+      "decidedAt",
+      "businessStreamVersion"
+    ],
+    "properties": {
+      "candidateId": {
+        "type": "string"
+      },
+      "candidateDigest": {
+        "type": "string"
+      },
+      "decision": {
+        "anyOf": [
+          {
+            "type": "string",
+            "const": "apply"
+          },
+          {
+            "type": "string",
+            "const": "reject"
+          }
+        ]
+      },
+      "decidedBy": {
+        "type": "string"
+      },
+      "decidedAt": {
+        "type": "string"
+      },
+      "businessStreamVersion": {
+        "type": "number"
+      }
+    }
+  },
+  "OutputOpcBusinessCandidateDetailV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "candidate",
+      "streamVersion",
+      "decision",
+      "availability"
+    ],
+    "properties": {
+      "candidate": {
+        "$ref": "#/components/schemas/OutputOpcBusinessCandidateV2"
+      },
+      "streamVersion": {
+        "type": "number"
+      },
+      "decision": {
+        "anyOf": [
+          {
+            "type": "null"
+          },
+          {
+            "$ref": "#/components/schemas/OutputOpcBusinessCandidateDecisionV2"
+          }
+        ]
+      },
+      "availability": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "apply",
+          "reject",
+          "staleReasons"
+        ],
+        "properties": {
+          "apply": {
+            "anyOf": [
+              {
+                "type": "boolean",
+                "const": false
+              },
+              {
+                "type": "boolean",
+                "const": true
+              }
+            ]
+          },
+          "reject": {
+            "anyOf": [
+              {
+                "type": "boolean",
+                "const": false
+              },
+              {
+                "type": "boolean",
+                "const": true
+              }
+            ]
+          },
+          "staleReasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  },
+  "OutputOpcBusinessCandidateListV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "items"
+    ],
+    "properties": {
+      "items": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputOpcBusinessCandidateDetailV2"
+        }
+      }
+    }
   },
   "OutputTeamTemplateSummaryV1": {
     "type": "object",

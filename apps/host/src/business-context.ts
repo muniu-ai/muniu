@@ -3,10 +3,11 @@ import type { BusinessContextTargetV2, BusinessObjectContextV2, BusinessStateV1,
 import { KernelError, sha256, type KernelTransaction } from "@mn/kernel";
 import { calculateBusinessSummary } from "@mn/plugin-opc";
 import { assertBusinessAccess, OPC_BUSINESS_NAMESPACE } from "./business-management.js";
+import { readBusinessSnapshot } from "./business-snapshots.js";
 
 interface SourceScope { readonly tenantId: string; readonly workspaceId: string }
 interface ReaderScope extends SourceScope { readonly principalId: string }
-const kinds = new Set(["customer", "order", "delivery", "review"]);
+const kinds = new Set(["customer", "service", "quote", "order", "delivery", "review"]);
 const prefix = "opc.business.";
 function fail(code: string, message: string): never { throw new KernelError(code, message, "重新选择当前工作区的业务对象并核对资料"); }
 
@@ -14,12 +15,13 @@ export function isBusinessContextRef(ref: { readonly namespace: string }): boole
   return ref.namespace.startsWith(prefix) && kinds.has(ref.namespace.slice(prefix.length));
 }
 
-function selectedContext(tx: KernelTransaction, scope: SourceScope, target: BusinessContextTargetV2): BusinessObjectContextV2 {
+function selectedContext(tx: KernelTransaction, scope: SourceScope, target: BusinessContextTargetV2, historicalVersion?: number): BusinessObjectContextV2 {
   const workspace = tx.getProjection<Workspace>("workspace", scope.workspaceId);
   if (!workspace || workspace.tenantId !== scope.tenantId) fail("WORKSPACE_NOT_FOUND", "工作区不存在");
   if (!workspace.activePluginIds.includes("opc")) fail("PLUGIN_NOT_ACTIVE", "工作区尚未启用 OPC");
   if (!kinds.has(target.kind) || !target.resourceId || target.resourceId.length > 200) fail("BUSINESS_CONTEXT_INVALID", "业务对象类型或标识无效");
-  const state = tx.getProjection<BusinessStateV1>(OPC_BUSINESS_NAMESPACE, scope.workspaceId);
+  const state = historicalVersion === undefined ? tx.getProjection<BusinessStateV1>(OPC_BUSINESS_NAMESPACE, scope.workspaceId)
+    : readBusinessSnapshot(tx, scope, historicalVersion);
   if (!state || state.workspaceId !== scope.workspaceId || state.streamVersion < 1) fail("BUSINESS_CONTEXT_NOT_FOUND", "业务对象不存在");
   const customer = (id: string, version?: number) => {
     const value = state.customers.slice().reverse().find(item => item.id === id && (version === undefined || item.version === version));
@@ -47,6 +49,15 @@ function selectedContext(tx: KernelTransaction, scope: SourceScope, target: Busi
   if (target.kind === "customer") {
     const value = customer(target.resourceId);
     title = `客户 · ${value.name}`; selected = { customer: value };
+  } else if (target.kind === "service") {
+    const value = state.services.slice().reverse().find(item => item.id === target.resourceId);
+    if (!value) fail("BUSINESS_CONTEXT_NOT_FOUND", "产品或服务不存在");
+    title = `产品与服务 · ${value.title}`; selected = { service: value };
+  } else if (target.kind === "quote") {
+    const quote = state.quotes.find(item => item.id === target.resourceId);
+    const service = quote && state.services.find(item => item.id === quote.serviceId && item.version === quote.serviceVersion);
+    if (!quote || !service) fail("BUSINESS_CONTEXT_NOT_FOUND", "报价或关联产品版本不存在");
+    title = `报价 · ${service.title}`; selected = { quote, customer: customer(quote.customerId, quote.customerVersion), service };
   } else if (target.kind === "order") {
     const facts = orderFacts(target.resourceId);
     title = `订单 · ${facts.customer.name} · ${facts.service.title}`; selected = facts;
@@ -66,11 +77,13 @@ function selectedContext(tx: KernelTransaction, scope: SourceScope, target: Busi
     sourceRef: { namespace: `${prefix}${target.kind}`, resourceId: target.resourceId, streamVersion: state.streamVersion, digest } };
 }
 
-export function readBusinessContext(tx: KernelTransaction, scope: ReaderScope, target: BusinessContextTargetV2 | GoalResourceRefV2): BusinessObjectContextV2 {
+export function readBusinessContext(tx: KernelTransaction, scope: ReaderScope, target: BusinessContextTargetV2 | GoalResourceRefV2,
+  purpose: "current" | "historical" = "current"): BusinessObjectContextV2 {
   assertBusinessAccess(tx, scope, false);
   if ("namespace" in target) {
     if (!isBusinessContextRef(target)) fail("BUSINESS_CONTEXT_INVALID", "业务来源类型无效");
-    const result = selectedContext(tx, scope, { kind: target.namespace.slice(prefix.length) as BusinessContextTargetV2["kind"], resourceId: target.resourceId });
+    const result = selectedContext(tx, scope, { kind: target.namespace.slice(prefix.length) as BusinessContextTargetV2["kind"], resourceId: target.resourceId },
+      purpose === "historical" ? target.streamVersion : undefined);
     checkRef(result, target); return result;
   }
   return selectedContext(tx, scope, target);
@@ -81,13 +94,20 @@ function checkRef(current: BusinessObjectContextV2, ref: GoalResourceRefV2): voi
     fail("GOAL_RESOURCE_CHANGED", "业务资料版本已变化");
 }
 
-export function assertBusinessContextRef(tx: KernelTransaction, scope: ReaderScope, ref: GoalResourceRefV2): void {
-  readBusinessContext(tx, scope, ref);
+export function assertBusinessContextRef(tx: KernelTransaction, scope: ReaderScope, ref: GoalResourceRefV2,
+  purpose: "current" | "historical" = "current"): void {
+  readBusinessContext(tx, scope, ref, purpose);
 }
 
 /** This validates dependencies; the caller still checks the current reader or execution authority. */
-export function validateBusinessContextSource(tx: KernelTransaction, scope: SourceScope, ref: GoalResourceRefV2): boolean {
+export function validateBusinessContextSource(tx: KernelTransaction, scope: SourceScope, ref: GoalResourceRefV2,
+  purpose: "current" | "historical" = "current"): boolean {
   if (!isBusinessContextRef(ref)) return false;
-  checkRef(selectedContext(tx, scope, { kind: ref.namespace.slice(prefix.length) as BusinessContextTargetV2["kind"], resourceId: ref.resourceId }), ref);
+  checkRef(selectedContext(tx, scope, { kind: ref.namespace.slice(prefix.length) as BusinessContextTargetV2["kind"], resourceId: ref.resourceId },
+    purpose === "historical" ? ref.streamVersion : undefined), ref);
   return true;
+}
+
+export function validateHistoricalBusinessContextSource(tx: KernelTransaction, scope: SourceScope, ref: GoalResourceRefV2): boolean {
+  return validateBusinessContextSource(tx, scope, ref, "historical");
 }

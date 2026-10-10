@@ -399,7 +399,9 @@ async function verifyBusiness(page, requestLog) {
   await navigate("报价与订单");
   result = await form("新增报价", "生成报价", { quantity: "1", discount: "0", validUntil: today, dueOn: today }, { customerId, service });
   const quoteId = result.state.quotes[0].id;
-  result = await form("登记客户确认", "确认成交", { confirmedOn: today, sourceRef: "客户确认邮件 fixture-quote" }, { quoteId });
+  result = await form("登记客户确认", "登记客户接受报价", { confirmedOn: today, sourceRef: "客户确认邮件 fixture-quote" }, { quoteId });
+  if (result.state.orders.length !== 0 || result.state.quoteConfirmations.length !== 1) throw new Error("客户接受报价必须单独记录，不能自动使订单生效");
+  result = await form("登记订单生效", "登记订单生效", { contractedOn: today, sourceRef: "订单合同 fixture-order" }, { quoteConfirmationId: result.state.quoteConfirmations[0].id });
   const orderId = result.state.orders[0].id;
   await page.getByRole("button", { name: "工作台", exact: true }).click();
   await page.getByRole("button", { name: /搜索命令/ }).click();

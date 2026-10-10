@@ -39,16 +39,17 @@ test("历史订单只形成期初余额，部分收款、退款与减免分别�
   assert.equal(original.payments.length, 0); assert.equal(original.orders[0]!.agreedAmountMinor, "100000");
 });
 
-test("报价绑定不可变客户与产品版本，确认只能创建一次订单", () => {
+test("报价绑定不可变客户与产品版本，显式生效只能创建一次订单", () => {
   let state = fixture();
   state = apply(state, { type: "quote.create", quoteId: "quote", customerId: "customer", serviceId: "service", serviceVersion: 1, quantity: 2, discountMinor: "10000", validUntil: "2026-10-20", dueOn: "2026-10-30" });
   state = apply(state, { type: "service.record", serviceId: "service", title: "新版服务", currency: "CNY", priceMinor: "200000", inScope: ["新范围"], outOfScope: [], acceptanceCriteria: ["新标准"] });
   state = apply(state, { type: "customer.record", customerId: "customer", name: "新客户名称", source: "转介绍", need: "新需求" });
-  state = apply(state, { type: "quote.confirm", quoteId: "quote", orderId: "order", confirmedOn: "2026-10-09", sourceRef: "customer-confirmation" });
+  state = apply(state, { type: "quote.confirm", quoteId: "quote", confirmationId: "confirmation", confirmedOn: "2026-10-09", sourceRef: "customer-confirmation" });
+  state = apply(state, { type: "order.activate", orderId: "order", quoteConfirmationId: "confirmation", contractedOn: "2026-10-09", sourceRef: "contract" });
   assert.equal(state.orders[0]!.agreedAmountMinor, "190000");
   assert.equal(state.orders[0]!.serviceVersion, 1); assert.equal(state.orders[0]!.customerVersion, 1);
   assert.equal(state.services[0]!.priceMinor, "100000");
-  assert.throws(() => apply(state, { type: "quote.confirm", quoteId: "quote", orderId: "other", confirmedOn: "2026-10-09", sourceRef: "again" }), { code: "BUSINESS_CONFLICT" });
+  assert.throws(() => apply(state, { type: "quote.confirm", quoteId: "quote", confirmationId: "other", confirmedOn: "2026-10-09", sourceRef: "again" }), { code: "BUSINESS_CONFLICT" });
 });
 
 test("部分交付与客户验收独立，累计超额和提前全部验收被拒绝", () => {
@@ -149,5 +150,35 @@ test("上海午夜后的实际收款使用本地业务日，报价确认不能�
   assert.equal(received.payments[0]!.receivedOn, "2026-10-10");
   const quoted = (opc as any).applyBusinessCommand(fixture(), { type: "quote.create", quoteId: "midnight-quote", customerId: "customer", serviceId: "service", serviceVersion: 1,
     quantity: 1, discountMinor: "0", validUntil: "2026-10-20", dueOn: "2026-10-20" }, midnight) as BusinessStateV1;
-  assert.throws(() => (opc as any).applyBusinessCommand(quoted, { type: "quote.confirm", quoteId: "midnight-quote", orderId: "midnight-order", confirmedOn: "2026-10-09", sourceRef: "customer" }, midnight), { code: "BUSINESS_DATE_INVALID" });
+  assert.throws(() => (opc as any).applyBusinessCommand(quoted, { type: "quote.confirm", quoteId: "midnight-quote", confirmationId: "midnight-confirm", confirmedOn: "2026-10-09", sourceRef: "customer" }, midnight), { code: "BUSINESS_DATE_INVALID" });
+});
+
+test("客户接受报价与订单生效分别保存，不推导交付验收和收款", () => {
+  const quoted = apply(fixture(), { type: "quote.create", quoteId: "q-split", customerId: "customer", serviceId: "service", serviceVersion: 1,
+    quantity: 2, discountMinor: "10000", validUntil: "2026-10-20", dueOn: "2026-10-30" });
+  const confirmed = apply(quoted, { type: "quote.confirm", confirmationId: "qc", quoteId: "q-split", confirmedOn: "2026-10-09", sourceRef: "customer-agreement" } as any);
+  assert.equal((confirmed as any).quoteConfirmations.length, 1);
+  assert.equal(confirmed.orders.length, 0);
+  assert.equal(summary(confirmed).contractedMinor, "0");
+  assert.equal(summary(confirmed).outstandingMinor, "0");
+  const activated = apply(confirmed, { type: "order.activate", orderId: "active", quoteConfirmationId: "qc", contractedOn: "2026-10-09", sourceRef: "signed-contract" } as any);
+  assert.equal(activated.orders[0]!.agreedAmountMinor, "190000");
+  assert.equal(activated.orders[0]!.quoteId, "q-split");
+  assert.equal(summary(activated).cashReceivedMinor, "0");
+  assert.equal(summary(activated).orders[0].accepted, false);
+  assert.equal(summary(activated).orders[0].delivered, false);
+  assert.throws(() => apply(confirmed, { type: "quote.confirm", confirmationId: "qc2", quoteId: "q-split", confirmedOn: "2026-10-09", sourceRef: "duplicate" } as any), { code: "BUSINESS_CONFLICT" });
+  assert.throws(() => apply(activated, { type: "order.activate", orderId: "other", quoteConfirmationId: "qc", contractedOn: "2026-10-09", sourceRef: "duplicate" } as any), { code: "BUSINESS_CONFLICT" });
+  assert.equal(quoted.orders.length, 0);
+});
+
+test("订单生效拒绝缺少接受事实、早于接受日或晚于今天，历史订单不补推报价确认", () => {
+  const quoted = apply(fixture(), { type: "quote.create", quoteId: "q-date", customerId: "customer", serviceId: "service", serviceVersion: 1,
+    quantity: 1, discountMinor: "0", validUntil: "2026-10-20", dueOn: "2026-10-30" });
+  const activate = { type: "order.activate", orderId: "active", quoteConfirmationId: "qc", contractedOn: "2026-10-09", sourceRef: "signed-contract" } as const;
+  assert.throws(() => apply(quoted, activate as any), { code: "BUSINESS_NOT_FOUND" });
+  const confirmed = apply(quoted, { type: "quote.confirm", confirmationId: "qc", quoteId: "q-date", confirmedOn: "2026-10-09", sourceRef: "customer-agreement" } as any);
+  for (const contractedOn of ["2026-10-08", "2026-10-10"]) assert.throws(() => apply(confirmed, { ...activate, contractedOn } as any), { code: "BUSINESS_DATE_INVALID" });
+  const previous = historical();
+  assert.deepEqual((previous as any).quoteConfirmations, []);
 });

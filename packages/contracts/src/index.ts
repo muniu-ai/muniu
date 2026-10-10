@@ -21,4 +21,8 @@ export * from "./business-calendar.js";
 export * from "./agent-readiness.js";
 export * from "./context.js";
 export * from "./business-context.js";
+export * from "./opc-business-candidates.js";
+export * from "./goal-delivery-view.js";
 export * from "./coordination.js";
+
+export { opcBusinessCandidateCommandSchema } from "./business-api-schema.js";

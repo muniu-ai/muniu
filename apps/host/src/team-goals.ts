@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
+import { recordCoordinatedExternalUsage } from './goal-external-rework.js';
 import type { CoordinationAttemptV2, CoordinationRunV2, Execution, GoalDeliveryAcceptanceV2, GoalDeliverySetV2, GoalOutputRefV2, GoalPlanV2,
-  GoalResourceRefV2, GoalTeamDetailV2, GoalTeamPlanProposalV2, GoalTeamPlanRevisionV2, GoalUsageV2, GoalV2, Principal, Thread, Workspace, WorkspaceMembership } from "@mn/contracts";
+  GoalResourceRefV2, GoalCoordinatedDetailV2, GoalTeamPlanProposalV2, GoalCoordinatedPlanV2, GoalUsageV2, GoalV2, Principal, Thread, Workspace, WorkspaceMembership } from "@mn/contracts";
 import { appendKernelEvent, KernelError, sha256, type KernelStore, type KernelTransaction } from "@mn/kernel";
 import type { ContentAddressedStorage, KeyProvider } from "@mn/storage";
 import { GoalRuleError, validateGoalUsage } from "@mn/task-orchestration";
+import type { GoalReworkAdmission } from "./goal-delivery-service.js";
 import type { GoalScope } from "./goals.js";
 
-export interface TeamGoalContext { readonly goal: GoalV2; readonly plan: GoalTeamPlanRevisionV2 }
+export interface TeamGoalContext { readonly goal: GoalV2; readonly plan: GoalCoordinatedPlanV2; readonly reusedNodeIds?: readonly string[] }
 export interface TeamGoalRunContext extends TeamGoalContext { readonly run: CoordinationRunV2 }
 export interface TeamGoalObservation {
   readonly status: GoalV2["status"];
@@ -19,7 +21,7 @@ export interface TeamGoalCommandInput { readonly nodeId?: string; readonly decis
 export interface TeamGoalApplicationPorts {
   assertResources(transaction: KernelTransaction, scope: GoalScope, refs: readonly GoalResourceRefV2[]): void;
   assertPlan(transaction: KernelTransaction, context: TeamGoalContext): void;
-  start(transaction: KernelTransaction, context: TeamGoalContext): CoordinationRunV2;
+  start(transaction: KernelTransaction, context: TeamGoalContext & { readonly reworkAdmission?: GoalReworkAdmission }): CoordinationRunV2;
   advance(transaction: KernelTransaction, context: TeamGoalRunContext & { readonly accountingOnly?: boolean }): TeamGoalObservation;
   command(transaction: KernelTransaction, context: TeamGoalRunContext, command: TeamGoalCommand, input: TeamGoalCommandInput): CoordinationRunV2;
   assertAcceptance(transaction: KernelTransaction, context: TeamGoalContext & { readonly deliverySet: GoalDeliverySetV2 }): void;
@@ -76,8 +78,8 @@ function current(tx: KernelTransaction, options: GoalScope & { readonly goalId: 
   if (goal.deliverySetId && (!deliverySet || deliverySet.goalId !== goal.id || deliverySet.planRevisionId !== plan?.id)) fail("GOAL_DELIVERY_INVALID", "交付集合引用无效");
   return { goal, plan: plan ?? null, deliverySet: deliverySet ?? null };
 }
-function team(detail: ReturnType<typeof current>): GoalTeamDetailV2 {
-  if (!detail.plan || !("kind" in detail.plan) || detail.plan.kind !== "team-v1") fail("GOAL_TEAM_PLAN_REQUIRED", "此目标没有团队计划");
+function team(detail: ReturnType<typeof current>): GoalCoordinatedDetailV2 {
+  if (!detail.plan || !("kind" in detail.plan) || (detail.plan.kind !== "team-v1" && detail.plan.kind !== "single-v2")) fail("GOAL_TEAM_PLAN_REQUIRED", "此目标没有团队计划");
   return { ...detail, plan: detail.plan, ...(detail.goal.coordinationRef ? { runId: detail.goal.coordinationRef.runId } : {}) };
 }
 function runAt(tx: KernelTransaction, detail: TeamGoalContext): CoordinationRunV2 {
@@ -108,12 +110,12 @@ function outputs(tx: KernelTransaction, options: TeamGoalServiceOptions, goal: G
   }
   return goal.deliverables.filter(spec => spec.required).every(spec => items.some(item => item.key === spec.key)) && items.every(item => item.checks.every((check: GoalOutputRefV2["checks"][number]) => check.status === "passed"));
 }
-function readable(tx: KernelTransaction, options: TeamGoalServiceOptions, detail: GoalTeamDetailV2): GoalTeamDetailV2 {
+function readable(tx: KernelTransaction, options: TeamGoalServiceOptions, detail: GoalCoordinatedDetailV2): GoalCoordinatedDetailV2 {
   resources(tx, options, detail.goal.resourceRefs);
   if (detail.deliverySet) { outputs(tx, options, detail.goal, detail.deliverySet.items); options.ports.assertAcceptance(tx, { ...detail, deliverySet: detail.deliverySet }); }
   return detail;
 }
-function response(tx: KernelTransaction, options: TeamGoalServiceOptions, detail: GoalTeamDetailV2, redacted: boolean): GoalTeamDetailV2 {
+function response(tx: KernelTransaction, options: TeamGoalServiceOptions, detail: GoalCoordinatedDetailV2, redacted: boolean): GoalCoordinatedDetailV2 {
   if (!redacted) return readable(tx, options, detail);
   try { return readable(tx, options, detail); } catch { return { ...detail, deliverySet: null }; }
 }
@@ -128,16 +130,18 @@ function write(tx: KernelTransaction, options: TeamGoalServiceOptions, previous:
 function open(goal: GoalV2): void { if (["accepted", "cancelled"].includes(goal.status)) fail("GOAL_CLOSED", "目标已结束"); }
 function creator(goal: GoalV2, options: GoalScope): void { if (goal.principalId !== options.principalId) fail("GOAL_CONTROLLER_REQUIRED", "只有目标创建者可以决定团队执行与成果验收"); }
 async function mutate(options: TeamGoalMutationOptions, operation: string, input: unknown,
-  change: (tx: KernelTransaction, detail: ReturnType<typeof current>) => GoalV2, redacted = false): Promise<GoalTeamDetailV2> {
+  change: (tx: KernelTransaction, detail: ReturnType<typeof current>) => GoalV2, redacted = false): Promise<GoalCoordinatedDetailV2> {
   protect(options);
   if (typeof options.idempotencyKey !== "string" || !options.idempotencyKey.trim() || options.idempotencyKey.length > 200) fail("IDEMPOTENCY_KEY_REQUIRED", "目标变更需要有效幂等键");
   if (!integer(options.expectedStreamVersion, 1)) fail("STREAM_VERSION_CONFLICT", "目标版本无效");
   const scope = `goal.team.${operation}:${options.workspaceId}:${options.principalId}:${options.goalId}`, digest = sha256({ input: copy(input), expectedStreamVersion: options.expectedStreamVersion });
   return options.store.transact(options.tenantId, tx => {
     const detail = current(tx, options), previous = tx.getIdempotency(scope, options.idempotencyKey);
+    if (operation === "external_usage_recorded" && (member(tx, options).workspaceRole !== "owner"
+      || tx.getProjection<Principal>("principal", options.principalId)?.kind !== "human")) fail("FORBIDDEN", "仅工作区所有者可以核对外部用量");
     if (previous) {
       if (previous.requestDigest !== digest) fail("IDEMPOTENCY_KEY_REUSED", "幂等键已用于其他请求");
-      return response(tx, options, previous.response as GoalTeamDetailV2, redacted);
+      return response(tx, options, previous.response as GoalCoordinatedDetailV2, redacted);
     }
     if (detail.goal.streamVersion !== options.expectedStreamVersion) fail("STREAM_VERSION_CONFLICT", "目标版本已变化");
     const next = change(tx, detail);
@@ -149,24 +153,24 @@ async function mutate(options: TeamGoalMutationOptions, operation: string, input
     return response(tx, options, result, redacted);
   });
 }
-export async function getTeamGoal(options: TeamGoalServiceOptions & { readonly goalId: string }): Promise<GoalTeamDetailV2> {
+export async function getTeamGoal(options: TeamGoalServiceOptions & { readonly goalId: string }): Promise<GoalCoordinatedDetailV2> {
   protect(options); return options.store.transact(options.tenantId, tx => readable(tx, options, team(current(tx, options))));
 }
 /** Internal control read omits output text; never expose this function as a public read endpoint. */
-export async function getTeamGoalForCoordination(options: TeamGoalServiceOptions & { readonly goalId: string }): Promise<GoalTeamDetailV2> {
+export async function getTeamGoalForCoordination(options: TeamGoalServiceOptions & { readonly goalId: string }): Promise<GoalCoordinatedDetailV2> {
   protect(options); return options.store.transact(options.tenantId, tx => ({ ...team(current(tx, options)), deliverySet: null }));
 }
-export async function replayTeamGoalPlan(options: TeamGoalMutationOptions, input: unknown): Promise<GoalTeamDetailV2 | undefined> {
+export async function replayTeamGoalPlan(options: TeamGoalMutationOptions, input: unknown): Promise<GoalCoordinatedDetailV2 | undefined> {
   protect(options);
   return options.store.transact(options.tenantId, tx => {
     current(tx, options);
     const scope = `goal.team.plan_proposed:${options.workspaceId}:${options.principalId}:${options.goalId}`, prior = tx.getIdempotency(scope, options.idempotencyKey);
     if (!prior) return undefined;
     if (prior.requestDigest !== sha256({ input: copy(input), expectedStreamVersion: options.expectedStreamVersion })) fail("IDEMPOTENCY_KEY_REUSED", "幂等键已用于其他请求");
-    return readable(tx, options, prior.response as GoalTeamDetailV2);
+    return readable(tx, options, prior.response as GoalCoordinatedDetailV2);
   });
 }
-export async function proposeTeamGoalPlan(options: TeamGoalMutationOptions & { readonly proposal: GoalTeamPlanProposalV2; readonly planRequest?: unknown }): Promise<GoalTeamDetailV2> {
+export async function proposeTeamGoalPlan(options: TeamGoalMutationOptions & { readonly proposal: GoalTeamPlanProposalV2; readonly planRequest?: unknown }): Promise<GoalCoordinatedDetailV2> {
   const proposal = copy(options.proposal);
   if (options.planRequest) {
     const request = options.planRequest as Record<string, unknown>;
@@ -182,12 +186,12 @@ export async function proposeTeamGoalPlan(options: TeamGoalMutationOptions & { r
     resources(tx, options, goal.resourceRefs);
     const body = { ...proposal, id: options.id("goal-plan"), goalId: goal.id, threadId: goal.threadId, revision: (detail.plan?.revision ?? 0) + 1,
       inputVersion: goal.inputVersion, criteriaVersion: goal.criteriaVersion, budget: goal.budget, resourceRefs: goal.resourceRefs, deliverables: goal.deliverables, createdAt: options.now() };
-    const plan: GoalTeamPlanRevisionV2 = { ...body, digest: sha256(body) };
+    const plan: GoalCoordinatedPlanV2 = { ...body, digest: sha256(body) };
     options.ports.assertPlan(tx, { goal, plan }); tx.putProjection(PLAN, plan.id, plan);
     return { ...goal, status: "awaiting_authorization", planRevisionId: plan.id };
   });
 }
-export async function startTeamGoal(options: TeamGoalMutationOptions & { readonly planRevisionId: string; readonly planDigest: string }): Promise<GoalTeamDetailV2> {
+export async function startTeamGoal(options: TeamGoalMutationOptions & { readonly planRevisionId: string; readonly planDigest: string }): Promise<GoalCoordinatedDetailV2> {
   return mutate(options, "started", { planRevisionId: options.planRevisionId, planDigest: options.planDigest }, (tx, initial) => {
     const detail = team(initial), { goal, plan } = detail; open(goal); creator(goal, options);
     if (plan.id !== options.planRevisionId || plan.digest !== options.planDigest) fail("GOAL_PLAN_CHANGED", "只能授权当前计划的确切版本");
@@ -213,7 +217,7 @@ export async function startTeamGoal(options: TeamGoalMutationOptions & { readonl
     return started;
   });
 }
-function observe(tx: KernelTransaction, options: TeamGoalServiceOptions, detail: GoalTeamDetailV2): GoalV2 {
+function observe(tx: KernelTransaction, options: TeamGoalServiceOptions, detail: GoalCoordinatedDetailV2): GoalV2 {
   const { goal, plan } = detail;
   if (goal.status === "accepted") fail("GOAL_CLOSED", "目标已接受");
   if (!goal.cancellationRequestedAt) authorization(tx, options, detail);
@@ -232,8 +236,9 @@ function observe(tx: KernelTransaction, options: TeamGoalServiceOptions, detail:
   if (goal.cancellationRequestedAt) return { ...next, status: terminal && next.reservation?.status === "settled" ? "cancelled" : "needs_reconciliation",
     reasonCode: next.reservation?.status !== "settled" ? "GOAL_USAGE_UNKNOWN" : terminal ? undefined : "GOAL_CANCELLATION_PENDING" };
   if (terminal && next.reservation?.status !== "settled") return { ...next, status: "needs_reconciliation", reasonCode: "GOAL_USAGE_UNKNOWN" };
-  if (value.status === "awaiting_acceptance") {
-    if (!outputs(tx, options, goal, value.outputs ?? [])) return { ...next, status: "failed", reasonCode: "GOAL_DELIVERY_INCOMPLETE" };
+  if (value.status === "awaiting_acceptance" || (value.status === "failed" && value.outputs?.length)) {
+    const valid = outputs(tx, options, goal, value.outputs ?? []);
+    if (value.status === "awaiting_acceptance" && !valid) return { ...next, status: "failed", reasonCode: "GOAL_DELIVERY_INCOMPLETE" };
     const body = { goalId: goal.id, planRevisionId: plan.id, criteriaVersion: goal.criteriaVersion, items: value.outputs! }, digest = sha256(body), id = `goal-delivery-${digest}`;
     if (goal.deliverySetId && goal.deliverySetId !== id) fail("GOAL_OUTPUT_INVALID", "已登记交付集合不能覆盖");
     const deliverySet: GoalDeliverySetV2 = { ...body, id, digest, createdAt: options.now() };
@@ -243,7 +248,25 @@ function observe(tx: KernelTransaction, options: TeamGoalServiceOptions, detail:
   }
   return next;
 }
-export async function advanceTeamGoal(options: TeamGoalMutationOptions): Promise<GoalTeamDetailV2> {
+export async function recordTeamExternalGoalUsage(options: TeamGoalMutationOptions & { readonly usage: GoalUsageV2; readonly source: string; readonly accountingOnly?: boolean }): Promise<GoalCoordinatedDetailV2> {
+  usage(options.usage);
+  return mutate(options, "external_usage_recorded", { usage: options.usage, source: options.source }, (tx, raw) => {
+    const detail = team(raw);
+    let accountingOnly = options.accountingOnly === true;
+    if (!accountingOnly) try { authorization(tx, options, detail); } catch { accountingOnly = true; }
+    recordCoordinatedExternalUsage(tx, { ...options, goal: detail.goal, plan: detail.plan });
+    if (!accountingOnly) return observe(tx, options, detail);
+    const value = accountingObservation(options.ports.advance(tx, { ...detail, run: runAt(tx, detail), accountingOnly: true }));
+    if (!value.usage || !["failed", "cancelled", "awaiting_acceptance"].includes(value.status)) fail("GOAL_USAGE_UNKNOWN", "外部执行仍有待核对用量");
+    usage(value.usage);
+    if (value.usage.currency !== detail.goal.budget.currency) fail("GOAL_BUDGET_CURRENCY_MISMATCH", "账单币种与目标预算不同");
+    const overrun = value.usage.tokens > detail.goal.budget.maxTokens || BigInt(value.usage.costMinorUnits) > BigInt(detail.goal.budget.maxCostMinorUnits);
+    return { ...detail.goal, reservation: { status: "settled", actual: value.usage },
+      status: overrun ? "needs_reconciliation" : detail.goal.cancellationRequestedAt ? "cancelled" : "failed",
+      reasonCode: overrun ? "GOAL_BUDGET_OVERRUN" : "GOAL_AUTHORIZATION_STALE" };
+  }, true);
+}
+export async function advanceTeamGoal(options: TeamGoalMutationOptions): Promise<GoalCoordinatedDetailV2> {
   return mutate(options, "observed", {}, (tx, detail) => observe(tx, options, team(detail)), true);
 }
 export async function observeTeamGoalInBackground(options: TeamGoalServiceOptions & { readonly goalId: string }): Promise<void> {
@@ -280,7 +303,7 @@ export async function reconcileTeamGoalUsage(options: TeamGoalServiceOptions & {
     if (sha256(next) !== sha256(goal)) write(tx, options, goal, next, "team_usage_reconciled");
   });
 }
-export async function commandTeamGoal(options: TeamGoalMutationOptions & TeamGoalCommandInput & { readonly command: TeamGoalCommand }): Promise<GoalTeamDetailV2> {
+export async function commandTeamGoal(options: TeamGoalMutationOptions & TeamGoalCommandInput & { readonly command: TeamGoalCommand }): Promise<GoalCoordinatedDetailV2> {
   const input = { command: options.command, ...(options.nodeId ? { nodeId: options.nodeId } : {}), ...(options.decision ? { decision: options.decision } : {}) };
   return mutate(options, `command_${options.command}`, input, (tx, initial) => {
     const detail = team(initial), { goal } = detail; open(goal); creator(goal, options);
@@ -308,7 +331,7 @@ export async function commandTeamGoal(options: TeamGoalMutationOptions & TeamGoa
   }, options.command === "cancel" || options.command === "pause");
 }
 export async function acceptTeamGoalDelivery(options: TeamGoalMutationOptions & { readonly deliverySetId: string; readonly criteriaVersion: string;
-  readonly items: readonly { readonly key: string; readonly digest: string; readonly reviewedCriterionIds: readonly string[] }[] }): Promise<GoalTeamDetailV2> {
+  readonly items: readonly { readonly key: string; readonly digest: string; readonly reviewedCriterionIds: readonly string[] }[] }): Promise<GoalCoordinatedDetailV2> {
   const input = copy({ deliverySetId: options.deliverySetId, criteriaVersion: options.criteriaVersion, items: options.items });
   return mutate(options, "accepted", input, (tx, initial) => {
     const detail = team(initial), { goal, plan, deliverySet } = detail; open(goal); creator(goal, options);

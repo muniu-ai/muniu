@@ -116,7 +116,10 @@ import {
 } from "./product-state.js";
 import { executeOpcCommand } from "./opc-api.js";
 import { businessPeriod, commandOpcBusiness, readOpcBusiness } from "./business-management.js";
-import { readBusinessContext, validateBusinessContextSource } from "./business-context.js";
+import { readBusinessContext, validateBusinessContextSource, validateHistoricalBusinessContextSource } from "./business-context.js";
+import { dispatchOpcBusinessCandidateRequest } from "./opc-business-candidates-api.js";
+import { createGoalOutputAccess } from "./goal-output-access.js";
+import { isCoordinatedGoalPlan } from "@mn/contracts";
 import type { BusinessContextTargetV2 } from "@mn/contracts";
 import {
   hydrateOpcOpportunity,
@@ -1157,6 +1160,15 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
     return activeTool.id;
   };
 
+  const validateGoalRunner = async (tenantId: string, principalId: string, workspaceId: string, runnerId: Exclude<CodingRunnerId, "builtin">): Promise<void> => {
+    const workspace = await authorizedWorkspace(options.store, tenantId, principalId, workspaceId, "operate");
+    await requireRunnerPluginTool(tenantId, workspace, runnerId);
+    const configuration = await requireConfirmedCodingRunner(options.store, tenantId, workspaceId, runnerId);
+    const inspection = await inspectCodingRunner(runnerIdentityInspector, runnerId, configuration.identity.requestedPath);
+    if (Object.entries(inspection).some(([key, value]) => configuration.identity[key as keyof typeof configuration.identity] !== value))
+      throw new KernelError("RUNNER_RECONFIRMATION_REQUIRED", "CLI 文件身份已变化", "重新确认 CLI");
+  };
+
   const encodeJson = json;
   const dispatch = async (request: Request): Promise<Response> => {
     const json: typeof encodeJson = (value, status = 200, traceId) => {
@@ -1226,13 +1238,34 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
       const businessContextPath = /^\/v2\/workspaces\/([^/]+)\/business-context\/([^/]+)\/([^/]+)$/u.exec(url.pathname);
       if (businessContextPath && request.method === "GET") {
         if (!protectedJournal) throw new KernelError("BUSINESS_PROTECTED_STORAGE_REQUIRED", "经营资料需要受保护的事件存储", "配置受保护存储后重试");
-        if (url.searchParams.size) throw new KernelError("INVALID_BODY", "业务资料接口不接受查询参数", "通过路径选择业务对象");
+        const version = url.searchParams.get("version"), digest = url.searchParams.get("digest");
+        if (url.searchParams.size && (url.searchParams.size !== 2 || url.searchParams.getAll("version").length !== 1
+          || url.searchParams.getAll("digest").length !== 1 || !version || !/^[1-9][0-9]*$/u.test(version)
+          || !Number.isSafeInteger(Number(version)) || !digest || !/^[a-f0-9]{64}$/u.test(digest)))
+          throw new KernelError("INVALID_BODY", "业务历史版本参数无效", "同时提供确切版本与摘要");
         const workspaceId = decodeURIComponent(businessContextPath[1]!);
         const kind = decodeURIComponent(businessContextPath[2]!) as BusinessContextTargetV2["kind"];
         const resourceId = decodeURIComponent(businessContextPath[3]!);
         const result = await options.store.transact(TENANT_ID, tx => readBusinessContext(tx,
-          { tenantId: TENANT_ID, workspaceId, principalId: ACTOR_ID }, { kind, resourceId }));
+          { tenantId: TENANT_ID, workspaceId, principalId: ACTOR_ID }, version && digest
+            ? { namespace: `opc.business.${kind}`, resourceId, streamVersion: Number(version), digest } : { kind, resourceId },
+          version ? "historical" : "current"));
         return json(result, 200, traceId);
+      }
+      if (url.pathname === "/v2/plugins/opc/business/candidates" || url.pathname.startsWith("/v2/plugins/opc/business/candidates/")) {
+        if (!protectedJournal || !options.cas || !options.protectedPayloadKeyProvider)
+          throw new KernelError("BUSINESS_PROTECTED_STORAGE_REQUIRED", "经营候选需要受保护的成果与事件存储", "配置受保护存储后重试");
+        const runtimeOptions = { store: options.store, kernel, cas: options.cas, keyProvider: options.protectedPayloadKeyProvider,
+          protectedJournal, now, id: nextId,
+          definitions: [tenantPlugins.definition("opc"), tenantPlugins.definition("coding"), tenantPlugins.definition("runner-codex-cli"), tenantPlugins.definition("runner-claude-cli")].filter((value): value is PluginDefinitionV1 => Boolean(value)) };
+        const ports = createGoalOutputAccess({ assertDelivery(tx, context, purpose) {
+          const scoped = { ...runtimeOptions, validateContextSource: purpose === "read" ? validateHistoricalBusinessContextSource : validateBusinessContextSource };
+          if (isCoordinatedGoalPlan(context.plan)) createHostTeamRuntime(scoped).assertDelivery(tx, { ...context, plan: context.plan });
+          else createHostGoalRuntime(scoped).assertDelivery(tx, { ...context, plan: context.plan });
+        } });
+        const result = await dispatchOpcBusinessCandidateRequest({ request, store: options.store, tenantId: TENANT_ID,
+          principalId: ACTOR_ID, now, ports, ...(typeof mutationKey === "string" ? { mutationKey } : {}) });
+        if (result) return json(result.data, result.status, traceId);
       }
       if (url.pathname === "/v2/plugins/opc/business" || url.pathname === "/v2/plugins/opc/business/commands") {
         if (!protectedJournal) throw new KernelError("BUSINESS_PROTECTED_STORAGE_REQUIRED", "经营台账需要受保护的事件存储", "配置受保护存储后重试");
@@ -1264,13 +1297,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
             await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId, "operate");
             try { return (await options.agentRuntimeReadiness?.({ tenantId: TENANT_ID, workspaceId }))?.sandbox === "available"; } catch { return false; }
           },
-          validateRunner: async (workspaceId, runnerId) => {
-            const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId, "operate");
-            await requireRunnerPluginTool(TENANT_ID, workspace, runnerId);
-            const configuration = await requireConfirmedCodingRunner(options.store, TENANT_ID, workspaceId, runnerId);
-            const inspection = await inspectCodingRunner(runnerIdentityInspector, runnerId, configuration.identity.requestedPath);
-            if (Object.entries(inspection).some(([key, value]) => configuration.identity[key as keyof typeof configuration.identity] !== value)) throw new KernelError("RUNNER_RECONFIRMATION_REQUIRED", "CLI 文件身份已变化", "重新确认 CLI");
-          },
+          validateRunner: (workspaceId, runnerId) => validateGoalRunner(TENANT_ID, ACTOR_ID, workspaceId, runnerId),
           definitions: [tenantPlugins.definition("opc"), tenantPlugins.definition("coding"), tenantPlugins.definition("runner-codex-cli"), tenantPlugins.definition("runner-claude-cli")].filter((value): value is PluginDefinitionV1 => Boolean(value)),
           ...(typeof mutationKey === "string" ? { mutationKey } : {}) });
         if (result) return json(result.data, result.status, traceId);
@@ -1611,7 +1638,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         }
         const view = await threadTurns(options.store, TENANT_ID, threadId,
           options.cas && options.protectedPayloadKeyProvider
-            ? { cas: options.cas, keyProvider: options.protectedPayloadKeyProvider, validateContextSource: validateBusinessContextSource } : undefined);
+            ? { cas: options.cas, keyProvider: options.protectedPayloadKeyProvider, validateContextSource: validateHistoricalBusinessContextSource } : undefined);
         await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId);
         return json(view, 200, traceId);
       }
@@ -3062,7 +3089,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         if (goal.coordinationRef) {
           let sandboxAvailable = false;
           try { sandboxAvailable = (await options.agentRuntimeReadiness?.({ tenantId, workspaceId: goal.workspaceId }))?.sandbox === "available"; } catch { /* unavailable is fail-closed */ }
-          await createHostTeamRuntime({ ...runtimeOptions, sandboxAvailable }).observeInBackground({ tenantId, workspaceId: goal.workspaceId, principalId: goal.principalId }, goal.id);
+          await createHostTeamRuntime({ ...runtimeOptions, sandboxAvailable, validateRunner: (workspaceId, runnerId) => validateGoalRunner(tenantId, goal.principalId, workspaceId, runnerId) }).observeInBackground({ tenantId, workspaceId: goal.workspaceId, principalId: goal.principalId }, goal.id);
           continue;
         }
         const runtime = createHostGoalRuntime(runtimeOptions);

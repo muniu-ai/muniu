@@ -69,6 +69,7 @@ export default defineConfig({
           { text: "P0 基础体验验证", link: "/verification/agent-os-p0-2026-10-10" },
           { text: "P1 资料与上下文验证", link: "/verification/agent-os-p1-2026-10-10" },
           { text: "P2 持久团队验证", link: "/verification/agent-os-p2-2026-10-10" },
+          { text: "P3 经营交付验证", link: "/verification/agent-os-p3-2026-10-10" },
         ],
       },
       {

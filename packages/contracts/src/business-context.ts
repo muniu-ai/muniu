@@ -2,7 +2,7 @@
 import type { GoalResourceRefV2 } from "./goals.js";
 
 export interface BusinessContextTargetV2 {
-  readonly kind: "customer" | "order" | "delivery" | "review";
+  readonly kind: "customer" | "service" | "quote" | "order" | "delivery" | "review";
   readonly resourceId: string;
 }
 

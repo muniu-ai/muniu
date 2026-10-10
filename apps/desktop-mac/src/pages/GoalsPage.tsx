@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import type { AgentSchedulingRequestV2, BusinessContextTargetV2, GoalResponseV2, GoalTeamDetailV2, GoalTeamProgressV2, TeamTemplateIdV1, TeamTemplateSummaryV1, GoalStatusV2, GoalV2, ModelConnectionV2, Thread } from "@mn/contracts";
+import type { AgentSchedulingRequestV2, BusinessContextTargetV2, GoalResponseV2, GoalCoordinatedDetailV2, GoalReworkPreviewV2, GoalTeamProgressV2, TeamTemplateIdV1, TeamTemplateSummaryV1, GoalStatusV2, GoalV2, ModelConnectionV2, Thread } from "@mn/contracts";
 import { GoalDetailViews, type GoalDetailView } from "../components/GoalDetailViews";
 import { GoalPlanView, formatTeamCost } from "../components/GoalPlanView";
 import { GoalProgressView } from "../components/GoalProgressView";
 import { TeamSelector } from "../components/TeamSelector";
 import { AgentOsApiError, type AgentOsClient } from "../api";
+import { DeliveryDecisionForm } from "../components/DeliveryDecisionForm";
+import { ReworkPreview } from "../components/ReworkPreview";
+import { BusinessCandidatesPanel } from "../components/BusinessCandidatesPanel";
 import { ResultText } from "../components/ResultText";
 import { TaskComposer } from "../components/TaskComposer";
 import { GoalSources } from "../components/GoalSources";
@@ -20,10 +23,11 @@ type PendingGoalMutation = { goalId: string; uncertain: boolean; work: () => Pro
 const labels: Record<GoalStatusV2, string> = { draft: "草稿", awaiting_authorization: "待确认计划", running: "执行中", waiting_approval: "等待审批", pausing: "正在暂停", paused: "已暂停",
   needs_reconciliation: "待核对", failed: "未完成", awaiting_acceptance: "待验收", accepted: "已验收", cancelled: "已取消" };
 
-export function GoalsPage({ target, api, workspaceId, onOpenThread, pluginIds, repositories, repositoryId, onRepository, onRegisterRepository, onSettings, newTaskRequest, active, onTaskCreated, businessTarget }: {
+export function GoalsPage({ target, api, workspaceId, onOpenThread, pluginIds, repositories, repositoryId, onRepository, onRegisterRepository, onSettings, newTaskRequest, active, onTaskCreated, businessTarget, onRecordDelivery }: {
   readonly target?: { readonly id: string; readonly sequence: number };
   readonly api: AgentOsClient; readonly workspaceId: string; readonly onOpenThread: (thread: Thread) => void;
   readonly businessTarget?: BusinessContextTargetV2 & { readonly sequence: number };
+  readonly onRecordDelivery?: (draft:{title:string;artifactRef:string;orderId?:string})=>void;
   readonly active: boolean; readonly onTaskCreated: () => void;
   readonly pluginIds: readonly string[]; readonly repositories: readonly CodingRepositorySummary[]; readonly repositoryId?: string;
   readonly onRepository: (id: string) => void; readonly onRegisterRepository: () => void; readonly onSettings: () => void; readonly newTaskRequest: number;
@@ -40,8 +44,11 @@ export function GoalsPage({ target, api, workspaceId, onOpenThread, pluginIds, r
   const [teamTemplates, setTeamTemplates] = useState<readonly TeamTemplateSummaryV1[]>([]);
   const [teamTemplateId, setTeamTemplateId] = useState<TeamTemplateIdV1 | null>(null);
   const [teamModelId, setTeamModelId] = useState("");
+  const [reworkPreview, setReworkPreview] = useState<GoalReworkPreviewV2>();
+  const cachedReworkPreview = useRef<GoalReworkPreviewV2 | undefined>(undefined);
   const [teamProgress, setTeamProgress] = useState<GoalTeamProgressV2>();
   const progressSequence = useRef(0);
+  const previewSequence = useRef(0);
   const [pendingMutations, setPendingMutations] = useState<ReadonlyMap<string, PendingGoalMutation>>(new Map());
   const pendingMutation = detail ? pendingMutations.get(detail.goal.id) : undefined;
   const [loading, setLoading] = useState(true);
@@ -54,13 +61,23 @@ export function GoalsPage({ target, api, workspaceId, onOpenThread, pluginIds, r
   const [currency, setCurrency] = useState("CNY");
   const [tokens, setTokens] = useState("100000");
   const [cost, setCost] = useState("5000");
-  const teamDetail = detail && isTeamGoalDetail(detail) ? detail : undefined;
+  const teamDetail = detail && isCoordinatedGoalDetail(detail) ? detail : undefined;
   const progress = teamDetail && teamProgress?.goalId === teamDetail.goal.id && teamProgress.planRevisionId === teamDetail.plan.id ? teamProgress : undefined;
-  const singleDetail = detail && !isTeamGoalDetail(detail) ? detail : undefined;
+  const singleDetail = detail && !isCoordinatedGoalDetail(detail) ? detail : undefined;
+  const singleNode = teamDetail?.plan.kind === "single-v2" && teamDetail.plan.nodes.length === 1 ? teamDetail.plan.nodes[0] : undefined;
+  const runnerId = singleDetail?.plan?.runnerId ?? (singleNode?.kind === "agent" ? singleNode.executor.runnerId : undefined);
   const mutationLocked = pendingMutation?.goalId === detail?.goal.id;
   const teamModels = models.filter(model => model.billingCurrency === detail?.goal.budget.currency);
   const teamModel = teamModels.find(model => model.id === teamModelId) ?? teamModels[0];
-  const canPlan = Boolean(detail && ["draft", "awaiting_authorization"].includes(detail.goal.status) && !teamDetail?.runId && !singleDetail?.goal.executionRef);
+  const canPlan = Boolean(detail && ["draft", "awaiting_authorization"].includes(detail.goal.status) && !teamDetail?.runId && !singleDetail?.goal.executionRef && !detail.deliveryReview?.reworks.some(rework=>rework.planRevisionId===detail.plan?.id));
+  const canDecideDelivery = Boolean(detail?.deliverySet && ["awaiting_acceptance", "failed"].includes(detail.goal.status) && detail.goal.reservation?.status === "settled");
+  const currentDecisions = detail?.deliveryReview?.decisions.filter(decision => decision.deliverySetId === detail.deliverySet?.id) ?? [];
+  const latestDecision = currentDecisions.at(-1);
+  const effectiveDecisions = new Map(currentDecisions.flatMap(decision => decision.items.map(item => [JSON.stringify([item.key, item.digest]), item] as const)));
+  const needsRework = detail?.deliverySet?.items.some(output => effectiveDecisions.get(JSON.stringify([output.key, output.digest]))?.decision === "request_changes");
+  const reworkBlockedReason = !detail ? undefined : detail.goal.status === "accepted" ? "任务已最终接收。如有新的交付要求，请创建新任务。"
+    : detail.goal.status === "needs_reconciliation" || detail.goal.reservation?.status !== "settled" ? "费用或外部结果尚未核对，暂不能返工。请在进展中处理待核对事项。"
+    : !["awaiting_acceptance", "failed"].includes(detail.goal.status) ? "当前任务状态不允许返工。" : undefined;
   const [duration, setDuration] = useState("60");
   const navigationSequence = useRef(0);
   function startNewTask() { navigationSequence.current += 1; setDetail(undefined); setExisting(false); setError(undefined); }
@@ -80,8 +97,9 @@ export function GoalsPage({ target, api, workspaceId, onOpenThread, pluginIds, r
       setGoals([]); setError(message(caught)); progressSequence.current += 1; setTeamProgress(undefined);
       const goalId = selectedGoalId.current;
       if (goalId) {
+        cachedReworkPreview.current = undefined; setReworkPreview(undefined);
         readEpochs.current.set(goalId, (readEpochs.current.get(goalId) ?? 0) + 1);
-        setDetail(previous => previous?.goal.id === goalId ? { ...previous, deliverySet: null } : previous);
+        setDetail(previous => previous?.goal.id === goalId ? { ...previous, deliverySet: null, deliveryReview: undefined } : previous);
         setReviewed(new Set());
       }
     }
@@ -96,11 +114,11 @@ export function GoalsPage({ target, api, workspaceId, onOpenThread, pluginIds, r
     return () => { active = false; };
   }, [refreshList]);
   useEffect(() => { let current = true; void api.teamTemplates(workspaceId).then(next => { if (current) setTeamTemplates(next); }).catch(() => { if (current) setTeamTemplates([]); }); return () => { current = false; }; }, [api, workspaceId]);
-  useEffect(() => { setView(!detail || detail.goal.status === "draft" ? "goal" : detail.goal.status === "awaiting_authorization" ? "plan" : ["awaiting_acceptance", "accepted"].includes(detail.goal.status) ? "results" : "progress"); }, [detail?.goal.id, detail?.goal.status]);
+  useEffect(() => { setView(!detail || detail.goal.status === "draft" ? "goal" : detail.goal.status === "awaiting_authorization" ? "plan" : ["awaiting_acceptance", "accepted"].includes(detail.goal.status) || (detail.goal.status === "failed" && detail.deliverySet) ? "results" : "progress"); }, [detail?.goal.id, detail?.goal.status, detail?.deliverySet?.id]);
   useEffect(() => {
     const request = ++progressSequence.current;
     setTeamProgress(undefined);
-    if (!detail || !isTeamGoalDetail(detail)) return;
+    if (!detail || !isCoordinatedGoalDetail(detail)) return;
     const goalId = detail.goal.id, planId = detail.plan.id;
     void api.goalNodes(workspaceId, goalId).then(next => {
       if (request === progressSequence.current && next.goalId === goalId && next.planRevisionId === planId) setTeamProgress(next);
@@ -110,29 +128,38 @@ export function GoalsPage({ target, api, workspaceId, onOpenThread, pluginIds, r
   useEffect(() => { pageRef.current?.closest(".page-scroll")?.scrollTo({ top: 0 }); }, [detail?.goal.id]);
   useEffect(() => {
     setSelection(singleDetail?.plan?.scheduling?.request ?? (singleDetail?.plan ? { runnerId: singleDetail.plan.runnerId, strategy: "quality", modelBindingId: singleDetail.plan.modelBindingId } : { runnerId: "auto", strategy: "quality" }));
-    setTeamTemplateId(teamDetail?.plan.template.id ?? null);
+    setTeamTemplateId(teamDetail?.plan.kind === "team-v1" ? teamDetail.plan.template.id : null);
     const agent = teamDetail?.plan.nodes.find(node => node.kind === "agent");
     setTeamModelId(agent?.kind === "agent" ? agent.executor.modelBindingId : "");
   }, [detail?.goal.id, detail?.plan?.id]);
-  useEffect(() => { setReviewed(new Set()); }, [detail?.goal.id, detail?.deliverySet?.digest]);
+  useEffect(() => { setReviewed(new Set()); cachedReworkPreview.current = undefined; setReworkPreview(undefined); }, [detail?.goal.id, detail?.deliverySet?.digest]);
   useEffect(() => {
     const goalId = detail?.goal.id;
     let active = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const stop = api.watchWorkspaceEvents(workspaceId, () => {
-      progressSequence.current += 1; setTeamProgress(undefined);
+      progressSequence.current += 1; setTeamProgress(undefined); previewSequence.current += 1; setReworkPreview(undefined);
       if (timer) return;
       timer = setTimeout(() => {
         timer = undefined;
         void refreshGoals();
         if (!goalId) return;
         const epoch = readEpochs.current.get(goalId) ?? 0;
+        const previewEpoch = previewSequence.current;
         void api.goal(workspaceId, goalId).then(next => {
-          if (active && epoch === (readEpochs.current.get(goalId) ?? 0)) setDetail(previous => previous?.goal.id === goalId && previous.goal.streamVersion <= next.goal.streamVersion ? next : previous);
+          if (active && epoch === (readEpochs.current.get(goalId) ?? 0)) {
+            setDetail(previous => previous?.goal.id === goalId && previous.goal.streamVersion <= next.goal.streamVersion ? next : previous);
+            if (previewEpoch === previewSequence.current && selectedGoalId.current === goalId) {
+              const preview = cachedReworkPreview.current;
+              if (preview && reworkPreviewMatches(preview, next)) setReworkPreview(preview);
+              else { cachedReworkPreview.current = undefined; setReworkPreview(undefined); }
+            }
+          }
         }).catch(caught => {
           if (!active) return;
           readEpochs.current.set(goalId, (readEpochs.current.get(goalId) ?? 0) + 1);
-          setDetail(previous => previous?.goal.id === goalId ? { ...previous, deliverySet: null } : previous);
+          cachedReworkPreview.current = undefined; setReworkPreview(undefined);
+          setDetail(previous => previous?.goal.id === goalId ? { ...previous, deliverySet: null, deliveryReview: undefined } : previous);
           setReviewed(new Set()); setError(message(caught));
         });
       }, 150);
@@ -149,7 +176,7 @@ export function GoalsPage({ target, api, workspaceId, onOpenThread, pluginIds, r
     return () => { current = false; };
   }, [api, workspaceId, target]);
   const selectedThreadId = threads.find(thread => thread.id === threadId)?.id ?? threads[0]?.id ?? "";
-  const planDirty = teamDetail ? teamTemplateId !== teamDetail.plan.template.id || teamDetail.plan.nodes.some(node => node.kind === "agent" && node.executor.modelBindingId !== teamModel?.id)
+  const planDirty = teamDetail ? teamTemplateId !== (teamDetail.plan.kind === "team-v1" ? teamDetail.plan.template.id : null) || teamDetail.plan.nodes.some(node => node.kind === "agent" && node.executor.modelBindingId !== teamModel?.id)
     : Boolean(detail?.plan && (teamTemplateId || JSON.stringify(selection) !== JSON.stringify(singleDetail?.plan?.scheduling?.request ?? { runnerId: singleDetail?.plan?.runnerId, strategy: "quality", modelBindingId: singleDetail?.plan?.modelBindingId })));
   const selectedTemplate = teamTemplates.find(template => template.id === teamTemplateId);
   const planReady = !teamTemplateId || Boolean(selectedTemplate?.available && selectedTemplate.pluginId === (detail?.plan?.pluginId ?? threads.find(item => item.id === detail?.goal.threadId)?.pluginId) && teamModel);
@@ -182,8 +209,9 @@ export function GoalsPage({ target, api, workspaceId, onOpenThread, pluginIds, r
       if (sequence !== navigationSequence.current) return;
       if (caught instanceof AgentOsApiError && (caught.status === 403 || caught.status === 404 || /RESOURCE|ACCESS|AUTHORIZATION/u.test(caught.detail.code))) {
         if (goalId) readEpochs.current.set(goalId, (readEpochs.current.get(goalId) ?? 0) + 1);
-        progressSequence.current += 1; setTeamProgress(undefined);
-        setDetail(previous => previous && previous.goal.id === goalId ? { ...previous, deliverySet: null } : previous); setReviewed(new Set());
+        progressSequence.current += 1; setTeamProgress(undefined); previewSequence.current += 1; setReworkPreview(undefined);
+        cachedReworkPreview.current = undefined;
+        setDetail(previous => previous && previous.goal.id === goalId ? { ...previous, deliverySet: null, deliveryReview: undefined } : previous); setReviewed(new Set());
       }
       setError(message(caught));
     } finally { setBusy(false); }
@@ -229,13 +257,13 @@ export function GoalsPage({ target, api, workspaceId, onOpenThread, pluginIds, r
         </fieldset><button className="primary-button" disabled={busy || !selectedThreadId || !objective.trim() || !criteria.trim()}>{busy ? "正在保存…" : "创建目标"}</button>
       </form>}</section>{detail && <section className="panel goal-detail" aria-label="目标详情">
         <div className="goal-heading"><h2>{detail.goal.objective.split("\n")[0]}</h2><span className="pill" role="status">{labels[detail.goal.status]}</span></div>
+        {detail.goal.reasonCode && <p className="inline-error">{reason(detail.goal.reasonCode)}</p>}
         <ol className="task-lifecycle" aria-label="任务阶段">{["委派说明", "审阅计划", "执行与调整", "成果验收"].map((label, index) => <li key={label} className={(detail.goal.status === "draft" ? 0 : detail.goal.status === "awaiting_authorization" ? 1 : ["awaiting_acceptance", "accepted"].includes(detail.goal.status) ? 3 : 2) === index ? "current" : ""}>{index + 1}. {label}</li>)}</ol>
         {mutationLocked && !busy && <div role="alert"><p>上次操作的结果尚未确认，请使用原请求继续核对。</p><button className="secondary-button" onClick={() => void retryMutation(pendingMutation!)}>重试上次操作</button></div>}
         <GoalDetailViews value={view} onChange={setView} panels={{
           goal: <>
         <h3>任务与约束</h3><pre className="goal-brief-preview">{detail.goal.objective}</pre>
         <GoalSources key={detail.goal.id} api={api} workspaceId={workspaceId} resourceRefs={detail.goal.resourceRefs} />
-        {detail.goal.reasonCode && <p className="inline-error">{reason(detail.goal.reasonCode)}</p>}
         <p>额度：{formatTeamCost(detail.goal.budget.maxCostMinorUnits, detail.goal.budget.currency)} · {detail.goal.budget.maxTokens} tokens · {detail.goal.budget.maxDurationMs / 60_000} 分钟</p>
         {detail.goal.reservation && <p>用量：{detail.goal.reservation.status === "settled" ? `${detail.goal.reservation.actual?.costMinorUnits ?? "0"} 分 ${detail.goal.budget.currency}，${detail.goal.reservation.actual?.tokens ?? 0} tokens` : detail.goal.reservation.status === "unknown" ? "待核对，额度继续保留" : "已预留"}</p>}
         <h3>验收标准</h3>{detail.goal.deliverables.map(spec => <div key={spec.key}><strong>{spec.title}{spec.required ? "（必需）" : "（可选）"}</strong><ul>{spec.criteria.map(criterion => <li key={criterion.id}>{criterion.description}</li>)}</ul></div>)}
@@ -267,8 +295,8 @@ export function GoalsPage({ target, api, workspaceId, onOpenThread, pluginIds, r
                   <button className="primary-button" disabled={busy || mutationLocked} onClick={() => void mutate(key => api.decideGoal(detail, node.id, "continue", key))}>确认并继续</button>
                   <button className="secondary-button" disabled={busy || mutationLocked} onClick={() => void mutate(key => api.decideGoal(detail, node.id, "stop", key))}>停止此计划</button></article>)}
               </section>}
-            </> : <p role="status">正在核对团队进展与可用操作…</p> : singleDetail?.goal.executionRef && thread ? <ThreadAgentPanel key={detail.goal.id} api={api} workspaceId={workspaceId} pluginId={thread.pluginId as "opc" | "coding"} threadId={thread.id} resourceId={thread.resourceRef?.resourceId} goalExecution={{ executionId: singleDetail.goal.executionRef.executionId, canControl: ["running", "waiting_approval"].includes(detail.goal.status), onCancel: () => perform(() => api.commandGoal(detail, "cancel")) }} /> : <p>计划确认后开始执行。</p>}
-            {singleDetail?.plan?.runnerId !== "builtin" && singleDetail?.goal.reasonCode === "GOAL_USAGE_UNKNOWN" && <ExternalUsageForm key={detail.goal.id} detail={singleDetail} disabled={busy} onSave={(usage, source) => void perform(() => api.recordExternalUsage(singleDetail, usage, source))} />}
+            </> : <p role="status">正在核对步骤进展与可用操作…</p> : singleDetail?.goal.executionRef && thread ? <ThreadAgentPanel key={detail.goal.id} api={api} workspaceId={workspaceId} pluginId={thread.pluginId as "opc" | "coding"} threadId={thread.id} resourceId={thread.resourceRef?.resourceId} goalExecution={{ executionId: singleDetail.goal.executionRef.executionId, canControl: ["running", "waiting_approval"].includes(detail.goal.status), onCancel: () => perform(() => api.commandGoal(detail, "cancel")) }} /> : <p>计划确认后开始执行。</p>}
+            {(runnerId === "codex-cli" || runnerId === "claude-cli") && detail.goal.reasonCode === "GOAL_USAGE_UNKNOWN" && <ExternalUsageForm key={detail.goal.id} detail={detail} disabled={busy || mutationLocked} onSave={(usage, source) => void mutate(key => api.recordExternalUsage(detail, usage, source, key))} />}
           </>,
           results: <>
         {detail.deliverySet ? <section aria-label="成果验收"><h3>成果与检查</h3><p>先查看任务成果，再确认各项内容标准。程序检查不代替内容判断。</p>
@@ -279,11 +307,21 @@ export function GoalsPage({ target, api, workspaceId, onOpenThread, pluginIds, r
               <input type="checkbox" disabled={busy || detail.goal.status !== "awaiting_acceptance"} checked={detail.goal.status === "accepted" || reviewed.has(key)} onChange={event => {
                 const checked = event.target.checked; setReviewed(previous => { const next = new Set(previous); if (checked) next.add(key); else next.delete(key); return next; });
               }} />已复核：{criterion.description}</label>; })}
+            {onRecordDelivery && pluginIds.includes("opc") && (detail.goal.status==="accepted" || [...(detail.deliveryReview?.decisions??[])].reverse().filter(decision=>decision.deliverySetId===detail.deliverySet!.id).flatMap(decision=>decision.items).find(item=>item.key===output.key&&item.digest===output.digest)?.decision==="accept") && <button className="secondary-button" disabled={busy||mutationLocked} onClick={()=>onRecordDelivery({title:spec?.title??output.key,artifactRef:`goal:${detail.goal.id}/plan:${detail.plan!.id}/delivery:${detail.deliverySet!.id}/output:${output.key}/digest:${output.digest}`,...(detail.goal.resourceRefs.filter(ref=>ref.namespace==="opc.business.order").length===1?{orderId:detail.goal.resourceRefs.find(ref=>ref.namespace==="opc.business.order")!.resourceId}:{})})}>登记此成果的交付</button>}
             <details><summary>成果版本与证据</summary><p>{output.resourceRef.namespace} · {output.resourceRef.resourceId}</p><p>摘要：{output.digest}</p><ul>{output.checks.flatMap(check => check.evidenceRefs.map((ref, index) => <li key={`${check.checkId}:${index}`}>{ref.namespace} · {ref.resourceId} · 版本 {ref.streamVersion}</li>))}</ul></details>
           </article>; })}
-          {detail.goal.status === "awaiting_acceptance" && <button className="primary-button" disabled={busy || !acceptanceReady} onClick={() => void perform(() => api.acceptGoal(detail,
-            detail.deliverySet!.items.map(output => ({ key: output.key, digest: output.digest, reviewedCriterionIds: detail.goal.deliverables.find(spec => spec.key === output.key)!.criteria.filter(criterion => reviewed.has(JSON.stringify([output.key, criterion.id]))).map(criterion => criterion.id) }))))}>接收成果</button>}
-        </section> : <p>尚无可验收成果。完成计划后在这里查看成果与检查结果。</p>}
+          {detail.goal.status === "awaiting_acceptance" && <button className="primary-button" disabled={busy || mutationLocked || !acceptanceReady} onClick={() => void mutate(key => api.acceptGoal(detail,
+            detail.deliverySet!.items.map(output => ({ key: output.key, digest: output.digest, reviewedCriterionIds: detail.goal.deliverables.find(spec => spec.key === output.key)!.criteria.filter(criterion => reviewed.has(JSON.stringify([output.key, criterion.id]))).map(criterion => criterion.id) })), key))}>接收成果</button>}
+          {canDecideDelivery && <DeliveryDecisionForm key={detail.deliverySet.digest} specs={detail.goal.deliverables} outputs={detail.deliverySet.items} allowAccept={detail.goal.status === "awaiting_acceptance"} disabled={busy||mutationLocked} onSubmit={items=>void mutate(key=>api.decideGoalDelivery(detail,items,key))}/>}
+          <BusinessCandidatesPanel key={`${detail.goal.id}:${detail.deliverySet.id}`} api={api} workspaceId={workspaceId} origin={{goalId:detail.goal.id,planRevisionId:detail.plan!.id,deliverySetId:detail.deliverySet.id}} outputs={detail.deliverySet.items}/>
+        </section> : <p>{detail.goal.status === "failed" ? "此次执行未形成可验收成果。请在进展中核对失败原因。" : "尚无可验收成果。完成计划后在这里查看成果与检查结果。"}</p>}
+        {detail.deliveryReview && reworkBlockedReason && <p role="status">{reworkBlockedReason}</p>}
+        {detail.deliveryReview && <section aria-label="验收与返工历史"><h3>验收与返工记录</h3>{detail.deliveryReview.decisions.map(decision=><article key={decision.id}><p>{new Date(decision.decidedAt).toLocaleString("zh-CN")}</p><ul>{decision.items.map(item=><li key={item.key}>{detail.goal.deliverables.find(spec=>spec.key===item.key)?.title??item.key} · {item.decision==="accept"?"已接收":item.decision==="defer"?"暂缓":"要求修改"}{item.decision==="request_changes"?`：${item.instruction}`:item.decision==="defer"&&item.reason?`：${item.reason}`:""}</li>)}</ul>
+          {decision.id===latestDecision?.id&&needsRework&&!detail.deliveryReview?.reworks.some(rework=>rework.decisionId===decision.id)&&<button className="secondary-button" disabled={busy||mutationLocked||Boolean(reworkBlockedReason)} onClick={()=>void mutate(async key=>{const preview=await api.previewGoalRework(detail,decision.id,key);if(selectedGoalId.current===detail.goal.id)cachedReworkPreview.current=preview;const request=previewSequence.current;const fresh=await api.goal(workspaceId,detail.goal.id);if(request===previewSequence.current&&selectedGoalId.current===detail.goal.id&&reworkPreviewMatches(preview,fresh))setReworkPreview(preview);return fresh;})}>预览返工</button>}
+        </article>)}
+        {detail.deliveryReview.history.map(history=><details key={history.planRevisionId}><summary>历史计划修订 {history.revision} · {history.deliverySet?.items.length??0} 项成果</summary>{history.usage&&<p>截至此修订累计费用：{formatTeamCost(history.usage.costMinorUnits,history.usage.currency)}</p>}{history.deliverySet?.items.map(item=><article key={item.key}><h4>{detail.goal.deliverables.find(spec=>spec.key===item.key)?.title??item.key}</h4><ResultText text={item.preview}/><p>成果摘要：{item.digest}</p></article>)}</details>)}
+        </section>}
+        {reworkPreview?.goalId===detail.goal.id&&reworkPreview.sourcePlanRevisionId===detail.plan?.id&&reworkPreview.expectedGoalStreamVersion===detail.goal.streamVersion&&<ReworkPreview preview={reworkPreview} disabled={busy||mutationLocked||Boolean(reworkBlockedReason)} onCancel={()=>{cachedReworkPreview.current=undefined;setReworkPreview(undefined);}} onConfirm={()=>void mutate(key=>api.reworkGoal(detail,reworkPreview,key))}/>}
           </>,
         }} />
         <div className="goal-actions">{thread?.resourceRef && <button className="secondary-button" onClick={() => onOpenThread(thread)}>查看业务对象</button>}
@@ -298,15 +336,22 @@ export function GoalsPage({ target, api, workspaceId, onOpenThread, pluginIds, r
 }
 function message(error: unknown): string { return error instanceof AgentOsApiError ? `${error.detail.message}。${error.detail.action}` : "无法读取或更新目标，请检查 Host 后重试。"; }
 function checkLabel(id: string): string {
+  if (id === "team.independent-review-recorded") return "独立复核";
   if (id === "opc.persisted-response-and-sources") return "答复与来源版本一致";
   if (id === "coding.authoritative-evidence") return "代码候选与检查证据一致";
   return "成果证据检查";
 }
 function reason(code: string): string {
+  if (code === "GOAL_OUTPUT_INVALID") return "成果格式或交付项不符合计划，未登记可验收成果。";
+  if (code === "GOAL_REVIEW_REJECTED") return "独立复核未通过。请查看成果检查，选择未满足的验收项并要求修改。";
   if (code.includes("USAGE") || code.includes("BUDGET")) return "费用或用量需要核对，暂不继续派发。";
   if (code.includes("DELIVERY") || code.includes("OUTPUT")) return "成果尚未满足检查要求，请查看关联任务。";
   if (code.includes("AUTH") || code.includes("RESOURCE")) return "权限或资料已变化，请核对关联任务与授权。";
   return "当前目标需要处理，请查看关联任务和收件箱。";
 }
 
-function isTeamGoalDetail(value: GoalResponseV2): value is GoalTeamDetailV2 { return value.plan !== null && "kind" in value.plan && value.plan.kind === "team-v1"; }
+function isCoordinatedGoalDetail(value: GoalResponseV2): value is GoalCoordinatedDetailV2 { return value.plan !== null && "kind" in value.plan && (value.plan.kind === "team-v1" || value.plan.kind === "single-v2"); }
+function reworkPreviewMatches(preview: GoalReworkPreviewV2, detail: GoalResponseV2): boolean {
+  return preview.goalId === detail.goal.id && preview.sourcePlanRevisionId === detail.plan?.id
+    && preview.sourceDeliverySetId === detail.deliverySet?.id && preview.expectedGoalStreamVersion === detail.goal.streamVersion;
+}

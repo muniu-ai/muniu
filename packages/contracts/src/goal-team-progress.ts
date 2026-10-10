@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 import type { CoordinationAttemptV2, CoordinationControlV2 } from "./coordination.js";
 import type { GoalDetailV2, GoalResourceRefV2 } from "./goals.js";
-import type { GoalTeamDetailV2 } from "./team-goals.js";
+import type { GoalTeamDetailV2, GoalCoordinatedDetailV2 } from "./team-goals.js";
+import type { GoalDeliveryReviewStateV2 } from "./goal-delivery-view.js";
 
-export type GoalResponseV2 = GoalDetailV2 | GoalTeamDetailV2;
+export type GoalResponseV2 = (GoalDetailV2 | GoalCoordinatedDetailV2) & { readonly deliveryReview?: GoalDeliveryReviewStateV2 };
 export type GoalTeamActionV2 = "start" | "pause" | "resume" | "cancel" | "decide";
 export interface GoalTeamNodeProgressV2 {
   readonly nodeId: string;
@@ -26,4 +27,7 @@ export interface GoalTeamProgressV2 {
 }
 export function isTeamGoalDetail(value: GoalResponseV2): value is GoalTeamDetailV2 {
   return value.plan !== null && "kind" in value.plan && value.plan.kind === "team-v1";
+}
+export function isCoordinatedGoalDetail(value: GoalResponseV2): value is GoalCoordinatedDetailV2 {
+  return value.plan !== null && "kind" in value.plan && ["team-v1", "single-v2"].includes(value.plan.kind);
 }

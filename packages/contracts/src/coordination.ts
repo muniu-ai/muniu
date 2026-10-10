@@ -16,6 +16,7 @@ export interface CoordinationLimitsV2 {
   readonly maxNodes: number;
   readonly maxAttempts: number;
   readonly maxDepth: number;
+  readonly maxReworkRounds?: number;
 }
 export interface CoordinationNodeV2 {
   readonly id: string;
@@ -74,6 +75,26 @@ export interface CoordinationGroupV2 extends VersionedEntity {
   readonly limits: CoordinationLimitsV2;
   readonly nodeIds: readonly string[];
   readonly deadlineAt: string;
+  readonly reworkRounds?: number;
+  readonly initialAccounting?: CoordinationInitialAccountingV2;
+  readonly counterReservations?: readonly CoordinationCounterReservationV2[];
+}
+/** A one-time, verified charge from the original non-coordinated execution. Its Job is never rewritten. */
+export interface CoordinationInitialAccountingV2 {
+  readonly executionId: string; readonly jobId: string; readonly generation: number; readonly revisionId: string;
+  readonly executionStreamVersion: number; readonly jobStreamVersion: number; readonly runtimeLastSequence: number;
+  readonly usage: { readonly currency: string; readonly tokens: number; readonly costMinorUnits: string };
+  readonly usageEvidenceDigest: string; readonly deadlineAt: string;
+  readonly counterReservations: readonly { readonly kind: string; readonly id: string; readonly limit: number }[];
+}
+export interface CoordinationCounterReservationV2 {
+  readonly kind: string; readonly id: string; readonly executionId: string; readonly limit: number;
+}
+export interface CoordinationNodeReuseInputV2 {
+  readonly nodeId: string; readonly sourceAttemptId: string; readonly inputDigest: string; readonly outputDigest: string;
+}
+export interface CoordinationNodeReuseV2 extends VersionedEntity, CoordinationNodeReuseInputV2 {
+  readonly workspaceId: string; readonly groupId: string; readonly runId: string; readonly revisionId: string;
 }
 export interface CoordinationControlV2 extends VersionedEntity {
   readonly workspaceId: string;

@@ -20,14 +20,14 @@ import { confirmCodingRunner } from "../src/coding-runners.js";
 
 const runnerInspection = { requestedPath: "/opt/fixture/codex", realPath: "/opt/fixture/codex", sha256: "b".repeat(64), device: "1", inode: "2", byteLength: 100, modifiedAtMs: 100 };
 
-async function fixture(t: test.TestContext, goalPollIntervalMs = 60_000) {
+async function fixture(t: test.TestContext, goalPollIntervalMs = 60_000, sandboxAvailable = false) {
   const root = await mkdtemp(join(tmpdir(), "mn-goal-host-"));
   const cas = new FileCas({ rootDir: join(root, "cas") });
   const keyProvider = new InMemoryKeyProvider(Buffer.alloc(32, 71));
   const store = new SqliteStorage({ databaseFile: join(root, "state.sqlite"), hmacKey: Buffer.alloc(32, 72) });
   const secretStore = { async save() { return "keychain://muniu.v2/goal-fixture"; }, async read() { return "fixture"; } };
   const allocated: string[] = [];
-  const host = await createAgentOsHost({ id: kind => { allocated.push(kind); return `${kind}-${randomUUID()}`; }, goalPollIntervalMs, store, cas, protectedPayloadKeyProvider: keyProvider, secretStore, runnerIdentityInspector: { async inspect() { return runnerInspection; } } });
+  const host = await createAgentOsHost({ id: kind => { allocated.push(kind); return `${kind}-${randomUUID()}`; }, goalPollIntervalMs, store, cas, protectedPayloadKeyProvider: keyProvider, secretStore, runnerIdentityInspector: { async inspect() { return runnerInspection; } }, ...(sandboxAvailable ? { agentRuntimeReadiness: async () => ({ worker: "available" as const, sandbox: "available" as const, runnerSupervisor: "available" as const }) } : {}) });
   t.after(async () => { await host.close(); await store.close(); await rm(root, { recursive: true, force: true }); });
   const workspace = await host.kernel.createWorkspace("local", "local-owner", randomUUID(), { name: "目标验收", viewMode: "business", pluginIds: ["opc", "coding", "runner-codex-cli"] });
   const opportunity = await captureOpportunity({ store, tenantId: "local", workspaceId: workspace.id, actorId: "local-owner", now: () => new Date().toISOString(), id: kind => `${kind}-${randomUUID()}`, idempotencyKey: "opportunity", expectedStreamVersion: 0, input: "为独立开发者整理需求验证问题" });
@@ -577,4 +577,71 @@ test('读取会话正文期间撤销成员权限，响应前再次检查读权�
   };
   assert.ok((await f.send(`/v2/workspaces/${f.workspace.id}/threads/${material.thread.id}/turns`)).status >= 400);
   assert.equal(revoked, true);
+});
+
+
+for (const sourceUnavailable of [false, true]) test(`外部 CLI 单执行者返工保留原身份与未知费用，${sourceUnavailable ? '来源撤回后只结算费用' : '所有者核对后累计结算且不要求 BYOK'}`, async t => {
+  const f = await fixture(t, 10, true);
+  await f.store.transact('local', tx => {
+    confirmCodingRunner({ transaction: tx, tenantId: 'local', workspaceId: f.workspace.id, actorId: 'local-owner', runnerId: 'codex-cli', expectedStreamVersion: 0, expectedVersion: 'fixture', expectedSha256: runnerInspection.sha256, inspection: runnerInspection, occurredAt: new Date().toISOString(), correlationId: randomUUID() });
+    tx.putProjection('modelConnection', f.model.id, { ...f.model, status: 'error', streamVersion: 3 });
+    appendKernelEvent(tx, { tenantId: 'local', aggregateType: 'fixture', aggregateId: randomUUID(), expectedStreamVersion: 0, type: 'fixture.model_disabled', actorId: 'local-owner', generation: 0, correlationId: randomUUID(), publicPayload: {} });
+  });
+  const created = await f.create(), path = `/v2/goals/${created.body.data.goal.id}`;
+  const ok = async (suffix: string, body?: unknown, key?: string) => {
+    const value = await f.send(path + suffix, body, key); assert.ok(value.status >= 200 && value.status < 300, JSON.stringify(value)); return value.body.data;
+  };
+  const planned = await ok('/plan-revisions', { workspaceId: f.workspace.id, expectedStreamVersion: 1, scheduling: { runnerId: 'codex-cli', strategy: 'quality' } });
+  await ok('/commands', { workspaceId: f.workspace.id, expectedStreamVersion: planned.goal.streamVersion, command: 'start', planRevisionId: planned.plan.id, planDigest: planned.plan.digest });
+  const runtime = (await import('@mn/worker')).createProtectedRuntimeStore({ store: f.store, cas: f.cas, keyProvider: f.keyProvider, tenantId: 'local', workspaceId: f.workspace.id });
+  let calls = 0;
+  const runnerWorker = new AgentOsWorker({ id: 'external-rework-fixture', store: f.store,
+    lock: { engineLockDigest: 'fixture', expectedEngineLockDigest: 'fixture', pluginLockDigest: 'fixture', expectedPluginLockDigest: 'fixture' },
+    handlers: { 'agent.execution.run': async job => {
+      const execution = await f.store.transact('local', tx => { const value = tx.getProjection<Execution>('execution', job.payload.executionId as string)!; assertGoalExecutionResources(tx, value); return value; });
+      assert.equal(execution.runnerId, 'codex-cli'); assert.equal(execution.modelBindingId, 'runner:codex-cli'); calls++;
+      await runtime.append({ executionId: execution.id, type: 'model/response', payload: { generation: execution.generation, text: calls === 1 ? '待改进的机会分析' : '已补充反证和验收说明', toolCalls: [] } });
+      await runtime.append({ executionId: execution.id, type: 'turn/completed', payload: { generation: execution.generation } });
+      return { text: 'fixture completed; no external binary launched' };
+    } } });
+  const wait = async (status: string) => {
+    for (let i = 0; i < 200; i++) { await runnerWorker.pollOnce(); const value = await ok(`?workspaceId=${f.workspace.id}`); if (value.goal.status === status) return value; await new Promise(resolve => setTimeout(resolve, 10)); }
+    assert.fail(JSON.stringify(await ok(`?workspaceId=${f.workspace.id}`)));
+  };
+  let detail = await wait('needs_reconciliation');
+  assert.notEqual(detail.goal.reservation.status, 'settled');
+  detail = await ok('/commands', { workspaceId: f.workspace.id, expectedStreamVersion: detail.goal.streamVersion, command: 'record_external_usage', usage: { currency: 'CNY', tokens: 20, costMinorUnits: '12' }, source: '首轮厂商账单' });
+  assert.equal(detail.goal.status, 'awaiting_acceptance');
+  detail = await ok('/delivery-decisions', { workspaceId: f.workspace.id, expectedStreamVersion: detail.goal.streamVersion,
+    deliverySetId: detail.deliverySet.id, criteriaVersion: detail.deliverySet.criteriaVersion,
+    items: [{ key: 'report', digest: detail.deliverySet.items[0].digest, decision: 'request_changes', failedCriterionIds: ['sources'], instruction: '补充反证和验收说明' }] });
+  const preview = await ok('/rework-previews', { workspaceId: f.workspace.id, expectedStreamVersion: detail.goal.streamVersion, decisionId: detail.deliveryReview.decisions.at(-1).id });
+  assert.equal(preview.plan.kind, 'single-v2'); assert.equal(preview.plan.nodes[0].executor.runnerId, 'codex-cli');
+  assert.equal(preview.remainingBudget.maxCostMinorUnits, '38');
+  await ok('/reworks', { workspaceId: f.workspace.id, expectedStreamVersion: detail.goal.streamVersion, previewId: preview.id, previewDigest: preview.digest });
+  detail = await wait('needs_reconciliation'); assert.equal(calls, 2); assert.notEqual(detail.goal.reservation.status, 'settled');
+  assert.equal(detail.goal.reasonCode, 'GOAL_USAGE_UNKNOWN', '已结束的CLI账单需提供统一核对入口');
+  const attempted = await f.store.transact('local', tx => tx.listProjections<any>('coordination.attempt').find(value => value.runId === detail.goal.coordinationRef.runId));
+  assert.notEqual(attempted.reservation.status, 'settled', 'CLI 未知费用不能结算为零');
+  const bill = { workspaceId: f.workspace.id, expectedStreamVersion: detail.goal.streamVersion, command: 'record_external_usage', usage: { currency: 'CNY', tokens: 10, costMinorUnits: '7' }, source: '返工厂商账单' };
+  await f.store.transact('local', tx => recordToolAdmission(tx, tx.getProjection<Execution>('execution', attempted.executionId)!, 'external-unknown', 'started', new Date().toISOString()));
+  assert.ok((await f.send(path + '/commands', bill)).status >= 400, '未知外部副作用不能用账单核对绕过');
+  await f.store.transact('local', tx => recordToolAdmission(tx, tx.getProjection<Execution>('execution', attempted.executionId)!, 'external-unknown', 'settled', new Date().toISOString()));
+  if (sourceUnavailable) await f.store.transact('local', tx => {
+    tx.deleteProjection('opc.opportunity', f.opportunity.id);
+    appendKernelEvent(tx, { tenantId: 'local', aggregateType: 'fixture', aggregateId: randomUUID(), expectedStreamVersion: 0, type: 'fixture.source_removed', actorId: 'local-owner', generation: 0, correlationId: randomUUID(), publicPayload: {} });
+  });
+  const settled = await ok('/commands', bill, 'external-rework-bill');
+  if (sourceUnavailable) { assert.equal(settled.deliverySet, null); assert.equal(JSON.stringify(settled).includes('已补充反证和验收说明'), false); }
+  else assert.equal(settled.goal.status, 'awaiting_acceptance');
+  assert.deepEqual(settled.goal.reservation.actual, { currency: 'CNY', tokens: 30, costMinorUnits: '19' });
+  assert.deepEqual(await ok('/commands', bill, 'external-rework-bill'), settled);
+  assert.ok((await f.send(path + '/commands', { ...bill, expectedStreamVersion: settled.goal.streamVersion, usage: { ...bill.usage, costMinorUnits: '0' } })).status >= 400);
+  await f.store.transact('local', tx => {
+    const member = tx.getProjection<any>('membership', `${f.workspace.id}:local-owner`)!;
+    tx.putProjection('membership', member.id, { ...member, workspaceRole: 'operator', streamVersion: member.streamVersion + 1 });
+    appendKernelEvent(tx, { tenantId: 'local', aggregateType: 'fixture', aggregateId: randomUUID(), expectedStreamVersion: 0, type: 'fixture.owner_downgraded', actorId: 'local-owner', generation: 0, correlationId: randomUUID(), publicPayload: {} });
+  });
+  const deniedReplay = await f.send(path + '/commands', bill, 'external-rework-bill');
+  assert.equal(deniedReplay.body.code, 'FORBIDDEN', '幂等账单重放也必须检查当前所有者权限');
 });

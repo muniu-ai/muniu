@@ -83,6 +83,7 @@
     "verify:agent-os-p0-ui": "npm run verify:onboarding-paths-ui && npm run verify:navigation-ui && npm run verify:workspace-refresh-ui",
     "verify:agent-os-p1-ui": "node --test apps/desktop-mac/scripts/test/goal-sources.test.mjs && node apps/desktop-mac/scripts/verify-materials-ui.mjs && node apps/desktop-mac/scripts/verify-material-formats-ui.mjs && node apps/desktop-mac/scripts/verify-business-context-ui.mjs && node apps/desktop-mac/scripts/verify-task-draft-recovery-ui.mjs",
     "test:team-views": "node --test apps/desktop-mac/scripts/test/team-api.test.mjs apps/desktop-mac/scripts/test/team-views.test.mjs apps/desktop-mac/scripts/test/team-plan.test.mjs",
+    "verify:agent-os-p3-ui": "node --test apps/desktop-mac/scripts/test/delivery-api.test.mjs apps/desktop-mac/scripts/test/delivery-review.test.mjs apps/desktop-mac/scripts/test/delivery-flow.test.mjs",
     "verify:agent-os-p2-ui": "npm run test:team-views && node apps/desktop-mac/scripts/verify-agent-os-ui.mjs teams"
   },
   "devDependencies": {

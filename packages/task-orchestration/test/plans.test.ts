@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { GoalPlanProposalV2, GoalTeamPlanProposalV2, TeamAgentCapabilityV1, TeamAgentNodeV1, TeamPlanNodeV1, TeamTemplateIdV1 } from "@mn/contracts";
-import { assertTeamPlan, getTeamTemplate, listTeamTemplates, readyTeamNodes, TEAM_DEFAULT_LIMITS, TeamPlanValidationError, type TeamPlanValidationContext } from "../src/index.js";
+import type { GoalPlanProposalV2, GoalTeamPlanProposalV2, GoalSinglePlanProposalV2, TeamAgentCapabilityV1, TeamAgentNodeV1, TeamPlanNodeV1, TeamTemplateIdV1 } from "@mn/contracts";
+import { assertSinglePlan, assertTeamPlan, getTeamTemplate, listTeamTemplates, readyTeamNodes, TEAM_DEFAULT_LIMITS, TeamPlanValidationError, type TeamPlanValidationContext } from "../src/index.js";
 
 const digest = "a".repeat(64);
 const source = { namespace: "asset", resourceId: "source", streamVersion: 1, digest };
@@ -71,6 +71,30 @@ test("three pinned templates keep Coding governance in one delivery node", () =>
     const value = fixture(id); assert.equal(assertTeamPlan(value.plan, value.context).topologicalOrder.at(-1), "handoff");
   }
   assert.throws(() => { (getTeamTemplate("code-delivery").nodes as unknown as unknown[]).pop(); }, TypeError);
+});
+
+test("single-v2 keeps one original executor without an artificial review team", () => {
+  const value = fixture();
+  const { template: _template, kind: _kind, ...shared } = value.plan;
+  const plan: GoalSinglePlanProposalV2 = { ...shared, kind: "single-v2", nodes: [{ ...agent(value), id: "execute" }],
+    deliverableBindings: [{ deliverableKey: "report", nodeId: "execute", outputKey: "result" }] };
+  assert.deepEqual(assertSinglePlan(plan, value.context).topologicalOrder, ["execute"]);
+  mutate(value.context.capabilities[0], { costControl: "unknown" });
+  assert.deepEqual(assertSinglePlan(plan, value.context).topologicalOrder, ["execute"]);
+  assert.throws(() => assertSinglePlan({ ...plan, nodes: [...plan.nodes, { ...plan.nodes[0]!, id: "review" }] }, value.context), TeamPlanValidationError);
+  assert.throws(() => assertSinglePlan({ ...plan, deliverableBindings: [] }, value.context), TeamPlanValidationError);
+  mutate((plan.nodes[0] as TeamAgentNodeV1).executor, { toolIds: ["undeclared.write"] });
+  assert.throws(() => assertSinglePlan(plan, value.context), TeamPlanValidationError);
+});
+
+test("only explicitly reused agent nodes avoid consuming new revision quotas", () => {
+  const value = fixture();
+  mutate(value.context, { cumulative: { nodes: 12, nodeIds: value.plan.nodes.map(node => node.id), attempts: 15, reworkRounds: 2, delegationDepth: 1 } });
+  assert.throws(() => assertTeamPlan(value.plan, value.context), TeamPlanValidationError);
+  mutate(value.context, { cumulative: { nodes: 10, attempts: 23, reworkRounds: 2, delegationDepth: 1 }, reusedNodeIds: ['research-primary', 'research-counter', 'synthesis'] });
+  assert.equal(assertTeamPlan(value.plan, value.context).topologicalOrder.length, value.plan.nodes.length);
+  mutate(value.context, { reusedNodeIds: ['handoff'] });
+  assert.throws(() => assertTeamPlan(value.plan, value.context), TeamPlanValidationError);
 });
 
 test("Coding delivery uses its governed runner and the declared OPC read-only reviewer", () => {

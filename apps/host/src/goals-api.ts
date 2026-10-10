@@ -1,15 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
-import { isBusinessContextRef, assertBusinessContextRef } from "./business-context.js";
+import { recordTeamExternalGoalUsage } from './team-goals.js';
+import { isBusinessContextRef, assertBusinessContextRef, validateHistoricalBusinessContextSource } from "./business-context.js";
 import { assertAssetReader } from "./asset-context.js";
 import { scheduleGoal } from "./goal-scheduling.js";
-import { isTeamGoalDetail, type AgentSchedulingRequestV2, type TeamTemplateIdV1 } from "@mn/contracts";
-import type { GoalBudgetV2, GoalDeliverableSpecV2, GoalResourceRefV2 } from "@mn/contracts";
+import { isCoordinatedGoalDetail, type AgentSchedulingRequestV2, type TeamTemplateIdV1 } from "@mn/contracts";
+import type { GoalBudgetV2, GoalDeliverableSpecV2, GoalDeliveryItemDecisionV2, GoalResourceRefV2 } from "@mn/contracts";
 import { KernelError } from "@mn/kernel";
 import { acceptGoalDelivery, recordExternalGoalUsage, cancelGoal, createGoal, getGoal, getGoalForCoordination, listGoals, replayGoalPlan, proposeGoalPlan, startGoal } from "./goals.js";
 import { createHostGoalRuntime, goalThreadResources, type HostGoalRuntimeOptions } from "./goal-runtime.js";
 import { createHostTeamRuntime } from "./team-runtime.js";
 import { proposeHostTeamPlan } from "./team-planning.js";
 import { acceptTeamGoalDelivery, commandTeamGoal, getTeamGoal, proposeTeamGoalPlan, replayTeamGoalPlan, startTeamGoal } from "./team-goals.js";
+import { createGoalDeliveryService } from "./goal-delivery-runtime.js";
+import { getGoalDeliveryReview, decideGoalDelivery, previewGoalRework, confirmGoalRework } from "./goal-delivery-service.js";
 import { readBoundedJsonBody } from "./http-body.js";
 
 export interface GoalRequestOptions extends HostGoalRuntimeOptions { readonly request: Request; readonly tenantId: string; readonly principalId: string; readonly mutationKey?: string; readonly teamSandboxAvailable?: (workspaceId: string) => Promise<boolean> }
@@ -20,12 +23,12 @@ function integer(value: unknown): number { if (!Number.isSafeInteger(value) || (
 function array(value: unknown, limit = 100): unknown[] { if (!Array.isArray(value) || value.length > limit) invalid(); return value; }
 function resources(value: unknown): GoalResourceRefV2[] { return array(value).map(item => { const ref = object(item, ["namespace", "resourceId", "streamVersion", "digest"]); return { namespace: text(ref.namespace), resourceId: text(ref.resourceId), streamVersion: integer(ref.streamVersion), ...(ref.digest === undefined ? {} : { digest: text(ref.digest) }) }; }); }
 function budget(value: unknown): GoalBudgetV2 { const input = object(value, ["maxTokens", "maxCostMinorUnits", "currency", "maxDurationMs"]); return { maxTokens: integer(input.maxTokens), maxCostMinorUnits: text(input.maxCostMinorUnits), currency: text(input.currency, 3), maxDurationMs: integer(input.maxDurationMs) }; }
-function deliverables(value: unknown): GoalDeliverableSpecV2[] { return array(value, 1).map(item => { const input = object(item, ["key", "title", "required", "criteria"]); if (typeof input.required !== "boolean") invalid(); return { key: text(input.key), title: text(input.title), required: input.required, criteria: array(input.criteria, 20).map(value => { const criterion = object(value, ["id", "description"]); return { id: text(criterion.id), description: text(criterion.description, 2000) }; }) }; }); }
+function deliverables(value: unknown): GoalDeliverableSpecV2[] { return array(value, 20).map(item => { const input = object(item, ["key", "title", "required", "criteria"]); if (typeof input.required !== "boolean") invalid(); return { key: text(input.key), title: text(input.title), required: input.required, criteria: array(input.criteria, 20).map(value => { const criterion = object(value, ["id", "description"]); return { id: text(criterion.id), description: text(criterion.description, 2000) }; }) }; }); }
 export async function dispatchGoalRequest(options: GoalRequestOptions): Promise<{ readonly data: unknown; readonly status: number } | undefined> {
   const url = new URL(options.request.url);
   const collection = /^\/v2\/workspaces\/([^/]+)\/goals$/u.exec(url.pathname);
   const templates = /^\/v2\/workspaces\/([^/]+)\/team-templates$/u.exec(url.pathname);
-  const item = /^\/v2\/goals\/([^/]+)(?:\/(plan-revisions|commands|acceptances|nodes))?$/u.exec(url.pathname);
+  const item = /^\/v2\/goals\/([^/]+)(?:\/(plan-revisions|commands|acceptances|nodes|delivery-decisions|rework-previews|reworks))?$/u.exec(url.pathname);
   if (!collection && !item && !templates) return undefined;
   const runtime = createHostGoalRuntime(options);
   if (options.request.method === "GET") {
@@ -33,15 +36,17 @@ export async function dispatchGoalRequest(options: GoalRequestOptions): Promise<
     if ((collection || templates) ? url.searchParams.size : url.searchParams.size !== 1 || url.searchParams.getAll("workspaceId").length !== 1) invalid();
     const workspaceId = (collection || templates) ? text(decodeURIComponent((collection || templates)![1]!)) : text(url.searchParams.get("workspaceId"));
     const scope = { tenantId: options.tenantId, principalId: options.principalId, workspaceId };
-    const teamOptions = { ...options, sandboxAvailable: await options.teamSandboxAvailable?.(workspaceId) ?? false };
+    const readOptions = { ...options, validateContextSource: ((tx, sourceScope, ref) => validateHistoricalBusinessContextSource(tx, sourceScope, ref) || options.validateContextSource?.(tx, sourceScope, ref) === true) as NonNullable<HostGoalRuntimeOptions["validateContextSource"]> };
+    const teamOptions = { ...readOptions, sandboxAvailable: await options.teamSandboxAvailable?.(workspaceId) ?? false };
     const teamRuntime = createHostTeamRuntime(teamOptions);
     if (templates) return { status: 200, data: await teamRuntime.templates(scope) };
-    const service = await runtime.service(scope);
+    const service = await createHostGoalRuntime(readOptions).service(scope);
     if (collection) return { status: 200, data: await listGoals(service) };
     const goalId = text(decodeURIComponent(item![1]!));
     if (item![2] === "nodes") return { status: 200, data: await teamRuntime.progress(scope, goalId) };
     const detail = await getGoalForCoordination({ ...service, goalId });
-    return { status: 200, data: isTeamGoalDetail(detail) ? await getTeamGoal({ ...await teamRuntime.service(scope, detail), goalId }) : await getGoal({ ...service, goalId }) };
+    if (isCoordinatedGoalDetail(detail)) await getTeamGoal({ ...await teamRuntime.service(scope), goalId }); else await getGoal({ ...service, goalId });
+    return { status: 200, data: await getGoalDeliveryReview({ ...await createGoalDeliveryService(teamOptions, scope), goalId }) };
   }
   if (options.request.method !== "POST" || templates || (!collection && (!item?.[2] || item[2] === "nodes"))) return undefined;
   if (url.searchParams.size) invalid();
@@ -73,6 +78,34 @@ export async function dispatchGoalRequest(options: GoalRequestOptions): Promise<
   }
   const goalId = text(decodeURIComponent(item![1]!)), expectedStreamVersion = integer(body.expectedStreamVersion);
   const base = { ...service, goalId, expectedStreamVersion, idempotencyKey };
+  if (["delivery-decisions", "rework-previews", "reworks"].includes(item![2]!)) {
+    const delivery = { ...await createGoalDeliveryService(teamOptions, scope), goalId, expectedStreamVersion, idempotencyKey };
+    if (item![2] === "delivery-decisions") {
+      object(body, ["workspaceId", "expectedStreamVersion", "deliverySetId", "criteriaVersion", "items"]);
+      const items: GoalDeliveryItemDecisionV2[] = array(body.items, 20).map(value => {
+        const input = object(value, ["key", "digest", "decision", "reviewedCriterionIds", "failedCriterionIds", "instruction", "reason"]);
+        const shared = { key: text(input.key), digest: text(input.digest) };
+        if (input.decision === "accept") {
+          object(input, ["key", "digest", "decision", "reviewedCriterionIds"]);
+          return { ...shared, decision: "accept", reviewedCriterionIds: array(input.reviewedCriterionIds, 20).map(value => text(value)) };
+        }
+        if (input.decision === "request_changes") {
+          object(input, ["key", "digest", "decision", "failedCriterionIds", "instruction"]);
+          return { ...shared, decision: "request_changes", failedCriterionIds: array(input.failedCriterionIds, 20).map(value => text(value)), instruction: text(input.instruction, 4000) };
+        }
+        if (input.decision !== "defer") invalid();
+        object(input, ["key", "digest", "decision", "reason"]);
+        return { ...shared, decision: "defer", ...(input.reason === undefined ? {} : { reason: text(input.reason, 4000) }) };
+      });
+      return { status: 200, data: await decideGoalDelivery({ ...delivery, deliverySetId: text(body.deliverySetId), criteriaVersion: text(body.criteriaVersion), items }) };
+    }
+    if (item![2] === "rework-previews") {
+      object(body, ["workspaceId", "expectedStreamVersion", "decisionId"]);
+      return { status: 200, data: await previewGoalRework({ ...delivery, decisionId: text(body.decisionId) }) };
+    }
+    object(body, ["workspaceId", "expectedStreamVersion", "previewId", "previewDigest"]);
+    return { status: 200, data: await confirmGoalRework({ ...delivery, previewId: text(body.previewId), previewDigest: text(body.previewDigest) }) };
+  }
   if (item![2] === "plan-revisions") {
     if (body.kind !== undefined) {
       object(body, ["workspaceId", "expectedStreamVersion", "kind", "templateId", "templateVersion", "modelBindingId"]);
@@ -111,7 +144,15 @@ export async function dispatchGoalRequest(options: GoalRequestOptions): Promise<
     object(body, command === "record_external_usage" ? ["workspaceId", "expectedStreamVersion", "command", "usage", "source"] : command === "start" ? ["workspaceId", "expectedStreamVersion", "command", "planRevisionId", "planDigest"]
       : command === "decide" ? ["workspaceId", "expectedStreamVersion", "command", "nodeId", "decision"] : ["workspaceId", "expectedStreamVersion", "command"]);
     const current = await getGoalForCoordination(base);
-    if (isTeamGoalDetail(current)) {
+    if (isCoordinatedGoalDetail(current)) {
+      if (command === "record_external_usage") {
+        const value = object(body.usage, ["tokens", "costMinorUnits", "currency"]);
+        let prepared, accountingOnly = false;
+        try { prepared = await teamRuntime.service(scope, current); }
+        catch { accountingOnly = true; prepared = await teamRuntime.service(scope, current, true); }
+        return { status: 200, data: await recordTeamExternalGoalUsage({ ...base, ...prepared, accountingOnly,
+          usage: { tokens: integer(value.tokens), costMinorUnits: text(value.costMinorUnits), currency: text(value.currency, 3) }, source: text(body.source, 2000) }) };
+      }
       if (!["start", "refresh", "cancel", "pause", "resume", "decide"].includes(command)) invalid();
       if (command === "refresh") return { status: 200, data: await teamRuntime.refresh({ ...base, ...await teamRuntime.service(scope) }) };
       const prepared = { ...base, ...await teamRuntime.service(scope, current, command === "cancel" || command === "pause") };
@@ -141,7 +182,7 @@ export async function dispatchGoalRequest(options: GoalRequestOptions): Promise<
     return { key: text(item.key), digest: text(item.digest), reviewedCriterionIds: array(item.reviewedCriterionIds, 20).map(value => text(value)) };
   }) };
   const detail = await getGoalForCoordination(base);
-  return { status: 200, data: isTeamGoalDetail(detail) ? await acceptTeamGoalDelivery({ ...base, ...await teamRuntime.service(scope, detail), ...acceptance }) : await acceptGoalDelivery({ ...base, ...acceptance }) };
+  return { status: 200, data: isCoordinatedGoalDetail(detail) ? await acceptTeamGoalDelivery({ ...base, ...await teamRuntime.service(scope, detail), ...acceptance }) : await acceptGoalDelivery({ ...base, ...acceptance }) };
 }
 
 function scheduling(value: unknown): AgentSchedulingRequestV2 {

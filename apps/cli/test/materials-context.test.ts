@@ -46,7 +46,7 @@ test("asset extraction preserves partial coverage, issues and cell locators", as
 });
 
 test("business context reads each typed source through Host and does not issue domain commands", async () => {
-  for (const kind of ["customer", "order", "delivery", "review"] as const) {
+  for (const kind of ["customer", "service", "quote", "order", "delivery", "review"] as const) {
     const output: string[] = [];
     const context: BusinessObjectContextV2 = { kind, resourceId: "record/a", title: "业务来源", content: "合成事实", sourceRef: { namespace: `opc.business.${kind}`, resourceId: "record/a", streamVersion: 9, digest: "server-fact-digest" } };
     assert.equal(await runCli(["business", "context", kind, "record/a", "--workspace", "workspace-1", "--json"], { io: { stdout: line => output.push(line), stderr() {} }, fetch: async (input, init) => {
@@ -59,7 +59,7 @@ test("business context reads each typed source through Host and does not issue d
 
 test("material commands reject incomplete or unsupported arguments before network access", async () => {
   for (const args of [["asset", "upload", "--workspace", "w"], ["asset", "upload", "--workspace", "w", "--file", "/missing.txt", "--key"],
-    ["asset", "extract"], ["asset", "extract", "a", "extra"], ["business", "context", "quote", "a", "--workspace", "w"], ["business", "context", "customer", "a"]]) {
+    ["asset", "extract"], ["asset", "extract", "a", "extra"], ["business", "context", "invoice", "a", "--workspace", "w"], ["business", "context", "customer", "a"]]) {
     let requests = 0;
     assert.equal(await runCli([...args, "--json"], { io: { stdout() {}, stderr() {} }, fetch: async () => { requests++; throw new Error("unexpected"); } }), 2);
     assert.equal(requests, 0);

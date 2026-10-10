@@ -15,9 +15,9 @@ function requireOne<T extends { readonly id: string }>(items: readonly T[], id: 
   if (!found) fail("BUSINESS_NOT_FOUND", "关联经营记录不存在");
   return found;
 }
-function add<K extends Collection>(state: BusinessStateV1, field: K, record: BusinessStateV1[K][number]): BusinessStateV1 {
-  if (state[field].length >= 10_000) fail("BUSINESS_LIMIT_EXCEEDED", "首版账本已达到记录上限");
-  return { ...state, [field]: [...state[field], record] };
+function add<K extends Collection>(state: BusinessStateV1, field: K, record: NonNullable<BusinessStateV1[K]>[number]): BusinessStateV1 {
+  if ((state[field]?.length ?? 0) >= 10_000) fail("BUSINESS_LIMIT_EXCEEDED", "首版账本已达到记录上限");
+  return { ...state, [field]: [...(state[field] ?? []), record] };
 }
 function dateBetween(day: string, minimum: string, maximum: string): void {
   if (day < minimum || day > maximum) fail("BUSINESS_DATE_INVALID", "发生日期必须位于订单或期初截止日之后，且不能晚于今天");
@@ -56,7 +56,7 @@ function assertOrderHistory(state: BusinessStateV1, order: BusinessOrderV1): voi
 export function createEmptyBusiness(workspaceId: string): BusinessStateV1 {
   if (typeof workspaceId !== "string" || !workspaceId.trim() || workspaceId.length > 200) fail("BUSINESS_INPUT_INVALID", "工作区标识无效");
   return { schemaVersion: 1, workspaceId, currency: "CNY", streamVersion: 0, plans: [], customers: [], services: [],
-    quotes: [], orders: [], adjustments: [], deliveries: [], acceptances: [], payments: [], paymentReversals: [], refunds: [], expenses: [], reviews: [] };
+    quotes: [], quoteConfirmations: [], orders: [], adjustments: [], deliveries: [], acceptances: [], payments: [], paymentReversals: [], refunds: [], expenses: [], reviews: [] };
 }
 
 /** Cash uses occurrence dates; opening receipts are stock, never period cash. */
@@ -117,13 +117,27 @@ export function applyBusinessCommand(current: BusinessStateV1, input: BusinessCo
       next = add(current, "quotes", { id: quoteId, customerVersion: buyer.version, totalMinor: String(total), ...fields, ...audit }); break;
     }
     case "quote.confirm": {
-      unique(current.orders, command.orderId); const quote = requireOne(current.quotes, command.quoteId);
-      if (current.orders.some(item => item.quoteId === quote.id)) fail("BUSINESS_CONFLICT", "此报价已生成订单");
+      const confirmations = current.quoteConfirmations ?? [];
+      unique(confirmations, command.confirmationId); const quote = requireOne(current.quotes, command.quoteId);
+      if (confirmations.some(item => item.quoteId === quote.id) || current.orders.some(item => item.quoteId === quote.id))
+        fail("BUSINESS_CONFLICT", "此报价已有客户接受或历史成交记录");
       dateBetween(command.confirmedOn, businessDateAt(quote.recordedAt), today);
       if (command.confirmedOn > quote.validUntil || command.confirmedOn > quote.dueOn) fail("BUSINESS_DATE_INVALID", "报价已过有效期或付款期限");
-      next = add(current, "orders", { id: command.orderId, quoteId: quote.id, customerId: quote.customerId, customerVersion: quote.customerVersion,
+      next = add({ ...current, quoteConfirmations: confirmations }, "quoteConfirmations", { id: command.confirmationId,
+        quoteId: quote.id, confirmedOn: command.confirmedOn, sourceRef: command.sourceRef, ...audit }); break;
+    }
+    case "order.activate": {
+      unique(current.orders, command.orderId);
+      const confirmation = requireOne(current.quoteConfirmations ?? [], command.quoteConfirmationId);
+      const quote = requireOne(current.quotes, confirmation.quoteId);
+      if (current.orders.some(item => item.quoteId === quote.id || item.quoteConfirmationId === confirmation.id))
+        fail("BUSINESS_CONFLICT", "此客户接受记录已关联生效订单");
+      dateBetween(command.contractedOn, confirmation.confirmedOn, today);
+      if (quote.dueOn < command.contractedOn) fail("BUSINESS_DATE_INVALID", "订单生效日期不能晚于报价付款期限");
+      next = add(current, "orders", { id: command.orderId, quoteId: quote.id, quoteConfirmationId: confirmation.id,
+        customerId: quote.customerId, customerVersion: quote.customerVersion,
         serviceId: quote.serviceId, serviceVersion: quote.serviceVersion, quantity: quote.quantity, agreedAmountMinor: quote.totalMinor,
-        contractedOn: command.confirmedOn, dueOn: quote.dueOn, sourceRef: command.sourceRef, ...audit }); break;
+        contractedOn: command.contractedOn, dueOn: quote.dueOn, sourceRef: command.sourceRef, ...audit }); break;
     }
     case "order.record": {
       unique(current.orders, command.orderId); const buyer = customer(command.customerId); service(command.serviceId, command.serviceVersion);
@@ -198,5 +212,5 @@ export function applyBusinessCommand(current: BusinessStateV1, input: BusinessCo
     }
   }
   for (const target of next.orders) assertOrderHistory(next, target);
-  return { ...next, streamVersion: current.streamVersion + 1 };
+  return { ...next, quoteConfirmations: next.quoteConfirmations ?? [], streamVersion: current.streamVersion + 1 };
 }

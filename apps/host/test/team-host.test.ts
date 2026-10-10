@@ -162,7 +162,12 @@ for (const reviewDecision of ['pass', 'needs_revision'] as const) test(`研究�
     assert.equal(accepted.status, 200, JSON.stringify(accepted.body));
     assert.equal(accepted.body.data.goal.status, 'accepted');
   } else {
-    assert.equal(finished.deliverySet, null);
+    assert.equal(finished.deliverySet.items.length, 1);
+    assert.equal(finished.deliverySet.items[0].checks.find((check: any) => check.checkId === 'team.independent-review-recorded').status, 'failed');
+    const rejected = await f.send(`${f.path}/acceptances`, { workspaceId: f.workspace.id, expectedStreamVersion: finished.goal.streamVersion,
+      deliverySetId: finished.deliverySet.id, criteriaVersion: finished.goal.criteriaVersion,
+      items: finished.deliverySet.items.map((item: any) => ({ key: item.key, digest: item.digest, reviewedCriterionIds: ['sources'] })) });
+    assert.equal(rejected.status, 422);
     assert.equal(nodes.nodes.find((node: any) => node.nodeId === 'handoff').status, 'pending');
   }
   const bypass = await f.send(`/v2/executions/${attempts[0]!.executionId}/commands`, { command: 'follow_up', message: '重新执行', expectedStreamVersion: 1 });

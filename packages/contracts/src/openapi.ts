@@ -3,6 +3,7 @@ import type { JsonObject } from "./json.js";
 import { API_OUTPUT_COMPONENTS_V2, API_OUTPUT_SCHEMAS_V2 } from "./generated-responses.js";
 import type { ApiOutputsV2 } from "./api-outputs.js";
 import { goalMutationSchema } from "./goal-api-schema.js";
+import { opcBusinessCandidateCreateSchema, opcBusinessCandidateDecisionSchema } from "./opc-business-candidate-schema.js";
 import { businessMutationSchema } from "./business-api-schema.js";
 
 type HttpMethod = "get" | "post" | "put" | "patch" | "delete";
@@ -29,6 +30,13 @@ export const API_OPERATIONS_V2 = [
   { method: "post", path: "/v2/goals/{goalId}/plan-revisions", operationId: "proposeGoalPlan", mutation: true, versioned: true },
   { method: "post", path: "/v2/goals/{goalId}/commands", operationId: "commandGoal", mutation: true, versioned: true },
   { method: "post", path: "/v2/goals/{goalId}/acceptances", operationId: "acceptGoalDelivery", mutation: true, versioned: true },
+  { method: "post", path: "/v2/goals/{goalId}/delivery-decisions", operationId: "decideGoalDelivery", mutation: true, versioned: true },
+  { method: "post", path: "/v2/goals/{goalId}/rework-previews", operationId: "previewGoalRework", mutation: true, versioned: true },
+  { method: "post", path: "/v2/goals/{goalId}/reworks", operationId: "reworkGoal", mutation: true, versioned: true },
+  { method: "get", path: "/v2/plugins/opc/business/candidates", operationId: "listOpcBusinessCandidates", mutation: false, versioned: false },
+  { method: "post", path: "/v2/plugins/opc/business/candidates", operationId: "createOpcBusinessCandidate", mutation: true, versioned: true },
+  { method: "get", path: "/v2/plugins/opc/business/candidates/{candidateId}", operationId: "getOpcBusinessCandidate", mutation: false, versioned: false },
+  { method: "post", path: "/v2/plugins/opc/business/candidates/{candidateId}/decisions", operationId: "decideOpcBusinessCandidate", mutation: true, versioned: true },
   { method: "post", path: "/v2/business-actions", operationId: "createBusinessAction", mutation: true, versioned: true },
   { method: "get", path: "/v2/business-actions/{actionId}", operationId: "getBusinessAction", mutation: false, versioned: false },
   { method: "post", path: "/v2/business-actions/{actionId}/reconciliation-decisions", operationId: "reconcileBusinessAction", mutation: true, versioned: true },
@@ -170,7 +178,12 @@ export function createOpenApiDocument(): JsonObject {
       for (const name of ["generation", "fencingToken"]) parameters.push({ in: "query", name, required: true, schema: { type: "integer", minimum: 1 } });
     }
     if (["listInbox", "listMemories", "listDeliverables", "getHealth"].includes(operation.operationId)) parameters.push({ in: "query", name: "workspaceId", required: false, schema: { type: "string" } });
-    if (["listActivity", "getGoal", "getGoalNodes"].includes(operation.operationId)) parameters.push({ in: "query", name: "workspaceId", required: true, schema: { type: "string" } });
+    if (["listActivity", "getGoal", "getGoalNodes", "listOpcBusinessCandidates", "getOpcBusinessCandidate"].includes(operation.operationId)) parameters.push({ in: "query", name: "workspaceId", required: true, schema: { type: "string" } });
+    if (operation.operationId === "listOpcBusinessCandidates") parameters.push({ in: "query", name: "goalId", required: false, schema: { type: "string" } });
+    if (operation.operationId === "getBusinessContext") parameters.push(
+      { in: "query", name: "version", required: false, schema: { type: "integer", minimum: 1 } },
+      { in: "query", name: "digest", required: false, schema: { type: "string", pattern: "^[a-f0-9]{64}$" } },
+    );
     if (operation.operationId === "listMemories") parameters.push({ in: "query", name: "namespace", required: false, schema: { type: "string" } });
     if ([
       "getOpcBusiness",
@@ -562,6 +575,8 @@ export function createOpenApiDocument(): JsonObject {
 }
 
 function mutationSchema(operationId: string, versioned: boolean): JsonObject {
+  if (operationId === "createOpcBusinessCandidate") return opcBusinessCandidateCreateSchema();
+  if (operationId === "decideOpcBusinessCandidate") return opcBusinessCandidateDecisionSchema();
   if (operationId === "commandOpcBusiness") return businessMutationSchema();
   const goalSchema = goalMutationSchema(operationId);
   if (goalSchema) return goalSchema;

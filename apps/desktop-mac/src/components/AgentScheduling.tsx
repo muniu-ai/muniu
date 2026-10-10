@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { useState } from "react";
-import type { AgentSchedulingDecisionV2, AgentSchedulingRequestV2, GoalDetailV2, GoalUsageV2, ModelConnectionV2 } from "@mn/contracts";
+import type { AgentSchedulingDecisionV2, AgentSchedulingRequestV2, GoalResponseV2, GoalUsageV2, ModelConnectionV2 } from "@mn/contracts";
 
 export const runnerLabel = (id: string) => id === "codex-cli" ? "Codex CLI" : id === "claude-cli" ? "Claude Code" : "木牛内置 Agent";
 export function SchedulingControls({ value, onChange, models, disabled = false, currency, onSettings }: {
@@ -41,7 +41,7 @@ export function SchedulingDecision({ decision }: { decision: AgentSchedulingDeci
   </section>;
 }
 
-export function ExternalUsageForm({ detail, disabled, onSave }: { detail: GoalDetailV2; disabled: boolean; onSave: (usage: GoalUsageV2, source: string) => void }) {
+export function ExternalUsageForm({ detail, disabled, onSave }: { detail: GoalResponseV2; disabled: boolean; onSave: (usage: GoalUsageV2, source: string) => void }) {
   const [cost, setCost] = useState(""), [tokens, setTokens] = useState(""), [source, setSource] = useState("");
   return <form className="external-usage" aria-label="外部用量核对" onSubmit={event => { event.preventDefault(); if (/^(0|[1-9][0-9]{0,17})$/u.test(cost) && Number.isSafeInteger(Number(tokens)) && Number(tokens) >= 0 && tokens !== "" && source.trim()) onSave({ costMinorUnits: cost, tokens: Number(tokens), currency: detail.goal.budget.currency }, source.trim()); }}>
     <h3>核对 CLI 用量</h3><p>按厂商账单或订阅分摊登记，不将“未知”填为 0。登记后固定记录，再进行成果验收。</p><div className="scheduling-fields">

@@ -9,7 +9,7 @@ import { runCli } from "../src/index.js";
 
 const emptyBusiness: BusinessManagementViewV1 = {
   state: { schemaVersion: 1, workspaceId: "workspace-1", currency: "CNY", streamVersion: 0, plans: [], customers: [], services: [],
-    quotes: [], orders: [], adjustments: [], deliveries: [], acceptances: [], payments: [], paymentReversals: [], refunds: [], expenses: [], reviews: [] },
+    quotes: [], quoteConfirmations: [], orders: [], adjustments: [], deliveries: [], acceptances: [], payments: [], paymentReversals: [], refunds: [], expenses: [], reviews: [] },
   summary: { currency: "CNY", sourceStreamVersion: 0, period: { start: "2026-10-01", end: "2026-10-09" }, cashReceivedMinor: "0",
     cashRefundedMinor: "0", cashExpensesMinor: "0", netCashFlowMinor: "0", contractedMinor: "0", outstandingMinor: "0", overdueMinor: "0", orders: [] },
 };

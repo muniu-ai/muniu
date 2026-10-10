@@ -49,7 +49,7 @@ const HELP = `木牛 Agent OS 0.2
 资料与业务上下文：
   mn asset upload --workspace <工作区 ID> --file <资料路径> [--key <上传请求标识>] --json
   mn asset extract <资料 ID> --json
-  mn business context <customer|order|delivery|review> <对象 ID> --workspace <工作区 ID> --json
+  mn business context <customer|service|quote|order|delivery|review> <对象 ID> --workspace <工作区 ID> --json
 
 目标与验收：
   mn goal list --workspace <工作区 ID>
@@ -64,6 +64,12 @@ const HELP = `木牛 Agent OS 0.2
   mn goal cancel <目标 ID> --workspace <工作区 ID> --version <目标版本>
   mn goal pause|resume <目标 ID> --workspace <工作区 ID> --version <目标版本> [--key <幂等键>]
   mn goal decide <目标 ID> --workspace <工作区 ID> --version <目标版本> --node <节点 ID> --decision continue|stop [--key <幂等键>]
+  mn goal delivery-decide <目标 ID> --workspace <工作区 ID> --version <版本> --file <逐项决定 JSON> [--key <幂等键>]
+  mn goal rework-preview <目标 ID> --workspace <工作区 ID> --version <版本> --decision <决定 ID> [--key <幂等键>]
+  mn goal rework <目标 ID> --workspace <工作区 ID> --version <版本> --preview <预览 ID> --preview-digest <摘要> [--key <幂等键>]
+  mn business candidate list|show [候选 ID] --workspace <工作区 ID>
+  mn business candidate create --workspace <工作区 ID> --goal <目标 ID> --plan <计划 ID> --delivery-set <成果集 ID> --output <成果 key> --output-digest <摘要> --proposal <候选 key> [--key <幂等键>]
+  mn business candidate decide <候选 ID> --workspace <工作区 ID> --version <候选版本> --business-version <台账版本> --candidate-digest <摘要> --preview-digest <摘要> --decision apply|reject [--key <幂等键>]
   mn goal usage <目标 ID> --workspace <工作区 ID> --version <目标版本> --file <用量 JSON 文件>
   mn goal accept <目标 ID> --workspace <工作区 ID> --version <目标版本> --file <验收 JSON 文件>
 
@@ -342,13 +348,26 @@ async function assetCommand(parsed: ParsedArguments, api: ApiClient): Promise<Cl
   return { command: "asset upload", data, human: JSON.stringify(data, null, 2) };
 }
 async function businessContext(parsed: ParsedArguments, api: ApiClient): Promise<CliResult> {
-  assertAllowedFlags(parsed, ["workspace"]);
+  if (parsed.positional[0] === "candidate") return businessCandidate(parsed, api);
+  assertAllowedFlags(parsed, ["workspace", "version", "digest"]);
   const [action, kind, resourceId] = parsed.positional;
-  if (action !== "context" || !kind || !["customer", "order", "delivery", "review"].includes(kind) || !resourceId || parsed.positional.length !== 3) {
-    throw new CliUsageError("用法：mn business context <customer|order|delivery|review> <对象 ID> --workspace <工作区 ID>");
+  if (action !== "context" || !kind || !["customer", "service", "quote", "order", "delivery", "review"].includes(kind) || !resourceId || parsed.positional.length !== 3) {
+    throw new CliUsageError("用法：mn business context <customer|service|quote|order|delivery|review> <对象 ID> --workspace <工作区 ID>");
   }
-  const data = await api.get(apiPath("getBusinessContext", { workspaceId: flag(parsed, "workspace", true)!, kind, resourceId }));
+  const version=flag(parsed,"version"),digest=flag(parsed,"digest");
+  if(Boolean(version)!==Boolean(digest))throw new CliUsageError("历史业务资料必须同时指定 --version 和 --digest");
+  const data = await api.get(apiPath("getBusinessContext", { workspaceId: flag(parsed, "workspace", true)!, kind, resourceId }, version ? {version:integerFlag(parsed,"version",0),digest:digest!} : {}));
   return { command: "business context", data, human: JSON.stringify(data, null, 2) };
+}
+
+async function businessCandidate(parsed: ParsedArguments, api: ApiClient): Promise<CliResult> {
+ const action=parsed.positional[1]??"list",candidateId=parsed.positional[2],workspaceId=flag(parsed,"workspace",true)!;
+ let data:unknown;
+ if(action==="list"||action==="show") { assertAllowedFlags(parsed,["workspace"]);if(action==="show"&&!candidateId)throw new CliUsageError("缺少候选 ID");data=action==="list"?await api.get(apiPath("listOpcBusinessCandidates",{},{workspaceId})):await api.get(apiPath("getOpcBusinessCandidate",{candidateId:candidateId!},{workspaceId})); }
+ else if(action==="create") {assertAllowedFlags(parsed,["workspace","goal","plan","delivery-set","output","output-digest","proposal","key"]);data=await api.mutate(apiPath("createOpcBusinessCandidate",{}),{workspaceId,expectedStreamVersion:0,origin:{goalId:flag(parsed,"goal",true)!,planRevisionId:flag(parsed,"plan",true)!,deliverySetId:flag(parsed,"delivery-set",true)!,outputKey:flag(parsed,"output",true)!,outputDigest:flag(parsed,"output-digest",true)!},proposalKey:flag(parsed,"proposal",true)!},"POST",flag(parsed,"key"));}
+ else if(action==="decide") {assertAllowedFlags(parsed,["workspace","version","business-version","candidate-digest","preview-digest","decision","key"]);if(!candidateId)throw new CliUsageError("缺少候选 ID");const decision=flag(parsed,"decision",true)!;if(!["apply","reject"].includes(decision))throw new CliUsageError("--decision 只能是 apply 或 reject");flag(parsed,"version",true);flag(parsed,"business-version",true);const version=integerFlag(parsed,"version",0);if(version<1)throw new CliUsageError("--version 必须为正整数");data=await api.mutate(apiPath("decideOpcBusinessCandidate",{candidateId}),{workspaceId,expectedStreamVersion:version,expectedBusinessStreamVersion:integerFlag(parsed,"business-version",0),candidateDigest:flag(parsed,"candidate-digest",true)!,previewDigest:flag(parsed,"preview-digest",true)!,decision},"POST",flag(parsed,"key"));}
+ else throw new CliUsageError("business candidate 支持 list、show、create、decide");
+ return {command:`business candidate ${action}`,data,human:JSON.stringify(data,null,2)};
 }
 
 async function goal(parsed: ParsedArguments, api: ApiClient): Promise<CliResult> {
@@ -369,7 +388,7 @@ async function goal(parsed: ParsedArguments, api: ApiClient): Promise<CliResult>
     const data = await api.mutate(apiPath("createGoal", { workspaceId: flag(parsed, "workspace", true)! }), await goalFile(parsed));
     return { command, data, human: `已创建目标：${data.goal.id}` };
   }
-  if (!["show", "nodes", "plan", "start", "refresh", "cancel", "pause", "resume", "decide", "accept", "usage"].includes(action)) throw new CliUsageError("goal 支持 list、templates、show、nodes、create、plan、start、refresh、pause、resume、cancel、decide、accept、usage");
+  if (!["show", "nodes", "plan", "start", "refresh", "cancel", "pause", "resume", "decide", "accept", "usage", "delivery-decide", "rework-preview", "rework"].includes(action)) throw new CliUsageError("goal 支持 list、templates、show、nodes、create、plan、start、refresh、pause、resume、cancel、decide、accept、usage、delivery-decide、rework-preview、rework");
   const goalId = parsed.positional[1];
   if (!goalId) throw new CliUsageError("缺少目标 ID");
   if (action === "show" || action === "nodes") {
@@ -399,6 +418,21 @@ async function goal(parsed: ParsedArguments, api: ApiClient): Promise<CliResult>
     const data = await api.mutate(apiPath("proposeGoalPlan", { goalId }), { ...base, scheduling: { runnerId, strategy,
       ...(model ? { modelBindingId: model } : {}), ...(value ? { expectedValueMinorUnits: value } : {}), ...(timeCost ? { timeCostMinorUnitsPerHour: timeCost } : {}) } }, "POST", flag(parsed, "key"));
     return { command, data, human: JSON.stringify(data, null, 2) };
+  }
+  if (action === "delivery-decide") {
+    assertAllowedFlags(parsed,["workspace","version","file","key"]);
+    const data=await api.mutate(apiPath("decideGoalDelivery",{goalId}),{...await goalFile(parsed),...base},"POST",flag(parsed,"key"));
+    return {command,data,human:JSON.stringify(data,null,2)};
+  }
+  if (action === "rework-preview") {
+    assertAllowedFlags(parsed,["workspace","version","decision","key"]);
+    const data=await api.mutate(apiPath("previewGoalRework",{goalId}),{...base,decisionId:flag(parsed,"decision",true)!},"POST",flag(parsed,"key"));
+    return {command,data,human:JSON.stringify(data,null,2)};
+  }
+  if (action === "rework") {
+    assertAllowedFlags(parsed,["workspace","version","preview","preview-digest","key"]);
+    const data=await api.mutate(apiPath("reworkGoal",{goalId}),{...base,previewId:flag(parsed,"preview",true)!,previewDigest:flag(parsed,"preview-digest",true)!},"POST",flag(parsed,"key"));
+    return {command,data,human:JSON.stringify(data,null,2)};
   }
   if (action === "usage") {
     assertAllowedFlags(parsed, ["workspace", "version", "file"]);

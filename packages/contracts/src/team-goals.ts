@@ -77,6 +77,7 @@ export interface TeamDeliverableBindingV1 {
   readonly outputKey: string;
 }
 export interface GoalTeamPlanProposalV2 {
+  readonly outputFormat?: "items-v1";
   readonly kind: "team-v1";
   readonly template: { readonly id: TeamTemplateIdV1; readonly version: "1"; readonly digest: string };
   readonly pluginId: "opc" | "coding";
@@ -99,7 +100,25 @@ export interface GoalTeamPlanRevisionV2 extends GoalTeamPlanProposalV2 {
   readonly digest: string;
   readonly createdAt: string;
 }
-export type GoalPlanV2 = GoalPlanRevisionV2 | GoalTeamPlanRevisionV2;
+/** The first single-executor plan remains unchanged; later revisions use one coordinated executor. */
+export interface GoalSinglePlanProposalV2 extends Omit<GoalTeamPlanProposalV2, 'kind' | 'template'> {
+  readonly kind: 'single-v2';
+}
+export interface GoalSinglePlanRevisionV2 extends GoalSinglePlanProposalV2 {
+  readonly id: string; readonly goalId: string; readonly threadId: string; readonly revision: number;
+  readonly inputVersion: number; readonly criteriaVersion: string; readonly budget: GoalBudgetV2;
+  readonly resourceRefs: readonly GoalResourceRefV2[]; readonly deliverables: readonly GoalDeliverableSpecV2[];
+  readonly digest: string; readonly createdAt: string;
+}
+export type GoalCoordinatedPlanProposalV2 = GoalTeamPlanProposalV2 | GoalSinglePlanProposalV2;
+export type GoalCoordinatedPlanV2 = GoalTeamPlanRevisionV2 | GoalSinglePlanRevisionV2;
+export type GoalPlanV2 = GoalPlanRevisionV2 | GoalCoordinatedPlanV2;
+export function isCoordinatedGoalPlan(plan: GoalPlanV2 | null | undefined): plan is GoalCoordinatedPlanV2 {
+  return !!plan && 'kind' in plan && (plan.kind === 'team-v1' || plan.kind === 'single-v2');
+}
+export interface GoalCoordinatedDetailV2 {
+  readonly goal: GoalV2; readonly plan: GoalCoordinatedPlanV2; readonly deliverySet: GoalDeliverySetV2 | null; readonly runId?: string;
+}
 export interface GoalTeamDetailV2 {
   readonly goal: GoalV2;
   readonly plan: GoalTeamPlanRevisionV2;

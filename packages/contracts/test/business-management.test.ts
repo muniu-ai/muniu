@@ -18,3 +18,13 @@ test("经营命令严格拒绝未知字段、非法金额、无效日期与非�
     assert.throws(() => parse(value), { code: "BUSINESS_INPUT_INVALID" });
   }
 });
+
+test("报价确认和订单生效使用互斥严格字段，旧自动建单输入不可再创建事实", () => {
+  const confirm = { type: "quote.confirm", confirmationId: "qc", quoteId: "q", confirmedOn: "2026-10-09", sourceRef: "customer" };
+  const activate = { type: "order.activate", orderId: "o", quoteConfirmationId: "qc", contractedOn: "2026-10-09", sourceRef: "contract" };
+  assert.deepEqual(parse(confirm), confirm);
+  assert.deepEqual(parse(activate), activate);
+  assert.throws(() => parse({ ...confirm, orderId: "o" }), { code: "BUSINESS_INPUT_INVALID" });
+  assert.throws(() => parse({ type: "quote.confirm", quoteId: "q", orderId: "o", confirmedOn: "2026-10-09", sourceRef: "customer" }), { code: "BUSINESS_INPUT_INVALID" });
+  assert.throws(() => parse({ ...activate, agreedAmountMinor: "1" }), { code: "BUSINESS_INPUT_INVALID" });
+});

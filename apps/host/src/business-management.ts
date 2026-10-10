@@ -3,14 +3,15 @@ import { businessDateAt, parseBusinessCommand, parseBusinessPeriod, type Busines
   type Principal, type Workspace, type WorkspaceMembership } from "@mn/contracts";
 import { appendKernelEvent, KernelError, sha256, type KernelStore, type KernelTransaction } from "@mn/kernel";
 import { applyBusinessCommand, calculateBusinessSummary, createEmptyBusiness } from "@mn/plugin-opc";
+import { recordBusinessSnapshots } from "./business-snapshots.js";
 
 export const OPC_BUSINESS_NAMESPACE = "opc.business";
-interface BusinessScope {
+export interface BusinessScope {
   readonly tenantId: string;
   readonly workspaceId: string;
   readonly principalId: string;
 }
-interface BusinessOptions extends BusinessScope {
+export interface BusinessOptions extends BusinessScope {
   readonly store: KernelStore;
   readonly now: () => string;
 }
@@ -35,7 +36,7 @@ export function businessPeriod(start: string | null, end: string | null, timesta
   return period;
 }
 
-function current(tx: KernelTransaction, workspaceId: string): BusinessStateV1 {
+export function currentOpcBusiness(tx: KernelTransaction, workspaceId: string): BusinessStateV1 {
   const state = tx.getProjection<BusinessStateV1>(OPC_BUSINESS_NAMESPACE, workspaceId) ?? createEmptyBusiness(workspaceId);
   if (state.workspaceId !== workspaceId) throw new KernelError("BUSINESS_SCOPE_MISMATCH", "经营台账作用域无效", "核对受保护经营状态");
   return state;
@@ -44,8 +45,8 @@ function current(tx: KernelTransaction, workspaceId: string): BusinessStateV1 {
 export async function readOpcBusiness(options: BusinessOptions, period: BusinessPeriodV1): Promise<BusinessManagementViewV1> {
   return options.store.transact(options.tenantId, tx => {
     assertBusinessAccess(tx, options, false);
-    const state = current(tx, options.workspaceId);
-    return { state, summary: calculateBusinessSummary(state, period) };
+    const state = currentOpcBusiness(tx, options.workspaceId);
+    return { state: { ...state, quoteConfirmations: state.quoteConfirmations ?? [] }, summary: calculateBusinessSummary(state, period) };
   });
 }
 
@@ -54,9 +55,8 @@ export async function commandOpcBusiness(options: BusinessOptions & {
   readonly command: unknown;
   readonly idempotencyKey: string;
 }): Promise<BusinessManagementViewV1> {
-  const command = parseBusinessCommand(options.command);
   const requestDigest = sha256({ workspaceId: options.workspaceId, principalId: options.principalId,
-    expectedStreamVersion: options.expectedStreamVersion, command });
+    expectedStreamVersion: options.expectedStreamVersion, command: options.command });
   const scope = `opc.business:${options.workspaceId}`;
   return options.store.transact(options.tenantId, tx => {
     assertBusinessAccess(tx, options, true);
@@ -65,17 +65,27 @@ export async function commandOpcBusiness(options: BusinessOptions & {
       if (previous.requestDigest !== requestDigest) throw new KernelError("IDEMPOTENCY_KEY_REUSED", "幂等键已用于不同经营命令", "使用新的 Idempotency-Key");
       return previous.response as BusinessManagementViewV1;
     }
-    const state = current(tx, options.workspaceId);
-    if (state.streamVersion !== options.expectedStreamVersion)
-      throw new KernelError("STREAM_VERSION_CONFLICT", "经营台账版本已变化", "重新读取台账并核对命令", true);
-    const timestamp = options.now();
-    const next = applyBusinessCommand(state, command, { principalId: options.principalId, occurredAt: timestamp });
-    const response = { state: next, summary: calculateBusinessSummary(next, businessPeriod(null, null, timestamp)) };
-    tx.putProjection(OPC_BUSINESS_NAMESPACE, options.workspaceId, next);
-    appendKernelEvent(tx, { tenantId: options.tenantId, aggregateType: OPC_BUSINESS_NAMESPACE, aggregateId: options.workspaceId,
-      expectedStreamVersion: state.streamVersion, type: `opc.business.${command.type}`, actorId: options.principalId,
-      generation: 0, correlationId: sha256([scope, options.idempotencyKey]), publicPayload: { workspaceId: options.workspaceId, command: command.type } });
-    tx.putIdempotency({ tenantId: options.tenantId, scope, key: options.idempotencyKey, requestDigest, response, createdAt: timestamp });
+    const response = commandOpcBusinessInTransaction(tx, { ...options, correlationId: sha256([scope, options.idempotencyKey]) });
+    tx.putIdempotency({ tenantId: options.tenantId, scope, key: options.idempotencyKey, requestDigest, response, createdAt: options.now() });
     return response;
   });
+}
+
+export function commandOpcBusinessInTransaction(tx: KernelTransaction, options: BusinessScope & {
+  readonly now: () => string; readonly expectedStreamVersion: number; readonly command: unknown; readonly correlationId: string;
+}): BusinessManagementViewV1 {
+  assertBusinessAccess(tx, options, true);
+  const command = parseBusinessCommand(options.command);
+  const state = currentOpcBusiness(tx, options.workspaceId);
+  if (state.streamVersion !== options.expectedStreamVersion)
+    throw new KernelError("STREAM_VERSION_CONFLICT", "经营台账版本已变化", "重新读取台账并核对命令", true);
+  const timestamp = options.now();
+  const next = applyBusinessCommand(state, command, { principalId: options.principalId, occurredAt: timestamp });
+  const response = { state: next, summary: calculateBusinessSummary(next, businessPeriod(null, null, timestamp)) };
+  recordBusinessSnapshots(tx, options, state, next);
+  tx.putProjection(OPC_BUSINESS_NAMESPACE, options.workspaceId, next);
+  appendKernelEvent(tx, { tenantId: options.tenantId, aggregateType: OPC_BUSINESS_NAMESPACE, aggregateId: options.workspaceId,
+    expectedStreamVersion: state.streamVersion, type: `opc.business.${command.type}`, actorId: options.principalId,
+    generation: 0, correlationId: options.correlationId, publicPayload: { workspaceId: options.workspaceId, command: command.type } });
+  return response;
 }

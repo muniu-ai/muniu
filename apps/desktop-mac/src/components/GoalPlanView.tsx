@@ -20,7 +20,7 @@ export function GoalPlanView({ plan, onOpenSource }: {
   plan: GoalPlanV2;
   onOpenSource?: (source: GoalResourceRefV2) => void;
 }) {
-  const team = "kind" in plan && plan.kind === "team-v1" ? plan : null;
+  const team = "kind" in plan && (plan.kind === "team-v1" || plan.kind === "single-v2") ? plan : null;
   function source(ref: GoalResourceRefV2) {
     const text = `${ref.resourceId} · 版本 ${ref.streamVersion}`;
     return onOpenSource ? <button type="button" className="quiet-button" onClick={() => onOpenSource(ref)}>{text}</button> : <span>{text}</span>;
@@ -50,7 +50,7 @@ export function GoalPlanView({ plan, onOpenSource }: {
     </li>;
   }
   return <section className="team-plan-view" aria-label="执行计划">
-    <header><h3>{team ? templateTitles[team.template.id] : "单 Agent"}</h3><p>计划修订 {plan.revision}{team && ` · 模板版本 ${team.template.version}`}</p></header>
+    <header><h3>{team?.kind === "team-v1" ? templateTitles[team.template.id] : "单 Agent"}</h3><p>计划修订 {plan.revision}{team?.kind === "team-v1" && ` · 模板版本 ${team.template.version}`}</p></header>
     <p>总执行额度：<Budget value={plan.budget} /></p>
     {team ? <>
       <p className="team-plan-limits">并行 {team.limits.maxParallelNodes} 个步骤 · 委派深度 {team.limits.maxDelegationDepth} 层 · 累计节点 {team.limits.maxNodes} 个 · 累计尝试 {team.limits.maxAttempts} 次 · 返工上限 {team.limits.maxReworkRounds} 轮</p>

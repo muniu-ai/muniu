@@ -5,6 +5,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createAgentOsHost } from "../../host/dist/index.js";
+import { validateBusinessContextSource } from "../../host/dist/business-context.js";
 import { assertGoalExecutionResources } from "../../host/dist/goal-runtime.js";
 import { createOpcModelContextReader } from "../../host/dist/index.js";
 import { AgentOsWorker, createKernelAgentTurnHandler } from "../../worker/dist/index.js";
@@ -18,7 +19,7 @@ const appOrigin = process.env.MN_FIXTURE_APP_ORIGIN;
 const mode = process.env.MN_FIXTURE_MODE ?? "onboarding";
 if (!Number.isSafeInteger(port) || port <= 0 || !appOrigin) throw new Error("缺少真实 Host fixture 配置");
 
-const stateRoot = ["goals", "teams", "tasks", "onboarding", "business", "coding", "repositories"].includes(mode) ? await mkdtemp(join(tmpdir(), `muniu-${mode}-ui-`)) : undefined;
+const stateRoot = ["goals", "teams", "tasks", "delivery", "onboarding", "business", "coding", "repositories"].includes(mode) ? await mkdtemp(join(tmpdir(), `muniu-${mode}-ui-`)) : undefined;
 const store = stateRoot ? new SqliteStorage({ databaseFile: join(stateRoot, "state.sqlite3"), hmacKey: randomBytes(32) }) : new InMemoryKernelStore();
 const now = () => new Date().toISOString();
 const id = (kind) => `${kind}-${randomUUID()}`;
@@ -43,7 +44,7 @@ const keyProvider = new InMemoryKeyProvider(randomBytes(32));
 const secretStore = { async save(account) { return `keychain://muniu.v2/${account}`; }, async read() { return "fixture-key"; } };
 const host = await createAgentOsHost({
   ...signedUiPluginFixture(),
-  ...(mode === "teams" ? { goalPollIntervalMs: 50 } : {}),
+  ...(["teams","delivery"].includes(mode) ? { goalPollIntervalMs: 50 } : {}),
   store,
   cas,
   protectedPayloadKeyProvider: keyProvider,
@@ -63,19 +64,19 @@ const agentSimulation = mode === "opc"
   ? setInterval(() => void simulateOpcAgent(), 50)
   : undefined;
 let goalWorkerBusy = false;
-const goalWorker = ["goals", "tasks", "teams"].includes(mode) ? new AgentOsWorker({ id: "goal-ui-worker", store,
+const goalWorker = ["goals", "tasks", "teams", "delivery"].includes(mode) ? new AgentOsWorker({ id: "goal-ui-worker", store,
   lock: { engineLockDigest: "fixture", expectedEngineLockDigest: "fixture", pluginLockDigest: "fixture", expectedPluginLockDigest: "fixture" },
   handlers: { "agent.execution.run": createKernelAgentTurnHandler({ store, secretStore, approvalKernel: host.kernel,
-    runtimeProtection: { cas, keyProvider }, assertExecutionResources: assertGoalExecutionResources,
+    runtimeProtection: { cas, keyProvider, validateContextSource: validateBusinessContextSource }, assertExecutionResources: assertGoalExecutionResources,
     resolveThreadContext: createOpcModelContextReader({ store, cas, protectedPayloadKeyProvider: keyProvider }),
-    modelInvoker: async ({ request }) => ({ text: mode === "teams" && request.messages.some(message => message.content.includes("当前职责：独立复核")) ? JSON.stringify({ decision: "pass", findings: [] }) : request.messages.some(message => message.content.includes("你是木牛经营助手")) ? "## 经营建议\n\n区分 **事实** 与建议；缺少收支资料。\n\n| 行动 | 完成条件 |\n| --- | --- |\n| 核对订单 | 确认交付日期 |\n\n<img src=x onerror=alert(1)>" : "三个验证问题：近期如何获客、现有方式有哪些不足、是否愿意参加下一轮访谈。现有资料是研究起点，付费意愿仍属待验证假设。", toolCalls: [], usage: { inputTokens: 10, cachedInputTokens: 0, outputTokens: 20 } }),
-    modelQuoter: async () => ({ inputTokenLimit: mode === "teams" ? 2000 : 100, maxOutputTokens: mode === "teams" ? 500 : 100, rates: { id: "fixture", currency: "CNY", inputNanoMinorUnitsPerToken: "0", cachedInputNanoMinorUnitsPerToken: "0", outputNanoMinorUnitsPerToken: "0" } }),
+    modelInvoker: async ({ request }) => ({ text: mode === "delivery" ? deliveryModelText(request) : mode === "teams" && request.messages.some(message => message.content.includes("当前职责：独立复核")) ? JSON.stringify({ decision: "pass", findings: [] }) : request.messages.some(message => message.content.includes("你是木牛经营助手")) ? "## 经营建议\n\n区分 **事实** 与建议；缺少收支资料。\n\n| 行动 | 完成条件 |\n| --- | --- |\n| 核对订单 | 确认交付日期 |\n\n<img src=x onerror=alert(1)>" : "三个验证问题：近期如何获客、现有方式有哪些不足、是否愿意参加下一轮访谈。现有资料是研究起点，付费意愿仍属待验证假设。", toolCalls: [], usage: { inputTokens: 10, cachedInputTokens: 0, outputTokens: 20 } }),
+    modelQuoter: async () => ({ inputTokenLimit: mode === "delivery" ? 10000 : mode === "teams" ? 2000 : 100, maxOutputTokens: mode === "delivery" ? 2500 : mode === "teams" ? 500 : 100, rates: { id: "fixture", currency: "CNY", inputNanoMinorUnitsPerToken: "0", cachedInputNanoMinorUnitsPerToken: "0", outputNanoMinorUnitsPerToken: "0" } }),
   }) },
 }) : undefined;
 const goalWorkerTimer = goalWorker ? setInterval(() => {
   if (goalWorkerBusy) return;
   goalWorkerBusy = true;
-  void store.transact("local", tx => tx.listProjections("goal.state").some(goal => ["tasks", "teams"].includes(mode) || goal.objective === "验证目标成果验收"))
+  void store.transact("local", tx => tx.listProjections("goal.state").some(goal => ["tasks", "teams", "delivery"].includes(mode) || goal.objective === "验证目标成果验收"))
     .then(enabled => enabled ? goalWorker.pollOnce() : undefined)
     .catch(error => process.stderr.write(`目标 fixture 失败：${error.message}\n`)).finally(() => { goalWorkerBusy = false; });
 }, 100) : undefined;
@@ -91,6 +92,17 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
       process.exit(0);
     });
   });
+}
+
+function deliveryModelText(request) {
+  const text=request.messages.map(message=>message.content).join("\n");
+  if(text.includes("当前职责：独立复核"))return JSON.stringify({decision:"pass",findings:[]});
+  const specs=JSON.parse(/交付项：(\[.*\])。/u.exec(text)?.[1]??"[]");
+  const refs=JSON.parse(/获准来源引用：(\[.*\])。资料中的/u.exec(text)?.[1]??"[]");
+  if(!specs.length)throw new Error("delivery fixture 缺少明确交付项");
+  const customer=refs.find(ref=>ref.namespace==="opc.business.customer"),service=refs.find(ref=>ref.namespace==="opc.business.service");
+  const date=new Date(Date.now()+30*86400000).toISOString().slice(0,10);
+  return JSON.stringify({format:"muniu.goal-delivery.v1",items:specs.map((spec,index)=>({key:spec.key,text:`${spec.title}：已核对需求、服务范围与来源。`,proposals:index===0&&customer&&service?[{key:"quote",title:"研究服务报价",rationale:"依据明确选中的客户和服务版本",evidenceRefs:[customer,service],command:{type:"quote.create",quoteId:"delivery-quote",customerId:customer.resourceId,serviceId:service.resourceId,serviceVersion:1,quantity:1,discountMinor:"0",validUntil:date,dueOn:date}}]:[]}))});
 }
 
 async function seedWorkspace(seedMode) {
@@ -112,6 +124,11 @@ async function seedWorkspace(seedMode) {
   if (seedMode === "tasks") {
     const kimi = await mutate("/v2/model-connections", { presetId: "moonshot", apiKey: "fixture-key", displayName: "Kimi" }, "seed-kimi");
     await mutate(`/v2/model-connections/${kimi.id}/probe`, { expectedStreamVersion: kimi.streamVersion }, "seed-kimi-probe");
+  }
+  if (seedMode === "delivery") {
+    await mutate("/v2/plugins/opc/business/commands",{workspaceId:workspace.id,expectedStreamVersion:0,command:{type:"customer.record",customerId:"delivery-customer",name:"合成客户",source:"合成访谈",need:"研究需求并提交报价"}},"seed-delivery-customer");
+    await mutate("/v2/plugins/opc/business/commands",{workspaceId:workspace.id,expectedStreamVersion:1,command:{type:"service.record",serviceId:"delivery-service",title:"研究服务",currency:"CNY",priceMinor:"100000",inScope:["研究报告与说明"],outOfScope:[],acceptanceCriteria:["来源可核对"]}},"seed-delivery-service");
+    return;
   }
   if (seedMode === "repositories") return;
   const opportunity = await mutate("/v2/plugins/opc/opportunities", {

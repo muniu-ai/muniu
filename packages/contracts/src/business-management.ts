@@ -24,11 +24,14 @@ export interface BusinessQuoteV1 extends BusinessAuditV1 {
   readonly discountMinor: BusinessMoneyV1; readonly totalMinor: BusinessMoneyV1;
   readonly validUntil: string; readonly dueOn: string; readonly notes?: string;
 }
+export interface BusinessQuoteConfirmationV1 extends BusinessAuditV1 {
+  readonly id: string; readonly quoteId: string; readonly confirmedOn: string; readonly sourceRef: string;
+}
 export interface BusinessOrderV1 extends BusinessAuditV1 {
   readonly id: string; readonly customerId: string; readonly customerVersion: number;
   readonly serviceId: string; readonly serviceVersion: number; readonly quantity: number;
   readonly agreedAmountMinor: BusinessMoneyV1; readonly contractedOn: string; readonly dueOn: string;
-  readonly sourceRef: string; readonly quoteId?: string; readonly opening?: BusinessOpeningV1;
+  readonly sourceRef: string; readonly quoteId?: string; readonly quoteConfirmationId?: string; readonly opening?: BusinessOpeningV1;
 }
 export interface BusinessOpeningV1 {
   readonly asOf: string; readonly receivedMinor: BusinessMoneyV1;
@@ -83,7 +86,7 @@ export interface BusinessStateV1 {
   readonly schemaVersion: 1; readonly workspaceId: string; readonly currency: "CNY"; readonly streamVersion: number;
   readonly plans: readonly BusinessPlanV1[]; readonly customers: readonly BusinessCustomerV1[];
   readonly services: readonly BusinessServiceV1[]; readonly quotes: readonly BusinessQuoteV1[];
-  readonly orders: readonly BusinessOrderV1[]; readonly adjustments: readonly BusinessOrderAdjustmentV1[];
+  readonly quoteConfirmations?: readonly BusinessQuoteConfirmationV1[]; readonly orders: readonly BusinessOrderV1[]; readonly adjustments: readonly BusinessOrderAdjustmentV1[];
   readonly deliveries: readonly BusinessDeliveryV1[]; readonly acceptances: readonly BusinessAcceptanceV1[];
   readonly payments: readonly BusinessPaymentV1[]; readonly paymentReversals: readonly BusinessPaymentReversalV1[];
   readonly refunds: readonly BusinessRefundV1[]; readonly expenses: readonly BusinessExpenseV1[];
@@ -103,8 +106,10 @@ export type BusinessCommandV1 =
   | { readonly type: "quote.create"; readonly quoteId: string; readonly customerId: string; readonly serviceId: string;
       readonly serviceVersion: number; readonly quantity: number; readonly discountMinor: BusinessMoneyV1;
       readonly validUntil: string; readonly dueOn: string; readonly notes?: string }
-  | { readonly type: "quote.confirm"; readonly quoteId: string; readonly orderId: string;
+  | { readonly type: "quote.confirm"; readonly quoteId: string; readonly confirmationId: string;
       readonly confirmedOn: string; readonly sourceRef: string }
+  | { readonly type: "order.activate"; readonly orderId: string; readonly quoteConfirmationId: string;
+      readonly contractedOn: string; readonly sourceRef: string }
   | { readonly type: "order.record"; readonly orderId: string; readonly customerId: string; readonly serviceId: string;
       readonly serviceVersion: number; readonly quantity: number; readonly agreedAmountMinor: BusinessMoneyV1;
       readonly contractedOn: string; readonly dueOn: string; readonly sourceRef: string; readonly opening: BusinessOpeningV1 }
@@ -189,7 +194,8 @@ const commandRules: Readonly<Record<BusinessCommandV1["type"], Readonly<Record<s
     inScope: lines, outOfScope: listRule(textRule(2000), 0), acceptanceCriteria: lines },
   "quote.create": { quoteId: identifier, customerId: identifier, serviceId: identifier, serviceVersion: integerRule(1, 1_000_000),
     quantity: integerRule(1, 10_000), discountMinor: moneyRule(), validUntil: day, dueOn: day, notes: optional(text) },
-  "quote.confirm": { quoteId: identifier, orderId: identifier, confirmedOn: day, sourceRef: source },
+  "quote.confirm": { quoteId: identifier, confirmationId: identifier, confirmedOn: day, sourceRef: source },
+  "order.activate": { orderId: identifier, quoteConfirmationId: identifier, contractedOn: day, sourceRef: source },
   "order.record": { orderId: identifier, customerId: identifier, serviceId: identifier, serviceVersion: integerRule(1, 1_000_000),
     quantity: integerRule(1, 10_000), agreedAmountMinor: moneyRule(), contractedOn: day, dueOn: day, sourceRef: source, opening: openingRule },
   "order.adjust": { adjustmentId: identifier, orderId: identifier, amountDeltaMinor: moneyRule(false, true), effectiveOn: day, dueOn: optional(day), reason: text, sourceRef: source },

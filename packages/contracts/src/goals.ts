@@ -37,6 +37,7 @@ export interface GoalDeliverableSpecV2 {
   readonly criteria: readonly { readonly id: string; readonly description: string }[];
 }
 export interface GoalPlanProposalV2 {
+  readonly outputFormat?: "items-v1";
   readonly domainInputDigest: string;
   readonly threadStreamVersion: number;
   readonly pluginId: "opc" | "coding";
@@ -73,6 +74,8 @@ export interface GoalOutputRefV2 {
   readonly criteriaVersion: string;
   readonly preview: string;
   readonly sourceRefs: readonly GoalResourceRefV2[];
+  readonly businessProposals?: readonly { readonly key: string; readonly title: string;
+    readonly commandType: "quote.create" | "delivery.record" | "review.record" }[];
   readonly checks: readonly {
     readonly checkId: string;
     readonly status: "passed" | "failed";
@@ -84,6 +87,7 @@ export interface GoalExecutionObservationV2 {
   readonly generation: number;
   readonly usage?: GoalUsageV2;
   readonly outputs?: readonly GoalOutputRefV2[];
+  readonly outputError?: "GOAL_OUTPUT_INVALID";
 }
 export interface GoalExecutionRefV2 {
   readonly executionId: string;
@@ -141,3 +145,4 @@ export interface GoalDetailV2 { readonly goal: GoalV2; readonly plan: GoalPlanRe
 
 export * from "./team-goals.js";
 export * from "./goal-team-progress.js";
+export * from "./goal-delivery.js";

@@ -38,7 +38,7 @@
 资料与业务上下文：
   mn asset upload --workspace <工作区 ID> --file <资料路径> [--key <上传请求标识>] --json
   mn asset extract <资料 ID> --json
-  mn business context <customer|order|delivery|review> <对象 ID> --workspace <工作区 ID> --json
+  mn business context <customer|service|quote|order|delivery|review> <对象 ID> --workspace <工作区 ID> --json
 
 目标与验收：
   mn goal list --workspace <工作区 ID>
@@ -53,6 +53,12 @@
   mn goal cancel <目标 ID> --workspace <工作区 ID> --version <目标版本>
   mn goal pause|resume <目标 ID> --workspace <工作区 ID> --version <目标版本> [--key <幂等键>]
   mn goal decide <目标 ID> --workspace <工作区 ID> --version <目标版本> --node <节点 ID> --decision continue|stop [--key <幂等键>]
+  mn goal delivery-decide <目标 ID> --workspace <工作区 ID> --version <版本> --file <逐项决定 JSON> [--key <幂等键>]
+  mn goal rework-preview <目标 ID> --workspace <工作区 ID> --version <版本> --decision <决定 ID> [--key <幂等键>]
+  mn goal rework <目标 ID> --workspace <工作区 ID> --version <版本> --preview <预览 ID> --preview-digest <摘要> [--key <幂等键>]
+  mn business candidate list|show [候选 ID] --workspace <工作区 ID>
+  mn business candidate create --workspace <工作区 ID> --goal <目标 ID> --plan <计划 ID> --delivery-set <成果集 ID> --output <成果 key> --output-digest <摘要> --proposal <候选 key> [--key <幂等键>]
+  mn business candidate decide <候选 ID> --workspace <工作区 ID> --version <候选版本> --business-version <台账版本> --candidate-digest <摘要> --preview-digest <摘要> --decision apply|reject [--key <幂等键>]
   mn goal usage <目标 ID> --workspace <工作区 ID> --version <目标版本> --file <用量 JSON 文件>
   mn goal accept <目标 ID> --workspace <工作区 ID> --version <目标版本> --file <验收 JSON 文件>
 

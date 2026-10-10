@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
-import { appendKernelEvent } from "@mn/kernel";
+import { appendKernelEvent, sha256 } from "@mn/kernel";
 import { FileCas, InMemoryKeyProvider, SqliteStorage } from "@mn/storage";
 import { createAgentOsHost } from "../src/index.js";
 
@@ -78,7 +78,10 @@ test("经营事实完整交易、重放与受保护重建保持金额和身份�
   await run({ type: "quote.create", quoteId: "quote-1", customerId: "customer-1", serviceId: "service-1", serviceVersion: 1,
     quantity: 1, discountMinor: "0", validUntil: "2026-10-31", dueOn: "2026-10-08" });
   f.time("2026-10-09T12:00:00.000Z");
-  const sold = await run({ type: "quote.confirm", quoteId: "quote-1", orderId: "order-1", confirmedOn: "2026-10-02", sourceRef: "客户确认函-1" }, "sale");
+  const confirmed = await run({ type: "quote.confirm", quoteId: "quote-1", confirmationId: "confirmation-1", confirmedOn: "2026-10-02", sourceRef: "客户确认函-1" }, "confirmation");
+  assert.equal(confirmed.state.orders.length, 0);
+  assert.equal(confirmed.summary.outstandingMinor, "0");
+  const sold = await run({ type: "order.activate", quoteConfirmationId: "confirmation-1", orderId: "order-1", contractedOn: "2026-10-02", sourceRef: "生效合同-1" }, "sale");
   assert.equal(sold.summary.outstandingMinor, "100000");
   const partial = await run({ type: "payment.record", paymentId: "payment-1", orderId: "order-1", amountMinor: "30000", receivedOn: "2026-10-03", sourceRef: "收款凭据-1" });
   assert.equal(partial.summary.outstandingMinor, "70000");
@@ -207,4 +210,38 @@ test("存量订单保持期初与本期现金分离，金额违规原子回滚�
   assert.equal(period.body.data.state.payments.length, 2);
   assert.equal(period.body.data.state.paymentReversals.length, 1);
   assert.equal((await f.command({ type: "payment.reverse", reversalId: "reverse-refunded", paymentId: "pay-1", reversedOn: "2026-10-05", reason: "误记", sourceRef: "核对单" }, version)).status, 422);
+});
+
+test("报价确认旧成功回执可重放，但旧请求不能再次建立事实", async t => {
+  const f = await fixture(t);
+  const command = { type: "quote.confirm", quoteId: "old-quote", orderId: "old-order", confirmedOn: "2026-10-09", sourceRef: "historical-confirmation" };
+  const frozen = (await f.read()).body.data;
+  delete frozen.state.quoteConfirmations;
+  await f.store.transact("local", tx => {
+    tx.putIdempotency({ tenantId: "local", scope: `opc.business:${f.workspace.id}`, key: "old-confirmation", createdAt: "2026-10-09T12:00:00.000Z",
+      requestDigest: sha256({ workspaceId: f.workspace.id, principalId: "local-owner", expectedStreamVersion: 0, command }), response: frozen });
+    appendKernelEvent(tx, { tenantId: "local", aggregateType: "test", aggregateId: "old-receipt", expectedStreamVersion: 0,
+      type: "fixture.old_receipt", actorId: "local-owner", generation: 0, correlationId: "old-receipt", publicPayload: {} });
+  });
+  assert.deepEqual((await f.command(command, 0, "old-confirmation")).body.data, frozen);
+  assert.equal((await f.command(command, 0, "new-key")).status, 422);
+  assert.equal((await f.read()).body.data.state.streamVersion, 0);
+});
+
+test("已有0.2台账缺少新确认集合时仍可读取，后续命令不补造历史确认", async t => {
+  const f = await fixture(t);
+  await f.command(customer, 0);
+  await f.alter("opc.business", f.workspace.id, current => { const { quoteConfirmations: _newField, ...original } = current; return original; });
+  await f.store.transact("local", tx => {
+    tx.deleteProjection("opc.businessSnapshot", `${f.workspace.id}:1`);
+    appendKernelEvent(tx, { tenantId: "local", aggregateType: "test", aggregateId: "old-business-state", expectedStreamVersion: 0,
+      type: "fixture.old_state", actorId: "local-owner", generation: 0, correlationId: "old-business-state", publicPayload: {} });
+  });
+  const read = await f.read();
+  assert.equal(read.status, 200, JSON.stringify(read.body));
+  assert.deepEqual(read.body.data.state.quoteConfirmations, []);
+  assert.equal(read.body.data.state.customers.length, 1);
+  const next = await f.command(service, 1);
+  assert.equal(next.status, 200, JSON.stringify(next.body));
+  assert.deepEqual(next.body.data.state.quoteConfirmations, []);
 });

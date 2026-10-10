@@ -183,6 +183,10 @@ export function createProtectedRuntimeStore(options: ProtectedRuntimeOptions): R
     async readSettlementRecords(executionId) {
       const projection = await restore(executionId);
       return Promise.all(projection.records.map(async record => {
+        if (record.type === 'budget/reserved') {
+          const value = await decode(record);
+          return { ...value, payload: { kind: value.payload.kind ?? null, id: value.payload.id ?? null, limit: value.payload.limit ?? null } };
+        }
         if (record.type === "subagent/reserved") {
           const value = await decode(record);
           const authority = value.payload.authority as JsonObject | undefined;

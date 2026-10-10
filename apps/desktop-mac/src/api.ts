@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { apiPath, matchApiOperation, parseApiResponse, type ApiPath, type JsonApiOperationIdV2, type ApiOutputsV2 } from "@mn/contracts/client";
-import type { AgentSchedulingRequestV2, GoalUsageV2, BusinessCommandV1, BusinessPeriodV1, BusinessContextTargetV2, CodingRunnerId, ExternalCodingRunnerId, ConfirmCodingRunnerMutationBodyV2, GoalBudgetV2, GoalDeliverableSpecV2, GoalDetailV2, GoalResourceRefV2, GoalResponseV2, ProposeTeamGoalPlanV2 } from "@mn/contracts";
+import type { AgentSchedulingRequestV2, GoalDeliveryItemDecisionV2, GoalReworkPreviewV2, OpcBusinessCandidateDetailV2, OpcBusinessCandidateOriginV2, GoalUsageV2, BusinessCommandV1, BusinessPeriodV1, BusinessContextTargetV2, CodingRunnerId, ExternalCodingRunnerId, ConfirmCodingRunnerMutationBodyV2, GoalBudgetV2, GoalDeliverableSpecV2, GoalDetailV2, GoalResourceRefV2, GoalResponseV2, ProposeTeamGoalPlanV2 } from "@mn/contracts";
 import type {
   AgentThreadSummary,
   ApiFailure,
@@ -33,11 +33,28 @@ export class AgentOsClient {
   business(workspaceId: string, period?: BusinessPeriodV1) {
     return this.request(apiPath("getOpcBusiness", {}, { workspaceId, ...(period ? { periodStart: period.start, periodEnd: period.end } : {}) }));
   }
-  businessContext(workspaceId: string, target: BusinessContextTargetV2) {
-    return this.request(apiPath("getBusinessContext", { workspaceId, kind: target.kind, resourceId: target.resourceId }));
+  businessContext(workspaceId: string, target: BusinessContextTargetV2, versionRef?: GoalResourceRefV2) {
+    return this.request(apiPath("getBusinessContext", { workspaceId, kind: target.kind, resourceId: target.resourceId }, versionRef ? {version:versionRef.streamVersion,digest:versionRef.digest} : {}));
   }
   commandBusiness(workspaceId: string, expectedStreamVersion: number, command: BusinessCommandV1, requestKey?: string) {
     return this.request(apiPath("commandOpcBusiness", {}), { method: "POST", ...(requestKey ? { headers: { "Idempotency-Key": requestKey } } : {}), body: JSON.stringify({ workspaceId, expectedStreamVersion, command }) });
+  }
+  businessCandidates(workspaceId: string) { return this.request(apiPath("listOpcBusinessCandidates", {}, {workspaceId})); }
+  businessCandidate(workspaceId: string, candidateId: string) { return this.request(apiPath("getOpcBusinessCandidate", {candidateId}, {workspaceId})); }
+  createBusinessCandidate(workspaceId: string, origin: OpcBusinessCandidateOriginV2, proposalKey: string, requestKey: string) {
+    return this.request(apiPath("createOpcBusinessCandidate", {}), {method:"POST",headers:{"Idempotency-Key":requestKey},body:JSON.stringify({workspaceId,expectedStreamVersion:0,origin,proposalKey})});
+  }
+  decideBusinessCandidate(detail: OpcBusinessCandidateDetailV2, decision: "apply"|"reject", requestKey: string) {
+    return this.request(apiPath("decideOpcBusinessCandidate", {candidateId:detail.candidate.id}), {method:"POST",headers:{"Idempotency-Key":requestKey},body:JSON.stringify({workspaceId:detail.candidate.workspaceId,expectedStreamVersion:detail.streamVersion,expectedBusinessStreamVersion:detail.candidate.businessStreamVersion,candidateDigest:detail.candidate.digest,previewDigest:detail.candidate.previewDigest,decision})});
+  }
+  decideGoalDelivery(detail: GoalResponseV2, items: readonly GoalDeliveryItemDecisionV2[], requestKey: string) {
+    return this.request(apiPath("decideGoalDelivery", {goalId:detail.goal.id}), {method:"POST",headers:{"Idempotency-Key":requestKey},body:JSON.stringify({workspaceId:detail.goal.workspaceId,expectedStreamVersion:detail.goal.streamVersion,deliverySetId:detail.deliverySet?.id,criteriaVersion:detail.deliverySet?.criteriaVersion,items})});
+  }
+  previewGoalRework(detail: GoalResponseV2, decisionId: string, requestKey: string) {
+    return this.request(apiPath("previewGoalRework", {goalId:detail.goal.id}), {method:"POST",headers:{"Idempotency-Key":requestKey},body:JSON.stringify({workspaceId:detail.goal.workspaceId,expectedStreamVersion:detail.goal.streamVersion,decisionId})});
+  }
+  reworkGoal(detail: GoalResponseV2, preview: GoalReworkPreviewV2, requestKey: string) {
+    return this.request(apiPath("reworkGoal", {goalId:detail.goal.id}), {method:"POST",headers:{"Idempotency-Key":requestKey},body:JSON.stringify({workspaceId:detail.goal.workspaceId,expectedStreamVersion:preview.expectedGoalStreamVersion,previewId:preview.id,previewDigest:preview.digest})});
   }
   goals(workspaceId: string) { return this.request(apiPath("listGoals", { workspaceId })); }
   goal(workspaceId: string, goalId: string) { return this.request(apiPath("getGoal", { goalId }, { workspaceId })); }
@@ -67,13 +84,13 @@ export class AgentOsClient {
       workspaceId: detail.goal.workspaceId, expectedStreamVersion: detail.goal.streamVersion, command: "decide", nodeId, decision,
     }) });
   }
-  recordExternalUsage(detail: GoalDetailV2, usage: GoalUsageV2, source: string) {
-    return this.request(apiPath("commandGoal", { goalId: detail.goal.id }), { method: "POST", body: JSON.stringify({
+  recordExternalUsage(detail: GoalResponseV2, usage: GoalUsageV2, source: string, requestKey?: string) {
+    return this.request(apiPath("commandGoal", { goalId: detail.goal.id }), { method: "POST", ...(requestKey ? { headers: { "Idempotency-Key": requestKey } } : {}), body: JSON.stringify({
       workspaceId: detail.goal.workspaceId, expectedStreamVersion: detail.goal.streamVersion, command: "record_external_usage", usage, source,
     }) });
   }
-  acceptGoal(detail: GoalResponseV2, items: readonly { key: string; digest: string; reviewedCriterionIds: readonly string[] }[]) {
-    return this.request(apiPath("acceptGoalDelivery", { goalId: detail.goal.id }), { method: "POST", body: JSON.stringify({
+  acceptGoal(detail: GoalResponseV2, items: readonly { key: string; digest: string; reviewedCriterionIds: readonly string[] }[], requestKey?: string) {
+    return this.request(apiPath("acceptGoalDelivery", { goalId: detail.goal.id }), { method: "POST", ...(requestKey ? {headers:{"Idempotency-Key":requestKey}} : {}), body: JSON.stringify({
       workspaceId: detail.goal.workspaceId, expectedStreamVersion: detail.goal.streamVersion,
       deliverySetId: detail.deliverySet?.id, criteriaVersion: detail.deliverySet?.criteriaVersion, items,
     }) });

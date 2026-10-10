@@ -6,8 +6,22 @@ export type ContextSourceValidator = (tx: KernelTransaction, scope: { tenantId: 
 
 export const EXECUTION_CONTEXT_NAMESPACE = 'execution.context';
 export function assertContextSource(tx: KernelTransaction, scope: { tenantId: string; workspaceId: string }, ref: GoalResourceRefV2, validateSource?: ContextSourceValidator): void {
+  assertSource(tx, scope, ref, validateSource, new Set());
+}
+function assertSource(tx: KernelTransaction, scope: { tenantId: string; workspaceId: string }, ref: GoalResourceRefV2,
+  validateSource: ContextSourceValidator | undefined, ancestors: ReadonlySet<string>): void {
   if (validateSource?.(tx, scope, ref)) return;
   const value = tx.getProjection<{ tenantId?: string; workspaceId: string; streamVersion: number; digest?: string; protected?: boolean; protectedPayloadRef?: string }>(ref.namespace, ref.resourceId);
+  if (ref.namespace === 'coding.execution') {
+    const execution = tx.getProjection<Execution>('execution', ref.resourceId);
+    const run = value as unknown as { executionId?: string; generation?: number } | undefined;
+    if (!value || !execution || execution.id !== ref.resourceId || execution.tenantId !== scope.tenantId || execution.workspaceId !== scope.workspaceId
+      || run?.executionId !== execution.id || run.generation !== execution.generation || value.streamVersion !== ref.streamVersion || !ref.digest || ref.digest !== sha256(value)) {
+      throw new KernelError('CONTEXT_SOURCE_CHANGED', '代码成果来源或版本已变化', '重新核对原执行与成果');
+    }
+    assertSources(tx, execution, validateSource, ancestors);
+    return;
+  }
   const domain = ['opc.opportunity', 'coding.repository'].includes(ref.namespace);
   if (!value || value.workspaceId !== scope.workspaceId || (value.tenantId !== scope.tenantId && !(domain && value.tenantId === undefined))
     || value.streamVersion !== ref.streamVersion || !ref.digest || ref.digest !== (value.digest ?? sha256(value))) {
@@ -19,13 +33,19 @@ export function assertContextSource(tx: KernelTransaction, scope: { tenantId: st
   }
 }
 export function assertExecutionContextSources(tx: KernelTransaction, execution: Execution, validateSource?: ContextSourceValidator): ExecutionContextV2 | undefined {
+  return assertSources(tx, execution, validateSource, new Set());
+}
+function assertSources(tx: KernelTransaction, execution: Execution, validateSource: ContextSourceValidator | undefined,
+  ancestors: ReadonlySet<string>): ExecutionContextV2 | undefined {
+  if (ancestors.has(execution.id) || ancestors.size >= 32) throw new KernelError('CONTEXT_INVALID', '执行来源引用形成循环或过深', '检查原执行来源记录');
   const context = tx.getProjection<ExecutionContextV2>(EXECUTION_CONTEXT_NAMESPACE, execution.id);
   if (!context) return undefined;
   const { digest, ...body } = context;
   if (context.executionId !== execution.id || context.tenantId !== execution.tenantId || context.workspaceId !== execution.workspaceId || sha256(body) !== digest) {
     throw new KernelError('CONTEXT_INVALID', '执行来源记录无效', '停止执行并检查受保护事件记录');
   }
-  for (const ref of context.sourceRefs) assertContextSource(tx, execution, ref, validateSource);
+  const path = new Set([...ancestors, execution.id]);
+  for (const ref of context.sourceRefs) assertSource(tx, execution, ref, validateSource, path);
   return context;
 }
 export function saveExecutionContext(tx: KernelTransaction, execution: Execution,

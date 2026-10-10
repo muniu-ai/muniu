@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { ArrowUpRight, BriefcaseBusiness, Code2, FileText, Paperclip, Plus, X } from "lucide-react";
-import type { AgentSchedulingRequestV2, Asset, BusinessContextTargetV2, BusinessObjectContextV2, GoalDetailV2, GoalResourceRefV2, GoalResponseV2, ModelConnectionV2, ProposeTeamGoalPlanV2, TeamTemplateIdV1, TeamTemplateSummaryV1 } from "@mn/contracts";
+import type { AgentSchedulingRequestV2, Asset, BusinessContextTargetV2, BusinessObjectContextV2, GoalDetailV2, GoalDeliverableSpecV2, GoalResourceRefV2, GoalResponseV2, ModelConnectionV2, ProposeTeamGoalPlanV2, TeamTemplateIdV1, TeamTemplateSummaryV1 } from "@mn/contracts";
 import { AgentOsApiError, type AgentOsClient } from "../api";
 import type { CodingRepositorySummary } from "../types";
 
 import { sourceLocation } from "./GoalSources";
 import { SchedulingControls } from "./AgentScheduling";
+import { BusinessMaterialPicker } from "./BusinessMaterialPicker";
 import { TeamSelector } from "./TeamSelector";
 
 type Material = { id: string; name: string; file: File; text: string; asset?: Asset;
@@ -28,9 +29,12 @@ export function TaskComposer({ api, workspaceId, pluginIds, repositories, reposi
   const [kind, setKind] = useState(pluginIds.includes("opc") ? "opc" : "coding");
   const [objective, setObjective] = useState("");
   const [criteria, setCriteria] = useState("");
+  const [extraDeliverables, setExtraDeliverables] = useState<readonly { key: string; title: string; criteria: string }[]>([]);
   const [constraints, setConstraints] = useState("");
   const [materials, setMaterials] = useState<readonly Material[]>([]);
-  const [businessMaterial, setBusinessMaterial] = useState<{ target: BusinessContextTargetV2; context?: BusinessObjectContextV2; error?: string }>();
+  const [businessMaterials, setBusinessMaterials] = useState<readonly { target: BusinessContextTargetV2; context?: BusinessObjectContextV2; error?: string }[]>([]);
+  const businessMaterial = businessMaterials.at(-1);
+  function saveBusinessMaterial(material: typeof businessMaterial) { if (material) setBusinessMaterials(items=>[...items.filter(item=>item.target.kind!==material.target.kind||item.target.resourceId!==material.target.resourceId),material]); }
   const businessSequence = useRef(0);
   const [businessLoading, setBusinessLoading] = useState(false);
   const [preview, setPreview] = useState<string>();
@@ -49,12 +53,14 @@ export function TaskComposer({ api, workspaceId, pluginIds, repositories, reposi
   const [step, setStep] = useState("");
   const [locked, setLocked] = useState(false);
   const mounted = useRef(true);
-  const transaction = useRef<{ key: string; kind: string; objective: string; brief: string; resourceRefs: readonly GoalResourceRefV2[]; criteria: string[]; repositoryId?: string; scheduling: AgentSchedulingRequestV2; teamPlan?: Pick<ProposeTeamGoalPlanV2, "templateId" | "templateVersion" | "modelBindingId">; currency: string; cost: string; duration: number; threadId?: string; taskId?: string; goal?: GoalDetailV2 } | undefined>(undefined);
+  const transaction = useRef<{ key: string; kind: string; objective: string; brief: string; resourceRefs: readonly GoalResourceRefV2[]; criteria: string[]; deliverables: readonly GoalDeliverableSpecV2[]; repositoryId?: string; scheduling: AgentSchedulingRequestV2; teamPlan?: Pick<ProposeTeamGoalPlanV2, "templateId" | "templateVersion" | "modelBindingId">; currency: string; cost: string; duration: number; threadId?: string; taskId?: string; goal?: GoalDetailV2 } | undefined>(undefined);
   const submitting = useRef(false);
   const readLock = useRef(false);
   const external = scheduling.runnerId === "codex-cli" || scheduling.runnerId === "claude-cli";
   const selectedRepository = repositories.find(item => item.id === repositoryId) ?? (repositories.length === 1 ? repositories[0] : undefined);
   const descriptions = criteria.split("\n").map(item => item.trim()).filter(Boolean);
+  const deliverables: readonly GoalDeliverableSpecV2[] = [{ key: "result", title: kind === "coding" ? "研发成果" : "经营成果", required: true, criteria: descriptions.map((description,index)=>({id:`criterion-${index+1}`,description})) }, ...(kind === "coding" ? [] : extraDeliverables).map(item=>({key:item.key,title:item.title.trim(),required:true,criteria:item.criteria.split("\n").map(value=>value.trim()).filter(Boolean).map((description,index)=>({id:`criterion-${index+1}`,description}))}))];
+  const deliverablesValid = deliverables.every(item=>item.title.length>0&&item.criteria.length>0&&item.criteria.length<=20&&item.criteria.every(criterion=>criterion.description.length<=2000));
   const brief = [objective.trim(), constraints.trim() && `约束与边界：\n${constraints.trim()}`].filter(Boolean).join("\n\n");
   const lengthValid = brief.length <= 16000;
   const previewMaterial = materials.find(item => item.id === preview);
@@ -62,7 +68,7 @@ export function TaskComposer({ api, workspaceId, pluginIds, repositories, reposi
   const teamModel = teamModels.find(model => model.id === teamModelId) ?? teamModels[0];
   const teamTemplate = teamTemplates.find(template => template.id === teamTemplateId);
   const ready = pluginIds.includes(kind) && objective.trim() && descriptions.length > 0 && descriptions.length <= 20 && descriptions.every(item => item.length <= 2000)
-    && lengthValid && (teamTemplateId ? teamTemplate?.available && teamTemplate.pluginId === kind && teamModel : external || models.some(model => model.billingCurrency === currency)) && (kind !== "coding" || selectedRepository) && !reading && !businessLoading && (!businessMaterial || Boolean(businessMaterial.context))
+    && deliverablesValid && lengthValid && (teamTemplateId ? teamTemplate?.available && teamTemplate.pluginId === kind && teamModel : external || models.some(model => model.billingCurrency === currency)) && (kind !== "coding" || selectedRepository) && !reading && !businessLoading && businessMaterials.every(material=>Boolean(material.context))
     && materials.every(item => item.status === "ready" && item.asset && item.extraction && item.extraction.status !== "unreadable");
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => {
@@ -82,15 +88,15 @@ export function TaskComposer({ api, workspaceId, pluginIds, repositories, reposi
   }, [businessTarget?.sequence]);
   async function loadBusinessMaterial(target: BusinessContextTargetV2) {
     const request = ++businessSequence.current;
-    setBusinessMaterial({ target }); setBusinessLoading(true);
+    saveBusinessMaterial({ target }); setBusinessLoading(true);
     try {
       const context = await api.businessContext(workspaceId, target);
       if (!mounted.current || request !== businessSequence.current) return;
-      setBusinessMaterial({ target, context });
+      saveBusinessMaterial({ target, context });
       setObjective(current => current.trim() ? current : `围绕「${context.title}」完成分析并提出下一步建议。`);
       setCriteria(current => current.trim() ? current : "区分业务事实、建议和待确认事项\n每项结论说明业务资料依据");
     } catch (caught) {
-      if (mounted.current && request === businessSequence.current) setBusinessMaterial({ target, error: caught instanceof AgentOsApiError ? `${caught.detail.message}。${caught.detail.action}` : "无法读取业务资料，请重试。" });
+      if (mounted.current && request === businessSequence.current) saveBusinessMaterial({ target, error: caught instanceof AgentOsApiError ? `${caught.detail.message}。${caught.detail.action}` : "无法读取业务资料，请重试。" });
     } finally { if (mounted.current && request === businessSequence.current) setBusinessLoading(false); }
   }
 
@@ -162,8 +168,8 @@ export function TaskComposer({ api, workspaceId, pluginIds, repositories, reposi
     if (!Number.isSafeInteger(minorUnits) || minorUnits < 1 || !Number.isSafeInteger(Number(minutes)) || Number(minutes) < 1) { setError("请填写有效的执行额度和时限。"); return; }
     submitting.current = true; setBusy(true); setLocked(true); setError(undefined);
     const previous = transaction.current;
-    const run = transaction.current = locked && previous ? previous : { key: crypto.randomUUID(), kind, objective: objective.trim(), brief, criteria: descriptions,
-      resourceRefs: [...materials.map(item => ({ namespace: "asset", resourceId: item.asset!.id, streamVersion: item.asset!.streamVersion, digest: item.asset!.digest })), ...(businessMaterial?.context ? [businessMaterial.context.sourceRef] : [])],
+    const run = transaction.current = locked && previous ? previous : { key: crypto.randomUUID(), kind, objective: objective.trim(), brief, criteria: descriptions, deliverables,
+      resourceRefs: [...materials.map(item => ({ namespace: "asset", resourceId: item.asset!.id, streamVersion: item.asset!.streamVersion, digest: item.asset!.digest })), ...businessMaterials.flatMap(material=>material.context?[material.context.sourceRef]:[])],
       ...(selectedRepository ? { repositoryId: selectedRepository.id } : {}), scheduling, currency, cost: String(minorUnits), duration: Number(minutes) * 60_000,
       ...(teamTemplateId && teamModel ? { teamPlan: { templateId: teamTemplateId, templateVersion: "1" as const, modelBindingId: teamModel.id } } : {}),
       ...(previous?.kind === kind && previous.objective === objective.trim() && previous.repositoryId === selectedRepository?.id ? { threadId: previous.threadId, taskId: previous.taskId } : {}) };
@@ -179,12 +185,12 @@ export function TaskComposer({ api, workspaceId, pluginIds, repositories, reposi
       }
       if (!run.goal) run.goal = await api.createGoal(workspaceId, { threadId: run.threadId, objective: run.brief, resourceRefs: run.resourceRefs,
         budget: { maxTokens: 100000, maxCostMinorUnits: run.cost, currency: run.currency, maxDurationMs: run.duration },
-        deliverables: [{ key: "result", title: run.kind === "coding" ? "研发成果" : "经营成果", required: true, criteria: run.criteria.map((description, index) => ({ id: `criterion-${index + 1}`, description })) }],
+        deliverables: run.deliverables,
       }, `${run.key}:goal`);
       setStep("正在准备待审阅的计划…");
       const detail = run.teamPlan ? await api.planTeamGoal(run.goal, run.teamPlan, `${run.key}:plan`) : await api.planGoal(run.goal, run.scheduling, `${run.key}:plan`);
       if (!mounted.current) return;
-      setObjective(""); setCriteria(""); setConstraints(""); setMaterials([]); setBusinessMaterial(undefined); setPreview(undefined); setTeamTemplateId(null); transaction.current = undefined; setLocked(false);
+      setObjective(""); setCriteria(""); setExtraDeliverables([]); setConstraints(""); setMaterials([]); setBusinessMaterials([]); setPreview(undefined); setTeamTemplateId(null); transaction.current = undefined; setLocked(false);
       onCreated(detail);
     } catch (caught) {
       if (mounted.current) {
@@ -201,14 +207,15 @@ export function TaskComposer({ api, workspaceId, pluginIds, repositories, reposi
     <div className="field task-objective"><label htmlFor="task-objective">任务目标</label><textarea id="task-objective" rows={5} maxLength={6000} disabled={locked} value={objective} onChange={event => setObjective(event.target.value)} placeholder={kind === "coding" ? "描述使用场景、预期行为或需要排查的问题…" : "例如：结合本月经营数据，制定下月客户跟进与交付计划…"} onKeyDown={event => { if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} /></div>
     {kind === "coding" && <div className="task-repository"><label>任务仓库<select aria-label="任务仓库" value={selectedRepository?.id ?? ""} disabled={locked} onChange={event => onRepository(event.target.value)}><option value="" disabled>选择仓库</option>{repositories.map(item => <option key={item.id} value={item.id}>{item.name} · {item.rootRealPath}</option>)}</select></label><button type="button" className="quiet-button" disabled={locked} onClick={onRegisterRepository}><Plus size={15} />{repositories.length ? "添加仓库" : "登记仓库"}</button></div>}
     <div className="task-material-actions"><label className={`secondary-button ${locked ? "disabled" : ""}`}><Paperclip size={15} />添加资料<input aria-label="添加文本资料" type="file" accept=".txt,.md,.csv,.json,.pdf,.docx,.xlsx" multiple disabled={locked || reading} onChange={event => { const files = Array.from(event.target.files ?? []); event.target.value = ""; void addFiles(files); }} /></label>{kind === "opc" && <button type="button" className="quiet-button" disabled={locked || reading} onClick={() => void addBusinessSnapshot()}>附加经营汇总</button>}<small>{reading ? "正在读取资料…" : "支持文本、PDF、Word 和表格，最多 6 份，每份 20 MB"}</small></div>
-    {businessMaterial && <section className="task-materials" aria-label="关联业务资料">
-      {businessLoading ? <p role="status">正在读取业务资料…</p> : businessMaterial.context ? <>
+    {kind === "opc" && <BusinessMaterialPicker api={api} workspaceId={workspaceId} disabled={locked||businessLoading} onSelect={target=>void loadBusinessMaterial(target)}/>}
+    {businessMaterials.map(businessMaterial=><section key={`${businessMaterial.target.kind}:${businessMaterial.target.resourceId}`} className="task-materials" aria-label="关联业务资料">
+      {businessLoading && !businessMaterial.context && !businessMaterial.error ? <p role="status">正在读取业务资料…</p> : businessMaterial.context ? <>
         <strong>{businessMaterial.context.title}</strong><p>事实版本 {businessMaterial.context.sourceRef.streamVersion} · 仅供任务分析，业务变更仍需确认。</p>
         <details><summary>查看业务资料</summary><pre className="material-preview">{businessMaterial.context.content}</pre></details>
         <button type="button" className="quiet-button" disabled={locked} onClick={() => void loadBusinessMaterial(businessMaterial.target)}>重新核对业务资料</button>
       </> : <p role="alert">{businessMaterial.error}<button type="button" className="quiet-button" disabled={locked} onClick={() => void loadBusinessMaterial(businessMaterial.target)}>重试业务资料</button></p>}
-      <button type="button" className="quiet-button" disabled={locked} onClick={() => { businessSequence.current += 1; setBusinessMaterial(undefined); setBusinessLoading(false); }}>移除业务资料</button>
-    </section>}
+      <button type="button" className="quiet-button" disabled={locked} onClick={() => { businessSequence.current += 1; setBusinessMaterials(items=>items.filter(item=>item!==businessMaterial)); setBusinessLoading(false); }}>移除业务资料</button>
+    </section>)}
     {materials.length > 0 && <div className="task-materials">{materials.map(item => <div key={item.id}><div className="material-chip"><button type="button" onClick={() => setPreview(preview === item.id ? undefined : item.id)}><FileText size={14} />{item.name}</button><button type="button" aria-label={`移除 ${item.name}`} disabled={locked} onClick={() => { setMaterials(current => current.filter(value => value.id !== item.id)); setPreview(undefined); }}><X size={14} /></button></div>
       <small>{item.status === "uploading" ? "正在保存受保护资料…" : item.status === "parsing" ? "正在解析…" : item.status === "failed" ? "资料未就绪" : item.extraction?.status === "partial" ? "部分解析，请核对遗漏" : item.extraction?.status === "unreadable" ? "无法读取，请移除或重新提供文本" : "已解析"}</small>
       {item.error && <p role="alert">{item.error}<button type="button" className="quiet-button" aria-label={`重试资料：${item.name}`} disabled={locked || reading} onClick={() => void retryMaterial(item)}>重试资料</button></p>}
@@ -216,6 +223,8 @@ export function TaskComposer({ api, workspaceId, pluginIds, repositories, reposi
     </div>)}</div>}
     {previewMaterial && <div>{previewMaterial.extraction ? <>{previewMaterial.extraction.blocks.slice(0, 20).map(block => <div key={block.id}><small>{sourceLocation(block.locator)}</small><pre className="material-preview">{block.text}</pre></div>)}{previewMaterial.extraction.blocks.length > 20 && <p>此处仅预览前 20 个片段，完整原文随资料保存。</p>}</> : <p>资料准备完成后显示提取内容与位置。</p>}</div>}
     <div className="field"><label htmlFor="task-criteria">验收要求 <span>每行一项</span></label><textarea id="task-criteria" aria-label="验收要求" rows={3} required maxLength={6000} disabled={locked} value={criteria} onChange={event => setCriteria(event.target.value)} placeholder="成果要包含什么？怎样判断完成？" /></div>
+    {kind !== "coding" && extraDeliverables.map((item,index)=><fieldset key={item.key} disabled={locked}><legend>交付项 {index+2}</legend><label className="field">名称<input aria-label={`交付项 ${index+2} 名称`} required maxLength={200} value={item.title} onChange={event=>setExtraDeliverables(values=>values.map(value=>value.key===item.key?{...value,title:event.target.value}:value))}/></label><label className="field">验收要求<textarea aria-label={`交付项 ${index+2} 验收要求`} required rows={3} maxLength={6000} value={item.criteria} onChange={event=>setExtraDeliverables(values=>values.map(value=>value.key===item.key?{...value,criteria:event.target.value}:value))}/></label><button type="button" className="quiet-button" onClick={()=>setExtraDeliverables(values=>values.filter(value=>value.key!==item.key))}>移除交付项</button></fieldset>)}
+    <button type="button" className="secondary-button" disabled={locked||kind==="coding"||extraDeliverables.length>=19} onClick={()=>setExtraDeliverables(values=>[...values,{key:`deliverable-${crypto.randomUUID()}`,title:"",criteria:""}])}>增加交付项</button>{kind==="coding"&&<p>代码交付使用一个完整候选，包含变更差异、检查结果和交付说明。</p>}
     <details className="task-boundaries"><summary>补充约束与执行额度</summary><div className="field"><label htmlFor="task-constraints">约束与偏好</label><textarea id="task-constraints" rows={3} maxLength={3000} disabled={locked} value={constraints} onChange={event => setConstraints(event.target.value)} placeholder="期限、语气、目标人群、不在范围内的工作…" /></div><div className="task-budget"><label>币种<select aria-label="预算币种" disabled={locked} value={currency} onChange={event => setCurrency(event.target.value)}><option>CNY</option><option>USD</option></select></label><label>费用上限（{currency}）<input aria-label="费用上限" type="number" min="0.01" max="10000" step="0.01" required disabled={locked} value={cost} onChange={event => setCost(event.target.value)} /></label><label>时限（分钟）<input aria-label="时限（分钟）" type="number" min="1" max="1440" step="1" required disabled={locked} value={minutes} onChange={event => setMinutes(event.target.value)} /></label></div><small>模型用量上限 100,000 tokens；费用按参考价格预留，以厂商账单为准。</small></details>
     {error && <p className="inline-error" role="alert">{error}</p>}
     {!lengthValid && <p className="inline-error" role="alert">任务和约束合计超过 16000 字符，请精简内容。</p>}

@@ -23,7 +23,8 @@ export function businessMutationSchema(): JsonObject {
     "customer.record": variant("customer.record", { customerId: identifier, name: title, source, need: text, contact: { ...text, maxLength: 500 }, followUpOn: date }, ["contact", "followUpOn"]),
     "service.record": variant("service.record", { serviceId: identifier, title, currency: { const: "CNY" }, priceMinor: money, inScope: list, outOfScope: { ...list, minItems: 0 }, acceptanceCriteria: list }),
     "quote.create": variant("quote.create", { quoteId: identifier, customerId: identifier, serviceId: identifier, serviceVersion, quantity, discountMinor: money, validUntil: date, dueOn: date, notes: text }, ["notes"]),
-    "quote.confirm": variant("quote.confirm", { quoteId: identifier, orderId: identifier, confirmedOn: date, sourceRef: source }),
+    "quote.confirm": variant("quote.confirm", { quoteId: identifier, confirmationId: identifier, confirmedOn: date, sourceRef: source }),
+    "order.activate": variant("order.activate", { orderId: identifier, quoteConfirmationId: identifier, contractedOn: date, sourceRef: source }),
     "order.record": variant("order.record", { orderId: identifier, customerId: identifier, serviceId: identifier, serviceVersion, quantity, agreedAmountMinor: money, contractedOn: date, dueOn: date, sourceRef: source, opening }),
     "order.adjust": variant("order.adjust", { adjustmentId: identifier, orderId: identifier, amountDeltaMinor: { type: "string", pattern: "^(0|-?[1-9][0-9]{0,23})$" }, effectiveOn: date, dueOn: date, reason: text, sourceRef: source }, ["dueOn"]),
     "delivery.record": variant("delivery.record", { deliveryId: identifier, orderId: identifier, title, deliveredOn: date, artifactRef: source, progressPercent: { type: "integer", minimum: 1, maximum: 100 }, notes: text }, ["notes"]),
@@ -35,4 +36,13 @@ export function businessMutationSchema(): JsonObject {
     "review.record": variant("review.record", { reviewId: identifier, period, explanation: text, nextDecisions: list }),
   };
   return object({ workspaceId: text, expectedStreamVersion: { type: "integer", minimum: 0 }, command: { oneOf: Object.values(variants) } });
+}
+
+export function opcBusinessCandidateCommandSchema(): JsonObject {
+  const properties = businessMutationSchema().properties as JsonObject;
+  const variants = (properties.command as JsonObject).oneOf as JsonObject[];
+  return { oneOf: variants.filter(variant => {
+    const command = ((variant.properties as JsonObject).type as JsonObject).const;
+    return command === "quote.create" || command === "delivery.record" || command === "review.record";
+  }) };
 }

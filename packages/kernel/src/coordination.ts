@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import type { CoordinationAttemptV2, CoordinationAuthorityV2, CoordinationBindingV2, CoordinationBudgetV2,
   CoordinationControlV2, CoordinationGroupV2, CoordinationLimitsV2, CoordinationNodeV2, CoordinationRunV2,
+  CoordinationInitialAccountingV2, CoordinationNodeReuseInputV2, CoordinationNodeReuseV2,
   Execution, ExecutionAuthority, Job, Principal, ResourceRef, Thread, VersionedEntity, Workspace, WorkspaceMembership } from '@mn/contracts';
 import { assertCurrentExecutionAuthorization, hasUnsettledToolCalls } from './authority.js';
 import { sha256 } from './canonical.js';
@@ -14,12 +15,19 @@ export const COORDINATION_GROUP_NAMESPACE = 'coordination.group';
 export const COORDINATION_ATTEMPT_NAMESPACE = 'coordination.attempt';
 export const COORDINATION_CONTROL_NAMESPACE = 'coordination.control';
 export const COORDINATION_POLICY_NAMESPACE = 'coordination.workspace-policy';
+export const COORDINATION_REUSE_NAMESPACE = 'coordination.reuse';
 export function coordinationThreadId(runId: string, nodeId: string, attempt: number): string {
   return `coordination-thread:${sha256({ runId, nodeId, attempt })}`;
 }
 const HARD_LIMITS: CoordinationLimitsV2 = { maxParallel: 3, maxNodes: 12, maxAttempts: 24, maxDepth: 1 };
-type Namespace = typeof COORDINATION_RUN_NAMESPACE | typeof COORDINATION_GROUP_NAMESPACE | typeof COORDINATION_ATTEMPT_NAMESPACE | typeof COORDINATION_CONTROL_NAMESPACE;
-export type CreateCoordinationRunInput = Omit<CoordinationRunV2, keyof VersionedEntity | 'groupId' | 'initiatedBy' | 'membershipStreamVersion' | 'status'> & { readonly id: string };
+type Namespace = typeof COORDINATION_RUN_NAMESPACE | typeof COORDINATION_GROUP_NAMESPACE | typeof COORDINATION_ATTEMPT_NAMESPACE | typeof COORDINATION_CONTROL_NAMESPACE | typeof COORDINATION_REUSE_NAMESPACE;
+export type CreateCoordinationRunInput = Omit<CoordinationRunV2, keyof VersionedEntity | 'groupId' | 'initiatedBy' | 'membershipStreamVersion' | 'status'> & {
+  readonly id: string;
+  readonly expectedGroupStreamVersion?: number;
+  readonly rework?: { readonly sourceRevisionId: string; readonly decisionDigest: string };
+  readonly initialAccounting?: CoordinationInitialAccountingV2;
+  readonly reuses?: readonly CoordinationNodeReuseInputV2[];
+};
 export interface AdmitCoordinatedTurnInput {
   readonly runId: string; readonly expectedStreamVersion: number; readonly nodeId: string; readonly attempt: number;
   readonly message: string; readonly preparedMessage?: SubmitTurnInput['preparedMessage']; readonly threadResourceRef?: ResourceRef;
@@ -47,8 +55,13 @@ function limits(input: CoordinationLimitsV2, ...stricter: (Partial<CoordinationL
   for (const key of Object.keys(result) as (keyof CoordinationLimitsV2)[]) {
     for (const value of [input, ...stricter]) if (value?.[key] !== undefined) {
       if (!Number.isSafeInteger(value[key]) || value[key]! < 1) fail('COORDINATION_LIMIT_INVALID', '协调限额无效');
-      result[key] = Math.min(result[key], value[key]!);
+      result[key] = Math.min(result[key]!, value[key]!);
     }
+  }
+  if ([input, ...stricter].some(value => value?.maxReworkRounds !== undefined)) {
+    const bounds = [input, ...stricter].flatMap(value => value?.maxReworkRounds === undefined ? [] : [value.maxReworkRounds]);
+    if (bounds.some(value => !Number.isSafeInteger(value) || value < 0)) fail('COORDINATION_LIMIT_INVALID', '返工轮次限制无效');
+    result.maxReworkRounds = Math.min(2, ...bounds);
   }
   return result;
 }
@@ -87,10 +100,69 @@ function dependencyComplete(tx: KernelTransaction, run: CoordinationRunV2, id: s
   const node = run.nodes.find(item => item.id === id);
   if (!node) return false;
   if (node.kind && node.kind !== 'agent') return tx.getProjection<CoordinationControlV2>(COORDINATION_CONTROL_NAMESPACE, `${run.id}:${id}`)?.decision === 'approved';
+  const reused = tx.getProjection<CoordinationNodeReuseV2>(COORDINATION_REUSE_NAMESPACE, `${run.id}:${id}`);
+  if (reused) { try { assertReuse(tx, run, reused); return true; } catch { return false; } }
   const latest = attempts(tx, run.groupId).filter(item => item.runId === run.id && item.nodeId === id).sort((a, b) => b.ordinal - a.ordinal)[0];
   const execution = latest && tx.getProjection<Execution>('execution', latest.executionId);
   return latest?.status === 'completed' && latest.reservation.status === 'settled' && execution?.status === 'completed'
     && execution.generation === latest.generation && !hasUnsettledToolCalls(tx, execution.id);
+}
+function assertClosed(tx: KernelTransaction, execution: Execution, job: Job): void {
+  if (!['completed', 'failed'].includes(job.status) || !['completed', 'failed', 'cancelled', 'interrupted', 'paused'].includes(execution.status)
+    || hasUnsettledToolCalls(tx, execution.id)) fail('COORDINATION_RECONCILIATION_REQUIRED', '原执行尚未物理终结或副作用仍需核对');
+  const records = tx.getProjection<{ records: readonly { type: string }[] }>('agent-runtime', execution.id)?.records ?? [];
+  let pending = 0;
+  for (const record of records) {
+    if (record.type === 'model/reserved') pending++;
+    if (record.type === 'model/settled' && --pending < 0) fail('COORDINATION_RECONCILIATION_REQUIRED', '原执行计量顺序无效');
+  }
+  if (pending) fail('COORDINATION_RECONCILIATION_REQUIRED', '原执行用量仍需核对');
+}
+function assertReuse(tx: KernelTransaction, run: Pick<CoordinationRunV2, 'groupId' | 'tenantId' | 'workspaceId' | 'nodes'>, proof: CoordinationNodeReuseInputV2): CoordinationAttemptV2 {
+  const source = tx.getProjection<CoordinationAttemptV2>(COORDINATION_ATTEMPT_NAMESPACE, proof.sourceAttemptId);
+  const oldRun = source && tx.getProjection<CoordinationRunV2>(COORDINATION_RUN_NAMESPACE, source.runId);
+  const oldNode = oldRun?.nodes.find(node => node.id === source?.nodeId), node = run.nodes.find(node => node.id === proof.nodeId);
+  const execution = source && tx.getProjection<Execution>('execution', source.executionId), job = source && tx.getProjection<Job>('job', source.jobId);
+  const binding = job?.payload.coordination as unknown as CoordinationBindingV2 | undefined;
+  if (!source || !oldRun || !oldNode || !node || (node.kind && node.kind !== 'agent') || source.groupId !== run.groupId
+    || source.tenantId !== run.tenantId || source.workspaceId !== run.workspaceId || source.status !== 'completed' || source.reservation.status !== 'settled'
+    || !execution || !job || execution.status !== 'completed' || execution.generation !== source.generation || job.payload.executionId !== execution.id
+    || oldRun.groupId !== run.groupId || oldRun.tenantId !== run.tenantId || oldRun.workspaceId !== run.workspaceId || oldRun.revisionId !== source.revisionId
+    || execution.tenantId !== run.tenantId || execution.workspaceId !== run.workspaceId || execution.threadId !== source.threadId || execution.initiatedBy !== oldRun.initiatedBy
+    || execution.agentDefinitionId !== oldNode.agentDefinitionId || execution.modelBindingId !== oldNode.modelBindingId || execution.pluginId !== oldNode.pluginId
+    || execution.runnerId !== oldNode.runnerId || execution.pluginPackageSha256 !== oldNode.pluginPackageSha256
+    || job.tenantId !== run.tenantId || job.workspaceId !== run.workspaceId
+    || binding?.aggregateType !== oldRun.aggregateType || binding.aggregateId !== oldRun.aggregateId || binding.runId !== oldRun.id
+    || binding.revisionId !== source.revisionId || binding.nodeId !== source.nodeId || binding.attemptId !== source.id
+    || !/^[a-f0-9]{64}$/u.test(proof.inputDigest) || !/^[a-f0-9]{64}$/u.test(proof.outputDigest)
+    || sha256({ pluginId: node.pluginId, agentDefinitionId: node.agentDefinitionId, modelBindingId: node.modelBindingId, runnerId: node.runnerId ?? null, pluginPackageSha256: node.pluginPackageSha256 ?? null, role: node.role })
+      !== sha256({ pluginId: oldNode.pluginId, agentDefinitionId: oldNode.agentDefinitionId, modelBindingId: oldNode.modelBindingId, runnerId: oldNode.runnerId ?? null, pluginPackageSha256: oldNode.pluginPackageSha256 ?? null, role: oldNode.role })) fail('COORDINATION_REUSE_INVALID', '沿用证据与原执行或节点配置不一致');
+  assertClosed(tx, execution, job);
+  return source;
+}
+function assertInitialAccounting(tx: KernelTransaction, tenantId: string, actorId: string, input: CreateCoordinationRunInput): void {
+  const proof = input.initialAccounting!;
+  const execution = tx.getProjection<Execution>('execution', proof.executionId), job = tx.getProjection<Job>('job', proof.jobId);
+  const binding = job?.payload.coordination as unknown as CoordinationBindingV2 | undefined;
+  const authority = execution && tx.getProjection<ExecutionAuthority>('authority', execution.authorityId);
+  const records = tx.getProjection<{ records: readonly { sequence: number }[] }>('agent-runtime', proof.executionId)?.records ?? [];
+  if (!input.rework || proof.revisionId !== input.rework.sourceRevisionId || !execution || !job || !authority
+    || execution.tenantId !== tenantId || job.tenantId !== tenantId || execution.workspaceId !== input.workspaceId || job.workspaceId !== input.workspaceId
+    || execution.threadId !== input.threadId || execution.initiatedBy !== actorId || execution.generation !== proof.generation
+    || authority.tenantId !== tenantId || authority.workspaceId !== input.workspaceId || authority.executionId !== execution.id
+    || execution.streamVersion !== proof.executionStreamVersion || job.streamVersion !== proof.jobStreamVersion || job.payload.executionId !== execution.id
+    || binding?.aggregateType !== input.aggregateType || binding.aggregateId !== input.aggregateId || binding.revisionId !== proof.revisionId || binding.runId
+    || (records.at(-1)?.sequence ?? 0) !== proof.runtimeLastSequence || !/^[a-f0-9]{64}$/u.test(proof.usageEvidenceDigest)
+    || !Number.isFinite(Date.parse(proof.deadlineAt)) || Date.parse(proof.deadlineAt) > Date.parse(execution.createdAt) + authority.budget.maxDurationMs
+    || Date.parse(input.deadlineAt) > Date.parse(proof.deadlineAt) || input.budgets.length !== 1
+    || input.budgets[0]!.currency !== authority.budget.currency || input.budgets[0]!.maxTokens > authority.budget.maxTokens
+    || BigInt(input.budgets[0]!.maxCostMinorUnits) > BigInt(authority.budget.maxCostMinorUnits) || proof.usage.currency !== authority.budget.currency)
+    fail('COORDINATION_INITIAL_ACCOUNTING_INVALID', '首次执行的费用、期限或目标绑定无效');
+  checkBudget({ currency: proof.usage.currency, maxTokens: proof.usage.tokens, maxCostMinorUnits: proof.usage.costMinorUnits });
+  assertClosed(tx, execution, job);
+  if (!Array.isArray(proof.counterReservations) || proof.counterReservations.length > 100
+    || new Set(proof.counterReservations.map(value => `${value.kind}:${value.id}`)).size !== proof.counterReservations.length
+    || proof.counterReservations.some(value => !/^[a-z][a-z0-9_]{0,63}$/u.test(value.kind) || !value.id?.trim() || value.id.length > 500 || !Number.isSafeInteger(value.limit) || value.limit < 0 || value.limit > 100)) fail('COORDINATION_INITIAL_ACCOUNTING_INVALID', '首次执行的累计计数无效');
 }
 function assertDependencies(tx: KernelTransaction, run: CoordinationRunV2, node: CoordinationNodeV2): void {
   if (!node.dependsOn.every(id => dependencyComplete(tx, run, id))) fail('COORDINATION_DEPENDENCY_PENDING', '节点依赖尚未完成或费用待核对');
@@ -134,10 +206,34 @@ export class KernelCoordination {
     input.budgets.forEach(checkBudget);
     const groupId = `coordination-group:${sha256({ tenantId, workspaceId: input.workspaceId, aggregateType: input.aggregateType, aggregateId: input.aggregateId })}`;
     const previous = tx.getProjection<CoordinationGroupV2>(COORDINATION_GROUP_NAMESPACE, groupId);
+    if (input.expectedGroupStreamVersion !== undefined && input.expectedGroupStreamVersion !== (previous?.streamVersion ?? 0)) throw new StreamVersionConflictError(input.expectedGroupStreamVersion, previous?.streamVersion ?? 0);
+    if (input.initialAccounting && previous) fail('COORDINATION_INITIAL_ACCOUNTING_EXISTS', '首次执行费用已经登记，不能再次导入');
+    if (input.initialAccounting) assertInitialAccounting(tx, tenantId, actorId, input);
+    if (input.rework && (!/^[a-f0-9]{64}$/u.test(input.rework.decisionDigest) || !input.rework.sourceRevisionId
+      || (!previous && !input.initialAccounting))) fail('COORDINATION_REWORK_INVALID', '返工缺少原计划和明确决定');
+    if (input.rework && previous) {
+      if (tx.getProjection<CoordinationRunV2>(COORDINATION_RUN_NAMESPACE, previous.currentRunId)?.revisionId !== input.rework.sourceRevisionId) fail('COORDINATION_REWORK_STALE', '只能返工当前计划');
+      for (const attempt of attempts(tx, groupId)) {
+        const execution = tx.getProjection<Execution>('execution', attempt.executionId), job = tx.getProjection<Job>('job', attempt.jobId);
+        if (!execution || !job || attempt.reservation.status !== 'settled' || execution.generation !== attempt.generation) fail('COORDINATION_RECONCILIATION_REQUIRED', '旧执行尚有未结费用或版本需要核对');
+        assertClosed(tx, execution, job);
+      }
+    }
     const policy = tx.getProjection<{ limits: Partial<CoordinationLimitsV2> }>(COORDINATION_POLICY_NAMESPACE, input.workspaceId);
     const bound = limits(input.limits, previous?.limits, policy?.limits);
+    const reworkRounds = (previous?.reworkRounds ?? 0) + (previous || input.rework ? 1 : 0);
+    if (reworkRounds > (bound.maxReworkRounds ?? 2)) fail('COORDINATION_REWORK_LIMIT', '累计返工已达到两轮或工作区更严格限制');
     if (!input.nodes.length || input.nodes.length > bound.maxNodes || new Set(input.nodes.map(n => n.id)).size !== input.nodes.length) fail('COORDINATION_NODES_INVALID', '协调节点缺失、重复或超过限额');
-    const nodeIds = [...new Set([...(previous?.nodeIds ?? []), ...input.nodes.map(n => n.id)])];
+    const reuses = input.reuses ?? [];
+    if (reuses.length && !input.rework || reuses.length > input.nodes.length || new Set(reuses.map(proof => proof.nodeId)).size !== reuses.length) fail('COORDINATION_REUSE_INVALID', '沿用范围重复或缺少返工记录');
+    for (const proof of reuses) assertReuse(tx, { tenantId, workspaceId: input.workspaceId, groupId, nodes: input.nodes }, proof);
+    const priorRuns = tx.listProjections<CoordinationRunV2>(COORDINATION_RUN_NAMESPACE).filter(run => run.groupId === groupId && run.tenantId === tenantId && run.workspaceId === input.workspaceId);
+    const initialAccounting = previous?.initialAccounting ?? input.initialAccounting;
+    if (priorRuns.some(run => run.revisionId === input.revisionId) || initialAccounting?.revisionId === input.revisionId) fail('COORDINATION_REVISION_EXISTS', '同一修订不能通过新运行标识重复派发');
+    const priorNodeIds = [...(initialAccounting ? [sha256({ originalExecutionId: initialAccounting.executionId, revisionId: initialAccounting.revisionId })] : []),
+      ...priorRuns.flatMap(run => run.nodes.filter(node => !tx.getProjection(COORDINATION_REUSE_NAMESPACE, `${run.id}:${node.id}`)).map(node => sha256({ revisionId: run.revisionId, nodeId: node.id })))];
+    const nodeIds = [...new Set([...priorNodeIds, ...input.nodes.filter(node => !reuses.some(proof => proof.nodeId === node.id)).map(node => sha256({ revisionId: input.revisionId, nodeId: node.id }))])];
+    if (previous && priorNodeIds.length < previous.nodeIds.length) fail('COORDINATION_HISTORY_INVALID', '累计节点记录不完整，不能重新计算额度');
     if (nodeIds.length > bound.maxNodes) fail('COORDINATION_NODE_LIMIT', '累计协调节点超过限额');
     for (const node of input.nodes) {
       assertText(node.id); checkBudget(node.budget);
@@ -157,10 +253,17 @@ export class KernelCoordination {
       if (old.status !== 'superseded') this.command(tx, tenantId, actorId, old.id, old.streamVersion, 'superseded');
     }
     const group: CoordinationGroupV2 = { id: groupId, tenantId, workspaceId: input.workspaceId, aggregateType: input.aggregateType, aggregateId: input.aggregateId,
-      currentRunId: input.id, budgets: copy(input.budgets), limits: bound, nodeIds, deadlineAt: input.deadlineAt, streamVersion: (previous?.streamVersion ?? 0) + 1, createdAt: previous?.createdAt ?? now, updatedAt: now };
+      currentRunId: input.id, budgets: copy(input.budgets), limits: bound, nodeIds, deadlineAt: input.deadlineAt, reworkRounds,
+      ...(previous?.initialAccounting || input.initialAccounting ? { initialAccounting: copy(previous?.initialAccounting ?? input.initialAccounting!) } : {}),
+      ...(previous?.counterReservations ? { counterReservations: previous.counterReservations } : {}),
+      streamVersion: (previous?.streamVersion ?? 0) + 1, createdAt: previous?.createdAt ?? now, updatedAt: now };
     write(tx, COORDINATION_GROUP_NAMESPACE, group, actorId, 'coordination.group_updated');
-    return write(tx, COORDINATION_RUN_NAMESPACE, { ...copy(input), groupId, tenantId, limits: bound, initiatedBy: actorId, membershipStreamVersion: membership.streamVersion,
-      status: 'active', streamVersion: 1, createdAt: now, updatedAt: now }, actorId, 'coordination.run_created');
+    const { initialAccounting: _accounting, rework: _rework, reuses: _reuses, expectedGroupStreamVersion: _version, ...runInput } = input;
+    const run = write(tx, COORDINATION_RUN_NAMESPACE, { ...copy(runInput), groupId, tenantId, limits: bound, initiatedBy: actorId, membershipStreamVersion: membership.streamVersion,
+      status: 'active' as const, streamVersion: 1, createdAt: now, updatedAt: now }, actorId, 'coordination.run_created');
+    for (const proof of reuses) write(tx, COORDINATION_REUSE_NAMESPACE, { ...proof, id: `${run.id}:${proof.nodeId}`, tenantId, workspaceId: run.workspaceId,
+      groupId, runId: run.id, revisionId: run.revisionId, streamVersion: 1, createdAt: now, updatedAt: now }, actorId, 'coordination.node_reused');
+    return run;
   }
 
   admit(tx: KernelTransaction, tenantId: string, actorId: string, input: AdmitCoordinatedTurnInput): CoordinationAdmission {
@@ -169,6 +272,7 @@ export class KernelCoordination {
     if (Date.parse(now) >= Date.parse(group.deadlineAt)) fail('COORDINATION_EXPIRED', '协调期限已到期');
     const node = run.nodes.find(n => n.id === input.nodeId);
     if (!node || (node.kind && node.kind !== 'agent')) fail('COORDINATION_NODE_INVALID', '该节点需要人工决定或控制节点完成操作');
+    if (tx.getProjection(COORDINATION_REUSE_NAMESPACE, `${run.id}:${node.id}`)) fail('COORDINATION_NODE_REUSED', '已明确沿用的节点不能再次派发');
     const records = attempts(tx, group.id);
     if (records.some(a => { const e = tx.getProjection<Execution>('execution', a.executionId); return !e || e.status === 'needs_reconciliation' || hasUnsettledToolCalls(tx, a.executionId); })) fail('COORDINATION_RECONCILIATION_REQUIRED', '原执行结果未知，须先核对');
     const prior = records.filter(a => a.runId === run.id && a.nodeId === node.id).sort((a, b) => b.ordinal - a.ordinal)[0];
@@ -177,11 +281,12 @@ export class KernelCoordination {
     assertDependencies(tx, run, node);
     const policy = tx.getProjection<{ limits: Partial<CoordinationLimitsV2> }>(COORDINATION_POLICY_NAMESPACE, run.workspaceId);
     const bound = limits(run.limits, group.limits, policy?.limits);
-    if (records.length >= bound.maxAttempts) fail('COORDINATION_ATTEMPT_LIMIT', '累计节点尝试超过限额');
+    if (records.length + (group.initialAccounting ? 1 : 0) >= bound.maxAttempts) fail('COORDINATION_ATTEMPT_LIMIT', '累计节点尝试超过限额');
     const active = records.filter(a => { const e = tx.getProjection<Execution>('execution', a.executionId); return e && !['completed', 'failed', 'cancelled'].includes(e.status); });
     if (active.length >= bound.maxParallel) fail('COORDINATION_PARALLEL_LIMIT', '并行节点达到限额');
     const cap = group.budgets.find(b => b.currency === node.budget.currency)!;
-    let tokens = 0n, cost = 0n;
+    let tokens = group.initialAccounting?.usage.currency === cap.currency ? BigInt(group.initialAccounting.usage.tokens) : 0n;
+    let cost = group.initialAccounting?.usage.currency === cap.currency ? BigInt(group.initialAccounting.usage.costMinorUnits) : 0n;
     for (const a of records.filter(a => a.reservation.budget.currency === cap.currency)) {
       tokens += BigInt(a.reservation.usage?.tokens ?? a.reservation.budget.maxTokens);
       cost += BigInt(a.reservation.usage?.costMinorUnits ?? a.reservation.budget.maxCostMinorUnits);
@@ -260,6 +365,36 @@ export function assertCurrentCoordinationAuthorization(tx: KernelTransaction, ex
     || authority.budget.maxCostMinorUnits !== node.budget.maxCostMinorUnits || authority.budget.maxSubagents !== 0 || authority.budget.maxSubagentDepth !== 0
     || authority.budget.maxDurationMs !== Date.parse(run.deadlineAt) - Date.parse(attempt.createdAt)) fail('COORDINATION_AUTHORITY_CHANGED', '节点配置、预算或权限与固定计划不一致');
   assertCurrentExecutionAuthorization(tx, execution);
+}
+
+function counterGroup(tx: KernelTransaction, execution: Execution): CoordinationGroupV2 | undefined {
+  const attempt = tx.listProjections<CoordinationAttemptV2>(COORDINATION_ATTEMPT_NAMESPACE).find(value => value.executionId === execution.id);
+  if (!attempt) return undefined;
+  const group = tx.getProjection<CoordinationGroupV2>(COORDINATION_GROUP_NAMESPACE, attempt.groupId);
+  if (!group || group.tenantId !== execution.tenantId || group.workspaceId !== execution.workspaceId) fail('COORDINATION_BINDING_INVALID', '累计计数缺少工作区绑定');
+  return group;
+}
+export function coordinationCounterRemaining(tx: KernelTransaction, execution: Execution, kind: string, limit: number): number | undefined {
+  if (!/^[a-z][a-z0-9_]{0,63}$/u.test(kind) || !Number.isSafeInteger(limit) || limit < 0 || limit > 100) fail('COORDINATION_COUNTER_INVALID', '累计计数限制无效');
+  const group = counterGroup(tx, execution);
+  if (!group) return undefined;
+  const records = [...(group.initialAccounting?.counterReservations ?? []), ...(group.counterReservations ?? [])].filter(value => value.kind === kind);
+  return Math.max(0, Math.min(limit, ...records.map(value => value.limit)) - records.length);
+}
+/** Called from the fenced runtime commit hook, so the local and aggregate reservations commit together. */
+export function reserveCoordinationCounterInTransaction(tx: KernelTransaction, execution: Execution,
+  input: { readonly kind: string; readonly id: string; readonly limit: number }, occurredAt: string): boolean {
+  const remaining = coordinationCounterRemaining(tx, execution, input.kind, input.limit), group = counterGroup(tx, execution);
+  if (!group || remaining === undefined) return false;
+  assertCurrentCoordinationAuthorization(tx, execution, occurredAt);
+  assertText(input.id);
+  const prior = group.counterReservations?.find(value => value.executionId === execution.id && value.kind === input.kind && value.id === input.id);
+  if (prior) { if (prior.limit !== input.limit) fail('COORDINATION_COUNTER_CHANGED', '计数预留不能变更限制'); return true; }
+  if (remaining <= 0) fail('COORDINATION_COUNTER_EXCEEDED', '累计操作额度已经耗尽');
+  write(tx, COORDINATION_GROUP_NAMESPACE, { ...group,
+    counterReservations: [...(group.counterReservations ?? []), { ...input, executionId: execution.id }],
+    streamVersion: group.streamVersion + 1, updatedAt: occurredAt }, execution.initiatedBy, 'coordination.counter_reserved');
+  return true;
 }
 
 export function settleCoordinatedTurnInTransaction(tx: KernelTransaction, tenantId: string, input: KernelJobSettlement): KernelJobSettlementReceipt {

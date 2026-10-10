@@ -55,9 +55,11 @@ test("运行上下文加密后原子写入事件与投影，并能在重建投�
   assert.deepEqual(await createProtectedRuntimeStore(options).readExecution("execution"), records);
   const budget = { maxTokens: 500, maxCostMinorUnits: '10', currency: 'CNY' };
   await recovered.append({ executionId: 'execution', type: 'subagent/reserved', payload: { authority: { budget, dataScopes: [{ namespace: 'private', resourceId: 'protected-customer' }] }, task: '受保护子任务' } });
+  await recovered.append({ executionId: 'execution', type: 'budget/reserved', payload: { kind: 'coding_repair', id: 'repair-1', ordinal: 1, limit: 3, privateDetail: '受保护修复说明' } });
   const accounting = await recovered.readSettlementRecords!('execution');
   assert.equal(reduceModelBudget(accounting, { maxTokens: 1000, maxCostMinorUnits: '100', currency: 'CNY' }).allocatedTokens, 500);
   assert.equal(JSON.stringify(accounting).includes('protected-customer'), false);
   assert.equal(JSON.stringify(accounting).includes('受保护'), false);
+  assert.deepEqual(accounting.at(-1)!.payload, { kind: 'coding_repair', id: 'repair-1', limit: 3 });
 
 });

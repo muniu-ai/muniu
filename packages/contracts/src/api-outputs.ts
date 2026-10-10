@@ -276,6 +276,13 @@ export interface ApiOutputsV2 {
   readonly proposeGoalPlan: GoalResponseV2;
   readonly commandGoal: GoalResponseV2;
   readonly acceptGoalDelivery: GoalResponseV2;
+  readonly decideGoalDelivery: GoalResponseV2;
+  readonly previewGoalRework: import("./goal-delivery-view.js").GoalReworkPreviewV2;
+  readonly reworkGoal: GoalResponseV2;
+  readonly listOpcBusinessCandidates: import("./opc-business-candidates.js").OpcBusinessCandidateListV2;
+  readonly createOpcBusinessCandidate: import("./opc-business-candidates.js").OpcBusinessCandidateDetailV2;
+  readonly getOpcBusinessCandidate: import("./opc-business-candidates.js").OpcBusinessCandidateDetailV2;
+  readonly decideOpcBusinessCandidate: import("./opc-business-candidates.js").OpcBusinessCandidateDetailV2;
   readonly listTeamTemplates: readonly TeamTemplateSummaryV1[];
   readonly getGoalNodes: GoalTeamProgressV2;
   readonly createBusinessAction: BusinessActionV1;

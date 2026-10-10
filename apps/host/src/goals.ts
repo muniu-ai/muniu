@@ -350,6 +350,7 @@ function observeState(tx: KernelTransaction, options: GoalServiceOptions, detail
   if (terminal && next.reservation?.status !== "settled") return { ...next, status: "needs_reconciliation", reasonCode: "GOAL_USAGE_UNKNOWN" };
   if (["failed", "cancelled"].includes(execution.status)) return { ...next, status: "failed", reasonCode: "GOAL_EXECUTION_FAILED" };
   if (execution.status === "completed") {
+    if (observed.outputError === "GOAL_OUTPUT_INVALID") return { ...next, status: "failed", reasonCode: observed.outputError };
     const outputs = observed.outputs ?? [];
     if (!checkOutputs(tx, options, goal, outputs)) return { ...next, status: "failed", reasonCode: "GOAL_DELIVERY_INCOMPLETE" };
     const body = { goalId: goal.id, planRevisionId: plan.id, criteriaVersion: goal.criteriaVersion, items: outputs };

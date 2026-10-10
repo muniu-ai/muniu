@@ -148,7 +148,7 @@ test("未知操作重试遇到撤权仍保留原请求，不能改为新操作",
 test("切换目标后旧节点响应不能恢复其他团队的可用操作", async () => {
   const current = await page("goals&race=1");
   try {
-    await current.getByText("正在核对团队进展与可用操作…", { exact: true }).waitFor();
+    await current.getByText("正在核对步骤进展与可用操作…", { exact: true }).waitFor();
     await current.getByRole("button", { name: "切换团队目标", exact: true }).click();
     await current.getByRole("button", { name: "恢复", exact: true }).waitFor();
     await current.evaluate(() => window.releaseOldProgress());
@@ -161,7 +161,7 @@ test("切换目标后旧节点响应不能恢复其他团队的可用操作", as
 test("撤权事件使在途团队节点响应失效", async () => {
   const current = await page("goals&race=1");
   try {
-    await current.getByText("正在核对团队进展与可用操作…", { exact: true }).waitFor();
+    await current.getByText("正在核对步骤进展与可用操作…", { exact: true }).waitFor();
     await current.evaluate(() => window.revoke());
     await current.getByRole("alert").filter({ hasText: "资料已撤权" }).waitFor();
     await current.evaluate(() => window.releaseOldProgress());
