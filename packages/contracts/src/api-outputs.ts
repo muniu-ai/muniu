@@ -93,6 +93,7 @@ export interface MemorySummaryV2 {
 }
 export type MemoryViewV2 = Omit<MemoryRecord, "protectedPayloadRef"> & { readonly value: JsonObject };
 export interface ModelConnectionV2 {
+  readonly billingCurrency?: string;
   readonly modelOptions: readonly { readonly modelName: string; readonly selectable: boolean; readonly reason?: string }[];
   readonly defaultForNewExecutions?: boolean;
   readonly id: string;

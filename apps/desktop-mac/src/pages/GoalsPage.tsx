@@ -2,14 +2,25 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import type { GoalDetailV2, GoalStatusV2, GoalV2, ModelConnectionV2, Thread } from "@mn/contracts";
 import { AgentOsApiError, type AgentOsClient } from "../api";
+import { ResultText } from "../components/ResultText";
+import { TaskComposer } from "../components/TaskComposer";
+import { ThreadAgentPanel } from "../components/ThreadAgentPanel";
+import type { CodingRepositorySummary } from "../types";
 import { EmptyState, ErrorState, Loading } from "../components/Status";
 
 const labels: Record<GoalStatusV2, string> = { draft: "草稿", awaiting_authorization: "待确认计划", running: "执行中", waiting_approval: "等待审批",
   needs_reconciliation: "待核对", failed: "未完成", awaiting_acceptance: "待验收", accepted: "已验收", cancelled: "已取消" };
 
-export function GoalsPage({ api, workspaceId, onOpenThread }: {
+export function GoalsPage({ api, workspaceId, onOpenThread, pluginIds, repositories, repositoryId, onRepository, onRegisterRepository, onSettings, newTaskRequest, active, onTaskCreated }: {
   readonly api: AgentOsClient; readonly workspaceId: string; readonly onOpenThread: (thread: Thread) => void;
+  readonly active: boolean; readonly onTaskCreated: () => void;
+  readonly pluginIds: readonly string[]; readonly repositories: readonly CodingRepositorySummary[]; readonly repositoryId?: string;
+  readonly onRepository: (id: string) => void; readonly onRegisterRepository: () => void; readonly onSettings: () => void; readonly newTaskRequest: number;
 }) {
+  const pageRef = useRef<HTMLDivElement>(null);
+  const [existing, setExisting] = useState(false);
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState("all");
   const [goals, setGoals] = useState<readonly GoalV2[]>([]);
   const [threads, setThreads] = useState<readonly Thread[]>([]);
   const [models, setModels] = useState<readonly ModelConnectionV2[]>([]);
@@ -25,6 +36,7 @@ export function GoalsPage({ api, workspaceId, onOpenThread }: {
   const [tokens, setTokens] = useState("100000");
   const [cost, setCost] = useState("5000");
   const [duration, setDuration] = useState("60");
+  useEffect(() => { setDetail(undefined); setExisting(false); setError(undefined); }, [newTaskRequest]);
   const [reviewed, setReviewed] = useState<ReadonlySet<string>>(new Set());
   const readEpochs = useRef(new Map<string, number>());
   const listRequestSequence = useRef(0);
@@ -48,13 +60,15 @@ export function GoalsPage({ api, workspaceId, onOpenThread }: {
   }, [api, workspaceId]);
   const refreshList = useCallback(async () => {
     const [, nextThreads, nextModels] = await Promise.all([refreshGoals(), api.threads(workspaceId), api.modelConnections()]);
-    setThreads(nextThreads.filter(thread => ["opc", "coding"].includes(thread.pluginId) && thread.resourceRef));
+    setThreads(nextThreads.filter(thread => ["opc", "coding"].includes(thread.pluginId)));
     setModels(nextModels.filter(model => model.status === "ready"));
   }, [api, workspaceId, refreshGoals]);
   useEffect(() => { let active = true;
     void refreshList().catch(caught => { if (active) setError(message(caught)); }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [refreshList]);
+  useEffect(() => { pageRef.current?.closest(".page-scroll")?.scrollTo({ top: 0 }); }, [detail?.goal.id]);
+  useEffect(() => { setModelId(detail?.plan?.modelBindingId ?? ""); }, [detail?.goal.id, detail?.plan?.id]);
   useEffect(() => { setReviewed(new Set()); }, [detail?.goal.id, detail?.deliverySet?.digest]);
   useEffect(() => {
     const goalId = detail?.goal.id;
@@ -80,7 +94,7 @@ export function GoalsPage({ api, workspaceId, onOpenThread }: {
     return () => { active = false; stop(); if (timer) clearTimeout(timer); };
   }, [api, workspaceId, detail?.goal.id, refreshGoals]);
   const selectedThreadId = threads.find(thread => thread.id === threadId)?.id ?? threads[0]?.id ?? "";
-  const selectedModelId = models.find(model => model.id === modelId)?.id ?? models.find(model => model.defaultForNewExecutions)?.id ?? models[0]?.id ?? "";
+  const selectedModelId = models.find(model => model.id === modelId)?.id ?? models.find(model => model.id === detail?.plan?.modelBindingId)?.id ?? models.find(model => model.defaultForNewExecutions)?.id ?? models[0]?.id ?? "";
   async function perform(work: () => Promise<GoalDetailV2>, goalId = detail?.goal.id) {
     if (busy) return;
     const epoch = goalId ? readEpochs.current.get(goalId) ?? 0 : undefined;
@@ -115,17 +129,19 @@ export function GoalsPage({ api, workspaceId, onOpenThread }: {
       && spec.criteria.every(criterion => reviewed.has(JSON.stringify([spec.key, criterion.id])));
   }));
   const thread = threads.find(item => item.id === detail?.goal.threadId);
-  return <div className="page-stack goals-page">
-    <header className="goal-heading"><div><h1>目标</h1><p>确定交付物和验收标准，审阅计划后开始执行。</p></div>
-      <button className="secondary-button" disabled={busy} onClick={() => { setDetail(undefined); setError(undefined); }}>新建目标</button></header>
+  return <div ref={pageRef} className="page-stack goals-page">
+    <header className="goal-heading"><div><h1>任务</h1><p>经营与研发在这里委派、跟进和验收。</p></div>
+      <button className="secondary-button" disabled={busy} onClick={() => { setDetail(undefined); setExisting(false); setError(undefined); }}>新建任务</button></header>
     {error && <ErrorState detail={error} onRetry={() => detail ? void perform(() => api.goal(workspaceId, detail.goal.id)) : void refreshList().then(() => setError(undefined)).catch(caught => setError(message(caught)))} />}
     {loading ? <Loading label="正在读取目标…" /> : <div className="goal-layout">
-      <section className="panel goal-list" aria-label="目标列表"><h2>工作区目标</h2>
-        {goals.length === 0 ? <EmptyState title="还没有目标" detail="选择已有 OPC 或 Coding 任务，并填写验收标准。" /> : goals.map(goal =>
+      <section className="panel goal-list" aria-label="目标列表"><h2>工作区任务</h2><input aria-label="搜索任务" placeholder="搜索任务" value={query} onChange={event => setQuery(event.target.value)} /><select aria-label="筛选任务状态" value={filter} onChange={event => setFilter(event.target.value)}><option value="all">全部状态</option><option value="active">进行中</option><option value="awaiting_acceptance">待验收</option><option value="accepted">已验收</option></select>
+        {goals.length === 0 ? <EmptyState title="还没有任务" detail="描述想要的结果，或从模板开始。" /> : goals.filter(goal => goal.objective.toLowerCase().includes(query.toLowerCase()) && (filter === "all" || (filter === "active" ? ["draft", "awaiting_authorization", "running", "waiting_approval"].includes(goal.status) : goal.status === filter))).map(goal =>
           <button key={goal.id} className={`goal-list-item ${detail?.goal.id === goal.id ? "selected" : ""}`} disabled={busy} onClick={() => void perform(() => api.goal(workspaceId, goal.id), goal.id)}>
-            <strong>{goal.objective}</strong><small>{goal.id === detail?.goal.id ? "当前目标" : labels[goal.status]}</small></button>)}
+            <strong>{goal.objective.split("\n")[0]}</strong><small>{goal.id === detail?.goal.id ? "当前目标" : labels[goal.status]}</small></button>)}
       </section>
-      {!detail ? <section className="panel"><form className="form-stack" onSubmit={event => void create(event)}><h2>创建目标</h2>
+      <section className="panel task-compose-panel" hidden={Boolean(detail)}><div hidden={existing}><TaskComposer visible={active && !detail && !existing} api={api} workspaceId={workspaceId} pluginIds={pluginIds} repositories={repositories} repositoryId={repositoryId} onRepository={onRepository} onRegisterRepository={onRegisterRepository} onSettings={onSettings} onCreated={next => { setDetail(next); setError(undefined); void refreshList(); onTaskCreated(); }} /></div>
+        <button className="quiet-button existing-task-toggle" onClick={() => setExisting(value => !value)}>{existing ? "返回新任务" : "关联已有任务"}</button>
+        {existing && <form className="form-stack" onSubmit={event => void create(event)}><h2>创建目标</h2>
         <div className="field"><label htmlFor="goal-objective">预期结果</label><textarea id="goal-objective" rows={3} value={objective} required maxLength={16000} disabled={busy} onChange={event => setObjective(event.target.value)} /></div>
         <div className="field"><label htmlFor="goal-thread">关联任务</label><select id="goal-thread" value={selectedThreadId} disabled={busy || !threads.length} onChange={event => setThreadId(event.target.value)}>
           {!threads.length && <option value="">先在 OPC 或 Coding 中创建任务</option>}{threads.map(item => <option key={item.id} value={item.id}>{item.pluginId === "coding" ? "Coding" : "OPC"} · {item.subject}</option>)}</select></div>
@@ -136,19 +152,23 @@ export function GoalsPage({ api, workspaceId, onOpenThread }: {
           <div className="field"><label htmlFor="goal-tokens">Token 上限</label><input id="goal-tokens" type="number" min="1" step="1" value={tokens} required disabled={busy} onChange={event => setTokens(event.target.value)} /></div>
           <div className="field"><label htmlFor="goal-duration">时限（分钟）</label><input id="goal-duration" type="number" min="1" step="1" value={duration} required disabled={busy} onChange={event => setDuration(event.target.value)} /></div>
         </fieldset><button className="primary-button" disabled={busy || !selectedThreadId || !objective.trim() || !criteria.trim()}>{busy ? "正在保存…" : "创建目标"}</button>
-      </form></section> : <section className="panel goal-detail" aria-label="目标详情">
-        <div className="goal-heading"><h2>{detail.goal.objective}</h2><span className="pill" role="status">{labels[detail.goal.status]}</span></div>
+      </form>}</section>{detail && <section className="panel goal-detail" aria-label="目标详情">
+        <div className="goal-heading"><h2>{detail.goal.objective.split("\n")[0]}</h2><span className="pill" role="status">{labels[detail.goal.status]}</span></div>
+        <ol className="task-lifecycle" aria-label="任务阶段">{["委派说明", "审阅计划", "执行与调整", "成果验收"].map((label, index) => <li key={label} className={(detail.goal.status === "draft" ? 0 : detail.goal.status === "awaiting_authorization" ? 1 : ["awaiting_acceptance", "accepted"].includes(detail.goal.status) ? 3 : 2) === index ? "current" : ""}>{index + 1}. {label}</li>)}</ol>
+        <details className="task-brief"><summary>查看完整任务与资料</summary><pre className="goal-preview">{detail.goal.objective}</pre></details>
         {detail.goal.reasonCode && <p className="inline-error">{reason(detail.goal.reasonCode)}</p>}
-        <p>额度：{detail.goal.budget.maxCostMinorUnits} 分 {detail.goal.budget.currency} · {detail.goal.budget.maxTokens} tokens · {detail.goal.budget.maxDurationMs / 60_000} 分钟</p>
+        <p>额度：{(Number(detail.goal.budget.maxCostMinorUnits) / 100).toFixed(2)} {detail.goal.budget.currency} · {detail.goal.budget.maxTokens} tokens · {detail.goal.budget.maxDurationMs / 60_000} 分钟</p>
         {detail.goal.reservation && <p>用量：{detail.goal.reservation.status === "settled" ? `${detail.goal.reservation.actual?.costMinorUnits ?? "0"} 分 ${detail.goal.budget.currency}，${detail.goal.reservation.actual?.tokens ?? 0} tokens` : detail.goal.reservation.status === "unknown" ? "待核对，额度继续保留" : "已预留"}</p>}
         <h3>验收标准</h3>{detail.goal.deliverables.map(spec => <div key={spec.key}><strong>{spec.title}{spec.required ? "（必需）" : "（可选）"}</strong><ul>{spec.criteria.map(criterion => <li key={criterion.id}>{criterion.description}</li>)}</ul></div>)}
         {!detail.goal.executionRef && <div className="field"><label htmlFor="goal-model">执行模型连接</label><select id="goal-model" value={selectedModelId} disabled={busy || !models.length} onChange={event => setModelId(event.target.value)}>
-          {!models.length && <option value="">先在集成中连接模型</option>}{models.map(model => <option key={model.id} value={model.id}>{model.displayName} · {model.defaultModel}</option>)}</select></div>}
-        {detail.plan && <div className="goal-plan"><h3>单执行者计划</h3><p>{thread?.subject ?? "关联任务"} · {detail.plan.pluginId === "coding" ? "Coding" : "OPC"} · {detail.plan.model}</p><p>执行任务，检查成果，再逐条复核并接收。</p>
+          {!models.length && <option value="">先在集成中连接模型</option>}{models.map(model => <option key={model.id} value={model.id} disabled={model.billingCurrency !== detail.goal.budget.currency}>{model.displayName} · {model.defaultModel}{model.billingCurrency !== detail.goal.budget.currency ? "（币种不符）" : ""}</option>)}</select></div>}
+        {detail.plan && !detail.goal.executionRef && selectedModelId !== detail.plan.modelBindingId && <p className="inline-error">模型已变更，请重新生成计划后确认。</p>}
+        {detail.plan && <div className="goal-plan"><h3>执行计划</h3><p>{thread?.subject ?? "关联任务"} · {detail.plan.pluginId === "coding" ? "研发" : detail.plan.agentDefinitionId === "opc.business-assistant" ? "经营助手" : "机会验证"} · {detail.plan.model}</p><p>由木牛内置 Agent 执行；按已确认的目标交付成果，再逐项验收。经营分析不会自动修改账目；研发变更需要经过检查与审批。</p>
           <details><summary>计划权限与版本</summary><dl><dt>计划版本</dt><dd>{detail.plan.revision}</dd><dt>工具</dt><dd>{detail.plan.toolIds.join("、") || "无"}</dd><dt>数据范围</dt><dd>{detail.plan.dataScopes.map(scope => `${scope.namespace}: ${scope.resourceId}`).join("、")}</dd><dt>计划摘要</dt><dd>{detail.plan.digest}</dd></dl></details></div>}
+        {detail.goal.executionRef && thread && <ThreadAgentPanel key={detail.goal.id} api={api} workspaceId={workspaceId} pluginId={thread.pluginId as "opc" | "coding"} threadId={thread.id} resourceId={thread.resourceRef?.resourceId} goalExecution={{ executionId: detail.goal.executionRef.executionId, canControl: ["running", "waiting_approval"].includes(detail.goal.status) }} />}
         {detail.deliverySet && <section aria-label="成果验收"><h3>成果与检查</h3><p>先查看任务成果，再确认各项内容标准。程序检查不代替内容判断。</p>
           {detail.deliverySet.items.map(output => { const spec = detail.goal.deliverables.find(item => item.key === output.key); return <article className="goal-output" key={output.key}><strong>{spec?.title ?? output.key}</strong>
-            <pre className="goal-preview">{output.preview}</pre>
+            <ResultText text={output.preview} /><a className="quiet-button" download="木牛任务成果.md" href={`data:text/markdown;charset=utf-8,${encodeURIComponent(output.preview)}`}>下载成果</a>
             <ul>{output.checks.map(check => <li key={check.checkId}>{check.status === "passed" ? "通过" : "未通过"} · {checkLabel(check.checkId)}</li>)}</ul>
             {spec?.criteria.map(criterion => { const key = JSON.stringify([output.key, criterion.id]); return <label className="goal-criterion" key={criterion.id}>
               <input type="checkbox" disabled={busy || detail.goal.status !== "awaiting_acceptance"} checked={detail.goal.status === "accepted" || reviewed.has(key)} onChange={event => {
@@ -159,11 +179,11 @@ export function GoalsPage({ api, workspaceId, onOpenThread }: {
           {detail.goal.status === "awaiting_acceptance" && <button className="primary-button" disabled={busy || !acceptanceReady} onClick={() => void perform(() => api.acceptGoal(detail,
             detail.deliverySet!.items.map(output => ({ key: output.key, digest: output.digest, reviewedCriterionIds: detail.goal.deliverables.find(spec => spec.key === output.key)!.criteria.filter(criterion => reviewed.has(JSON.stringify([output.key, criterion.id]))).map(criterion => criterion.id) }))))}>接收成果</button>}
         </section>}
-        <div className="goal-actions">{thread && <button className="secondary-button" onClick={() => onOpenThread(thread)}>查看任务</button>}
+        <div className="goal-actions">{thread?.resourceRef && <button className="secondary-button" onClick={() => onOpenThread(thread)}>查看业务对象</button>}
           {["draft", "awaiting_authorization"].includes(detail.goal.status) && <button className="secondary-button" disabled={busy || !selectedModelId} onClick={() => void perform(() => api.planGoal(detail, selectedModelId))}>生成计划</button>}
-          {detail.goal.status === "awaiting_authorization" && detail.plan && <button className="primary-button" disabled={busy} onClick={() => void perform(() => api.commandGoal(detail, "start"))}>确认计划并启动</button>}
+          {detail.goal.status === "awaiting_authorization" && detail.plan && <button className="primary-button" disabled={busy || selectedModelId !== detail.plan.modelBindingId} onClick={() => void perform(() => api.commandGoal(detail, "start"))}>确认计划并启动</button>}
           {detail.goal.executionRef && <button className="secondary-button" disabled={busy} onClick={() => void perform(() => api.commandGoal(detail, "refresh"))}>更新执行状态</button>}
-          {!["accepted", "cancelled"].includes(detail.goal.status) && <button className="secondary-button" disabled={busy} onClick={() => void perform(() => api.commandGoal(detail, "cancel"))}>取消目标</button>}
+          {!["accepted", "cancelled"].includes(detail.goal.status) && <button className="secondary-button" disabled={busy} onClick={() => void perform(() => api.commandGoal(detail, "cancel"))}>取消任务</button>}
         </div>
       </section>}
     </div>}

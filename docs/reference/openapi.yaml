@@ -7217,6 +7217,8 @@ components:
         - status
         - streamVersion
       properties:
+        billingCurrency:
+          type: string
         modelOptions:
           type: array
           items:

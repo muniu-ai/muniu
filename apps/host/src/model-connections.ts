@@ -4,7 +4,7 @@ import { appendKernelEvent, findModelPrice, KernelError, StreamVersionConflictEr
 
 export function publicModelConnection(connection: ModelConnection, preferredId?: string): ModelConnectionV2 {
   const { secretRef: _secretRef, defaultForNewExecutions: _previousDefault, ...value } = connection;
-  return { ...value, defaultForNewExecutions: connection.id === preferredId,
+  return { ...value, billingCurrency: findModelPrice(connection.presetId, connection.defaultModel)?.rates.currency, defaultForNewExecutions: connection.id === preferredId,
     modelOptions: connection.discoveredModels.map(modelName => ({ modelName,
     selectable: Boolean(findModelPrice(connection.presetId, modelName)),
     ...(!findModelPrice(connection.presetId, modelName) ? { reason: "尚未配置此模型的计费策略，暂不能用于任务" } : {}),

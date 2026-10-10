@@ -35,11 +35,11 @@ export class AgentOsClient {
   }
   goals(workspaceId: string) { return this.request(apiPath("listGoals", { workspaceId })); }
   goal(workspaceId: string, goalId: string) { return this.request(apiPath("getGoal", { goalId }, { workspaceId })); }
-  createGoal(workspaceId: string, input: { threadId: string; objective: string; resourceRefs: readonly GoalResourceRefV2[]; budget: GoalBudgetV2; deliverables: readonly GoalDeliverableSpecV2[] }) {
-    return this.request(apiPath("createGoal", { workspaceId }), { method: "POST", body: JSON.stringify(input) });
+  createGoal(workspaceId: string, input: { threadId: string; objective: string; resourceRefs: readonly GoalResourceRefV2[]; budget: GoalBudgetV2; deliverables: readonly GoalDeliverableSpecV2[] }, requestKey?: string) {
+    return this.request(apiPath("createGoal", { workspaceId }), { method: "POST", ...(requestKey ? { headers: { "Idempotency-Key": requestKey } } : {}), body: JSON.stringify(input) });
   }
-  planGoal(detail: GoalDetailV2, modelBindingId: string) {
-    return this.request(apiPath("proposeGoalPlan", { goalId: detail.goal.id }), { method: "POST", body: JSON.stringify({
+  planGoal(detail: GoalDetailV2, modelBindingId: string, requestKey?: string) {
+    return this.request(apiPath("proposeGoalPlan", { goalId: detail.goal.id }), { method: "POST", ...(requestKey ? { headers: { "Idempotency-Key": requestKey } } : {}), body: JSON.stringify({
       workspaceId: detail.goal.workspaceId, expectedStreamVersion: detail.goal.streamVersion, modelBindingId,
     }) });
   }
@@ -155,6 +155,10 @@ export class AgentOsClient {
     return this.request(
       apiPath("getWorkspaceAgentCatalog", { workspaceId: workspaceId }),
     );
+  }
+
+  createBusinessThread(workspaceId: string, subject: string, requestKey: string) {
+    return this.request(apiPath("createThread", { workspaceId }), { method: "POST", headers: { "Idempotency-Key": requestKey }, body: JSON.stringify({ pluginId: "opc", subject }) });
   }
 
   threads(workspaceId: string) {
@@ -389,9 +393,9 @@ export class AgentOsClient {
     });
   }
 
-  capture(workspaceId: string, pluginId: ProductPluginId, input: string, repositoryId?: string) {
+  capture(workspaceId: string, pluginId: ProductPluginId, input: string, repositoryId?: string, requestKey?: string) {
     return this.request(apiPath(pluginId === "opc" ? "createOpcOpportunity" : "createCodingTask", {}), {
-      method: "POST", body: JSON.stringify({ workspaceId, expectedStreamVersion: 0, input, ...(pluginId === "coding" && repositoryId ? { repositoryId } : {}) }),
+      method: "POST", ...(requestKey ? { headers: { "Idempotency-Key": requestKey } } : {}), body: JSON.stringify({ workspaceId, expectedStreamVersion: 0, input, ...(pluginId === "coding" && repositoryId ? { repositoryId } : {}) }),
     });
   }
 }

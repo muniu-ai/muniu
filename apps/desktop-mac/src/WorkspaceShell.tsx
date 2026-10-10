@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity, Bot, Boxes, BriefcaseBusiness, ChevronDown, Code2, Command, FileCheck2,
-  FolderKanban, Home, Inbox, PanelLeftClose, PanelLeftOpen, Plug, Plus, Search,
-  Settings, Sparkles, Users, Zap,
+  FolderKanban, Home, Inbox, PanelLeftClose, PanelLeftOpen, Plug, Search,
+  Settings, Sparkles, Users,
 } from "lucide-react";
 import { AgentOsApiError, AgentOsClient } from "./api";
 import { CommandPalette, type PaletteItem } from "./components/CommandPalette";
@@ -23,7 +23,7 @@ import { BusinessManagementPage } from "./pages/BusinessManagementPage";
 import type { BusinessStart } from "./Onboarding";
 import type {
   ActivitySummary, AgentCatalog, CodingRepositorySummary, CodingTaskSummary, DeliverableSummary, HomeSummary, MemorySummary,
-  InboxItemSummary, OpportunitySummary, PluginHealth, ProductPluginId, WorkspaceMemberSummary, WorkspaceSummary,
+  InboxItemSummary, OpportunitySummary, PluginHealth, WorkspaceMemberSummary, WorkspaceSummary,
 } from "./types";
 
 type PageId = "home" | "goals" | "workspaces" | "inbox" | "deliverables" | "activity" | "agents" | "integrations" | "settings" | "opc" | "opc-validation" | "coding" | `plugin:${string}`;
@@ -31,9 +31,6 @@ type PageId = "home" | "goals" | "workspaces" | "inbox" | "deliverables" | "acti
 const emptyHome: HomeSummary = { todayActions: [], blockers: [], approvals: [], recentDeliverables: [] };
 const emptyAgentCatalog: AgentCatalog = { agents: [], skills: [] };
 
-function productPlugins(pluginIds: readonly string[]): readonly ProductPluginId[] {
-  return pluginIds.filter((pluginId): pluginId is ProductPluginId => pluginId === "opc" || pluginId === "coding");
-}
 
 function pluginLabel(pluginId: string): string {
   if (pluginId === "opc") return "OPC";
@@ -58,7 +55,7 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces, initi
   const [technicalOpen, setTechnicalOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [captureText, setCaptureText] = useState("");
-  const [capturePlugin, setCapturePlugin] = useState<ProductPluginId | undefined>(productPlugins(initialWorkspace.activePluginIds)[0]);
+  const [newTaskRequest, setNewTaskRequest] = useState(0);
   const [captureBusy, setCaptureBusy] = useState(false);
   const [notice, setNotice] = useState<string>();
   const [home, setHome] = useState<HomeSummary>(emptyHome);
@@ -83,12 +80,13 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces, initi
   const [codingLoading, setCodingLoading] = useState(false);
   const [codingError, setCodingError] = useState<string>();
 
+  useEffect(() => { document.querySelector(".page-scroll")?.scrollTo({ top: 0 }); }, [page]);
+
   const professional = workspace.viewMode === "professional";
   const repositories = codingRepositories.filter(item => item.workspaceId === workspace.id);
   const repositoryId = repositories.find(item => item.id === captureRepositoryId)?.id
     ?? (repositories.length === 1 ? repositories[0]?.id : undefined);
-  const captureReady = Boolean(capturePlugin && captureText.trim() && !captureBusy
-    && (capturePlugin !== "coding" || (!codingLoading && !codingError && repositoryId)));
+
 
   const refreshCore = useCallback(async () => {
     setCoreLoading(true); setCoreError(undefined);
@@ -134,6 +132,7 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces, initi
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") { event.preventDefault(); setPaletteOpen(true); }
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "j") { event.preventDefault(); setPage("goals"); setNewTaskRequest(value => value + 1); }
       if (event.key === "Escape") setPaletteOpen(false);
     };
     window.addEventListener("keydown", onKeyDown);
@@ -160,6 +159,7 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces, initi
   }
 
   const paletteItems = useMemo<readonly PaletteItem[]>(() => [
+    { id: "delegate", kind: "命令", title: "委派任务", action: () => { setPage("goals"); setNewTaskRequest(value => value + 1); } },
     { id: "home", kind: "命令", title: "打开首页", action: () => setPage("home") },
     { id: "inbox", kind: "命令", title: "打开收件箱", detail: `${home.approvals.length} 项待处理`, action: () => setPage("inbox") },
     ...surfaces.flatMap((surface) => (surface.ui?.pages ?? []).map((entry) => ({ id: `plugin:${surface.pluginId}:${entry.routeId}`, kind: "命令" as const, title: entry.title, action: () => setPage(`plugin:${surface.pluginId}:${entry.routeId}`) }))),
@@ -170,15 +170,12 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces, initi
   ], [agentCatalog.skills, codingTasks, deliverables, home.approvals.length, opportunities, surfaces]);
 
   async function submitCapture() {
-    const value = captureText.trim();
-    if (!captureReady || !value || !capturePlugin) return;
-    setCaptureBusy(true); setNotice(undefined);
+    if (!captureText.trim() || captureBusy) return;
+    setCaptureBusy(true);
     try {
-      await api.capture(workspace.id, capturePlugin, value, repositoryId);
-      setCaptureText(""); setNotice(capturePlugin === "opc" ? "机会已生成，等待你审阅" : "Coding 任务已生成，等待你审阅");
-      if (capturePlugin === "opc") { await refreshOpc(); setPage("opc-validation"); }
-      else { await refreshCoding(); setPage("coding"); }
-      await refreshCore();
+      await api.capture(workspace.id, "opc", captureText.trim());
+      setCaptureText(""); setNotice("机会已记录，可以继续整理证据或委派分析任务");
+      await refreshOpc();
     } catch (error) { setNotice(safeMessage(error)); }
     finally { setCaptureBusy(false); }
   }
@@ -186,7 +183,7 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces, initi
   function selectWorkspace(next: WorkspaceSummary) {
     setRepositoryDialogOpen(false);
     setCaptureRepositoryId(undefined); setCodingRepositories([]);
-    setWorkspace(next); setCapturePlugin(productPlugins(next.activePluginIds)[0]); setSelectedOpportunityId(undefined); setSelectedCodingTaskId(undefined); setPage(next.viewMode === "business" && next.activePluginIds.includes("opc") ? "opc" : "home");
+    setWorkspace(next); setCaptureText(""); setSelectedOpportunityId(undefined); setSelectedCodingTaskId(undefined); setPage(next.viewMode === "business" && next.activePluginIds.includes("opc") ? "opc" : "home");
   }
 
   function updateWorkspace(next: WorkspaceSummary) {
@@ -195,7 +192,6 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces, initi
   }
 
   const degraded = health.filter((item) => item.status === "degraded");
-  const capturePlugins = productPlugins(workspace.activePluginIds);
 
   return <div className={`app-shell ${sidebarCompact ? "sidebar-compact" : ""}`} data-view-mode={workspace.viewMode}>
     <aside className="sidebar" aria-label="主导航">
@@ -203,7 +199,7 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces, initi
       <button className="workspace-switcher" onClick={() => setPage("workspaces")}><span className="workspace-avatar">{workspace.name.slice(0, 1)}</span>{!sidebarCompact && <span><strong>{workspace.name}</strong><small>{workspace.viewMode === "business" ? "经营视图" : "专业视图"}</small></span>}{!sidebarCompact && <ChevronDown size={15} />}</button>
       <nav>
         <NavButton compact={sidebarCompact} active={page === "home"} label="首页" icon={<Home />} onClick={() => setPage("home")} />
-        <NavButton compact={sidebarCompact} active={page === "goals"} label="目标" icon={<FileCheck2 />} onClick={() => setPage("goals")} />
+        <NavButton compact={sidebarCompact} active={page === "goals"} label="任务" icon={<FileCheck2 />} onClick={() => setPage("goals")} />
         <NavButton compact={sidebarCompact} active={page === "workspaces"} label="工作区" icon={<FolderKanban />} onClick={() => setPage("workspaces")} />
         <NavButton compact={sidebarCompact} active={page === "inbox"} label="收件箱" badge={home.approvals.length} icon={<Inbox />} onClick={() => setPage("inbox")} />
         <NavButton compact={sidebarCompact} active={page === "deliverables"} label="成果" icon={<FileCheck2 />} onClick={() => setPage("deliverables")} />
@@ -229,19 +225,7 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces, initi
         <span className="view-chip">{professional ? "专业视图" : "经营视图"}</span>
         <button className="avatar-button" title="本地所有者">本</button>
       </header>
-      {page !== "opc" && <section className="quick-capture" aria-label="快速捕获">
-        <span className="capture-icon"><Zap size={17} /></span>
-        <input value={captureText} disabled={!capturePlugin} onChange={(event) => setCaptureText(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void submitCapture(); }} placeholder={!capturePlugin ? "先在工作区启用 OPC 或 Coding" : capturePlugin === "opc" ? "记下一条机会、客户原话或反证" : "描述一个 Coding 任务"} />
-        <select aria-label="捕获类型" value={capturePlugin ?? ""} disabled={capturePlugins.length === 0} onChange={(event) => setCapturePlugin(event.target.value as ProductPluginId)}>{capturePlugins.map((pluginId) => <option key={pluginId} value={pluginId}>{pluginLabel(pluginId)}</option>)}</select>
-        {capturePlugin === "coding" && <>
-        {repositories.length > 0 && <select aria-label="任务仓库" value={repositoryId ?? ""} disabled={codingLoading} onChange={event => setCaptureRepositoryId(event.target.value || undefined)}>
-          <option value="" disabled>选择仓库</option>
-          {repositories.map(item => <option key={item.id} value={item.id}>{repositories.filter(other => other.name === item.name).length > 1 ? `${item.name} · ${item.rootRealPath}` : item.name}</option>)}
-        </select>}
-        <button className="quiet-button repository-entry" disabled={codingLoading || captureBusy || Boolean(codingError)} onClick={() => setRepositoryDialogOpen(true)}><Plus size={15} />{codingLoading ? "正在读取仓库" : repositories.length ? "添加仓库" : "登记仓库"}</button>
-        </>}
-        <button className="primary-button" disabled={!captureReady} onClick={() => void submitCapture()}><Plus size={15} />{captureBusy ? "正在保存" : "捕获"}</button>
-      </section>}
+      {page !== "goals" && <section className="delegation-launcher"><span><Sparkles size={20} /><span><strong>把目标交给木牛</strong><small>补充资料与验收要求，跟进经营或研发任务</small></span></span><button className="primary-button" onClick={() => { setPage("goals"); setNewTaskRequest(value => value + 1); }}>委派任务<kbd aria-hidden="true">⌘ J</kbd></button></section>}
       {notice && <div className="toast" role="status"><Sparkles size={15} />{notice}<button onClick={() => setNotice(undefined)}>关闭</button></div>}
       {degraded.length > 0 && <div className="degraded-banner" role="status">{degraded.map((item) => `${pluginLabel(item.pluginId)} 已降级`).join("，")}。首页、收件箱和设置仍可使用。</div>}
       <div className="page-scroll">
@@ -249,10 +233,10 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces, initi
         {coreError && page === "home" && <ErrorState detail={coreError} action="检查 Host 后重试" onRetry={() => void refreshCore()} />}
         {!coreLoading && !coreError && page === "home" && <HomePage summary={home} onNavigate={(target) => setPage(target === "opc" ? "opc-validation" : target as PageId)} />}
         {page === "workspaces" && <WorkspacesPage workspaces={workspaces} currentId={workspace.id} members={members} onSelect={selectWorkspace} />}
-        {page === "goals" && <GoalsPage key={workspace.id} api={api} workspaceId={workspace.id} onOpenThread={thread => {
+        <div hidden={page !== "goals"}><GoalsPage active={page === "goals"} onTaskCreated={() => { void refreshCoding(); void refreshCore(); }} key={workspace.id} pluginIds={workspace.activePluginIds} repositories={repositories} repositoryId={repositoryId} onRepository={setCaptureRepositoryId} onRegisterRepository={() => setRepositoryDialogOpen(true)} onSettings={() => setPage("settings")} newTaskRequest={newTaskRequest} api={api} workspaceId={workspace.id} onOpenThread={thread => {
           if (thread.pluginId === "coding") { setSelectedCodingTaskId(thread.resourceRef?.resourceId); setPage("coding"); }
           else { setSelectedOpportunityId(thread.resourceRef?.resourceId); setPage("opc-validation"); }
-        }} />}
+        }} /></div>
         {page === "inbox" && <InboxPage workspaceId={workspace.id} summary={home} api={api} onChanged={refreshCore} onOpen={openInboxItem} />}
         {page === "deliverables" && <DeliverablesPage items={deliverables} onOpen={(item) => openProduct(item.pluginId)} />}
         {page === "activity" && <ActivityPage items={activity} professional={professional} />}
@@ -262,15 +246,15 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces, initi
         {surfaces.flatMap((surface) => (surface.ui?.pages ?? []).filter((entry) => page === `plugin:${surface.pluginId}:${entry.routeId}`).map((entry) => <PluginBoundary key={`${surface.pluginId}:${surface.version}:${entry.routeId}`} pluginName={surface.pluginId}><div className="page-stack"><h1>{entry.title}</h1>{entry.cards.map((card, index) => <PluginCard key={index} card={card} pluginId={surface.pluginId} workspaceId={workspace.id} api={api} />)}</div></PluginBoundary>))}
         {page === "home" && surfaces.flatMap((surface) => (surface.ui?.widgets ?? []).map((widget) => <PluginBoundary key={`${surface.pluginId}:${surface.version}:${widget.widgetId}`} pluginName={surface.pluginId}><PluginCard card={widget.card} pluginId={surface.pluginId} workspaceId={workspace.id} api={api} /></PluginBoundary>))}
         {page === "opc" && <PluginBoundary pluginName="OPC"><BusinessManagementPage key={workspace.id} api={api} workspaceId={workspace.id} initialTab={workspace.id === initialWorkspace.id ? initialBusinessTab : undefined} onExplore={() => { setSelectedOpportunityId(undefined); setPage("opc-validation"); }} /></PluginBoundary>}
-        {page === "opc-validation" && <PluginBoundary pluginName="OPC"><button className="quiet-button" onClick={() => setPage("opc")}>返回经营管理</button><OpcPage api={api} workspaceId={workspace.id} items={opportunities} selectedId={selectedOpportunityId} onSelect={setSelectedOpportunityId} loading={opcLoading} error={opcError} viewMode={workspace.viewMode} onRetry={() => void refreshOpc()} onChanged={async () => { await Promise.all([refreshOpc(), refreshCore()]); }} /></PluginBoundary>}
+        {page === "opc-validation" && <PluginBoundary pluginName="OPC"><button className="quiet-button" onClick={() => setPage("opc")}>返回经营管理</button><form className="quick-capture" aria-label="记录机会" onSubmit={event => { event.preventDefault(); void submitCapture(); }}><input aria-label="机会描述" placeholder="记录客户原话或待验证的机会" value={captureText} disabled={captureBusy} onChange={event => setCaptureText(event.target.value)} /><button className="primary-button" disabled={captureBusy || !captureText.trim()}>记录机会</button></form><OpcPage api={api} workspaceId={workspace.id} items={opportunities} selectedId={selectedOpportunityId} onSelect={setSelectedOpportunityId} loading={opcLoading} error={opcError} viewMode={workspace.viewMode} onRetry={() => void refreshOpc()} onChanged={async () => { await Promise.all([refreshOpc(), refreshCore()]); }} /></PluginBoundary>}
         {page === "coding" && <PluginBoundary pluginName="Coding"><CodingPage key={workspace.id} api={api} workspaceId={workspace.id} repositories={repositories} onRegisterRepository={() => setRepositoryDialogOpen(true)} items={codingTasks} selectedId={selectedCodingTaskId} onSelect={setSelectedCodingTaskId} loading={codingLoading} error={codingError} viewMode={workspace.viewMode} onRetry={() => void refreshCoding()} /></PluginBoundary>}
       </div>
     </main>
     <CommandPalette open={paletteOpen} items={paletteItems} onClose={() => setPaletteOpen(false)} />
     <RepositoryDialog key={workspace.id} api={api} workspaceId={workspace.id} workspaceName={workspace.name} repositories={repositories} open={repositoryDialogOpen} onClose={() => setRepositoryDialogOpen(false)} onSelected={repository => {
       setCodingRepositories(current => [...current.filter(item => item.id !== repository.id), repository]);
-      setCaptureRepositoryId(repository.id); setCapturePlugin("coding");
-      setNotice(`已选中仓库「${repository.name}」，可以继续填写或捕获任务`);
+      setCaptureRepositoryId(repository.id);
+      setNotice(`已选中仓库「${repository.name}」，可以继续填写任务`);
     }} />
   </div>;
 }

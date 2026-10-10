@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { ResultText } from "./ResultText";
 import { Bot, Clock3, RefreshCw, Send } from "lucide-react";
 import { AgentOsApiError, type AgentOsClient } from "../api";
 import type { AgentThreadSummary, ThreadTurnEntry, ThreadTurnsView } from "../types";
@@ -10,7 +11,9 @@ interface ThreadAgentPanelProps {
   readonly api: AgentOsClient;
   readonly workspaceId: string;
   readonly pluginId: "opc" | "coding";
-  readonly resourceId: string;
+  readonly resourceId?: string;
+  readonly threadId?: string;
+  readonly goalExecution?: { readonly executionId: string; readonly canControl: boolean };
   readonly professional?: boolean;
 }
 
@@ -20,8 +23,8 @@ const promptSuggestions = [
   "找出最可能推翻假设的信号",
 ] as const;
 
-export function ThreadAgentPanel({ api, workspaceId, pluginId, resourceId, professional = false }: ThreadAgentPanelProps) {
-  const agentName = pluginId === "opc" ? "OPC Agent" : "Coding Agent";
+export function ThreadAgentPanel({ api, workspaceId, pluginId, resourceId, threadId, goalExecution, professional = false }: ThreadAgentPanelProps) {
+  const agentName = pluginId === "opc" ? threadId && !resourceId ? "经营助手" : "OPC Agent" : "Coding Agent";
   const resourceName = pluginId === "opc" ? "机会" : "任务";
   const namespace = pluginId === "opc" ? "opc.opportunity" : "coding.task";
   const titleId = `${pluginId}-agent-title`;
@@ -30,6 +33,7 @@ export function ThreadAgentPanel({ api, workspaceId, pluginId, resourceId, profe
   const [conversation, setConversation] = useState<ThreadTurnsView>();
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(true);
+  const [followLatest, setFollowLatest] = useState(true);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string>();
   const [runnerId, setRunnerId] = useState<CodingRunnerId>("builtin");
@@ -47,8 +51,7 @@ export function ThreadAgentPanel({ api, workspaceId, pluginId, resourceId, profe
       const matched = threads.find((candidate) =>
         candidate.pluginId === pluginId
         && candidate.archivedAt === undefined
-        && candidate.resourceRef?.namespace === namespace
-        && candidate.resourceRef.resourceId === resourceId);
+        && (threadId ? candidate.id === threadId : candidate.resourceRef?.namespace === namespace && candidate.resourceRef.resourceId === resourceId));
       if (!matched) throw new Error("THREAD_NOT_FOUND");
       const turns = await api.threadTurns(workspaceId, matched.id);
       if (sequence !== requestSequence.current) return;
@@ -57,11 +60,12 @@ export function ThreadAgentPanel({ api, workspaceId, pluginId, resourceId, profe
       setError(undefined);
     } catch (caught) {
       if (sequence !== requestSequence.current) return;
+      setConversation(undefined); setThread(undefined);
       setError(agentErrorMessage(caught));
     } finally {
       if (sequence === requestSequence.current) setLoading(false);
     }
-  }, [api, namespace, pluginId, resourceId, workspaceId]);
+  }, [api, namespace, pluginId, resourceId, threadId, workspaceId]);
 
   useEffect(() => { setThread(undefined); setConversation(undefined); setMessage(""); void loadConversation(true); }, [loadConversation]);
   useEffect(() => {
@@ -83,8 +87,8 @@ export function ThreadAgentPanel({ api, workspaceId, pluginId, resourceId, profe
     if (refreshTimer.current) clearTimeout(refreshTimer.current);
   }, []);
   useEffect(() => {
-    transcriptRef.current?.scrollTo({ top: transcriptRef.current.scrollHeight, behavior: "smooth" });
-  }, [conversation]);
+    if (followLatest) transcriptRef.current?.scrollTo({ top: transcriptRef.current.scrollHeight, behavior: "instant" });
+  }, [conversation, followLatest]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -93,10 +97,10 @@ export function ThreadAgentPanel({ api, workspaceId, pluginId, resourceId, profe
     setSending(true);
     setError(undefined);
     try {
-      const execution = conversation?.turns.at(-1)?.execution;
+      const execution = latestExecution;
       if (execution && ["queued", "running", "waiting_approval"].includes(execution.status)) {
         await api.executionCommand(execution, "follow_up", content);
-      } else await api.submitTurn(workspaceId, thread, content, pluginId === "coding" ? runnerId : undefined);
+      } else if (!goalExecution) await api.submitTurn(workspaceId, thread, content, pluginId === "coding" ? runnerId : undefined);
       setRunnerId("builtin");
       setMessage("");
       await loadConversation();
@@ -112,15 +116,17 @@ export function ThreadAgentPanel({ api, workspaceId, pluginId, resourceId, profe
     }
   }
 
-  const entries = conversation?.turns.flatMap((turn) => turn.entries) ?? [];
-  const latestExecution = conversation?.turns.at(-1)?.execution;
-  const latestTurn = conversation?.turns.at(-1);
+  const turns = conversation?.turns.filter(turn => !goalExecution || turn.execution.id === goalExecution.executionId) ?? [];
+  const entries = turns.flatMap(turn => turn.entries);
+  const latestTurn = turns.at(-1);
+  const latestExecution = latestTurn?.execution;
   const metering = latestTurn?.metering;
   const budgetNeedsNewExecution = metering && ["pending", "overrun"].includes(metering.status);
-  const blocked = latestExecution && ["paused", "interrupted", "needs_reconciliation"].includes(latestExecution.status);
+  const goalBlocked = goalExecution && (!goalExecution.canControl || !latestExecution || !["queued", "running", "waiting_approval"].includes(latestExecution.status));
+  const blocked = goalBlocked || latestExecution && ["paused", "interrupted", "needs_reconciliation"].includes(latestExecution.status);
   const active = latestExecution && ["queued", "running", "waiting_approval"].includes(latestExecution.status);
   async function control(command: "cancel" | "resume" | "steer") {
-    if (!latestExecution || sending) return;
+    if (!latestExecution || sending || (goalExecution && !goalExecution.canControl)) return;
     setSending(true);
     try {
       await api.executionCommand(latestExecution, command, command === "steer" ? message.trim() : undefined);
@@ -133,11 +139,11 @@ export function ThreadAgentPanel({ api, workspaceId, pluginId, resourceId, profe
   return <section className="opc-agent-panel" aria-labelledby={titleId}>
     <header>
       <span className="opc-agent-mark"><Bot size={19} /></span>
-      <div><p className="eyebrow">木牛 Agent OS</p><h2 id={titleId}>与 {agentName} 一起推进</h2><p>{pluginId === "opc" ? "Agent 只使用当前机会的上下文，建议需要你审阅。" : "默认由内置 Agent 在隔离副本生成变更，检查通过后仍需人工审批。"}</p></div>
+      <div><p className="eyebrow">木牛 Agent OS</p><h2 id={titleId}>与 {agentName} 一起推进</h2><p>{threadId ? "沿用已确认的任务范围与额度；补充说明不改变原有验收要求。" : pluginId === "opc" ? "Agent 只使用当前机会的上下文，建议需要你审阅。" : "默认由内置 Agent 在隔离副本生成变更，检查通过后仍需人工审批。"}</p></div>
       <button className="icon-button" type="button" title="刷新会话" disabled={loading} onClick={() => void loadConversation(true)}><RefreshCw size={16} /></button>
     </header>
 
-    <div className="opc-agent-transcript" ref={transcriptRef} aria-live="polite">
+    <div className="opc-agent-transcript" ref={transcriptRef} onScroll={event => { const el = event.currentTarget; setFollowLatest(el.scrollHeight - el.scrollTop - el.clientHeight < 60); }} aria-live="polite">
       {loading && entries.length === 0 && <p className="opc-agent-empty">正在读取{resourceName}会话…</p>}
       {!loading && entries.length === 0 && !error && <div className="opc-agent-empty">
         <strong>从当前阶段开始</strong>
@@ -147,6 +153,7 @@ export function ThreadAgentPanel({ api, workspaceId, pluginId, resourceId, profe
       {latestExecution && latestExecution.status !== "completed" && <p className={`opc-agent-status ${latestExecution.status}`}><Clock3 size={14} />{executionStatus(latestExecution.status)}</p>}
     </div>
 
+    {!followLatest && <button type="button" className="quiet-button" onClick={() => setFollowLatest(true)}>查看最新消息</button>}
     {metering && <aside className="agent-metering" aria-label="执行用量">
       <strong>{metering.status === "external_runner" ? "外部 Runner 用量请在厂商账单核对"
         : metering.status === "not_started" ? "尚无已结算用量"
@@ -161,22 +168,23 @@ export function ThreadAgentPanel({ api, workspaceId, pluginId, resourceId, profe
 
     {error && <div className="opc-agent-error" role="alert"><span>{error}</span><button type="button" className="quiet-button" onClick={() => void loadConversation(true)}>重试</button></div>}
 
-    {entries.length === 0 && <div className="opc-agent-suggestions" aria-label="建议问题">
+    {!goalExecution && entries.length === 0 && <div className="opc-agent-suggestions" aria-label="建议问题">
       {(pluginId === "opc" ? promptSuggestions : ["按任务要求生成可审阅的变更", "只修改与当前任务相关的文件"]).map((suggestion) => <button type="button" key={suggestion} onClick={() => setMessage(suggestion)}>{suggestion}</button>)}
     </div>}
+    {goalBlocked && <p className="composer-footnote">本次执行已结束或暂不可补充。请先处理执行状态；如需新增范围，请新建任务并重新确认额度。</p>}
     <form className="opc-agent-composer" onSubmit={(event) => void submit(event)}>
-      {pluginId === "coding" && <div className="runner-choice"><label>本轮执行方式<select aria-label="本轮执行方式" value={active ? latestExecution.runnerId ?? "builtin" : runnerId}
+      {pluginId === "coding" && !goalExecution && <div className="runner-choice"><label>本轮执行方式<select aria-label="本轮执行方式" value={active ? latestExecution.runnerId ?? "builtin" : runnerId}
         disabled={Boolean(active || blocked) || sending} onChange={event => setRunnerId(event.target.value as CodingRunnerId)}>
         <option value="builtin">内置 Agent（默认）</option>
         <option value="claude-cli" disabled={!availableRunners.includes("claude-cli")}>Claude CLI</option>
         <option value="codex-cli" disabled={!availableRunners.includes("codex-cli")}>Codex CLI</option>
       </select></label><small>{active ? "补充消息沿用当前执行方式" : "外部 Runner 需先在集成中启用并确认文件"}</small>{runnerError && <p role="alert">{runnerError}</p>}</div>}
       <label htmlFor={messageId}>给 {agentName} 的消息</label>
-      <div><textarea id={messageId} rows={2} value={message} disabled={!thread || sending} placeholder={pluginId === "opc" ? "例如：先找出最可能推翻这个假设的证据" : "例如：按任务要求修改，保留现有未提交内容"} onChange={(event) => setMessage(event.target.value)} onKeyDown={(event) => {
-        if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) event.currentTarget.form?.requestSubmit();
-      }} /><button className="primary-button" type="submit" disabled={!thread || !message.trim() || sending || Boolean(blocked)}><Send size={15} />{sending ? "正在发送" : `发送给 ${agentName}`}</button></div>
+      <div><textarea id={messageId} rows={2} value={message} disabled={!thread || sending || Boolean(goalBlocked)} placeholder={threadId ? "补充资料或说明本次任务的优先级…" : pluginId === "opc" ? "例如：先找出最可能推翻这个假设的证据" : "例如：按任务要求修改，保留现有未提交内容"} onChange={(event) => setMessage(event.target.value)} onKeyDown={(event) => {
+        if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); }
+      }} /><button className="primary-button" type="submit" disabled={!thread || !message.trim() || sending || Boolean(blocked)}><Send size={15} />{sending ? "正在发送" : goalExecution ? "补充说明" : `发送给 ${agentName}`}</button></div>
       <small>按 Command + Enter 发送</small>
-      {latestExecution && <div className="agent-controls">
+      {latestExecution && (!goalExecution || goalExecution.canControl) && <div className="agent-controls">
         {["queued", "running", "waiting_approval"].includes(latestExecution.status) && <>
           <button type="button" className="quiet-button" disabled={sending || !message.trim()} onClick={() => void control("steer")}>调整当前方向</button>
           <button type="button" className="quiet-button" disabled={sending} onClick={() => void control("cancel")}>取消执行</button>
@@ -201,7 +209,7 @@ function ConversationEntry({ entry, agentName }: { readonly entry: ThreadTurnEnt
   }
   return <article className={`opc-agent-message ${entry.role}`}>
     <strong>{entry.role === "user" ? "你" : agentName}</strong>
-    <p>{entry.content}</p>
+    <ResultText text={entry.content} />
   </article>;
 }
 

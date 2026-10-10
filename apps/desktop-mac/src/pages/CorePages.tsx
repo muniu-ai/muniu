@@ -9,8 +9,8 @@ import type { ActivitySummary, AgentCatalog, CodingReconciliationDecision, Codin
 export function HomePage({ summary, onNavigate }: { readonly summary: HomeSummary; readonly onNavigate: (page: string) => void }) {
   return <div className="page-stack">
     <section className="hero-panel">
-      <div><p className="eyebrow">今天</p><h2>{summary.todayActions[0]?.title ?? "工作区已经就绪"}</h2><p>{summary.todayActions[0]?.detail ?? "捕获一条机会或 Coding 任务，木牛会把它整理成可审阅对象。"}</p></div>
-      <button className="primary-button" onClick={() => onNavigate(summary.todayActions[0]?.pluginId ?? "opc")}><Lightbulb size={16} />开始推进</button>
+      <div><p className="eyebrow">今天</p><h2>{summary.todayActions[0]?.title ?? "工作区已经就绪"}</h2><p>{summary.todayActions[0]?.detail ?? "描述经营或研发目标，补充资料，审阅执行计划后开始工作。"}</p></div>
+      <button className="primary-button" onClick={() => onNavigate(summary.todayActions[0]?.pluginId ?? "goals")}><Lightbulb size={16} />开始推进</button>
     </section>
     <div className="metric-grid">
       <Metric icon={<ArrowRight />} label="今日行动" value={summary.todayActions.length} tone="accent" />

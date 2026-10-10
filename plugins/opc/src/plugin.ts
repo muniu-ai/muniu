@@ -71,6 +71,10 @@ export function createOpcPluginDefinition(
         id: "opc.opportunity-validator",
         displayName: "机会验证 Agent",
         description: "整理假设、证据和反证；承诺证据与最终决策仍由人确认",
+      }, {
+        id: "opc.business-assistant",
+        displayName: "经营助手",
+        description: "围绕战略、客户、产品服务、订单交付和收支复盘提供可审阅建议；经营事实由人确认",
       }],
       skills: [
         {

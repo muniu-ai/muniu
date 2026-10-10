@@ -4423,6 +4423,9 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
       "streamVersion"
     ],
     "properties": {
+      "billingCurrency": {
+        "type": "string"
+      },
       "modelOptions": {
         "type": "array",
         "items": {

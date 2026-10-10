@@ -9,7 +9,7 @@ import { chromium } from "playwright-core";
 import { businessDateAt } from "../../../packages/contracts/dist/index.js";
 
 const mode = process.argv[2] ?? "onboarding";
-if (!new Set(["onboarding", "opc", "coding", "goals", "business", "startup", "repositories"]).has(mode)) throw new Error(`未知验证模式：${mode}`);
+if (!new Set(["onboarding", "opc", "coding", "goals", "business", "startup", "repositories", "tasks"]).has(mode)) throw new Error(`未知验证模式：${mode}`);
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const desktopDir = resolve(scriptDir, "..");
 const repoRoot = resolve(desktopDir, "..", "..");
@@ -68,6 +68,7 @@ try {
   if (mode === "coding") await verifyCoding(page, requests);
   if (mode === "repositories") await verifyRepositories(page, requests);
   if (mode === "goals") await verifyGoals(page, requests);
+  if (mode === "tasks") await verifyTasks(page, requests);
   if (mode === "business") await verifyBusiness(page, requests);
   await page.getByTitle("技术配置").click();
   if (!await page.getByRole("button", { name: "设置", exact: true }).isVisible()) await page.getByTitle("技术配置").click();
@@ -119,9 +120,10 @@ try {
 
 async function verifyRepositories(page, requestLog) {
   await page.getByRole("button", { name: "首页", exact: true }).click();
-  const capture = page.getByRole("region", { name: "快速捕获" });
-  await capture.getByLabel("捕获类型").selectOption("coding");
-  const draft = capture.getByPlaceholder("描述一个 Coding 任务");
+  await page.getByRole("button", { name: "委派任务", exact: true }).click();
+  const capture = page.getByRole("form", { name: "委派新任务" });
+  await capture.getByRole("radio", { name: "研发", exact: true }).check();
+  const draft = capture.getByLabel("任务目标", { exact: true });
   await draft.fill("为客户网站补充错误处理");
   const registrations = () => requestLog.filter(entry => entry.method === "POST" && entry.path === "/v2/plugins/coding/repositories");
   await capture.getByRole("button", { name: "登记仓库", exact: true }).click();
@@ -169,7 +171,7 @@ async function verifyRepositories(page, requestLog) {
   await dialog.waitFor({ state: "hidden" });
   const choice = capture.getByLabel("任务仓库", { exact: true });
   const firstId = await choice.inputValue();
-  if (!firstId || await choice.locator("option:checked").textContent() !== "客户 网站" || await draft.inputValue() !== "为客户网站补充错误处理") throw new Error("登记后应选中新仓库并保留任务");
+  if (!firstId || !(await choice.locator("option:checked").textContent()).startsWith("客户 网站") || await draft.inputValue() !== "为客户网站补充错误处理") throw new Error("登记后应选中新仓库并保留任务");
 
   await capture.getByRole("button", { name: "添加仓库", exact: true }).click();
   await path.fill(`${firstPath}///`);
@@ -197,9 +199,10 @@ async function verifyRepositories(page, requestLog) {
   if (attempts.length !== 2 || !attempts[0].key || attempts[0].key !== attempts[1].key) throw new Error("响应丢失重试必须复用幂等键");
   await page.unroute(`${apiUrl}/v2/plugins/coding/repositories`);
   const secondId = await choice.inputValue();
-  if (!secondId || secondId === firstId || await choice.locator("option:checked").textContent() !== "second") throw new Error("多个仓库时应选中刚登记的一项");
-  await capture.getByRole("button", { name: "捕获", exact: true }).click();
-  await page.getByRole("status").filter({ hasText: "Coding 任务已生成" }).waitFor();
+  if (!secondId || secondId === firstId || !(await choice.locator("option:checked").textContent()).startsWith("second")) throw new Error("多个仓库时应选中刚登记的一项");
+  await capture.getByLabel("验收要求", { exact: true }).fill("包含错误处理和验证说明");
+  await capture.getByRole("button", { name: "准备执行计划", exact: true }).click();
+  await page.getByRole("button", { name: "确认计划并启动", exact: true }).waitFor();
   const task = requestLog.find(entry => entry.method === "POST" && entry.path === "/v2/plugins/coding/tasks");
   if (task?.body.repositoryId !== secondId) throw new Error("任务必须绑定新选中的仓库");
   await page.getByRole("button", { name: "Coding", exact: true }).click();
@@ -514,7 +517,8 @@ async function verifyConnectivitySettings(page, requestLog) {
 }
 
 async function verifyGoals(page, requestLog) {
-  await page.getByRole("button", { name: "目标", exact: true }).click();
+  await page.getByRole("button", { name: "任务", exact: true }).click();
+  await page.getByRole("button", { name: "关联已有任务", exact: true }).click();
   await page.getByLabel("预期结果").waitFor();
   const externalWorkspace = (await hostData(apiUrl, "/v2/workspaces"))[0];
   const externalThreadId = await page.getByLabel("关联任务").inputValue();
@@ -561,7 +565,7 @@ async function verifyGoals(page, requestLog) {
   await page.getByText("待确认计划", { exact: true }).waitFor();
   await page.getByRole("button", { name: "确认计划并启动", exact: true }).click();
   await page.getByText("执行中", { exact: true }).waitFor();
-  await page.getByRole("button", { name: "取消目标", exact: true }).click();
+  await page.getByRole("button", { name: "取消任务", exact: true }).click();
   await page.getByText("已取消", { exact: true }).waitFor();
   const create = requestLog.find(request => request.method === "POST" && /\/workspaces\/[^/]+\/goals$/u.test(request.path));
   if (create?.body?.deliverables?.[0]?.criteria?.length !== 2) throw new Error("目标未保存完整验收标准");
@@ -569,13 +573,14 @@ async function verifyGoals(page, requestLog) {
   if (!start?.body?.planRevisionId || !start.body.planDigest || !Number.isInteger(start.body.expectedStreamVersion)) throw new Error("目标启动未绑定审阅过的计划和版本");
   const cancel = requestLog.find(request => request.body?.command === "cancel" && request.path.includes("/goals/"));
   if (cancel.body.expectedStreamVersion <= start.body.expectedStreamVersion) throw new Error("目标取消未使用最新版本");
-  await page.getByRole("button", { name: "新建目标", exact: true }).click();
+  await page.getByRole("button", { name: "新建任务", exact: true }).click();
+  await page.getByRole("button", { name: "关联已有任务", exact: true }).click();
   await page.getByLabel("预期结果").fill("验证目标成果验收");
   await page.getByRole("button", { name: "创建目标", exact: true }).click();
   await page.getByRole("heading", { name: "验证目标成果验收", exact: true }).waitFor();
   await page.getByRole("button", { name: "生成计划", exact: true }).click();
   await page.getByRole("button", { name: "确认计划并启动", exact: true }).click();
-  await page.getByText("待验收", { exact: true }).waitFor();
+  await page.getByRole("status").filter({ hasText: /^待验收$/u }).waitFor();
   const acceptance = page.getByRole("region", { name: "成果验收" });
   await acceptance.getByText(/三个验证问题：近期如何获客/u).waitFor();
   const accept = acceptance.getByRole("button", { name: "接收成果", exact: true });
@@ -584,7 +589,7 @@ async function verifyGoals(page, requestLog) {
   if (await accept.isEnabled()) throw new Error("只复核部分标准时不能接收成果");
   await acceptance.getByRole("checkbox").nth(1).check();
   await accept.click();
-  await page.getByText("已验收", { exact: true }).waitFor();
+  await page.getByRole("status").filter({ hasText: /^已验收$/u }).waitFor();
   const accepted = requestLog.find(request => request.method === "POST" && request.path.endsWith("/acceptances"));
   if (!accepted?.body?.deliverySetId || accepted.body.items?.[0]?.reviewedCriterionIds?.length !== 2 || !accepted.body.items[0].digest) throw new Error("验收未绑定成果版本和完整标准");
   await assertViewportFit(page);
@@ -1029,14 +1034,10 @@ async function hostData(hostUrl, path) {
 async function verifyCoding(page, requestLog) {
   await page.getByRole("button", { name: "工作区" }).click();
   await expectText(page, "Codex Runner");
-  const capture = page.getByLabel("捕获类型");
-  const captureOptions = await capture.locator("option").allTextContents();
-  if (JSON.stringify(captureOptions) !== JSON.stringify(["Coding", "OPC"])) {
-    throw new Error(`快速捕获混入非产品插件：${JSON.stringify(captureOptions)}`);
-  }
-  if (!new Set(["opc", "coding"]).has(await capture.inputValue())) {
-    throw new Error(`快速捕获选择了非产品插件：${await capture.inputValue()}`);
-  }
+  await page.getByRole("button", { name: "委派任务", exact: true }).click();
+  const capture = page.getByRole("form", { name: "委派新任务" });
+  const taskKinds = await capture.getByRole("radio").count();
+  if (taskKinds !== 2) throw new Error("统一入口只能提供经营与研发，不得把 Runner 当成任务类型");
   await page.getByRole("button", { name: /收件箱/ }).click();
   await expectText(page, "模型凭据失效");
   await expectText(page, "重新连接模型后，等待中的任务才能继续");
@@ -1075,12 +1076,16 @@ async function verifyCoding(page, requestLog) {
   await registration.getByLabel("仓库绝对路径", { exact: true }).fill("/workspace/customer-service");
   await registration.getByRole("button", { name: "登记并选中", exact: true }).click();
   await repositories.getByText("customer-service", { exact: true }).waitFor();
-  await capture.selectOption("coding");
+  await page.getByRole("button", { name: "委派任务", exact: true }).click();
+  await capture.getByRole("radio", { name: "研发", exact: true }).check();
   const repositoryChoice = page.getByLabel("任务仓库", { exact: true });
-  await page.getByPlaceholder("描述一个 Coding 任务").fill("为第二个仓库补充错误处理");
-  if (await repositoryChoice.locator("option:checked").textContent() !== "customer-service") throw new Error("登记后应选中新仓库");
+  await capture.getByLabel("任务目标", { exact: true }).fill("为第二个仓库补充错误处理");
+  if (!(await repositoryChoice.locator("option:checked").textContent()).startsWith("customer-service")) throw new Error("登记后应选中新仓库");
   const selectedRepository = await repositoryChoice.inputValue();
-  await page.getByRole("button", { name: "捕获", exact: true }).click();
+  await capture.getByLabel("验收要求", { exact: true }).fill("说明修复和验证结果");
+  await capture.getByRole("button", { name: "准备执行计划", exact: true }).click();
+  await page.getByRole("button", { name: "确认计划并启动", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Coding", exact: true }).click();
   await page.locator(".coding-card").filter({ hasText: "为第二个仓库补充错误处理" }).waitFor();
   const newTaskCard = page.locator(".coding-card").filter({ hasText: "为第二个仓库补充错误处理" });
   await newTaskCard.getByText("进行中", { exact: true }).waitFor();
@@ -1164,7 +1169,7 @@ async function verifyCoding(page, requestLog) {
 }
 
 async function expectText(page, text) {
-  await page.getByText(text, { exact: false }).first().waitFor({ state: "visible" });
+  await page.getByText(text, { exact: false }).filter({ visible: true }).first().waitFor({ state: "visible" });
 }
 
 async function assertViewportFit(page) {
@@ -1174,7 +1179,7 @@ async function assertViewportFit(page) {
     scrollWidth: document.documentElement.scrollWidth,
     scrollHeight: document.documentElement.scrollHeight,
     shell: document.querySelector(".app-shell")?.getBoundingClientRect().toJSON(),
-    primary: document.querySelector(".primary-button")?.getBoundingClientRect().toJSON(),
+    primary: (document.querySelector("dialog[open] .primary-button") ?? Array.from(document.querySelectorAll(".primary-button")).find(button => button.checkVisibility()))?.getBoundingClientRect().toJSON(),
   }));
   if (fit.scrollWidth > fit.width + 1) throw new Error(`页面横向溢出：${JSON.stringify(fit)}`);
   if (fit.shell && (fit.shell.width > fit.width + 1 || fit.shell.height > fit.height + 1)) throw new Error(`Shell 超出窗口：${JSON.stringify(fit)}`);
@@ -1201,4 +1206,61 @@ function chromeExecutable() {
   const executable = candidates.find(existsSync);
   if (!executable) throw new Error("未找到可用于桌面验收的 Chrome 或 Chromium");
   return executable;
+}
+
+async function verifyTasks(page, requestLog) {
+  await page.getByRole("button", { name: "委派任务", exact: true }).click();
+  const composer = page.getByRole("form", { name: "委派新任务" });
+  const executionModel = composer.getByLabel("执行模型", { exact: true });
+  await executionModel.locator('option').nth(1).waitFor({ state: "attached" });
+  const initialModel = await executionModel.inputValue();
+  const selectedPlanModel = await executionModel.locator('option').evaluateAll((items, initial) => items.find(item => item.value !== initial).value, initialModel);
+  await executionModel.selectOption(selectedPlanModel);
+  await composer.getByLabel("任务目标", { exact: true }).fill("规划下月经营，分析现金流与交付安排");
+  await composer.getByLabel("验收要求", { exact: true }).fill("区分事实和建议\n说明资料缺口");
+  await composer.getByLabel("添加文本资料").setInputFiles({ name: "不可读.pdf", mimeType: "application/pdf", buffer: Buffer.from("fixture") });
+  await composer.getByRole("alert").filter({ hasText: "目前支持 UTF-8" }).waitFor();
+  await composer.getByLabel("添加文本资料").setInputFiles({ name: "交付约束.md", mimeType: "text/markdown", buffer: Buffer.from("现有客户优先；资料不是执行授权。") });
+  await composer.getByRole("button", { name: "交付约束.md", exact: true }).click();
+  await composer.getByText("现有客户优先；资料不是执行授权。", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "首页", exact: true }).click();
+  await page.getByRole("button", { name: "委派任务", exact: true }).click();
+  if (!(await composer.getByLabel("任务目标", { exact: true }).inputValue()).includes("现金流")) throw new Error("切换页面丢失任务草稿");
+  let droppedGoal = false;
+  await page.route(`${apiUrl}/v2/workspaces/*/goals`, async route => {
+    if (route.request().method() !== "POST" || droppedGoal) return route.continue();
+    droppedGoal = true;
+    const response = await route.fetch();
+    if (!response.ok()) throw new Error("任务响应丢失测试必须先完成真实写入");
+    await route.abort("failed");
+  });
+  await page.screenshot({ path: join(temporaryRoot, "task-composer.png"), fullPage: true, animations: "disabled" });
+  await composer.getByRole("button", { name: "准备执行计划", exact: true }).click();
+  await composer.getByRole("alert").waitFor();
+  if (await composer.getByLabel("任务目标", { exact: true }).isEnabled()) throw new Error("结果未知时不得改变重试内容");
+  await composer.getByRole("button", { name: "继续准备", exact: true }).click();
+  await page.getByRole("button", { name: "确认计划并启动", exact: true }).waitFor();
+  await page.unroute(`${apiUrl}/v2/workspaces/*/goals`);
+  if (await page.getByLabel("执行模型连接", { exact: true }).inputValue() !== selectedPlanModel) throw new Error("计划审阅显示的模型与委派时选择的模型不一致");
+  if (requestLog.some(item => item.path.endsWith("/turns"))) throw new Error("计划审阅之前不得开始执行");
+  const created = requestLog.filter(item => item.method === "POST" && /\/workspaces\/[^/]+\/goals$/.test(item.path));
+  if (created.length !== 2 || created[0].key !== created[1].key || JSON.stringify(created[0].body) !== JSON.stringify(created[1].body) || !created[0].body.objective.includes("现有客户优先")) throw new Error("资料未进入唯一任务");
+  if (requestLog.some(item => item.method === "POST" && item.path.endsWith("/opportunities"))) throw new Error("经营任务被错误创建为机会");
+  await page.screenshot({ path: join(temporaryRoot, "task-plan.png"), fullPage: true, animations: "disabled" });
+  await page.getByRole("button", { name: "确认计划并启动", exact: true }).click();
+  await page.getByRole("status").filter({ hasText: /^待验收$/u }).waitFor();
+  const acceptance = page.getByRole("region", { name: "成果验收" });
+  if (await acceptance.getByRole("button", { name: "接收成果", exact: true }).isEnabled()) throw new Error("验收必须逐条确认");
+  await acceptance.getByRole("checkbox").nth(0).check();
+  await acceptance.getByRole("checkbox").nth(1).check();
+  await acceptance.getByRole("button", { name: "接收成果", exact: true }).click();
+  await page.getByRole("status").filter({ hasText: /^已验收$/u }).waitFor();
+  if (await page.getByRole("button", { name: "补充说明", exact: true }).isEnabled()) throw new Error("结束后不能隐式开启额度外执行");
+  await page.getByRole("link", { name: "下载成果", exact: true }).waitFor();
+  await acceptance.getByRole("heading", { name: "经营建议", exact: true }).waitFor();
+  await acceptance.getByRole("table").waitFor();
+  if (await acceptance.locator("img, script").count()) throw new Error("模型正文不得执行 HTML");
+  await page.screenshot({ path: join(temporaryRoot, "task-delivery.png"), fullPage: true });
+  await page.setViewportSize({ width: 960, height: 640 });
+  await assertViewportFit(page);
 }

@@ -72,7 +72,8 @@
     "preflight:mac-signing": "node scripts/preflight-macos-signing.mjs",
     "tauri:desktop": "npm run tauri -w @mn/desktop-mac",
     "release:mac": "npm run build:host-sidecar && npm run tauri:build -w @mn/desktop-mac",
-    "verify:joint-recovery": "node scripts/joint-recovery.mjs"
+    "verify:joint-recovery": "node scripts/joint-recovery.mjs",
+    "verify:tasks-ui": "npm run verify:tasks-ui -w @mn/desktop-mac"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",

@@ -19,7 +19,8 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "node scripts/build-macos-release.mjs",
-    "tauri:build:raw": "tauri build"
+    "tauri:build:raw": "tauri build",
+    "verify:tasks-ui": "node scripts/verify-agent-os-ui.mjs tasks"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",

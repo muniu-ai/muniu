@@ -164,7 +164,9 @@ test("Agent 目录按工作区展示启用插件的职责与成果导向 Skill",
   ));
   assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
   const catalog = (await responseJson(response)).data;
-  assert.deepEqual(catalog.agents.map((agent: any) => agent.pluginId), ["opc", "coding"]);
+  assert.deepEqual(catalog.agents.map((agent: any) => [agent.pluginId, agent.id]), [
+    ["opc", "opc.opportunity-validator"], ["opc", "opc.business-assistant"], ["coding", "coding.builtin"],
+  ]);
   const research = catalog.skills.find((skill: any) => skill.id === "opc.skill.public-research");
   assert.deepEqual(research, {
     pluginId: "opc",

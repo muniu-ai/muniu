@@ -106,7 +106,7 @@ export function createHostGoalRuntime(options: HostGoalRuntimeOptions) {
     const toolIds = thread.pluginId === "coding" ? ["coding.repository.read", "coding.sandbox.write", "coding.gate.verify", "coding.candidate.accept"] : [];
     if (toolIds.some(id => !definition.contributions.tools.some(tool => tool.id === id))) fail("GOAL_EXECUTOR_UNAVAILABLE", "插件缺少目标所需工具");
     const dataScopes: ResourceRef[] = thread.pluginId === "coding" ? goal.resourceRefs.filter(ref => ref.namespace === "coding.repository").map(ref => ({ namespace: "repository", resourceId: ref.resourceId })) : [];
-    const agentDefinitionId = thread.pluginId === "coding" ? "coding.builtin" : "opc.opportunity-validator";
+    const agentDefinitionId = thread.pluginId === "coding" ? "coding.builtin" : thread.resourceRef ? "opc.opportunity-validator" : "opc.business-assistant";
     if (!definition.contributions.agents.some(agent => agent.id === agentDefinitionId)) fail("GOAL_EXECUTOR_UNAVAILABLE", "插件缺少目标执行者");
     return { threadStreamVersion: thread.streamVersion, domainInputDigest: domainInputDigest(tx, thread), pluginId: thread.pluginId as "opc" | "coding", pluginVersion: definition.version,
       ...(definition.manifest ? { pluginPackageSha256: definition.manifest.packageSha256 } : {}), agentDefinitionId,

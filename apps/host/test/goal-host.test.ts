@@ -247,3 +247,32 @@ test("目标只引用会话实际读取的资料，不能额外声明未使用�
   assert.ok(response.status >= 400, JSON.stringify(response.body));
   assert.equal((await f.store.transact("local", tx => tx.listProjections(GOAL_NAMESPACE))).length, 0);
 });
+
+test("经营任务使用独立经营助手，执行不新增机会或改写经营账目", async t => {
+  const f = await fixture(t);
+  const thread = await f.host.kernel.createThread("local", "local-owner", "business-thread", { workspaceId: f.workspace.id, pluginId: "opc", subject: "规划下月经营" });
+  const created = await f.send(`/v2/workspaces/${f.workspace.id}/goals`, {
+    threadId: thread.id, objective: "规划下月经营，分析现金流与交付安排", resourceRefs: [],
+    budget: { maxTokens: 1000, maxCostMinorUnits: "50", currency: "CNY", maxDurationMs: 60_000 },
+    deliverables: [{ key: "report", title: "经营计划", required: true, criteria: [{ id: "facts", description: "区分事实和建议" }] }],
+  });
+  const current = await start(f, created);
+  assert.equal(current.detail.plan.agentDefinitionId, "opc.business-assistant");
+  assert.deepEqual(current.detail.plan.toolIds, []);
+  const before = await f.store.transact("local", tx => ({ opportunities: tx.listProjections("opc.opportunity"), business: tx.listProjections("opc.business") }));
+  let calls = 0;
+  const result = await worker(f, async ({ request }) => {
+    calls++;
+    assert.ok(request.messages.some(message => message.content.includes("经营助手")));
+    assert.ok(request.messages.some(message => message.content.includes("分析现金流与交付安排")));
+    assert.ok(!request.messages.some(message => message.content.includes("你是木牛 OPC 机会验证 Agent")));
+    assert.deepEqual(request.availableToolIds, []);
+    return { text: "经营建议：先核对现有订单交付安排；缺少收支资料，不能推断现金余额。", toolCalls: [], usage: { inputTokens: 10, cachedInputTokens: 0, outputTokens: 10 } };
+  }).pollOnce();
+  assert.equal(result.status, "completed", JSON.stringify(result));
+  assert.equal(calls, 1);
+  const refreshed = await f.send(`${current.path}/commands`, { workspaceId: f.workspace.id, expectedStreamVersion: current.detail.goal.streamVersion, command: "refresh" });
+  assert.equal(refreshed.body.data.goal.status, "awaiting_acceptance");
+  assert.match(refreshed.body.data.deliverySet.items[0].preview, /经营建议/u);
+  assert.deepEqual(await f.store.transact("local", tx => ({ opportunities: tx.listProjections("opc.opportunity"), business: tx.listProjections("opc.business") })), before);
+});
