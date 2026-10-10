@@ -1,5 +1,4 @@
 import { AlertTriangle, ArrowLeft, ArrowRight, CheckCircle2, ChevronDown, CircleDashed, Code2, FileDiff, FlaskConical, SearchCheck, Target, UserCheck } from "lucide-react";
-import { useState } from "react";
 import type { AgentOsClient } from "../api";
 import { EmptyState, ErrorState, Loading } from "../components/Status";
 import type { CodingRepositorySummary, CodingTaskSummary, OpportunitySummary, ViewMode } from "../types";
@@ -57,12 +56,12 @@ function EvidenceColumn({ title, tone, items }: { readonly title: string; readon
   return <section className={`evidence-column ${tone}`}><header>{tone === "support" ? <SearchCheck size={16} /> : <AlertTriangle size={16} />}<strong>{title}</strong><span>{items.length}</span></header>{items.map((item) => <article key={item.id}><p>{item.summary}</p><small>{item.source} · {new Date(item.capturedAt).toLocaleDateString("zh-CN")}{item.humanConfirmed ? " · 人工确认" : ""}</small></article>)}</section>;
 }
 
-export function CodingPage({ api, workspaceId, repositories, onRepositoriesChanged, items, selectedId, onSelect, loading, error, viewMode, onRetry }: { readonly api: AgentOsClient; readonly workspaceId: string; readonly repositories: readonly CodingRepositorySummary[]; readonly onRepositoriesChanged: () => Promise<void>; readonly items: readonly CodingTaskSummary[]; readonly selectedId?: string; readonly onSelect: (id: string | undefined) => void; readonly loading: boolean; readonly error?: string; readonly viewMode: ViewMode; readonly onRetry: () => void }) {
+export function CodingPage({ api, workspaceId, repositories, onRegisterRepository, items, selectedId, onSelect, loading, error, viewMode, onRetry }: { readonly api: AgentOsClient; readonly workspaceId: string; readonly repositories: readonly CodingRepositorySummary[]; readonly onRegisterRepository: () => void; readonly items: readonly CodingTaskSummary[]; readonly selectedId?: string; readonly onSelect: (id: string | undefined) => void; readonly loading: boolean; readonly error?: string; readonly viewMode: ViewMode; readonly onRetry: () => void }) {
   const selected = items.find((task) => task.id === selectedId);
   if (selected) return <CodingDetailPage api={api} workspaceId={workspaceId} task={selected} viewMode={viewMode} onBack={() => onSelect(undefined)} />;
   return <div className="page-stack"><PageTitle eyebrow="受治理研发" title="Coding" detail="从任务、差异和检查结果做决定，技术执行细节按需展开。" />
     {loading && <Loading label="正在读取 Coding 任务" />}{error && <ErrorState title="Coding 已降级" detail={error} action="核心页面和 OPC 不受影响" onRetry={onRetry} />}
-    {!error && <CodingRepositories api={api} workspaceId={workspaceId} items={repositories} onChanged={onRepositoriesChanged} />}
+    {!error && <CodingRepositories items={repositories} onRegister={onRegisterRepository} disabled={loading} />}
     {!loading && !error && items.length === 0 && <EmptyState title="还没有 Coding 任务" detail="登记仓库后，在顶部选择仓库并描述任务目标" />}
     {!loading && !error && items.map((task) => <article className="coding-card" key={task.id}>
       <header><span className="coding-icon"><Code2 size={19} /></span><div><span className="pill">{codingStatusLabels[task.status]}</span><h2>{task.title}</h2><p>{task.repository}</p></div><button className="quiet-button" onClick={() => onSelect(task.id)}>打开任务<ArrowRight size={15} /></button></header>
@@ -73,26 +72,11 @@ export function CodingPage({ api, workspaceId, repositories, onRepositoriesChang
   </div>;
 }
 
-function CodingRepositories({ api, workspaceId, items, onChanged }: { readonly api: AgentOsClient; readonly workspaceId: string; readonly items: readonly CodingRepositorySummary[]; readonly onChanged: () => Promise<void> }) {
-  const [path, setPath] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
-  async function register() {
-    if (busy || !path.trim().startsWith("/")) return;
-    setBusy(true); setError(undefined);
-    try { await api.createCodingRepository(workspaceId, path.trim()); setPath(""); await onChanged(); }
-    catch (error) { setError(error instanceof Error ? error.message : "仓库登记失败，请重试"); }
-    finally { setBusy(false); }
-  }
+function CodingRepositories({ items, onRegister, disabled }: { readonly items: readonly CodingRepositorySummary[]; readonly onRegister: () => void; readonly disabled: boolean }) {
   return <section className="panel repository-manager" aria-label="Coding 仓库">
-    <PanelHeading title="工作区仓库" />
-    <p>登记后可重复使用。此操作只保存路径，不会读取或修改仓库；执行任务前还会检查访问权限。</p>
+    <header><PanelHeading title="工作区仓库" /><button className="secondary-button" disabled={disabled} onClick={onRegister}>{items.length ? "添加仓库" : "登记仓库"}</button></header>
+    <p>选择本地 Git 仓库，登记后可重复用于当前工作区的 Coding 任务。</p>
     {items.length > 0 && <ul>{items.map(item => <li key={item.id}><strong>{item.name}</strong><span>{item.rootRealPath || "尚未指定路径"}</span></li>)}</ul>}
-    <form onSubmit={event => { event.preventDefault(); void register(); }}>
-      <label className="field"><span>仓库绝对路径</span><input value={path} onChange={event => setPath(event.target.value)} placeholder="/Users/你的用户名/Projects/仓库" disabled={busy} /></label>
-      <button className="quiet-button" type="submit" disabled={busy || !path.trim().startsWith("/")}>{busy ? "正在登记" : "登记仓库"}</button>
-    </form>
-    {error && <p role="alert">{error}</p>}
   </section>;
 }
 

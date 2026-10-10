@@ -72,7 +72,7 @@ npm ci
 | Kernel、Runtime、Storage | `npm run test:core`、`npm run test:apps`、`npm run test:boundaries` | 先构建；涉及持久化、恢复或权限时补充对应企业验证 |
 | Host、Worker、CLI、业务执行服务 | `npm run test:apps`、`npm run test:boundaries` | 先构建；跨插件行为补充 `npm run verify:plugins` |
 | 产品插件、SDK、Runner | `npm run verify:plugins` 和受影响 Worker、UI 检查 | 先构建；外部 Runner 的 macOS 行为需在 macOS 验证 |
-| Desktop 界面与交互 | `npm run typecheck:desktop`、`npm run build:desktop`，以及对应的 `verify:onboarding-ui`、`verify:opc-ui`、`verify:coding-ui` | 先构建 Node workspace；UI 脚本需要系统 Chrome 或 Chromium，自行启动 Host fixture 与 Vite |
+| Desktop 界面与交互 | `npm run typecheck:desktop`、`npm run build:desktop`，以及对应的 `verify:onboarding-ui`、`verify:opc-ui`、`verify:coding-ui`、`verify:repositories-ui` | 先构建 Node workspace；UI 脚本需要系统 Chrome 或 Chromium，自行启动 Host fixture 与 Vite；构建与 UI 验证顺序执行，避免热更新中断页面 |
 | 原生 Desktop、sidecar | `npm run verify:mac-release`，再执行下方 macOS/Rust 门禁 | macOS、Apple 构建工具、固定 Rust 工具链；先生成 sidecar |
 | 企业部署与 sandbox | `npm run verify:helm`、`npm run verify:enterprise-fixture`、`npm run verify:kind` | Helm、Docker Compose；Kind 检查还需要 Docker、Kind、kubectl、curl 和镜像下载网络 |
 | 依赖、许可证、上游适配 | `npm run verify:oss-baseline`、`npm run test:oss-policy`、`npm run verify:licenses`、`npm audit --omit=dev` | 更新对应许可证清单；Cargo 许可证另按 CI 执行 `cargo-deny` 检查 |

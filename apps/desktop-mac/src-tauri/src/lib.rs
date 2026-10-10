@@ -169,6 +169,27 @@ async fn save_json_export(
     .map_err(|_| "文件保存任务未完成".to_string())?
 }
 
+#[tauri::command]
+async fn choose_repository_directory(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let selected = app
+            .dialog()
+            .file()
+            .set_title("选择 Git 仓库文件夹")
+            .blocking_pick_folder();
+        let Some(selected) = selected else {
+            return Ok(None);
+        };
+        let path = selected
+            .into_path()
+            .map_err(|_| "请选择本机文件夹".to_string())?;
+        let path = path.to_str().ok_or("文件夹路径包含无法识别的字符")?;
+        Ok(Some(path.to_string()))
+    })
+    .await
+    .map_err(|_| "文件夹选择未完成，请重试".to_string())?
+}
+
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(
@@ -197,7 +218,8 @@ pub fn run() {
             desktop_runtime_status,
             read_desktop_settings,
             write_desktop_settings,
-            save_json_export
+            save_json_export,
+            choose_repository_directory
         ])
         .build(tauri::generate_context!())
         .expect("failed to build 木牛 desktop");

@@ -50,6 +50,7 @@
     "verify:local-keychain": "npm run build -w @mn/storage && npm run build -w @mn/host && node scripts/verify-local-keychain.mjs",
     "verify:opc-ui": "npm run verify:opc-ui -w @mn/desktop-mac",
     "verify:coding-ui": "npm run verify:coding-ui -w @mn/desktop-mac",
+    "verify:repositories-ui": "npm run verify:repositories-ui -w @mn/desktop-mac",
     "verify:goals-ui": "npm run verify:goals-ui -w @mn/desktop-mac",
     "verify:plugins": "npm run test -w @mn/plugin-sdk && npm run test:plugins && npm run test -w @mn/host",
     "verify:enterprise-fixture": "node scripts/enterprise-e2e.mjs",

@@ -37,6 +37,7 @@ CLI 帮助、API 路由表、OpenAPI 和内置插件目录由源码生成。改�
 - [多 Agent、多模型提案](./proposals/agent-os-multi-agent-optimization-2026-10-09.md)：总体设计与分期；本次采用范围见 [S0 复用审查](./verification/agent-os-s0-reuse-2026-10-09.md)、[S1 决策](./adr/0013-goal-delivery-orchestration.md)和[验证记录](./verification/agent-os-s1-2026-10-09.md)。
 - [OPC 经营管理体系](./proposals/opc-business-management-2026-10-09.md)：完整经营领域、曾鸣著作依据及产品实施分期。
 - [工程验收记录](./verification/application-boundaries-2026-09-28.md)：查看对应提交的实际检查及未完成项。
+- [仓库登记体验验证](./verification/repository-registration-ux-2026-10-10.md)：快速登记、原生文件夹选择和重试检查。
 - [工业询价专项](./industry-delivery/README.md)：双仓库参考应用、合成样本和发布门禁；它不是首次使用木牛的前置条件。
 
 ## 如何判断一份资料的适用范围

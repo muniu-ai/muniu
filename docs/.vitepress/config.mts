@@ -90,6 +90,7 @@ export default defineConfig({
           { text: "macOS 发布", link: "/release/macos" },
           { text: "签名与公证", link: "/release/apple-developer-id" },
           { text: "工程验收记录", link: "/verification/application-boundaries-2026-09-28" },
+          { text: "仓库登记体验验证", link: "/verification/repository-registration-ux-2026-10-10" },
         ],
       },
       {

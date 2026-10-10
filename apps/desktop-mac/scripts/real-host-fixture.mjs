@@ -108,6 +108,7 @@ async function seedWorkspace(seedMode) {
   await mutate(`/v2/model-connections/${pendingModel.id}/probe`, {
     expectedStreamVersion: pendingModel.streamVersion,
   }, "seed-model-probe");
+  if (seedMode === "repositories") return;
   const opportunity = await mutate("/v2/plugins/opc/opportunities", {
     workspaceId: workspace.id,
     expectedStreamVersion: 0,

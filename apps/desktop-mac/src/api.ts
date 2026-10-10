@@ -333,9 +333,10 @@ export class AgentOsClient {
   }
   codingTasks(workspaceId: string) { return this.request(apiPath("listCodingTasks", {}, { workspaceId })); }
   codingRepositories(workspaceId: string) { return this.request(apiPath("listCodingRepositories", {}, { workspaceId })); }
-  createCodingRepository(workspaceId: string, input: string) {
+  createCodingRepository(workspaceId: string, input: string, requestKey?: string) {
     return this.request(apiPath("createCodingRepository", {}), {
-      method: "POST", body: JSON.stringify({ workspaceId, expectedStreamVersion: 0, input }),
+      method: "POST", ...(requestKey ? { headers: { "Idempotency-Key": requestKey } } : {}),
+      body: JSON.stringify({ workspaceId, expectedStreamVersion: 0, input }),
     });
   }
 

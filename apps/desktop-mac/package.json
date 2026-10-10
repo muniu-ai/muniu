@@ -12,6 +12,7 @@
     "preview": "vite preview --host 127.0.0.1",
     "verify:opc-ui": "node scripts/verify-agent-os-ui.mjs opc",
     "verify:coding-ui": "node scripts/verify-agent-os-ui.mjs coding",
+    "verify:repositories-ui": "node scripts/verify-agent-os-ui.mjs repositories",
     "verify:goals-ui": "node scripts/verify-agent-os-ui.mjs goals",
     "verify:onboarding-ui": "node scripts/verify-agent-os-ui.mjs onboarding",
     "verify:business-ui": "node scripts/verify-agent-os-ui.mjs business",

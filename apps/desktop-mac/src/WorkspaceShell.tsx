@@ -7,6 +7,7 @@ import {
 import { AgentOsApiError, AgentOsClient } from "./api";
 import { CommandPalette, type PaletteItem } from "./components/CommandPalette";
 import { BrandMark } from "./components/BrandMark";
+import { RepositoryDialog } from "./components/RepositoryDialog";
 import { PluginBoundary } from "./components/PluginBoundary";
 import { PluginCard } from "./components/PluginSurface";
 import { PluginManager } from "./components/PluginManager";
@@ -70,6 +71,7 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces, initi
   const [codingTasks, setCodingTasks] = useState<readonly CodingTaskSummary[]>([]);
   const [codingRepositories, setCodingRepositories] = useState<readonly CodingRepositorySummary[]>([]);
   const [captureRepositoryId, setCaptureRepositoryId] = useState<string>();
+  const [repositoryDialogOpen, setRepositoryDialogOpen] = useState(false);
   const [selectedOpportunityId, setSelectedOpportunityId] = useState<string>();
   const [selectedCodingTaskId, setSelectedCodingTaskId] = useState<string>();
   const [health, setHealth] = useState<readonly PluginHealth[]>([]);
@@ -182,6 +184,7 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces, initi
   }
 
   function selectWorkspace(next: WorkspaceSummary) {
+    setRepositoryDialogOpen(false);
     setCaptureRepositoryId(undefined); setCodingRepositories([]);
     setWorkspace(next); setCapturePlugin(productPlugins(next.activePluginIds)[0]); setSelectedOpportunityId(undefined); setSelectedCodingTaskId(undefined); setPage(next.viewMode === "business" && next.activePluginIds.includes("opc") ? "opc" : "home");
   }
@@ -230,10 +233,13 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces, initi
         <span className="capture-icon"><Zap size={17} /></span>
         <input value={captureText} disabled={!capturePlugin} onChange={(event) => setCaptureText(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void submitCapture(); }} placeholder={!capturePlugin ? "先在工作区启用 OPC 或 Coding" : capturePlugin === "opc" ? "记下一条机会、客户原话或反证" : "描述一个 Coding 任务"} />
         <select aria-label="捕获类型" value={capturePlugin ?? ""} disabled={capturePlugins.length === 0} onChange={(event) => setCapturePlugin(event.target.value as ProductPluginId)}>{capturePlugins.map((pluginId) => <option key={pluginId} value={pluginId}>{pluginLabel(pluginId)}</option>)}</select>
-        {capturePlugin === "coding" && <select aria-label="任务仓库" value={repositoryId ?? ""} disabled={codingLoading || repositories.length === 0} onChange={event => setCaptureRepositoryId(event.target.value || undefined)}>
-          <option value="" disabled>{repositories.length === 0 ? "请先登记仓库" : "选择仓库"}</option>
+        {capturePlugin === "coding" && <>
+        {repositories.length > 0 && <select aria-label="任务仓库" value={repositoryId ?? ""} disabled={codingLoading} onChange={event => setCaptureRepositoryId(event.target.value || undefined)}>
+          <option value="" disabled>选择仓库</option>
           {repositories.map(item => <option key={item.id} value={item.id}>{repositories.filter(other => other.name === item.name).length > 1 ? `${item.name} · ${item.rootRealPath}` : item.name}</option>)}
         </select>}
+        <button className="quiet-button repository-entry" disabled={codingLoading || captureBusy || Boolean(codingError)} onClick={() => setRepositoryDialogOpen(true)}><Plus size={15} />{codingLoading ? "正在读取仓库" : repositories.length ? "添加仓库" : "登记仓库"}</button>
+        </>}
         <button className="primary-button" disabled={!captureReady} onClick={() => void submitCapture()}><Plus size={15} />{captureBusy ? "正在保存" : "捕获"}</button>
       </section>}
       {notice && <div className="toast" role="status"><Sparkles size={15} />{notice}<button onClick={() => setNotice(undefined)}>关闭</button></div>}
@@ -257,10 +263,15 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces, initi
         {page === "home" && surfaces.flatMap((surface) => (surface.ui?.widgets ?? []).map((widget) => <PluginBoundary key={`${surface.pluginId}:${surface.version}:${widget.widgetId}`} pluginName={surface.pluginId}><PluginCard card={widget.card} pluginId={surface.pluginId} workspaceId={workspace.id} api={api} /></PluginBoundary>))}
         {page === "opc" && <PluginBoundary pluginName="OPC"><BusinessManagementPage key={workspace.id} api={api} workspaceId={workspace.id} initialTab={workspace.id === initialWorkspace.id ? initialBusinessTab : undefined} onExplore={() => { setSelectedOpportunityId(undefined); setPage("opc-validation"); }} /></PluginBoundary>}
         {page === "opc-validation" && <PluginBoundary pluginName="OPC"><button className="quiet-button" onClick={() => setPage("opc")}>返回经营管理</button><OpcPage api={api} workspaceId={workspace.id} items={opportunities} selectedId={selectedOpportunityId} onSelect={setSelectedOpportunityId} loading={opcLoading} error={opcError} viewMode={workspace.viewMode} onRetry={() => void refreshOpc()} onChanged={async () => { await Promise.all([refreshOpc(), refreshCore()]); }} /></PluginBoundary>}
-        {page === "coding" && <PluginBoundary pluginName="Coding"><CodingPage key={workspace.id} api={api} workspaceId={workspace.id} repositories={repositories} onRepositoriesChanged={refreshCoding} items={codingTasks} selectedId={selectedCodingTaskId} onSelect={setSelectedCodingTaskId} loading={codingLoading} error={codingError} viewMode={workspace.viewMode} onRetry={() => void refreshCoding()} /></PluginBoundary>}
+        {page === "coding" && <PluginBoundary pluginName="Coding"><CodingPage key={workspace.id} api={api} workspaceId={workspace.id} repositories={repositories} onRegisterRepository={() => setRepositoryDialogOpen(true)} items={codingTasks} selectedId={selectedCodingTaskId} onSelect={setSelectedCodingTaskId} loading={codingLoading} error={codingError} viewMode={workspace.viewMode} onRetry={() => void refreshCoding()} /></PluginBoundary>}
       </div>
     </main>
     <CommandPalette open={paletteOpen} items={paletteItems} onClose={() => setPaletteOpen(false)} />
+    <RepositoryDialog key={workspace.id} api={api} workspaceId={workspace.id} workspaceName={workspace.name} repositories={repositories} open={repositoryDialogOpen} onClose={() => setRepositoryDialogOpen(false)} onSelected={repository => {
+      setCodingRepositories(current => [...current.filter(item => item.id !== repository.id), repository]);
+      setCaptureRepositoryId(repository.id); setCapturePlugin("coding");
+      setNotice(`已选中仓库「${repository.name}」，可以继续填写或捕获任务`);
+    }} />
   </div>;
 }
 

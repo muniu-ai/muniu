@@ -9,7 +9,7 @@ import { chromium } from "playwright-core";
 import { businessDateAt } from "../../../packages/contracts/dist/index.js";
 
 const mode = process.argv[2] ?? "onboarding";
-if (!new Set(["onboarding", "opc", "coding", "goals", "business", "startup"]).has(mode)) throw new Error(`未知验证模式：${mode}`);
+if (!new Set(["onboarding", "opc", "coding", "goals", "business", "startup", "repositories"]).has(mode)) throw new Error(`未知验证模式：${mode}`);
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const desktopDir = resolve(scriptDir, "..");
 const repoRoot = resolve(desktopDir, "..", "..");
@@ -57,7 +57,7 @@ try {
     if (url.origin !== apiUrl || ["HEAD", "OPTIONS"].includes(request.method())) return;
     let body = {};
     try { body = request.postDataJSON(); } catch { /* 请求体不是 JSON */ }
-    requests.push({ method: request.method(), path: url.pathname, search: url.search, body });
+    requests.push({ method: request.method(), path: url.pathname, search: url.search, body, key: request.headers()["idempotency-key"] });
   });
   page.setDefaultTimeout(12_000);
   if (mode === "startup") await verifyStartup(page, requests);
@@ -66,6 +66,7 @@ try {
   if (mode === "onboarding") await verifyOnboarding(page, requests);
   if (mode === "opc") await verifyOpc(page, requests, apiUrl);
   if (mode === "coding") await verifyCoding(page, requests);
+  if (mode === "repositories") await verifyRepositories(page, requests);
   if (mode === "goals") await verifyGoals(page, requests);
   if (mode === "business") await verifyBusiness(page, requests);
   await page.getByTitle("技术配置").click();
@@ -114,6 +115,103 @@ try {
   await browser?.close().catch(() => undefined);
   for (const child of children.reverse()) child.kill("SIGTERM");
   if (process.env.MN_DESKTOP_E2E_KEEP_TEMP !== "1") await rm(temporaryRoot, { recursive: true, force: true });
+}
+
+async function verifyRepositories(page, requestLog) {
+  await page.getByRole("button", { name: "首页", exact: true }).click();
+  const capture = page.getByRole("region", { name: "快速捕获" });
+  await capture.getByLabel("捕获类型").selectOption("coding");
+  const draft = capture.getByPlaceholder("描述一个 Coding 任务");
+  await draft.fill("为客户网站补充错误处理");
+  const registrations = () => requestLog.filter(entry => entry.method === "POST" && entry.path === "/v2/plugins/coding/repositories");
+  await capture.getByRole("button", { name: "登记仓库", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "登记仓库", exact: true });
+  const path = dialog.getByLabel("仓库绝对路径", { exact: true });
+  const submit = dialog.getByRole("button", { name: "登记并选中", exact: true });
+  await dialog.waitFor();
+  if (await dialog.getByRole("button", { name: "选择文件夹", exact: true }).count()) throw new Error("浏览器不应显示不可用的原生目录选择");
+  for (const invalid of ["relative/path", "/", " /// "]) {
+    await path.fill(invalid);
+    if (await submit.isEnabled()) throw new Error("无效的仓库绝对路径必须阻止提交");
+  }
+  await page.keyboard.press("Escape");
+  await dialog.waitFor({ state: "hidden" });
+  if (registrations().length || await draft.inputValue() !== "为客户网站补充错误处理") throw new Error("取消登记不得写入或清空任务");
+  if (!await capture.getByRole("button", { name: "登记仓库", exact: true }).evaluate(el => el === document.activeElement)) throw new Error("取消后焦点应返回登记入口");
+
+  await page.evaluate(() => {
+    window.__folderResult = null;
+    window.__TAURI__ = { core: { invoke: async command => {
+      if (command !== "choose_repository_directory") throw new Error("unexpected native command");
+      if (window.__folderResult === "error") throw new Error("fixture error");
+      return window.__folderResult;
+    } } };
+  });
+  await capture.getByRole("button", { name: "登记仓库", exact: true }).click();
+  await path.fill("/workspace/manual");
+  const choose = dialog.getByRole("button", { name: "选择文件夹", exact: true });
+  await choose.click();
+  await choose.waitFor();
+  if (await path.inputValue() !== "/workspace/manual") throw new Error("取消目录选择必须保留已填路径");
+  await page.evaluate(() => { window.__folderResult = "error"; });
+  await choose.click();
+  await dialog.getByRole("alert").waitFor();
+  if (!await path.isEnabled()) throw new Error("原生选择失败后应允许手动输入");
+  const firstPath = "/workspace/客户 网站";
+  await page.evaluate(value => { window.__folderResult = value; }, firstPath);
+  await choose.click();
+  await path.inputValue().then(value => { if (value !== firstPath) throw new Error("未填入目录选择结果"); });
+  if (registrations().length) throw new Error("选择目录不得直接登记");
+  await page.setViewportSize({ width: 960, height: 640 });
+  await assertViewportFit(page);
+  await page.screenshot({ path: join(temporaryRoot, "repository-dialog.png") });
+  await submit.click();
+  await dialog.waitFor({ state: "hidden" });
+  const choice = capture.getByLabel("任务仓库", { exact: true });
+  const firstId = await choice.inputValue();
+  if (!firstId || await choice.locator("option:checked").textContent() !== "客户 网站" || await draft.inputValue() !== "为客户网站补充错误处理") throw new Error("登记后应选中新仓库并保留任务");
+
+  await capture.getByRole("button", { name: "添加仓库", exact: true }).click();
+  await path.fill(`${firstPath}///`);
+  await submit.click();
+  await dialog.waitFor({ state: "hidden" });
+  if (registrations().length !== 1 || await choice.inputValue() !== firstId) throw new Error("相同路径应复用已有仓库");
+
+  let dropped = false;
+  await page.route(`${apiUrl}/v2/plugins/coding/repositories`, async route => {
+    if (route.request().method() !== "POST" || dropped) return route.continue();
+    dropped = true;
+    const response = await route.fetch();
+    if (!response.ok()) throw new Error("丢失响应场景应先完成真实写入");
+    await route.abort("failed");
+  });
+  await capture.getByRole("button", { name: "添加仓库", exact: true }).click();
+  await path.fill("/workspace/second");
+  await submit.click();
+  await dialog.getByRole("alert").waitFor();
+  await dialog.getByRole("button", { name: "取消", exact: true }).click();
+  await capture.getByRole("button", { name: "添加仓库", exact: true }).click();
+  await submit.click();
+  await dialog.waitFor({ state: "hidden" });
+  const attempts = registrations().slice(-2);
+  if (attempts.length !== 2 || !attempts[0].key || attempts[0].key !== attempts[1].key) throw new Error("响应丢失重试必须复用幂等键");
+  await page.unroute(`${apiUrl}/v2/plugins/coding/repositories`);
+  const secondId = await choice.inputValue();
+  if (!secondId || secondId === firstId || await choice.locator("option:checked").textContent() !== "second") throw new Error("多个仓库时应选中刚登记的一项");
+  await capture.getByRole("button", { name: "捕获", exact: true }).click();
+  await page.getByRole("status").filter({ hasText: "Coding 任务已生成" }).waitFor();
+  const task = requestLog.find(entry => entry.method === "POST" && entry.path === "/v2/plugins/coding/tasks");
+  if (task?.body.repositoryId !== secondId) throw new Error("任务必须绑定新选中的仓库");
+  await page.getByRole("button", { name: "Coding", exact: true }).click();
+  const list = page.getByRole("region", { name: "Coding 仓库" });
+  await list.getByText("second", { exact: true }).waitFor();
+  if (await list.getByText("second", { exact: true }).count() !== 1) throw new Error("重试产生了重复仓库");
+  await list.getByRole("button", { name: "添加仓库", exact: true }).click();
+  await dialog.waitFor();
+  await dialog.getByRole("button", { name: "取消", exact: true }).click();
+  await assertViewportFit(page);
+  await page.screenshot({ path: join(temporaryRoot, "repository-capture.png") });
+  await page.setViewportSize({ width: 1180, height: 760 });
 }
 
 async function verifyStartup(page, requestLog) {
@@ -972,14 +1070,15 @@ async function verifyCoding(page, requestLog) {
   await page.getByRole("button", { name: "Coding" }).click();
   const repositories = page.getByRole("region", { name: "Coding 仓库" });
   await repositories.getByText("muniu", { exact: true }).waitFor();
-  await repositories.getByLabel("仓库绝对路径", { exact: true }).fill("/workspace/customer-service");
-  await repositories.getByRole("button", { name: "登记仓库", exact: true }).click();
+  await repositories.getByRole("button", { name: "添加仓库", exact: true }).click();
+  const registration = page.getByRole("dialog", { name: "登记仓库", exact: true });
+  await registration.getByLabel("仓库绝对路径", { exact: true }).fill("/workspace/customer-service");
+  await registration.getByRole("button", { name: "登记并选中", exact: true }).click();
   await repositories.getByText("customer-service", { exact: true }).waitFor();
   await capture.selectOption("coding");
   const repositoryChoice = page.getByLabel("任务仓库", { exact: true });
   await page.getByPlaceholder("描述一个 Coding 任务").fill("为第二个仓库补充错误处理");
-  if (await page.getByRole("button", { name: "捕获", exact: true }).isEnabled()) throw new Error("多个仓库时不得默认绑定第一项");
-  await repositoryChoice.selectOption({ label: "customer-service" });
+  if (await repositoryChoice.locator("option:checked").textContent() !== "customer-service") throw new Error("登记后应选中新仓库");
   const selectedRepository = await repositoryChoice.inputValue();
   await page.getByRole("button", { name: "捕获", exact: true }).click();
   await page.locator(".coding-card").filter({ hasText: "为第二个仓库补充错误处理" }).waitFor();
