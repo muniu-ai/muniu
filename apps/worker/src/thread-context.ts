@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+import { assertExecutionContextSources, inheritExecutionContext, type ContextSourceValidator } from "./execution-context.js";
 import type { ModelMessage, RuntimeStore } from "@mn/agent-runtime";
 import type { Execution } from "@mn/contracts";
 import type { KernelStore } from "@mn/kernel";
@@ -12,7 +13,7 @@ interface ThreadTurn {
 }
 
 /** History changes the model surface only; the model request persists its exact view. */
-export async function readThreadHistory(store: KernelStore, runtime: RuntimeStore, execution: Execution): Promise<readonly ModelMessage[]> {
+export async function readThreadHistory(store: KernelStore, runtime: RuntimeStore, execution: Execution, validateSource?: ContextSourceValidator): Promise<readonly ModelMessage[]> {
   const turns = await store.transact(execution.tenantId, tx => tx.listProjections<ThreadTurn>("session-log-entry")
     .filter(turn => turn.tenantId === execution.tenantId && turn.workspaceId === execution.workspaceId
       && turn.threadId === execution.threadId));
@@ -28,11 +29,16 @@ export async function readThreadHistory(store: KernelStore, runtime: RuntimeStor
     const previous = await store.transact(execution.tenantId, (transaction) => transaction.getProjection<Execution>("execution", id));
     if (!previous || previous.threadId !== execution.threadId || previous.workspaceId !== execution.workspaceId
       || previous.pluginId !== execution.pluginId || previous.status !== "completed") continue;
+    await store.transact(execution.tenantId, tx => {
+      assertExecutionContextSources(tx, previous, validateSource);
+      inheritExecutionContext(tx, execution, previous, validateSource);
+    });
     for (const record of await runtime.readExecution(id)) {
       const entry = record.payload;
       if (record.type === "session/entry" && entry.modelVisible !== false && typeof entry.content === "string"
-        && (entry.role === "user" || entry.role === "assistant")) messages.push({ role: entry.role, content: entry.content });
+        && (entry.role === "user" || entry.role === "assistant")) messages.push({ role: entry.role, content: entry.content, contextOrigin: { executionId: id, sequence: record.sequence } });
     }
   }
+  await store.transact(execution.tenantId, tx => assertExecutionContextSources(tx, execution, validateSource));
   return messages;
 }

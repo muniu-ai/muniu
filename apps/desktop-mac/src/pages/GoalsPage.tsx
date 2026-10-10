@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import type { AgentSchedulingRequestV2, GoalDetailV2, GoalStatusV2, GoalV2, ModelConnectionV2, Thread } from "@mn/contracts";
+import type { AgentSchedulingRequestV2, BusinessContextTargetV2, GoalDetailV2, GoalStatusV2, GoalV2, ModelConnectionV2, Thread } from "@mn/contracts";
 import { AgentOsApiError, type AgentOsClient } from "../api";
 import { ResultText } from "../components/ResultText";
 import { TaskComposer } from "../components/TaskComposer";
+import { GoalSources } from "../components/GoalSources";
 import { ThreadAgentPanel } from "../components/ThreadAgentPanel";
 import type { CodingRepositorySummary } from "../types";
 import { EmptyState, ErrorState, Loading } from "../components/Status";
@@ -13,9 +14,10 @@ import { SchedulingControls, SchedulingDecision, ExternalUsageForm, runnerLabel 
 const labels: Record<GoalStatusV2, string> = { draft: "草稿", awaiting_authorization: "待确认计划", running: "执行中", waiting_approval: "等待审批",
   needs_reconciliation: "待核对", failed: "未完成", awaiting_acceptance: "待验收", accepted: "已验收", cancelled: "已取消" };
 
-export function GoalsPage({ target, api, workspaceId, onOpenThread, pluginIds, repositories, repositoryId, onRepository, onRegisterRepository, onSettings, newTaskRequest, active, onTaskCreated }: {
+export function GoalsPage({ target, api, workspaceId, onOpenThread, pluginIds, repositories, repositoryId, onRepository, onRegisterRepository, onSettings, newTaskRequest, active, onTaskCreated, businessTarget }: {
   readonly target?: { readonly id: string; readonly sequence: number };
   readonly api: AgentOsClient; readonly workspaceId: string; readonly onOpenThread: (thread: Thread) => void;
+  readonly businessTarget?: BusinessContextTargetV2 & { readonly sequence: number };
   readonly active: boolean; readonly onTaskCreated: () => void;
   readonly pluginIds: readonly string[]; readonly repositories: readonly CodingRepositorySummary[]; readonly repositoryId?: string;
   readonly onRepository: (id: string) => void; readonly onRegisterRepository: () => void; readonly onSettings: () => void; readonly newTaskRequest: number;
@@ -156,7 +158,7 @@ export function GoalsPage({ target, api, workspaceId, onOpenThread, pluginIds, r
           <button key={goal.id} className={`goal-list-item ${detail?.goal.id === goal.id ? "selected" : ""}`} disabled={busy} onClick={() => void perform(() => api.goal(workspaceId, goal.id), goal.id)}>
             <strong>{goal.objective.split("\n")[0]}</strong><small>{goal.id === detail?.goal.id ? "当前目标" : labels[goal.status]}</small></button>)}
       </section>
-      <section className="panel task-compose-panel" hidden={Boolean(detail)}><div hidden={existing}><TaskComposer visible={active && !detail && !existing} api={api} workspaceId={workspaceId} pluginIds={pluginIds} repositories={repositories} repositoryId={repositoryId} onRepository={onRepository} onRegisterRepository={onRegisterRepository} onSettings={onSettings} onCreated={next => { navigationSequence.current += 1; setDetail(next); setError(undefined); void refreshList(); onTaskCreated(); }} /></div>
+      <section className="panel task-compose-panel" hidden={Boolean(detail)}><div hidden={existing}><TaskComposer businessTarget={businessTarget} visible={active && !detail && !existing} api={api} workspaceId={workspaceId} pluginIds={pluginIds} repositories={repositories} repositoryId={repositoryId} onRepository={onRepository} onRegisterRepository={onRegisterRepository} onSettings={onSettings} onCreated={next => { navigationSequence.current += 1; setDetail(next); setError(undefined); void refreshList(); onTaskCreated(); }} /></div>
         <button className="quiet-button existing-task-toggle" onClick={() => setExisting(value => !value)}>{existing ? "返回新任务" : "关联已有任务"}</button>
         {existing && <form className="form-stack" onSubmit={event => void create(event)}><h2>创建目标</h2>
         <div className="field"><label htmlFor="goal-objective">预期结果</label><textarea id="goal-objective" rows={3} value={objective} required maxLength={16000} disabled={busy} onChange={event => setObjective(event.target.value)} /></div>
@@ -172,7 +174,8 @@ export function GoalsPage({ target, api, workspaceId, onOpenThread, pluginIds, r
       </form>}</section>{detail && <section className="panel goal-detail" aria-label="目标详情">
         <div className="goal-heading"><h2>{detail.goal.objective.split("\n")[0]}</h2><span className="pill" role="status">{labels[detail.goal.status]}</span></div>
         <ol className="task-lifecycle" aria-label="任务阶段">{["委派说明", "审阅计划", "执行与调整", "成果验收"].map((label, index) => <li key={label} className={(detail.goal.status === "draft" ? 0 : detail.goal.status === "awaiting_authorization" ? 1 : ["awaiting_acceptance", "accepted"].includes(detail.goal.status) ? 3 : 2) === index ? "current" : ""}>{index + 1}. {label}</li>)}</ol>
-        <details className="task-brief"><summary>查看完整任务与资料</summary><pre className="goal-preview">{detail.goal.objective}</pre></details>
+        <details className="task-brief"><summary>查看任务与约束</summary><pre className="goal-preview">{detail.goal.objective}</pre></details>
+        <GoalSources key={detail.goal.id} api={api} workspaceId={workspaceId} resourceRefs={detail.goal.resourceRefs} />
         {detail.goal.reasonCode && <p className="inline-error">{reason(detail.goal.reasonCode)}</p>}
         <p>额度：{(Number(detail.goal.budget.maxCostMinorUnits) / 100).toFixed(2)} {detail.goal.budget.currency} · {detail.goal.budget.maxTokens} tokens · {detail.goal.budget.maxDurationMs / 60_000} 分钟</p>
         {detail.goal.reservation && <p>用量：{detail.goal.reservation.status === "settled" ? `${detail.goal.reservation.actual?.costMinorUnits ?? "0"} 分 ${detail.goal.budget.currency}，${detail.goal.reservation.actual?.tokens ?? 0} tokens` : detail.goal.reservation.status === "unknown" ? "待核对，额度继续保留" : "已预留"}</p>}

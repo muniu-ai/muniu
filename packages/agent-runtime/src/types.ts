@@ -24,6 +24,7 @@ export interface ScopeIdentity {
 }
 
 export interface ModelMessage {
+  readonly contextOrigin?: { readonly executionId: string; readonly sequence: number };
   readonly role: "system" | "user" | "assistant" | "tool";
   readonly content: string;
   readonly name?: string;
@@ -38,6 +39,7 @@ export interface ModelToolCall {
 }
 
 export interface ModelRequest {
+  readonly contextSelection?: JsonObject;
   readonly executionId: string;
   readonly agentId: string;
   readonly generation: number;
@@ -191,6 +193,7 @@ export type RuntimeRecordType =
   | "turn/completed"
   | "job/started"
   | "job/completed"
+  | "context/prepared"
   | "model/request"
   | "model/response"
   | "model/budget"
@@ -213,6 +216,8 @@ export interface RuntimeStore {
   append(input: RuntimeRecordInput): Promise<RuntimeRecord>;
   commit(executionId: string, expectedLastSequence: number, inputs: readonly RuntimeRecordInput[]): Promise<readonly RuntimeRecord[] | undefined>;
   readExecution(executionId: string): Promise<readonly RuntimeRecord[]>;
+  /** Accounting-only view: budget payloads and the complete sequence, never message or tool content. */
+  readSettlementRecords?(executionId: string): Promise<readonly RuntimeRecord[]>;
 }
 
 export type ToolAuthorization =
@@ -284,6 +289,7 @@ export interface AgentHandleOptions {
   readonly authority: RuntimeAuthority;
   readonly approval: ToolApprovalPort;
   readonly surface?: SessionSurface;
+  readonly prepareModelRequest?: (request: ModelRequest) => Promise<ModelRequest>;
   readonly maxModelBoundariesPerTurn?: number;
   readonly toolIntentTtlMs?: number;
   readonly now?: () => string;

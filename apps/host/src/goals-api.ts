@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
+import { isBusinessContextRef, assertBusinessContextRef } from "./business-context.js";
+import { assertAssetReader } from "./asset-context.js";
 import { scheduleGoal } from "./goal-scheduling.js";
 import type { AgentSchedulingRequestV2 } from "@mn/contracts";
 import type { GoalBudgetV2, GoalDeliverableSpecV2, GoalResourceRefV2 } from "@mn/contracts";
@@ -41,7 +43,12 @@ export async function dispatchGoalRequest(options: GoalRequestOptions): Promise<
     object(body, ["threadId", "objective", "resourceRefs", "budget", "deliverables"]);
     const threadId = text(body.threadId), selected = resources(body.resourceRefs);
     const bound = await options.store.transact(scope.tenantId, tx => goalThreadResources(tx, scope, threadId));
-    if (selected.some(ref => !bound.some(item => item.namespace === ref.namespace && item.resourceId === ref.resourceId))) invalid();
+    if (selected.some(ref => ref.namespace !== "asset" && !isBusinessContextRef(ref) && !bound.some(item => item.namespace === ref.namespace && item.resourceId === ref.resourceId))) invalid();
+    await options.store.transact(scope.tenantId, tx => {
+      for (const ref of selected.filter(item => item.namespace === "asset")) assertAssetReader(tx, scope, ref);
+      for (const ref of selected.filter(isBusinessContextRef)) assertBusinessContextRef(tx, scope, ref);
+    });
+    if (new Set(selected.map(ref => `${ref.namespace}:${ref.resourceId}`)).size !== selected.length) invalid();
     for (const ref of bound) {
       const existing = selected.find(item => item.namespace === ref.namespace && item.resourceId === ref.resourceId);
       if (existing && (existing.streamVersion !== ref.streamVersion || (existing.digest && existing.digest !== ref.digest))) invalid();

@@ -20,3 +20,5 @@ export * from "./opc-model-context.js";
 export * from "./projection-journal.js";
 
 export { assertGoalExecutionResources } from "./goal-runtime.js";
+
+export { validateBusinessContextSource } from "./business-context.js";

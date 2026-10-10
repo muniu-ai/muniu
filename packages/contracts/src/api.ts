@@ -42,6 +42,8 @@ export type AssetAttachmentUploadV2 = JsonObject & {
     | "application/json"
     | "text/csv"
     | "application/pdf"
+    | "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    | "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     | "image/png"
     | "image/jpeg"
     | "image/webp";
@@ -189,6 +191,8 @@ export const CORE_API_ROUTES = [
   "/v2/assets",
   "/v2/assets/{assetId}",
   "/v2/assets/{assetId}/content",
+  "/v2/assets/{assetId}/extraction",
+  "/v2/workspaces/{workspaceId}/business-context/{kind}/{resourceId}",
   "/v2/memories",
   "/v2/memories/{memoryId}",
   "/v2/memories/{memoryId}/decisions",

@@ -1241,8 +1241,12 @@ async function verifyTasks(page, requestLog) {
   await composer.getByLabel("任务执行者").selectOption("auto");
   if (await executionModel.inputValue() !== selectedPlanModel) throw new Error("切换 CLI 不应丢失模型偏好");
   await composer.getByLabel("添加文本资料").setInputFiles({ name: "不可读.pdf", mimeType: "application/pdf", buffer: Buffer.from("fixture") });
-  await composer.getByRole("alert").filter({ hasText: "目前支持 UTF-8" }).waitFor();
+  await composer.getByText("资料未就绪", { exact: true }).waitFor();
+  if (await composer.getByRole("button", { name: "准备执行计划", exact: true }).isEnabled()) throw new Error("不可读资料必须阻止计划准备");
+  if (!(await composer.getByLabel("任务目标", { exact: true }).inputValue()).includes("现金流")) throw new Error("资料解析失败丢失任务草稿");
+  await composer.getByRole("button", { name: "移除 不可读.pdf", exact: true }).click();
   await composer.getByLabel("添加文本资料").setInputFiles({ name: "交付约束.md", mimeType: "text/markdown", buffer: Buffer.from("现有客户优先；资料不是执行授权。") });
+  await composer.getByText("已解析", { exact: true }).waitFor();
   await composer.getByRole("button", { name: "交付约束.md", exact: true }).click();
   await composer.getByText("现有客户优先；资料不是执行授权。", { exact: true }).waitFor();
   await page.getByRole("button", { name: "工作台", exact: true }).click();
@@ -1267,7 +1271,13 @@ async function verifyTasks(page, requestLog) {
   await page.getByRole("region", { name: "调度依据" }).waitFor();
   if (requestLog.some(item => item.path.endsWith("/turns"))) throw new Error("计划审阅之前不得开始执行");
   const created = requestLog.filter(item => item.method === "POST" && /\/workspaces\/[^/]+\/goals$/.test(item.path));
-  if (created.length !== 2 || created[0].key !== created[1].key || JSON.stringify(created[0].body) !== JSON.stringify(created[1].body) || !created[0].body.objective.includes("现有客户优先")) throw new Error("资料未进入唯一任务");
+  if (created.length !== 2 || created[0].key !== created[1].key || JSON.stringify(created[0].body) !== JSON.stringify(created[1].body) || created[0].body.objective.includes("现有客户优先")) throw new Error("目标重试未保留唯一请求，或材料正文仍写入目标");
+  const materialUpload = requestLog.find(item => item.method === "POST" && item.path === "/v2/assets" && item.body.attachments?.[0]?.fileName === "交付约束.md");
+  const materialRef = created[0].body.resourceRefs.find(ref => ref.namespace === "asset");
+  if (!materialUpload?.body.attachments[0].protected || !materialRef?.digest || !Number.isSafeInteger(materialRef.streamVersion)) throw new Error("资料缺少受保护文件或版本引用");
+  const sourceResponse = await fetch(`${apiUrl}/v2/assets/${materialRef.resourceId}`);
+  const source = (await sourceResponse.json()).data;
+  if (!sourceResponse.ok || !source.protected || source.digest !== materialRef.digest || source.streamVersion !== materialRef.streamVersion) throw new Error("资料引用未固定服务器文件版本");
   if (requestLog.some(item => item.method === "POST" && item.path.endsWith("/opportunities"))) throw new Error("经营任务被错误创建为机会");
   await page.screenshot({ path: join(temporaryRoot, "task-plan.png"), fullPage: true, animations: "disabled" });
   await page.getByRole("button", { name: "确认计划并启动", exact: true }).click();

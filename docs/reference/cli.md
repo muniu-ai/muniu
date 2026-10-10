@@ -22,6 +22,8 @@
   opc               管理经营台账与机会验证
   code              管理 Coding 任务
   goal              管理目标、计划和成果验收
+  asset             上传受保护资料、查看提取内容与来源位置
+  business          读取客户、订单、交付和复盘的版本资料
   backup            创建、校验或恢复本地加密备份
 
 全局参数：
@@ -32,6 +34,11 @@
   mn opc business show --workspace <工作区 ID> --json
   mn opc business command --workspace <工作区 ID> --version <台账版本> --file <命令 JSON 文件> --json
   mn opc business command --workspace <工作区 ID> --version <台账版本> --input '<命令 JSON>'
+
+资料与业务上下文：
+  mn asset upload --workspace <工作区 ID> --file <资料路径> [--key <上传请求标识>] --json
+  mn asset extract <资料 ID> --json
+  mn business context <customer|order|delivery|review> <对象 ID> --workspace <工作区 ID> --json
 
 目标与验收：
   mn goal list --workspace <工作区 ID>

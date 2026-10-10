@@ -1,3 +1,4 @@
+import { validateBusinessContextSource } from "./business-context.js";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { lstat } from "node:fs/promises";
@@ -155,7 +156,7 @@ export async function startLocalAgentOsHost(options: StartLocalHostOptions = {})
       store,
       secretStore,
       approvalKernel: host.kernel,
-      runtimeProtection: { cas, keyProvider: protectedPayloadKeyProvider },
+      runtimeProtection: { cas, keyProvider: protectedPayloadKeyProvider, validateContextSource: validateBusinessContextSource },
       memoryReader: createEncryptedMemoryReader({
         store,
         cas,
@@ -174,7 +175,7 @@ export async function startLocalAgentOsHost(options: StartLocalHostOptions = {})
       ...(options.now ? { now: options.now } : {}),
     });
     const reconciliationVerificationHandler = createCodingReconciliationVerificationWorkerHandler({
-      runtimeProtection: { cas, keyProvider: protectedPayloadKeyProvider },
+      runtimeProtection: { cas, keyProvider: protectedPayloadKeyProvider, validateContextSource: validateBusinessContextSource },
       store,
       sandboxRoot: join(paths.root, "sandboxes", "coding"),
       ...(options.now ? { now: options.now } : {}),
@@ -196,7 +197,7 @@ export async function startLocalAgentOsHost(options: StartLocalHostOptions = {})
           store, kernel: host.kernel, ports: business.businessProvider, ...(options.now ? { now: options.now } : {}),
         }) } : {}),
         ...(business?.businessProvider.inquiries ? { "business.candidate.extract": createBusinessCandidateWorkerHandler({
-          store, secretStore, sourcePort: business.businessProvider.inquiries, runtimeProtection: { cas, keyProvider: protectedPayloadKeyProvider },
+          store, secretStore, sourcePort: business.businessProvider.inquiries, runtimeProtection: { cas, keyProvider: protectedPayloadKeyProvider, validateContextSource: validateBusinessContextSource },
           acceptsSecretReference: reference => reference.startsWith("keychain://muniu.v2/"),
           ...(options.modelInvoker ? { modelInvoker: options.modelInvoker } : {}),
           ...(options.modelQuoter ? { modelQuoter: options.modelQuoter } : {}),

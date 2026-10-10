@@ -80,7 +80,8 @@
     "verify:onboarding-paths-ui": "node apps/desktop-mac/scripts/verify-onboarding-paths-ui.mjs",
     "verify:navigation-ui": "node apps/desktop-mac/scripts/verify-navigation-races-ui.mjs",
     "verify:workspace-refresh-ui": "node apps/desktop-mac/scripts/verify-agent-os-ui.mjs refresh",
-    "verify:agent-os-p0-ui": "npm run verify:onboarding-paths-ui && npm run verify:navigation-ui && npm run verify:workspace-refresh-ui"
+    "verify:agent-os-p0-ui": "npm run verify:onboarding-paths-ui && npm run verify:navigation-ui && npm run verify:workspace-refresh-ui",
+    "verify:agent-os-p1-ui": "node --test apps/desktop-mac/scripts/test/goal-sources.test.mjs && node apps/desktop-mac/scripts/verify-materials-ui.mjs && node apps/desktop-mac/scripts/verify-material-formats-ui.mjs && node apps/desktop-mac/scripts/verify-business-context-ui.mjs && node apps/desktop-mac/scripts/verify-task-draft-recovery-ui.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",

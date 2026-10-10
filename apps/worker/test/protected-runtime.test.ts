@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import test from "node:test";
 import { InMemoryKernelStore } from "@mn/kernel";
 import { InMemoryKeyProvider, type ContentAddressedStorage } from "@mn/storage";
+import { reduceModelBudget } from "@mn/agent-runtime";
 import { createProtectedRuntimeStore } from "../src/runtime-store.js";
 
 test("运行上下文加密后原子写入事件与投影，并能在重建投影后恢复", async () => {
@@ -52,4 +53,11 @@ test("运行上下文加密后原子写入事件与投影，并能在重建投�
   store.readEventHistory = store.readEvents.bind(store);
   store.readEvents = async () => { throw new Error("EVENT_CURSOR_EXPIRED"); };
   assert.deepEqual(await createProtectedRuntimeStore(options).readExecution("execution"), records);
+  const budget = { maxTokens: 500, maxCostMinorUnits: '10', currency: 'CNY' };
+  await recovered.append({ executionId: 'execution', type: 'subagent/reserved', payload: { authority: { budget, dataScopes: [{ namespace: 'private', resourceId: 'protected-customer' }] }, task: '受保护子任务' } });
+  const accounting = await recovered.readSettlementRecords!('execution');
+  assert.equal(reduceModelBudget(accounting, { maxTokens: 1000, maxCostMinorUnits: '100', currency: 'CNY' }).allocatedTokens, 500);
+  assert.equal(JSON.stringify(accounting).includes('protected-customer'), false);
+  assert.equal(JSON.stringify(accounting).includes('受保护'), false);
+
 });

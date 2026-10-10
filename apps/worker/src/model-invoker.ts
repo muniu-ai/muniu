@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+import { assertModelContextLimit } from "./model-context.js";
 import { validateModelUsage, completeWithModelBudget, PersistentModelBudget, ExecutionBudgetExceededError,
   type ModelMessage, type ModelRequest, type ModelResponse, type ModelToolCall,
   type ModelUsage, type ModelBudgetReservation, type ModelBudgetLimits, type RuntimeStore } from "@mn/agent-runtime";
@@ -28,6 +29,7 @@ export async function invokeBudgetedByokModel(options: {
   readonly quote: ByokModelQuoter;
 }): Promise<ModelResponse> {
   const request = structuredClone(options.input.request);
+  assertModelContextLimit(request, findModelPrice(options.input.presetId, options.input.model)?.maxInputTokens);
   request.messages.forEach(Object.freeze);
   Object.freeze(request.messages);
   Object.freeze(request.availableToolIds);
@@ -43,6 +45,7 @@ export async function invokeBudgetedByokModel(options: {
     if (error instanceof ModelTransportError || error instanceof ExecutionBudgetExceededError) throw error;
     throw new ModelTransportError("无法预检模型预算，已停止调用");
   }
+  assertModelContextLimit({ ...request, maxOutputTokens: quote.maxOutputTokens }, findModelPrice(input.presetId, input.model)?.maxInputTokens);
   return completeWithModelBudget({ store: options.store, limits: options.limits, modelKey: `${input.presetId}:${input.model}`,
     request, quote, signal: input.signal, complete: (limitedRequest, signal) => options.invoke({ ...input, request: limitedRequest, signal }) });
 }

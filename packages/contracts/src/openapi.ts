@@ -16,6 +16,7 @@ export interface ApiOperationV2 {
 }
 
 export const API_OPERATIONS_V2 = [
+  { method: "get", path: "/v2/workspaces/{workspaceId}/business-context/{kind}/{resourceId}", operationId: "getBusinessContext", mutation: false, versioned: false },
   { method: "get", path: "/v2/workspaces/{workspaceId}/agent-readiness", operationId: "getWorkspaceAgentReadiness", mutation: false, versioned: false },
   { method: "post", path: "/v2/model-connections/{connectionId}/model", operationId: "selectModelConnectionModel", mutation: true, versioned: true },
   { method: "get", path: "/v2/plugins/opc/business", operationId: "getOpcBusiness", mutation: false, versioned: false },
@@ -62,6 +63,7 @@ export const API_OPERATIONS_V2 = [
   { method: "get", path: "/v2/deliverables", operationId: "listDeliverables", mutation: false, versioned: false },
   { method: "post", path: "/v2/assets", operationId: "createAssets", mutation: true, versioned: true },
   { method: "get", path: "/v2/assets/{assetId}", operationId: "getAsset", mutation: false, versioned: false },
+  { method: "get", path: "/v2/assets/{assetId}/extraction", operationId: "getAssetExtraction", mutation: false, versioned: false },
   { method: "get", path: "/v2/assets/{assetId}/content", operationId: "downloadAsset", mutation: false, versioned: false },
   { method: "delete", path: "/v2/assets/{assetId}", operationId: "deleteAsset", mutation: true, versioned: true },
   { method: "get", path: "/v2/memories", operationId: "listMemories", mutation: false, versioned: false },

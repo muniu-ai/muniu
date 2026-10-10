@@ -2,8 +2,8 @@
 import { randomUUID } from "node:crypto";
 import { apiPath, operationInputFields, matchApiOperation, parseApiResponse, type ApiPath, type JsonApiOperationIdV2, type ApiOutputsV2 } from "@mn/contracts/client";
 import { homedir } from "node:os";
-import { readFile } from "node:fs/promises";
-import { isAbsolute, join, resolve } from "node:path";
+import { open, readFile } from "node:fs/promises";
+import { basename, extname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ApiErrorV2, Thread, WorkspacePluginSurfaceV1 } from "@mn/contracts";
 import {
@@ -33,6 +33,8 @@ const HELP = `木牛 Agent OS 0.2
   opc               管理经营台账与机会验证
   code              管理 Coding 任务
   goal              管理目标、计划和成果验收
+  asset             上传受保护资料、查看提取内容与来源位置
+  business          读取客户、订单、交付和复盘的版本资料
   backup            创建、校验或恢复本地加密备份
 
 全局参数：
@@ -43,6 +45,11 @@ const HELP = `木牛 Agent OS 0.2
   mn opc business show --workspace <工作区 ID> --json
   mn opc business command --workspace <工作区 ID> --version <台账版本> --file <命令 JSON 文件> --json
   mn opc business command --workspace <工作区 ID> --version <台账版本> --input '<命令 JSON>'
+
+资料与业务上下文：
+  mn asset upload --workspace <工作区 ID> --file <资料路径> [--key <上传请求标识>] --json
+  mn asset extract <资料 ID> --json
+  mn business context <customer|order|delivery|review> <对象 ID> --workspace <工作区 ID> --json
 
 目标与验收：
   mn goal list --workspace <工作区 ID>
@@ -162,12 +169,12 @@ class ApiClient {
     return this.request(apiPath("getReadiness", { }), { method: "GET" }, new Set([503]));
   }
 
-  async mutate<K extends JsonApiOperationIdV2>(path: ApiPath<K>, body: unknown, method: "POST" | "PATCH" | "DELETE" = "POST"): Promise<ApiOutputsV2[K]> {
+  async mutate<K extends JsonApiOperationIdV2>(path: ApiPath<K>, body: unknown, method: "POST" | "PATCH" | "DELETE" = "POST", requestKey?: string): Promise<ApiOutputsV2[K]> {
     return this.request(path, {
       method,
       headers: {
         "content-type": "application/json",
-        "Idempotency-Key": this.nextIdempotencyKey(),
+        "Idempotency-Key": requestKey ?? this.nextIdempotencyKey(),
       },
       body: JSON.stringify(body),
     });
@@ -290,6 +297,53 @@ function reconciliationVersions(
     expectedStreamVersion: coreVersion,
     expectedCodingStreamVersion: codingVersion,
   };
+}
+
+const MATERIAL_TYPES: Readonly<Record<string, string>> = {
+  ".txt": "text/plain", ".md": "text/markdown", ".csv": "text/csv", ".json": "application/json", ".pdf": "application/pdf",
+  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+};
+async function assetCommand(parsed: ParsedArguments, api: ApiClient): Promise<CliResult> {
+  const action = parsed.positional[0];
+  if (action === "extract") {
+    assertAllowedFlags(parsed, []);
+    const assetId = parsed.positional[1];
+    if (!assetId || parsed.positional.length !== 2) throw new CliUsageError("用法：mn asset extract <资料 ID>");
+    const data = await api.get(apiPath("getAssetExtraction", { assetId }));
+    return { command: "asset extract", data, human: JSON.stringify(data, null, 2) };
+  }
+  if (action !== "upload" || parsed.positional.length !== 1) throw new CliUsageError("asset 支持 upload 或 extract");
+  assertAllowedFlags(parsed, ["workspace", "file", "key"]);
+  const workspaceId = flag(parsed, "workspace", true)!;
+  const file = flag(parsed, "file", true)!;
+  const requestKey = flag(parsed, "key", parsed.flags.has("key"));
+  if (requestKey && /[\r\n]/u.test(requestKey)) throw new CliUsageError("--key 不能包含换行");
+  const mediaType = MATERIAL_TYPES[extname(file).toLowerCase()];
+  if (!mediaType) throw new CliUsageError("资料支持 TXT、Markdown、CSV、JSON、PDF、DOCX 和 XLSX");
+  const handle = await open(resolve(file), "r").catch(() => { throw new CliUsageError("无法读取资料文件，请检查路径和读取权限"); });
+  let content: Buffer;
+  try {
+    const info = await handle.stat();
+    if (!info.isFile()) throw new CliUsageError("资料路径必须指向文件");
+    if (info.size > 20 * 1024 * 1024) throw new CliUsageError("资料超过 20 MB，请拆分或摘录相关内容");
+    content = await handle.readFile();
+    if (content.byteLength > 20 * 1024 * 1024) throw new CliUsageError("资料超过 20 MB，请拆分或摘录相关内容");
+  } finally { await handle.close(); }
+  const [asset] = await api.mutate(apiPath("createAssets", {}), { workspaceId, expectedStreamVersion: 0,
+    attachments: [{ fileName: basename(file), mediaType, contentBase64: content.toString("base64"), protected: true }] }, "POST", requestKey);
+  if (!asset) throw new CliUsageError("Host 未返回已保存资料，请使用相同 --key 核对上传结果");
+  const data = { asset, sourceRef: { namespace: "asset", resourceId: asset.id, streamVersion: asset.streamVersion, digest: asset.digest } };
+  return { command: "asset upload", data, human: JSON.stringify(data, null, 2) };
+}
+async function businessContext(parsed: ParsedArguments, api: ApiClient): Promise<CliResult> {
+  assertAllowedFlags(parsed, ["workspace"]);
+  const [action, kind, resourceId] = parsed.positional;
+  if (action !== "context" || !kind || !["customer", "order", "delivery", "review"].includes(kind) || !resourceId || parsed.positional.length !== 3) {
+    throw new CliUsageError("用法：mn business context <customer|order|delivery|review> <对象 ID> --workspace <工作区 ID>");
+  }
+  const data = await api.get(apiPath("getBusinessContext", { workspaceId: flag(parsed, "workspace", true)!, kind, resourceId }));
+  return { command: "business context", data, human: JSON.stringify(data, null, 2) };
 }
 
 async function goal(parsed: ParsedArguments, api: ApiClient): Promise<CliResult> {
@@ -1095,6 +1149,8 @@ export async function runCli(arguments_: readonly string[], dependencies: CliDep
       case "opc": result = await opc(parsed, api); break;
       case "code": result = await code(parsed, api); break;
       case "goal": result = await goal(parsed, api); break;
+      case "asset": result = await assetCommand(parsed, api); break;
+      case "business": result = await businessContext(parsed, api); break;
       case "backup": result = await backup(
         parsed,
         () => dependencies.backup ?? createDefaultBackup(dependencies),

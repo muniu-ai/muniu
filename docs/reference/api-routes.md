@@ -42,6 +42,7 @@ curl --fail-with-body --silent --show-error http://127.0.0.1:7318/v2/workspaces
 
 | 方法 | 路径 | operationId | 幂等键 | stream version |
 | --- | --- | --- | --- | --- |
+| `GET` | `/v2/workspaces/{workspaceId}/business-context/{kind}/{resourceId}` | `getBusinessContext` | — | — |
 | `GET` | `/v2/workspaces/{workspaceId}/agent-readiness` | `getWorkspaceAgentReadiness` | — | — |
 | `POST` | `/v2/model-connections/{connectionId}/model` | `selectModelConnectionModel` | 必需 | 必需 |
 | `GET` | `/v2/plugins/opc/business` | `getOpcBusiness` | — | — |
@@ -88,6 +89,7 @@ curl --fail-with-body --silent --show-error http://127.0.0.1:7318/v2/workspaces
 | `GET` | `/v2/deliverables` | `listDeliverables` | — | — |
 | `POST` | `/v2/assets` | `createAssets` | 必需 | 必需 |
 | `GET` | `/v2/assets/{assetId}` | `getAsset` | — | — |
+| `GET` | `/v2/assets/{assetId}/extraction` | `getAssetExtraction` | — | — |
 | `GET` | `/v2/assets/{assetId}/content` | `downloadAsset` | — | — |
 | `DELETE` | `/v2/assets/{assetId}` | `deleteAsset` | 必需 | 必需 |
 | `GET` | `/v2/memories` | `listMemories` | — | — |

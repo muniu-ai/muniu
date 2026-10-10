@@ -1,3 +1,5 @@
+import { prepareBoundedModelRequest } from "./context-selection.js";
+import { assertExecutionContextSources } from "./execution-context.js";
 import { invokeBusinessRunner } from "./business-runner.js";
 import { resolveExecutionModel } from "./execution-model.js";
 import { ControlledCodingSandbox } from "./coding.js";
@@ -783,6 +785,7 @@ export function createKernelAgentTurnHandler(
           if (control?.generation === state.execution.generation && control.command === "interrupt") throw new RuntimeControlError("interrupted");
           if (current.status === "cancelled" || current.status === "interrupted" || current.status === "paused") throw new RuntimeControlError(current.status);
           assertCurrentExecutionAuthorization(transaction, current);
+          assertExecutionContextSources(transaction, current, options.runtimeProtection?.validateContextSource);
           options.assertExecutionResources?.(transaction, current);
           for (const record of records) {
             if (record.type === "tool/started" && typeof record.payload.toolCallId === "string") {
@@ -827,7 +830,7 @@ export function createKernelAgentTurnHandler(
           ...(options.now ? { now: options.now } : {}),
           id: (sequence) => `${executionId}:runtime:${sequence}`,
         });
-      const history = await readThreadHistory(options.store, agentStore, state.execution);
+      const history = await readThreadHistory(runtimeStore, agentStore, state.execution, options.runtimeProtection?.validateContextSource);
       const threadContext = await options.resolveThreadContext?.(state.thread);
       const surface = new DefaultSessionSurface();
       return {
@@ -835,6 +838,7 @@ export function createKernelAgentTurnHandler(
         scope: executionScope,
         disposeScope: () => tenantScope.dispose(),
         store: agentStore,
+        prepareModelRequest: request => prepareBoundedModelRequest(request, agentStore),
         surface: { project: (snapshot) => [
           ...(threadContext ? [{ role: "user" as const, content: threadContext }] : []),
           ...(snapshot.compactions.length ? [] : history), ...surface.project(snapshot),
@@ -1122,3 +1126,6 @@ async function abortableDelay(milliseconds: number, signal: AbortSignal): Promis
     signal.addEventListener("abort", finish, { once: true });
   });
 }
+
+export { assertContextSource, assertExecutionContextSources, saveExecutionContext, EXECUTION_CONTEXT_NAMESPACE, type ContextSourceValidator } from './execution-context.js';
+export { assertModelContextLimit, MAX_MODEL_CONTEXT_BYTES } from './model-context.js';

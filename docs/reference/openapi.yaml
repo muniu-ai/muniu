@@ -3,6 +3,52 @@ info:
   title: Muniu Agent OS API
   version: 0.2.0
 paths:
+  /v2/workspaces/{workspaceId}/business-context/{kind}/{resourceId}:
+    get:
+      operationId: getBusinessContext
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: kind
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: resourceId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/OutputBusinessObjectContextV2"
+                  traceId:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+      x-muniu-versioned: false
   /v2/workspaces/{workspaceId}/agent-readiness:
     get:
       operationId: getWorkspaceAgentReadiness
@@ -2814,6 +2860,42 @@ paths:
         "422":
           $ref: "#/components/responses/Unprocessable"
       x-muniu-versioned: true
+  /v2/assets/{assetId}/extraction:
+    get:
+      operationId: getAssetExtraction
+      parameters:
+        - in: path
+          name: assetId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/OutputAssetExtractionV2"
+                  traceId:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+      x-muniu-versioned: false
   /v2/assets/{assetId}/content:
     get:
       operationId: downloadAsset
@@ -4562,6 +4644,50 @@ components:
       type: object
       additionalProperties:
         $ref: "#/components/schemas/OutputJsonValue"
+    OutputGoalResourceRefV2:
+      type: object
+      additionalProperties: false
+      required:
+        - streamVersion
+        - namespace
+        - resourceId
+      properties:
+        streamVersion:
+          type: number
+        namespace:
+          type: string
+        resourceId:
+          type: string
+        digest:
+          type: string
+    OutputBusinessObjectContextV2:
+      type: object
+      additionalProperties: false
+      required:
+        - title
+        - sourceRef
+        - content
+        - kind
+        - resourceId
+      properties:
+        title:
+          type: string
+        sourceRef:
+          $ref: "#/components/schemas/OutputGoalResourceRefV2"
+        content:
+          type: string
+        kind:
+          anyOf:
+            - type: string
+              const: customer
+            - type: string
+              const: order
+            - type: string
+              const: delivery
+            - type: string
+              const: review
+        resourceId:
+          type: string
     OutputBusinessPeriodV1:
       type: object
       additionalProperties: false
@@ -5256,22 +5382,6 @@ components:
                 type: string
               description:
                 type: string
-    OutputGoalResourceRefV2:
-      type: object
-      additionalProperties: false
-      required:
-        - streamVersion
-        - namespace
-        - resourceId
-      properties:
-        streamVersion:
-          type: number
-        namespace:
-          type: string
-        resourceId:
-          type: string
-        digest:
-          type: string
     OutputGoalBudgetV2:
       type: object
       additionalProperties: false
@@ -7180,6 +7290,88 @@ components:
         createdAt:
           type: string
         updatedAt:
+          type: string
+    OutputDocumentLocatorV2:
+      type: object
+      additionalProperties: false
+      required: []
+      properties:
+        page:
+          type: number
+        paragraph:
+          type: number
+        sheet:
+          type: string
+        cell:
+          type: string
+        row:
+          type: number
+        column:
+          type: number
+        part:
+          type: string
+    OutputAssetExtractionV2:
+      type: object
+      additionalProperties: false
+      required:
+        - assetRef
+        - fileName
+        - mediaType
+        - status
+        - blocks
+        - issues
+        - extractorVersion
+        - textDigest
+      properties:
+        assetRef:
+          $ref: "#/components/schemas/OutputGoalResourceRefV2"
+        fileName:
+          type: string
+        mediaType:
+          type: string
+        status:
+          anyOf:
+            - type: string
+              const: complete
+            - type: string
+              const: partial
+            - type: string
+              const: unreadable
+        blocks:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required:
+              - id
+              - text
+              - locator
+            properties:
+              id:
+                type: string
+              text:
+                type: string
+              locator:
+                $ref: "#/components/schemas/OutputDocumentLocatorV2"
+        issues:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required:
+              - code
+              - message
+            properties:
+              code:
+                type: string
+              message:
+                type: string
+              locator:
+                $ref: "#/components/schemas/OutputDocumentLocatorV2"
+        extractorVersion:
+          type: string
+          const: "1"
+        textDigest:
           type: string
     OutputAssetTombstone:
       type: object

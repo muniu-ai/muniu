@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+import { validateBusinessContextSource } from "../src/business-context.js";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -84,7 +85,7 @@ async function start(f: Awaited<ReturnType<typeof fixture>>, created: Awaited<Re
 function worker(f: Awaited<ReturnType<typeof fixture>>, modelInvoker: ByokModelInvoker) {
   return new AgentOsWorker({ id: "goal-worker", store: f.store, lock: { engineLockDigest: "fixture", expectedEngineLockDigest: "fixture", pluginLockDigest: "fixture", expectedPluginLockDigest: "fixture" }, handlers: {
     "agent.execution.run": createKernelAgentTurnHandler({ store: f.store, secretStore: f.secretStore, approvalKernel: f.host.kernel,
-      runtimeProtection: { cas: f.cas, keyProvider: f.keyProvider }, assertExecutionResources: assertGoalExecutionResources,
+      runtimeProtection: { cas: f.cas, keyProvider: f.keyProvider, validateContextSource: validateBusinessContextSource }, assertExecutionResources: assertGoalExecutionResources,
       resolveThreadContext: createOpcModelContextReader({ store: f.store, cas: f.cas, protectedPayloadKeyProvider: f.keyProvider }),
       codingSandboxRoot: join(f.root, "sandboxes"), approvalPollIntervalMs: 5, modelInvoker,
       modelQuoter: async () => ({ inputTokenLimit: 100, maxOutputTokens: 100, rates: { id: "fixture", currency: "CNY", inputNanoMinorUnitsPerToken: "0", cachedInputNanoMinorUnitsPerToken: "0", outputNanoMinorUnitsPerToken: "0" } }),
@@ -338,4 +339,242 @@ test("固定目标允许执行中补充说明，保持原计划与额度且禁�
   assert.equal(sent.body.data.authorityId, execution.authorityId);
   assert.equal(sent.body.data.runnerId, execution.runnerId);
   assert.ok((await f.send(`/v2/executions/${execution.id}/commands`, { expectedStreamVersion: sent.body.data.streamVersion, command: "resume" })).status >= 400);
+});
+
+async function materialGoal(f: Awaited<ReturnType<typeof fixture>>, content = '受保护事实：项目代号紫杉，约定两周交付。') {
+  const upload = await f.send('/v2/assets', { workspaceId: f.workspace.id, expectedStreamVersion: 0,
+    attachments: [{ fileName: 'requirements.md', mediaType: 'text/markdown', contentBase64: Buffer.from(content).toString('base64'), protected: true }] });
+  assert.equal(upload.status, 201, JSON.stringify(upload.body));
+  const asset = upload.body.data[0];
+  const ref = { namespace: 'asset', resourceId: asset.id, streamVersion: asset.streamVersion, digest: asset.digest };
+  const thread = await f.host.kernel.createThread('local', 'local-owner', randomUUID(), { workspaceId: f.workspace.id, pluginId: 'opc', subject: '资料分析' });
+  const input = { threadId: thread.id, objective: '分析材料并给出交付建议', resourceRefs: [ref],
+    budget: { maxTokens: 1000, maxCostMinorUnits: '50', currency: 'CNY', maxDurationMs: 60_000 },
+    deliverables: [{ key: 'report', title: '交付建议', required: true, criteria: [{ id: 'sources', description: '标明资料依据' }] }] };
+  return { asset, ref, thread, input, created: await f.send(`/v2/workspaces/${f.workspace.id}/goals`, input) };
+}
+
+test('保护资料以版本引用准入，提取可定位，模型调用前保存实际内容和来源', async t => {
+  const f = await fixture(t), material = await materialGoal(f);
+  const extracted = await f.send(`/v2/assets/${material.asset.id}/extraction`);
+  assert.equal(extracted.status, 200, JSON.stringify(extracted.body));
+  assert.equal(extracted.body.data.status, 'complete');
+  assert.deepEqual(extracted.body.data.assetRef, material.ref);
+  assert.match(extracted.body.data.blocks[0].text, /项目代号紫杉/u);
+  assert.ok(extracted.body.data.blocks[0].locator);
+  const current = await start(f, material.created);
+  assert.equal(current.detail.goal.objective, material.input.objective);
+  let calls = 0;
+  const result = await worker(f, async ({ request }) => {
+    calls++;
+    assert.ok(request.messages.some(message => message.content.includes('项目代号紫杉')));
+    const context = await f.store.transact('local', tx => tx.getProjection<any>('execution.context', request.executionId));
+    assert.deepEqual(context.sourceRefs, [material.ref]);
+    assert.ok(context.materials[0].selectedBlocks.length);
+    const records = await (await import('@mn/worker')).createProtectedRuntimeStore({ store: f.store, cas: f.cas, keyProvider: f.keyProvider, tenantId: 'local', workspaceId: f.workspace.id }).readExecution(request.executionId);
+    const persisted = records.filter(record => record.type === 'model/request').at(-1)!;
+    assert.ok(JSON.stringify(persisted.payload.messages).includes('项目代号紫杉'));
+    assert.deepEqual((persisted.payload.contextManifest as any).sourceRefs, [material.ref]);
+    return { text: '根据紫杉项目资料，先确认两周内的交付安排。', toolCalls: [], usage: { inputTokens: 10, cachedInputTokens: 0, outputTokens: 10 } };
+  }).pollOnce();
+  assert.equal(result.status, 'completed', JSON.stringify(result));
+  assert.equal(calls, 1);
+  const deleted = await f.host.dispatch(new Request(`http://fixture/v2/assets/${material.asset.id}`, { method: 'DELETE', headers: { 'content-type': 'application/json', 'Idempotency-Key': randomUUID() }, body: JSON.stringify({ expectedStreamVersion: material.asset.streamVersion, reason: '撤回资料授权' }) }));
+  assert.equal(deleted.status, 200);
+  assert.ok((await f.send(`/v2/workspaces/${f.workspace.id}/threads/${material.thread.id}/turns`)).status >= 400);
+  assert.ok((await f.send(`${current.path}?workspaceId=${f.workspace.id}`)).status >= 400);
+});
+
+test('保护资料拒绝伪造版本、未保护来源及超过上下文硬限额的整份输入', async t => {
+  const f = await fixture(t), material = await materialGoal(f, 'x'.repeat(110_000));
+  assert.equal(material.created.status, 201, JSON.stringify(material.created.body));
+  const bad = await f.send(`/v2/workspaces/${f.workspace.id}/goals`, { ...material.input, resourceRefs: [{ ...material.ref, digest: 'a'.repeat(64) }] });
+  assert.ok(bad.status >= 400);
+  const path = `/v2/goals/${material.created.body.data.goal.id}`;
+  const planned = await f.send(`${path}/plan-revisions`, { workspaceId: f.workspace.id, expectedStreamVersion: 1, modelBindingId: f.model.id });
+  assert.equal(planned.status, 200, JSON.stringify(planned.body));
+  const started = await f.send(`${path}/commands`, { workspaceId: f.workspace.id, expectedStreamVersion: 2, command: 'start', planRevisionId: planned.body.data.plan.id, planDigest: planned.body.data.plan.digest });
+  assert.ok(started.status >= 400, JSON.stringify(started.body));
+  assert.equal((await f.store.transact('local', tx => tx.listProjections('job'))).length, 0);
+});
+
+test('后续普通会话继承来源，撤权后禁止第三轮外发和历史成果读取', async t => {
+  const f = await fixture(t), material = await materialGoal(f), first = await start(f, material.created);
+  assert.equal((await worker(f, async () => ({ text: '紫杉项目需两周交付。' + '历史背景'.repeat(4000), toolCalls: [], usage: { inputTokens: 10, cachedInputTokens: 0, outputTokens: 10 } })).pollOnce()).status, 'completed');
+  const refreshed = await f.send(`${first.path}/commands`, { workspaceId: f.workspace.id, expectedStreamVersion: first.detail.goal.streamVersion, command: 'refresh' });
+  const ready = refreshed.body.data;
+  const accepted = await f.send(`${first.path}/acceptances`, { workspaceId: f.workspace.id, expectedStreamVersion: ready.goal.streamVersion, deliverySetId: ready.deliverySet.id, criteriaVersion: ready.goal.criteriaVersion,
+    items: [{ key: 'report', digest: ready.deliverySet.items[0].digest, reviewedCriterionIds: ['sources'] }] });
+  assert.equal(accepted.status, 200, JSON.stringify(accepted.body));
+  const turnsPath = `/v2/workspaces/${f.workspace.id}/threads/${material.thread.id}/turns`;
+  async function next(message: string) {
+    const thread = await f.store.transact('local', tx => tx.getProjection<Thread>('thread', material.thread.id)!);
+    const turn = await f.send(turnsPath, { expectedStreamVersion: thread.streamVersion, message, agentDefinitionId: 'opc.business-assistant', modelBindingId: f.model.id });
+    assert.equal(turn.status, 202, JSON.stringify(turn.body));
+    return turn.body.data;
+  }
+  const second = await next('依据上轮结论整理下一步。');
+  assert.equal((await worker(f, async ({ request }) => {
+    assert.ok(request.messages.some(message => message.content.includes('紫杉项目需两周交付')));
+    const context = await f.store.transact('local', tx => tx.getProjection<any>('execution.context', request.executionId));
+    assert.deepEqual(context.sourceRefs, [material.ref]);
+    assert.ok(context.inheritedExecutionIds.includes(first.detail.goal.executionRef.executionId));
+    assert.ok(request.contextSelection, '超限历史应在实际发送前摘录');
+    const runtime = (await import('@mn/worker')).createProtectedRuntimeStore({ store: f.store, cas: f.cas, keyProvider: f.keyProvider, tenantId: 'local', workspaceId: f.workspace.id });
+    const original = (await runtime.readExecution(request.executionId)).find(record => record.type === 'context/prepared');
+    assert.ok(JSON.stringify(original?.payload.messages).includes('历史背景'.repeat(4000)));
+    assert.ok(request.messages.some(message => message.content.includes('上下文摘录，不代表原文全貌')));
+    return { text: '先核对交付清单。', toolCalls: [], usage: { inputTokens: 10, cachedInputTokens: 0, outputTokens: 10 } };
+  }).pollOnce()).status, 'completed');
+  await next('继续整理。');
+  await f.host.dispatch(new Request(`http://fixture/v2/assets/${material.asset.id}`, { method: 'DELETE', headers: { 'content-type': 'application/json', 'Idempotency-Key': randomUUID() }, body: JSON.stringify({ expectedStreamVersion: material.asset.streamVersion, reason: '撤权' }) }));
+  let calls = 0;
+  await worker(f, async () => { calls++; throw new Error('资料已撤权，禁止调用'); }).pollOnce();
+  assert.equal(calls, 0);
+  assert.ok((await f.send(turnsPath)).status >= 400);
+  const runtime = (await import('@mn/worker')).createProtectedRuntimeStore({ store: f.store, cas: f.cas, keyProvider: f.keyProvider, tenantId: 'local', workspaceId: f.workspace.id });
+  await assert.rejects(runtime.readExecution(second.id), /资料来源|资料已删除/u);
+});
+
+test('资料解密期间撤权阻止提取返回，启动后撤权阻止模型预算预检', async t => {
+  const f = await fixture(t), material = await materialGoal(f);
+  const current = await start(f, material.created);
+  const get = f.cas.get.bind(f.cas);
+  let revoked = false;
+  f.cas.get = async digest => {
+    const bytes = await get(digest);
+    if (digest === material.asset.digest && !revoked) {
+      revoked = true;
+      await f.store.transact('local', tx => { tx.deleteProjection('protectedPayloadKey', material.asset.protectedPayloadRef); appendKernelEvent(tx, { tenantId: 'local', aggregateType: 'fixture-revocation', aggregateId: material.asset.id, expectedStreamVersion: 0, type: 'fixture.source_revoked', actorId: 'local-owner', generation: 0, correlationId: randomUUID(), publicPayload: {} }); });
+    }
+    return bytes;
+  };
+  assert.ok((await f.send(`/v2/assets/${material.asset.id}/extraction`)).status >= 400);
+  let calls = 0;
+  await worker(f, async () => { calls++; throw new Error('禁止调用'); }).pollOnce();
+  assert.equal(calls, 0);
+  assert.ok((await f.send(`${current.path}?workspaceId=${f.workspace.id}`)).status >= 400);
+});
+
+test('业务对象版本进入实际模型上下文，台账变化阻止历史再次传播', async t => {
+  const f = await fixture(t);
+  const { applyBusinessCommand, createEmptyBusiness } = await import('@mn/plugin-opc');
+  const { readBusinessContext } = await import('../src/business-context.js');
+  const state = applyBusinessCommand(createEmptyBusiness(f.workspace.id), { type: 'customer.record', customerId: 'customer-context', name: '青禾', source: '面谈', need: '确认交付范围' }, { principalId: 'local-owner', occurredAt: new Date().toISOString() });
+  await f.store.transact('local', tx => {
+    tx.putProjection('opc.business', f.workspace.id, state);
+    appendKernelEvent(tx, { tenantId: 'local', aggregateType: 'opc.business', aggregateId: f.workspace.id, expectedStreamVersion: 0, type: 'fixture.business_created', actorId: 'local-owner', generation: 0, correlationId: randomUUID(), publicPayload: { workspaceId: f.workspace.id } });
+  });
+  const context = await f.store.transact('local', tx => readBusinessContext(tx, { tenantId: 'local', workspaceId: f.workspace.id, principalId: 'local-owner' }, { kind: 'customer', resourceId: 'customer-context' }));
+  const material = await materialGoal(f);
+  const created = await f.send(`/v2/workspaces/${f.workspace.id}/goals`, { ...material.input, resourceRefs: [context.sourceRef], threadId: (await f.host.kernel.createThread('local', 'local-owner', randomUUID(), { workspaceId: f.workspace.id, pluginId: 'opc', subject: '客户委派' })).id });
+  const current = await start(f, created);
+  assert.equal((await worker(f, async ({ request }) => {
+    assert.ok(request.messages.some(message => message.content.includes('青禾') && message.content.includes('确认交付范围')));
+    assert.ok(!request.messages.some(message => message.content.includes('项目代号紫杉')));
+    return { text: '先与青禾核对交付范围。', toolCalls: [], usage: { inputTokens: 10, cachedInputTokens: 0, outputTokens: 10 } };
+  }).pollOnce()).status, 'completed');
+  await f.store.transact('local', tx => {
+    tx.putProjection('opc.business', f.workspace.id, applyBusinessCommand(state, { type: 'customer.record', customerId: 'customer-context', name: '青禾', source: '更新面谈', need: '增加新范围' }, { principalId: 'local-owner', occurredAt: new Date().toISOString() }));
+    appendKernelEvent(tx, { tenantId: 'local', aggregateType: 'opc.business', aggregateId: f.workspace.id, expectedStreamVersion: 1, type: 'fixture.business_changed', actorId: 'local-owner', generation: 0, correlationId: randomUUID(), publicPayload: { workspaceId: f.workspace.id } });
+  });
+  assert.ok((await f.send(`${current.path}?workspaceId=${f.workspace.id}`)).status >= 400);
+  assert.ok((await f.send(`/v2/workspaces/${f.workspace.id}/threads/${current.detail.goal.threadId}/turns`)).status >= 400);
+});
+
+test('模型在途撤销资料仍结算已发生费用，正文不进入后续工作', async t => {
+  const f = await fixture(t), material = await materialGoal(f), current = await start(f, material.created);
+  const result = await worker(f, async () => {
+    const response = await f.host.dispatch(new Request(`http://fixture/v2/assets/${material.asset.id}`, { method: 'DELETE', headers: { 'content-type': 'application/json', 'Idempotency-Key': randomUUID() }, body: JSON.stringify({ expectedStreamVersion: material.asset.streamVersion, reason: '模型在途撤权' }) }));
+    assert.equal(response.status, 200);
+    return { text: '禁止传播的紫杉答复', toolCalls: [], usage: { inputTokens: 10, cachedInputTokens: 0, outputTokens: 7 } };
+  }).pollOnce();
+  assert.notEqual(result.status, 'completed');
+  const rows = await f.store.transact('local', tx => tx.getProjection<any>('agent-runtime', current.detail.goal.executionRef.executionId).records);
+  const settled = rows.find((row: any) => row.type === 'model/settled');
+  assert.ok(settled, '已发生用量必须结算');
+  const value = await (await import('@mn/worker')).readProtectedRuntimePayload({ store: f.store, cas: f.cas, keyProvider: f.keyProvider, tenantId: 'local', workspaceId: f.workspace.id, ownerType: 'runtime', ownerId: current.detail.goal.executionRef.executionId, protectedPayloadRef: settled.protectedPayloadRef });
+  assert.equal((value.usage as any).outputTokens, 7);
+  assert.equal(rows.some((row: any) => row.type === 'model/response'), false);
+  const runtime = (await import('@mn/worker')).createProtectedRuntimeStore({ store: f.store, cas: f.cas, keyProvider: f.keyProvider, tenantId: 'local', workspaceId: f.workspace.id });
+  assert.equal(JSON.stringify(await runtime.readSettlementRecords!(current.detail.goal.executionRef.executionId)).includes('紫杉'), false);
+  assert.equal((await f.send(`/v2/activity?workspaceId=${f.workspace.id}`)).status, 200);
+  assert.ok((await f.send(`/v2/workspaces/${f.workspace.id}/threads/${material.thread.id}/turns`)).status >= 400);
+});
+
+test('材料引用拒绝未保护、跨工作区、缺摘要和重复来源', async t => {
+  const f = await fixture(t), material = await materialGoal(f);
+  const other = await f.host.kernel.createWorkspace('local', 'local-owner', randomUUID(), { name: '另一工作区', viewMode: 'business', pluginIds: ['opc'] });
+  for (const input of [
+    { workspaceId: f.workspace.id, protected: false }, { workspaceId: other.id, protected: true },
+  ]) {
+    const uploaded = await f.send('/v2/assets', { workspaceId: input.workspaceId, expectedStreamVersion: 0,
+      attachments: [{ fileName: 'other.txt', mediaType: 'text/plain', contentBase64: Buffer.from('未授权引用').toString('base64'), protected: input.protected }] });
+    assert.equal(uploaded.status, 201, JSON.stringify(uploaded.body));
+    const asset = uploaded.body.data[0];
+    const result = await f.send(`/v2/workspaces/${f.workspace.id}/goals`, { ...material.input, resourceRefs: [{ namespace: 'asset', resourceId: asset.id, streamVersion: asset.streamVersion, digest: asset.digest }] });
+    assert.ok(result.status >= 400);
+  }
+  for (const resourceRefs of [[{ ...material.ref, digest: undefined }], [material.ref, material.ref]]) {
+    assert.ok((await f.send(`/v2/workspaces/${f.workspace.id}/goals`, { ...material.input, resourceRefs })).status >= 400);
+  }
+});
+
+test('受保护上下文可从事件重建，删除来源后重建不会恢复读取权限', async t => {
+  const f = await fixture(t), material = await materialGoal(f), current = await start(f, material.created);
+  const executionId = current.detail.goal.executionRef.executionId;
+  const before = await f.store.transact('local', tx => tx.getProjection('execution.context', executionId));
+  await f.store.rebuildProjections('local');
+  assert.deepEqual(await f.store.transact('local', tx => tx.getProjection('execution.context', executionId)), before);
+  const page = await f.store.readEventHistory('local', 0, 1000);
+  assert.equal(JSON.stringify(page).includes('项目代号紫杉'), false);
+  await f.host.dispatch(new Request(`http://fixture/v2/assets/${material.asset.id}`, { method: 'DELETE', headers: { 'content-type': 'application/json', 'Idempotency-Key': randomUUID() }, body: JSON.stringify({ expectedStreamVersion: material.asset.streamVersion, reason: '重建前撤权' }) }));
+  await f.store.rebuildProjections('local');
+  assert.ok((await f.send(`/v2/workspaces/${f.workspace.id}/threads/${material.thread.id}/turns`)).status >= 400);
+  let calls = 0;
+  await worker(f, async () => { calls++; throw new Error('禁止重建后传播'); }).pollOnce();
+  assert.equal(calls, 0);
+});
+
+test('大资料只选目标相关完整段落，调用清单与实际发送段落一致', async t => {
+  const f = await fixture(t);
+  const irrelevant = Array.from({ length: 100 }, (_, index) => `无关背景${index}：${'天气记录'.repeat(200)}`).join('\n\n');
+  const material = await materialGoal(f, `${irrelevant}\n\n交付安排：项目应在两周内提交可验收文件。\n\n${irrelevant}`);
+  const current = await start(f, material.created);
+  assert.equal((await worker(f, async ({ request }) => {
+    const manifest = await f.store.transact('local', tx => tx.getProjection<any>('execution.context', request.executionId));
+    const selected = manifest.materials[0];
+    assert.ok(selected.selectedBlocks.length < selected.selection.totalBlockCount);
+    const content = request.messages.find(message => message.content.includes('selectedBlockCount'))!.content;
+    const payload = JSON.parse(content.slice(content.indexOf('{"assetRef"')));
+    assert.ok(payload.blocks.some((block: any) => block.text.includes('交付安排：项目应在两周内')));
+    assert.deepEqual(payload.blocks.map((block: any) => block.id), selected.selectedBlocks.map((block: any) => block.id));
+    assert.equal(payload.selectedBlockCount, selected.selectedBlocks.length);
+    return { text: '依据交付安排段落，两周内提交验收文件。', toolCalls: [], usage: { inputTokens: 10, cachedInputTokens: 0, outputTokens: 10 } };
+  }).pollOnce()).status, 'completed');
+  assert.equal(current.detail.goal.objective, material.input.objective);
+});
+
+test('读取会话正文期间撤销成员权限，响应前再次检查读权限', async t => {
+  const f = await fixture(t), material = await materialGoal(f), current = await start(f, material.created);
+  const key = await f.store.transact('local', tx => {
+    const entry = tx.listProjections<any>('session-log-entry').find(item => item.executionId === current.detail.goal.executionRef.executionId)!;
+    return tx.getProjection<any>('protectedPayloadKey', entry.protectedPayloadRef)!;
+  });
+  const get = f.cas.get.bind(f.cas);
+  let revoked = false;
+  f.cas.get = async digest => {
+    const bytes = await get(digest);
+    if (digest === key.ciphertextDigest && !revoked) {
+      revoked = true;
+      await f.store.transact('local', tx => {
+        const member = tx.getProjection<any>('membership', `${f.workspace.id}:local-owner`)!;
+        tx.putProjection('membership', member.id, { ...member, streamVersion: member.streamVersion + 1, removedAt: new Date().toISOString() });
+        appendKernelEvent(tx, { tenantId: 'local', aggregateType: 'membership', aggregateId: member.id, expectedStreamVersion: member.streamVersion, type: 'fixture.membership_removed', actorId: 'local-owner', generation: 0, correlationId: randomUUID(), publicPayload: {} });
+      });
+    }
+    return bytes;
+  };
+  assert.ok((await f.send(`/v2/workspaces/${f.workspace.id}/threads/${material.thread.id}/turns`)).status >= 400);
+  assert.equal(revoked, true);
 });

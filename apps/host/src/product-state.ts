@@ -2,8 +2,9 @@
 import { appendKernelEvent } from "@mn/kernel";
 
 import type { Approval, Asset, Deliverable, DeliverableSummaryV2, Execution, ExecutionAuthority, JsonObject, ProductNavigationV2, Thread, Workspace, CodingTaskSummaryV2 } from "@mn/contracts";
-import { KernelProjectionRuntimeStore } from "@mn/agent-runtime";
-import { createProtectedRuntimeStore, type RuntimeProtection } from "@mn/worker";
+import { KernelProjectionRuntimeStore, type RuntimeStore } from "@mn/agent-runtime";
+import { assertExecutionContextSources, createProtectedRuntimeStore, type RuntimeProtection } from "@mn/worker";
+import { validateBusinessContextSource } from "./business-context.js";
 import { executionMetering, meteringCostSummary } from "./execution-metering.js";
 import {
   KernelError,
@@ -614,6 +615,19 @@ export async function captureCodingTask(options: ProductMutationOptions & { read
   ));
 }
 
+function canReadExecutionMaterial(transaction: KernelTransaction, tenantId: string, workspaceId: string, executionId: string): boolean {
+  const execution = transaction.getProjection<Execution>("execution", executionId);
+  if (!execution || execution.tenantId !== tenantId || execution.workspaceId !== workspaceId) return false;
+  try {
+    assertExecutionContextSources(transaction, execution, validateBusinessContextSource);
+    return true;
+  } catch (error) {
+    if (error instanceof KernelError && ["CONTEXT_SOURCE_CHANGED", "CONTEXT_SOURCE_REVOKED", "CONTEXT_INVALID",
+      "GOAL_RESOURCE_CHANGED", "BUSINESS_CONTEXT_NOT_FOUND", "BUSINESS_CONTEXT_INVALID", "WORKSPACE_NOT_FOUND", "PLUGIN_NOT_ACTIVE"].includes(error.code)) return false;
+    throw error;
+  }
+}
+
 export async function listCodingTaskSummaries(store: KernelStore, tenantId: string, workspaceId: string): Promise<readonly CodingTaskSummaryV2[]> {
   return store.transact(tenantId, (transaction) => {
     const runs = transaction.listProjections<{ readonly executionId: string; readonly taskId: string; readonly updatedAt: string;
@@ -629,6 +643,10 @@ export async function listCodingTaskSummaries(store: KernelStore, tenantId: stri
       .map((task): CodingTaskSummaryV2 => {
         const run = runs.filter(run => run.taskId === task.id && (!run.result || run.result.task.workspaceId === workspaceId))
           .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+        if (run && !canReadExecutionMaterial(transaction, tenantId, workspaceId, run.executionId)) return {
+          id: task.id, title: task.title, repository: repositories.get(task.repositoryId)?.name ?? "待选择仓库", status: task.status,
+          checks: [{ name: "来源可用性", status: "pending" }], nextAction: "来源已撤销或变化，成果不可读取；请核对资料后重新委派",
+        };
         const lastCandidate = run?.result?.candidates.at(-1);
         const material = candidates.find(candidate => candidate.id === lastCandidate?.id && candidate.executionId === run?.executionId);
         const checks = run?.result?.gates.at(-1)?.checks;
@@ -751,6 +769,10 @@ export async function workspaceHome(store: KernelStore, tenantId: string, worksp
 }
 
 export function deliverableSummary(item: Deliverable, transaction: KernelTransaction): DeliverableSummaryV2 {
+  if (item.executionId && !canReadExecutionMaterial(transaction, item.tenantId, item.workspaceId, item.executionId)) return {
+    id: item.id, pluginId: item.pluginId, title: "成果暂不可读取", outcome: "来源已撤销或变化",
+    nextAction: "核对资料后重新委派", createdAt: item.createdAt,
+  };
   const thread = transaction.getProjection<Thread>("thread", item.threadId);
   const linked = thread && thread.id === item.threadId && thread.tenantId === item.tenantId
     && thread.workspaceId === item.workspaceId && thread.pluginId === item.pluginId;
@@ -792,10 +814,10 @@ export async function workspaceActivity(store: KernelStore, tenantId: string, wo
       return authority ? { execution, authority } : undefined;
     });
     if (!state) { costs.set(event.aggregateId, "费用未核算"); continue; }
-    const runtime = protection ? createProtectedRuntimeStore({ ...protection, store, tenantId, workspaceId })
+    const runtime: RuntimeStore = protection ? createProtectedRuntimeStore({ ...protection, store, tenantId, workspaceId })
       : new KernelProjectionRuntimeStore({ store, tenantId });
     costs.set(event.aggregateId, meteringCostSummary(executionMetering(state.execution, state.authority,
-      await runtime.readExecution(event.aggregateId))));
+      await (runtime.readSettlementRecords?.(event.aggregateId) ?? runtime.readExecution(event.aggregateId)))));
   }
   const latestByExecution = new Map(recent.filter(event => event.aggregateType === "execution").map(event => [event.aggregateId, event.id]));
   return recent.map((event) => ({

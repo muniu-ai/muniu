@@ -33,6 +33,8 @@ const EXTENSIONS: Readonly<Record<string, readonly string[]>> = {
   "application/json": [".json"],
   "text/csv": [".csv"],
   "application/pdf": [".pdf"],
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": [".docx"],
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"],
   "image/png": [".png"],
   "image/jpeg": [".jpg", ".jpeg"],
   "image/webp": [".webp"]
@@ -48,6 +50,11 @@ function assertMediaSignature(attachment: AttachmentInput): void {
   const { bytes, mediaType, fileName } = attachment;
   let matches = true;
   switch (mediaType) {
+    case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+    case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+      matches = beginsWith(bytes, [0x50, 0x4b, 0x03, 0x04])
+        || beginsWith(bytes, [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+      break;
     case "application/pdf":
       matches = beginsWith(bytes, [0x25, 0x50, 0x44, 0x46, 0x2d]);
       break;

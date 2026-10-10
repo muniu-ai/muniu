@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { apiPath, matchApiOperation, parseApiResponse, type ApiPath, type JsonApiOperationIdV2, type ApiOutputsV2 } from "@mn/contracts/client";
-import type { AgentSchedulingRequestV2, GoalUsageV2, BusinessCommandV1, BusinessPeriodV1, CodingRunnerId, ExternalCodingRunnerId, ConfirmCodingRunnerMutationBodyV2, GoalBudgetV2, GoalDeliverableSpecV2, GoalDetailV2, GoalResourceRefV2 } from "@mn/contracts";
+import type { AgentSchedulingRequestV2, GoalUsageV2, BusinessCommandV1, BusinessPeriodV1, BusinessContextTargetV2, CodingRunnerId, ExternalCodingRunnerId, ConfirmCodingRunnerMutationBodyV2, GoalBudgetV2, GoalDeliverableSpecV2, GoalDetailV2, GoalResourceRefV2 } from "@mn/contracts";
 import type {
   AgentThreadSummary,
   ApiFailure,
@@ -32,6 +32,9 @@ export class AgentOsClient {
   private readonly eventStreams = new Map<string, WorkspaceEventStream>();
   business(workspaceId: string, period?: BusinessPeriodV1) {
     return this.request(apiPath("getOpcBusiness", {}, { workspaceId, ...(period ? { periodStart: period.start, periodEnd: period.end } : {}) }));
+  }
+  businessContext(workspaceId: string, target: BusinessContextTargetV2) {
+    return this.request(apiPath("getBusinessContext", { workspaceId, kind: target.kind, resourceId: target.resourceId }));
   }
   commandBusiness(workspaceId: string, expectedStreamVersion: number, command: BusinessCommandV1, requestKey?: string) {
     return this.request(apiPath("commandOpcBusiness", {}), { method: "POST", ...(requestKey ? { headers: { "Idempotency-Key": requestKey } } : {}), body: JSON.stringify({ workspaceId, expectedStreamVersion, command }) });
@@ -284,9 +287,18 @@ export class AgentOsClient {
       },
     );
   }
-  async uploadAsset(workspaceId: string, file: File, protectedValue: boolean) {
+  asset(assetId: string) { return this.request(apiPath("getAsset", { assetId })); }
+  assetExtraction(assetId: string) { return this.request(apiPath("getAssetExtraction", { assetId })); }
+  async assetContent(assetId: string, signal?: AbortSignal): Promise<Blob> {
+    const response = await fetch(`${this.baseUrl}${apiPath("downloadAsset", { assetId })}`, { ...(signal ? { signal } : {}) });
+    if (!response.ok) throw new AgentOsApiError({ code: `ASSET_HTTP_${response.status}`, message: "无法读取资料原文",
+      action: "确认资料仍存在且拥有读取权限后重试", fieldIssues: [], traceId: response.headers.get("x-trace-id") ?? "unknown", retryable: response.status >= 500 }, response.status);
+    return response.blob();
+  }
+  async uploadAsset(workspaceId: string, file: File, protectedValue: boolean, requestKey?: string) {
     const [asset] = await this.request(apiPath("createAssets", { }), {
       method: "POST",
+      ...(requestKey ? { headers: { "Idempotency-Key": requestKey } } : {}),
       body: JSON.stringify({
         workspaceId,
         expectedStreamVersion: 0,
@@ -372,6 +384,8 @@ const MEDIA_TYPES_BY_EXTENSION: Readonly<Record<string, string>> = {
   json: "application/json",
   csv: "text/csv",
   pdf: "application/pdf",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   png: "image/png",
   jpg: "image/jpeg",
   jpeg: "image/jpeg",

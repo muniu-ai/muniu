@@ -1,3 +1,5 @@
+import { readAssetExtraction } from "./asset-context.js";
+import { assertContextSource, assertExecutionContextSources } from "@mn/worker";
 import type { Principal } from "@mn/contracts";
 import { readAgentReadiness, type CodingAgentRuntimeReadiness } from "./agent-readiness.js";
 import { publicModelConnection, selectModelConnection, preferredModelConnectionId, setDefaultModelConnection } from "./model-connections.js";
@@ -113,6 +115,8 @@ import {
 } from "./product-state.js";
 import { executeOpcCommand } from "./opc-api.js";
 import { businessPeriod, commandOpcBusiness, readOpcBusiness } from "./business-management.js";
+import { readBusinessContext, validateBusinessContextSource } from "./business-context.js";
+import type { BusinessContextTargetV2 } from "@mn/contracts";
 import {
   hydrateOpcOpportunity,
   validateOpcCommandSources,
@@ -621,6 +625,8 @@ async function threadTurns(
   const executions = (await projectionList<Execution>(store, tenantId, "execution"))
     .filter((execution) => execution.threadId === threadId)
     .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
+  const checkSources = () => store.transact(tenantId, tx => { for (const execution of executions) assertExecutionContextSources(tx, execution, protection?.validateContextSource); });
+  await checkSources();
   const storedEntries = await projectionList<SubmittedSessionEntry>(store, tenantId, "session-log-entry");
   const submittedEntries = await Promise.all(storedEntries.filter((entry) => entry.threadId === threadId)
     .map(async (entry) => {
@@ -632,7 +638,7 @@ async function threadTurns(
       if (typeof value.message !== "string") throw new Error("会话内容无效");
       return { ...entry, message: value.message };
     }));
-  return {
+  const view = {
     threadId,
     turns: await Promise.all(executions.map(async (execution) => {
       const runtime = protection ? createProtectedRuntimeStore({ ...protection, tenantId,
@@ -666,6 +672,8 @@ async function threadTurns(
       };
     })),
   };
+  await checkSources();
+  return view;
 }
 
 function runtimeSessionEntry(record: RuntimeRecord): ThreadTurnSessionEntry | undefined {
@@ -877,7 +885,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
     try {
     let installer: PluginInstallerPort | undefined;
     const protection = options.cas && options.protectedPayloadKeyProvider
-      ? { cas: options.cas, keyProvider: options.protectedPayloadKeyProvider } : undefined;
+      ? { cas: options.cas, keyProvider: options.protectedPayloadKeyProvider, validateContextSource: validateBusinessContextSource } : undefined;
     const dataManager = new KernelPluginProjectionManager({ store: options.store, tenantId,
       engine: profile === "local" ? "sqlite" : "postgresql", readEvent: event => readPluginDomainEvent(options.store, event, protection) });
     const plugins = new PluginContributionHost({
@@ -1214,6 +1222,17 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
       const tenantPlugins = tenantRuntime.plugins;
       const pluginInstaller = tenantRuntime.installer;
       await pluginInstaller?.synchronize?.();
+      const businessContextPath = /^\/v2\/workspaces\/([^/]+)\/business-context\/([^/]+)\/([^/]+)$/u.exec(url.pathname);
+      if (businessContextPath && request.method === "GET") {
+        if (!protectedJournal) throw new KernelError("BUSINESS_PROTECTED_STORAGE_REQUIRED", "经营资料需要受保护的事件存储", "配置受保护存储后重试");
+        if (url.searchParams.size) throw new KernelError("INVALID_BODY", "业务资料接口不接受查询参数", "通过路径选择业务对象");
+        const workspaceId = decodeURIComponent(businessContextPath[1]!);
+        const kind = decodeURIComponent(businessContextPath[2]!) as BusinessContextTargetV2["kind"];
+        const resourceId = decodeURIComponent(businessContextPath[3]!);
+        const result = await options.store.transact(TENANT_ID, tx => readBusinessContext(tx,
+          { tenantId: TENANT_ID, workspaceId, principalId: ACTOR_ID }, { kind, resourceId }));
+        return json(result, 200, traceId);
+      }
       if (url.pathname === "/v2/plugins/opc/business" || url.pathname === "/v2/plugins/opc/business/commands") {
         if (!protectedJournal) throw new KernelError("BUSINESS_PROTECTED_STORAGE_REQUIRED", "经营台账需要受保护的事件存储", "配置受保护存储后重试");
         const reading = request.method === "GET" && url.pathname === "/v2/plugins/opc/business";
@@ -1585,9 +1604,11 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         if (!thread || thread.workspaceId !== workspaceId) {
           throw new KernelError("THREAD_NOT_FOUND", "会话不存在", "刷新工作区会话");
         }
-        return json(await threadTurns(options.store, TENANT_ID, threadId,
+        const view = await threadTurns(options.store, TENANT_ID, threadId,
           options.cas && options.protectedPayloadKeyProvider
-            ? { cas: options.cas, keyProvider: options.protectedPayloadKeyProvider } : undefined), 200, traceId);
+            ? { cas: options.cas, keyProvider: options.protectedPayloadKeyProvider, validateContextSource: validateBusinessContextSource } : undefined);
+        await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId);
+        return json(view, 200, traceId);
       }
       if (turnMatch && request.method === "POST") {
         const body = await readBody(request);
@@ -1953,9 +1974,9 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         if (!workspaceId) throw new KernelError("INVALID_BODY", "缺少 workspaceId", "选择工作区后重试");
         await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId);
         return json(await workspaceActivity(options.store, TENANT_ID, workspaceId,
-          options.cas && options.protectedPayloadKeyProvider ? { cas: options.cas, keyProvider: options.protectedPayloadKeyProvider } : undefined), 200, traceId);
+          options.cas && options.protectedPayloadKeyProvider ? { cas: options.cas, keyProvider: options.protectedPayloadKeyProvider, validateContextSource: validateBusinessContextSource } : undefined), 200, traceId);
       }
-      const assetMatch = url.pathname.match(/^\/v2\/assets\/([^/]+)(\/content)?$/u);
+      const assetMatch = url.pathname.match(/^\/v2\/assets\/([^/]+)(\/(?:content|extraction))?$/u);
       if (assetMatch && request.method === "GET") {
         const asset = await projectionGet<Asset>(
           options.store,
@@ -1968,7 +1989,11 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         if (url.searchParams.size) throw new KernelError("INVALID_BODY", "附件接口不接受查询参数", "使用附件元数据或文件下载接口");
         if (!assetMatch[2]) return json(asset, 200, traceId);
         if (!options.cas) throw new KernelError("ASSET_STORE_UNAVAILABLE", "成果文件暂不可用", "检查对象存储连接");
-        return new Response(await readAssetContent({
+        if (assetMatch[2] === '/extraction') return json(await readAssetExtraction({
+          store: options.store, cas: options.cas, tenantId: TENANT_ID, principalId: ACTOR_ID, asset,
+          ...(options.protectedPayloadKeyProvider ? { protectedPayloadKeyProvider: options.protectedPayloadKeyProvider } : {}),
+        }), 200, traceId);
+        const content = await readAssetContent({
           store: options.store,
           cas: options.cas,
           tenantId: TENANT_ID,
@@ -1976,7 +2001,10 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           ...(options.protectedPayloadKeyProvider
             ? { protectedPayloadKeyProvider: options.protectedPayloadKeyProvider }
             : {}),
-        }), {
+        });
+        await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, asset.workspaceId);
+        await options.store.transact(TENANT_ID, tx => assertContextSource(tx, { tenantId: TENANT_ID, workspaceId: asset.workspaceId }, { namespace: 'asset', resourceId: asset.id, streamVersion: asset.streamVersion, digest: asset.digest }));
+        return new Response(content, {
           headers: {
             "content-type": asset.mediaType,
             "content-length": String(asset.byteLength),

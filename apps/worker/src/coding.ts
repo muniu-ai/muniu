@@ -1,3 +1,5 @@
+import { prepareBoundedModelRequest } from "./context-selection.js";
+import { assertExecutionContextSources, type ContextSourceValidator } from "./execution-context.js";
 // SPDX-License-Identifier: Apache-2.0
 import { appendKernelEvent } from "@mn/kernel";
 
@@ -388,7 +390,7 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
     const state = await loadCodingState(store, job.tenantId, executionId);
     await store.transact(job.tenantId, tx => options.assertExecutionResources?.(tx, state.execution));
     const onCommit = (tx: KernelTransaction, records: readonly RuntimeRecord[]) =>
-      finalizeCodingRuntime(tx, records, state, job, context, now(), options.assertExecutionResources);
+      finalizeCodingRuntime(tx, records, state, job, context, now(), options.assertExecutionResources, options.runtimeProtection?.validateContextSource);
     const runtime = options.runtimeProtection ? createProtectedRuntimeStore({
       ...options.runtimeProtection, tenantId: job.tenantId, workspaceId: state.execution.workspaceId, store, now, onCommit,
     }) : new KernelProjectionRuntimeStore({ tenantId: job.tenantId, store, now,
@@ -456,7 +458,7 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
 
 function finalizeCodingRuntime(tx: KernelTransaction, records: readonly RuntimeRecord[], state: CodingState,
   job: StoredJob, context: CodingWorkerJobContext, occurredAt: string,
-  assertResources?: (transaction: KernelTransaction, execution: Execution) => void): void | (() => void) {
+  assertResources?: (transaction: KernelTransaction, execution: Execution) => void, validateSource?: ContextSourceValidator): void | (() => void) {
   if (records.some(record => record.type === "model/request" || record.type === "model/reserved" || record.type === "tool/started"
     || record.type === "job/started" || record.type === "subagent/reserved"
     || (record.type === "execution/status" && record.payload.status === "completed"))) {
@@ -468,6 +470,7 @@ function finalizeCodingRuntime(tx: KernelTransaction, records: readonly RuntimeR
     if (control?.generation === execution.generation && control.command === "interrupt") throw new RuntimeControlError("interrupted");
     if (execution.status === "cancelled" || execution.status === "paused" || execution.status === "interrupted") throw new RuntimeControlError(execution.status);
     assertCurrentExecutionAuthorization(tx, execution);
+    assertExecutionContextSources(tx, execution, validateSource);
     assertResources?.(tx, execution);
     for (const record of records) {
       if (record.type === "tool/started" && typeof record.payload.toolCallId === "string") {
@@ -676,7 +679,7 @@ function createCodingTurnHandler(options: CodingExecutionWorkerOptions) {
         }
         const inbox = new PersistentInbox(runtime, executionId);
         await inbox.applySteersAtModelBoundary(turn);
-        return [...await readThreadHistory(store, runtime, state.execution),
+        return [...await readThreadHistory(store, runtime, state.execution, options.runtimeProtection?.validateContextSource),
           ...await session.modelView(new DefaultSessionSurface())];
       },
       ...(options.memoryReader ? { memoryPrompt: () => buildAgentMemoryPrompt({
@@ -2267,9 +2270,10 @@ class BuiltinCodingRunner implements ManagedCodingRunner {
       availableToolIds: ["coding.sandbox.write"],
     };
     const memoryPrompt = await this.#options.memoryPrompt?.();
-    const effectiveRequest: ModelRequest = memoryPrompt
+    const memoryRequest: ModelRequest = memoryPrompt
       ? { ...request, messages: [{ role: "system", content: memoryPrompt }, ...request.messages] }
       : request;
+    const effectiveRequest = await prepareBoundedModelRequest(memoryRequest, this.#options.runtime);
     await this.#options.runtime.append({
       executionId: this.#options.execution.id,
       type: "model/request",

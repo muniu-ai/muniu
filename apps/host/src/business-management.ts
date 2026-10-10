@@ -15,7 +15,7 @@ interface BusinessOptions extends BusinessScope {
   readonly now: () => string;
 }
 
-function assertAccess(tx: KernelTransaction, scope: BusinessScope, write: boolean): void {
+export function assertBusinessAccess(tx: KernelTransaction, scope: BusinessScope, write: boolean): void {
   const workspace = tx.getProjection<Workspace>("workspace", scope.workspaceId);
   const member = tx.getProjection<WorkspaceMembership>("membership", `${scope.workspaceId}:${scope.principalId}`);
   const principal = tx.getProjection<Principal>("principal", scope.principalId);
@@ -43,7 +43,7 @@ function current(tx: KernelTransaction, workspaceId: string): BusinessStateV1 {
 
 export async function readOpcBusiness(options: BusinessOptions, period: BusinessPeriodV1): Promise<BusinessManagementViewV1> {
   return options.store.transact(options.tenantId, tx => {
-    assertAccess(tx, options, false);
+    assertBusinessAccess(tx, options, false);
     const state = current(tx, options.workspaceId);
     return { state, summary: calculateBusinessSummary(state, period) };
   });
@@ -59,7 +59,7 @@ export async function commandOpcBusiness(options: BusinessOptions & {
     expectedStreamVersion: options.expectedStreamVersion, command });
   const scope = `opc.business:${options.workspaceId}`;
   return options.store.transact(options.tenantId, tx => {
-    assertAccess(tx, options, true);
+    assertBusinessAccess(tx, options, true);
     const previous = tx.getIdempotency(scope, options.idempotencyKey);
     if (previous) {
       if (previous.requestDigest !== requestDigest) throw new KernelError("IDEMPOTENCY_KEY_REUSED", "幂等键已用于不同经营命令", "使用新的 Idempotency-Key");

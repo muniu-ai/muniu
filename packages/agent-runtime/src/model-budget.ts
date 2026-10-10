@@ -120,7 +120,7 @@ export class PersistentModelBudget {
     validateModelUsage(usage);
     const { store, executionId } = this.options;
     for (;;) {
-      const records = await store.readExecution(executionId);
+      const records = await (store.readSettlementRecords?.(executionId) ?? store.readExecution(executionId));
       const row = records.find(record => record.type === "model/reserved" && record.payload.id === id);
       if (!row) throw new Error("模型请求未预留预算，拒绝结算");
       const reservation = row.payload as unknown as ModelBudgetReservation;

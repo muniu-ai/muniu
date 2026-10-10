@@ -1,3 +1,4 @@
+import type { AssetExtractionV2 } from "./context.js";
 import type { AgentReadinessReportV1 } from "./agent-readiness.js";
 // SPDX-License-Identifier: Apache-2.0
 import type { AgentCatalogV2, CodingReconciliationDecisionV2, CodingReconciliationViewV2 } from "./api.js";
@@ -266,6 +267,7 @@ export type CodingRunnerViewV2 =
 
 /** JSON extension points are explicit; every fixed Host operation has a concrete DTO. */
 export interface ApiOutputsV2 {
+  readonly getBusinessContext: BusinessObjectContextV2;
   readonly getOpcBusiness: BusinessManagementViewV1;
   readonly commandOpcBusiness: BusinessManagementViewV1;
   readonly listGoals: readonly GoalV2[];
@@ -310,6 +312,7 @@ export interface ApiOutputsV2 {
   readonly listDeliverables: readonly DeliverableSummaryV2[];
   readonly createAssets: readonly Asset[];
   readonly getAsset: Asset;
+  readonly getAssetExtraction: AssetExtractionV2;
   readonly downloadAsset: ArrayBuffer;
   readonly deleteAsset: AssetTombstone;
   readonly listMemories: readonly MemorySummaryV2[];
@@ -351,3 +354,4 @@ export interface ApiOutputsV2 {
   readonly getCodingReconciliation: CodingReconciliationViewV2;
   readonly decideCodingReconciliation: CodingReconciliationResultV2;
 }
+import type { BusinessObjectContextV2 } from "./business-context.js";

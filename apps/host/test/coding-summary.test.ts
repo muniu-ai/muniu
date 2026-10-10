@@ -7,6 +7,7 @@ import { listCodingTaskSummaries } from "../src/index.js";
 test("Coding 列表展示已持久化的 Diff、Gate、审批和下一步，并隔离其他工作区", async () => {
   const store = new InMemoryKernelStore();
   await store.transact("tenant-a", tx => {
+    tx.putProjection("execution", "execution", { id: "execution", tenantId: "tenant-a", workspaceId: "workspace" });
     tx.putProjection("coding.repository", "repo", { id: "repo", workspaceId: "workspace", name: "example" });
     tx.putProjection("coding.task", "task", { id: "task", title: "修正文案", workspaceId: "workspace", repositoryId: "repo",
       status: "completed", updatedAt: "2026-09-04T00:00:00Z" });

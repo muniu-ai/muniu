@@ -33,6 +33,12 @@
     "@mn/runner-claude-cli": "0.2.0",
     "@mn/runner-codex-cli": "0.2.0",
     "@mn/storage": "0.2.0",
-    "@mn/worker": "0.2.0"
+    "@mn/worker": "0.2.0",
+    "pdfjs-dist": "6.4.299",
+    "saxes": "6.0.0",
+    "yauzl": "3.4.0"
+  },
+  "devDependencies": {
+    "@types/yauzl": "3.4.0"
   }
 }

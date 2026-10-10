@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
+import { assertExecutionContextSources, type ContextSourceValidator } from "./execution-context.js";
+import { assertModelContextLimit } from "./model-context.js";
 import { randomUUID } from "node:crypto";
 import { assertRuntimeBatch, type RuntimeRecord, type RuntimeRecordInput, type RuntimeStore } from "@mn/agent-runtime";
 import type { Execution, JsonObject } from "@mn/contracts";
@@ -10,6 +12,7 @@ import {
 } from "@mn/storage";
 
 export interface RuntimeProtection {
+  readonly validateContextSource?: ContextSourceValidator;
   readonly cas: ContentAddressedStorage;
   readonly keyProvider: KeyProvider;
 }
@@ -44,6 +47,7 @@ export async function readExecutionInput(options: {
   readonly protection?: RuntimeProtection;
 }): Promise<string> {
   const { execution, store } = options;
+  await store.transact(execution.tenantId, tx => assertExecutionContextSources(tx, execution, options.protection?.validateContextSource));
   const entries = await store.transact(execution.tenantId, tx => tx.listProjections<JsonObject>("session-log-entry")
     .filter(entry => entry.tenantId === execution.tenantId && entry.workspaceId === execution.workspaceId
       && entry.threadId === execution.threadId && entry.executionId === execution.id));
@@ -58,6 +62,7 @@ export async function readExecutionInput(options: {
       protectedPayloadRef: source.protectedPayloadRef });
   }
   if (typeof value.message !== "string" || !value.message.trim()) throw new Error("执行缺少持久化的本轮输入");
+  await store.transact(execution.tenantId, tx => assertExecutionContextSources(tx, execution, options.protection?.validateContextSource));
   return value.message;
 }
 
@@ -107,7 +112,16 @@ export function createProtectedRuntimeStore(options: ProtectedRuntimeOptions): R
 
   async function appendBatch(executionId: string, batch: readonly RuntimeRecordInput[], expectedLastSequence?: number): Promise<readonly RuntimeRecord[] | undefined> {
       assertRuntimeBatch(executionId, expectedLastSequence ?? 0, batch);
-      const inputs = structuredClone(batch);
+      const contextSensitive = batch.some(record => ["context/prepared", "model/request", "model/response", "model/reserved", "tool/started", "session/entry", "turn/completed"].includes(record.type));
+      const context = await options.store.transact(options.tenantId, tx => {
+        const execution = tx.getProjection<Execution>("execution", executionId);
+        return execution && contextSensitive ? assertExecutionContextSources(tx, execution, options.validateContextSource) : undefined;
+      });
+      const inputs = structuredClone(batch).map(input => {
+        if (input.type !== 'model/request') return input;
+        assertModelContextLimit(input.payload);
+        return { ...input, payload: { ...input.payload, ...(context ? { contextManifest: context as unknown as JsonObject } : {}) } };
+      });
       const snapshot = await restore(executionId);
       const timestamp = now();
       const prepared = await Promise.all(inputs.map(async input => {
@@ -121,6 +135,10 @@ export function createProtectedRuntimeStore(options: ProtectedRuntimeOptions): R
         const current = tx.getProjection<RuntimeProjection>("agent-runtime", executionId) ?? snapshot;
         if (expectedLastSequence !== undefined && (current.records.at(-1)?.sequence ?? 0) !== expectedLastSequence) return undefined;
         const execution = tx.getProjection<Execution>("execution", executionId);
+        if (execution && contextSensitive) {
+          const currentContext = assertExecutionContextSources(tx, execution, options.validateContextSource);
+          if (currentContext?.digest !== context?.digest) throw new Error("执行上下文已变化，请重试");
+        }
         const values = inputs.map((input, index): StoredRecord => ({
           id: `runtime-${randomUUID()}`, executionId,
           sequence: current.nextSequence + index, type: input.type, occurredAt: timestamp,
@@ -162,9 +180,29 @@ export function createProtectedRuntimeStore(options: ProtectedRuntimeOptions): R
       return (await appendBatch(input.executionId, [input]))![0]!;
     },
     commit: (executionId, expectedLastSequence, batch) => appendBatch(executionId, batch, expectedLastSequence),
-    async readExecution(executionId) {
+    async readSettlementRecords(executionId) {
       const projection = await restore(executionId);
-      return Promise.all(projection.records.map(decode));
+      return Promise.all(projection.records.map(async record => {
+        if (record.type === "subagent/reserved") {
+          const value = await decode(record);
+          const authority = value.payload.authority as JsonObject | undefined;
+          return { ...value, payload: { authority: { budget: authority?.budget ?? null } } };
+        }
+        if (["model/budget", "model/reserved", "model/settled"].includes(record.type)) return decode(record);
+        const { protectedPayloadRef: _ref, ...metadata } = record;
+        return { ...metadata, payload: {} };
+      }));
+    },
+    async readExecution(executionId) {
+      const check = () => options.store.transact(options.tenantId, tx => {
+        const execution = tx.getProjection<Execution>("execution", executionId);
+        if (execution) assertExecutionContextSources(tx, execution, options.validateContextSource);
+      });
+      await check();
+      const projection = await restore(executionId);
+      const records = await Promise.all(projection.records.map(decode));
+      await check();
+      return records;
     },
   };
 }

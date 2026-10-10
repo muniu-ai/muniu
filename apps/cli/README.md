@@ -15,6 +15,9 @@ mn doctor --fix
 mn plugin ...
 mn opc ...
 mn code ...
+mn goal ...
+mn asset ...
+mn business context ...
 mn backup ...
 ```
 
@@ -25,6 +28,20 @@ mn backup ...
 外部 Coding Runner 只支持官方原生安装提供的 macOS Mach-O CLI，不支持 npm 或 shebang wrapper。Host 确认阶段不会执行目标路径；确认后，Worker 才会把已确认制品复制到其管理的只读目录，并在受限环境中探测版本。
 
 完整参数、退出码和 JSON 格式见 [CLI 参考](../../docs/reference/cli.md)。
+
+## 资料与业务上下文
+
+```bash
+mn asset upload --workspace WORKSPACE_ID --file ./资料.docx --key MATERIAL_REQUEST_ID --json
+mn asset extract ASSET_ID --json
+mn business context customer CUSTOMER_ID --workspace WORKSPACE_ID --json
+```
+
+资料上传始终使用受保护 Asset，支持 TXT、Markdown、CSV、JSON、PDF、DOCX 和 XLSX，每份不超过 20 MB。上传返回 `asset` 和 `sourceRef`；将 `sourceRef` 加入 `mn goal create --file` 输入的 `resourceRefs`，无需把资料全文复制到 `objective`。`digest` 原样取 Host 返回值，不使用本地文件摘要替代。
+
+`--key` 是这次上传的请求标识。响应丢失时保持文件、工作区和标识不变，重新运行同一命令；CLI 不自动重发。省略时按既有约定生成随机请求标识。提取结果保留 `complete`、`partial` 或 `unreadable` 状态、遗漏说明与页码、段落或单元格位置，提取成功不代表 Agent 已阅读全部资料。
+
+业务上下文支持 `customer`、`order`、`delivery` 和 `review`，返回当前授权下的事实正文与版本引用。资料或经营记录变化后，应重新读取并审阅计划；读取上下文不修改经营台账。已有 `mn opc business show` 和 `command` 保持原语义。
 
 ## 本地开发
 

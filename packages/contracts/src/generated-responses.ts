@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 import type { JsonObject } from "./json.js";
 export const API_OUTPUT_SCHEMAS_V2: Readonly<Record<string, JsonObject>> = {
+  "getBusinessContext": {
+    "$ref": "#/components/schemas/OutputBusinessObjectContextV2"
+  },
   "getOpcBusiness": {
     "$ref": "#/components/schemas/OutputBusinessManagementViewV1"
   },
@@ -241,6 +244,9 @@ export const API_OUTPUT_SCHEMAS_V2: Readonly<Record<string, JsonObject>> = {
   "getAsset": {
     "$ref": "#/components/schemas/OutputAsset"
   },
+  "getAssetExtraction": {
+    "$ref": "#/components/schemas/OutputAssetExtractionV2"
+  },
   "downloadAsset": {
     "type": "string",
     "format": "binary"
@@ -436,6 +442,74 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
     "type": "object",
     "additionalProperties": {
       "$ref": "#/components/schemas/OutputJsonValue"
+    }
+  },
+  "OutputGoalResourceRefV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "streamVersion",
+      "namespace",
+      "resourceId"
+    ],
+    "properties": {
+      "streamVersion": {
+        "type": "number"
+      },
+      "namespace": {
+        "type": "string"
+      },
+      "resourceId": {
+        "type": "string"
+      },
+      "digest": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputBusinessObjectContextV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "title",
+      "sourceRef",
+      "content",
+      "kind",
+      "resourceId"
+    ],
+    "properties": {
+      "title": {
+        "type": "string"
+      },
+      "sourceRef": {
+        "$ref": "#/components/schemas/OutputGoalResourceRefV2"
+      },
+      "content": {
+        "type": "string"
+      },
+      "kind": {
+        "anyOf": [
+          {
+            "type": "string",
+            "const": "customer"
+          },
+          {
+            "type": "string",
+            "const": "order"
+          },
+          {
+            "type": "string",
+            "const": "delivery"
+          },
+          {
+            "type": "string",
+            "const": "review"
+          }
+        ]
+      },
+      "resourceId": {
+        "type": "string"
+      }
     }
   },
   "OutputBusinessPeriodV1": {
@@ -1419,29 +1493,6 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
             }
           }
         }
-      }
-    }
-  },
-  "OutputGoalResourceRefV2": {
-    "type": "object",
-    "additionalProperties": false,
-    "required": [
-      "streamVersion",
-      "namespace",
-      "resourceId"
-    ],
-    "properties": {
-      "streamVersion": {
-        "type": "number"
-      },
-      "namespace": {
-        "type": "string"
-      },
-      "resourceId": {
-        "type": "string"
-      },
-      "digest": {
-        "type": "string"
       }
     }
   },
@@ -4314,6 +4365,127 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
         "type": "string"
       },
       "updatedAt": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputDocumentLocatorV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [],
+    "properties": {
+      "page": {
+        "type": "number"
+      },
+      "paragraph": {
+        "type": "number"
+      },
+      "sheet": {
+        "type": "string"
+      },
+      "cell": {
+        "type": "string"
+      },
+      "row": {
+        "type": "number"
+      },
+      "column": {
+        "type": "number"
+      },
+      "part": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputAssetExtractionV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "assetRef",
+      "fileName",
+      "mediaType",
+      "status",
+      "blocks",
+      "issues",
+      "extractorVersion",
+      "textDigest"
+    ],
+    "properties": {
+      "assetRef": {
+        "$ref": "#/components/schemas/OutputGoalResourceRefV2"
+      },
+      "fileName": {
+        "type": "string"
+      },
+      "mediaType": {
+        "type": "string"
+      },
+      "status": {
+        "anyOf": [
+          {
+            "type": "string",
+            "const": "complete"
+          },
+          {
+            "type": "string",
+            "const": "partial"
+          },
+          {
+            "type": "string",
+            "const": "unreadable"
+          }
+        ]
+      },
+      "blocks": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "text",
+            "locator"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            },
+            "locator": {
+              "$ref": "#/components/schemas/OutputDocumentLocatorV2"
+            }
+          }
+        }
+      },
+      "issues": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "code",
+            "message"
+          ],
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "locator": {
+              "$ref": "#/components/schemas/OutputDocumentLocatorV2"
+            }
+          }
+        }
+      },
+      "extractorVersion": {
+        "type": "string",
+        "const": "1"
+      },
+      "textDigest": {
         "type": "string"
       }
     }

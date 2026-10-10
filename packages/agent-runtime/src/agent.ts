@@ -93,6 +93,7 @@ export class AgentHandle {
   readonly #authority: AgentHandleOptions["authority"];
   readonly #approval: ToolApprovalPort;
   readonly #surface: SessionSurface;
+  readonly #prepareModelRequest: AgentHandleOptions["prepareModelRequest"];
   readonly #maxModelBoundariesPerTurn: number;
   readonly #toolIntentTtlMs: number;
   readonly #now: () => string;
@@ -115,6 +116,7 @@ export class AgentHandle {
     this.#authority = snapshotRuntimeAuthority(options.authority);
     this.#approval = options.approval;
     this.#surface = options.surface ?? new DefaultSessionSurface();
+    this.#prepareModelRequest = options.prepareModelRequest;
     this.#maxModelBoundariesPerTurn = options.maxModelBoundariesPerTurn ?? 16;
     if (!Number.isSafeInteger(this.#maxModelBoundariesPerTurn) || this.#maxModelBoundariesPerTurn < 1) {
       throw new Error("每 turn 的模型边界上限必须是正整数");
@@ -573,7 +575,7 @@ export class AgentHandle {
           scope: this.#scope.identity, executionId: this.#executionId, generation: runtime.generation,
         }) : runtime.prompts[index]!;
       }));
-      const request: ModelRequest = {
+      let request: ModelRequest = {
         executionId: this.#executionId,
         agentId: this.#definition.id,
         generation: runtime.generation,
@@ -584,6 +586,7 @@ export class AgentHandle {
         availableToolIds: runtime.availableToolIds,
       };
 
+      if (this.#prepareModelRequest) request = await this.#prepareModelRequest(request);
       await this.#persistModelRequest(request, boundary, prompts);
       const modelResponse = await this.#invokeModelWithinDeadline(runtime.llm, request);
       if (modelResponse.usage) validateModelUsage(modelResponse.usage);
@@ -663,6 +666,7 @@ export class AgentHandle {
         prompts,
         messages: request.messages.map((message) => ({ ...message })),
         availableToolIds: request.availableToolIds,
+        ...(request.contextSelection ? { contextSelection: request.contextSelection } : {}),
       },
     });
   }
