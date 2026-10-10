@@ -70,6 +70,7 @@ try {
   assert.deepEqual(goals[0].body, goals[1].body);
   assert.equal(goals[0].body.objective.includes(originalText), false, "正文不得写入目标描述");
   assert.deepEqual(goals[0].body.resourceRefs, [{ namespace: "asset", resourceId: committedAsset.id, streamVersion: committedAsset.streamVersion, digest: committedAsset.digest }]);
+  await page.getByRole("tab", { name: "目标", exact: true }).click();
   const sources = page.getByRole("region", { name: "任务资料来源", exact: true });
   await sources.getByText("交付说明.md", { exact: true }).waitFor();
   await sources.getByRole("button", { name: "查看摘录：交付说明.md", exact: true }).click();

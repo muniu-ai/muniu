@@ -4,8 +4,8 @@ import { CODING_RUNNER_CONFIGURATION_NAMESPACE, type CodingRunnerConfigurationV1
 import { readAssetExtraction } from "./asset-context.js";
 import { selectMaterialBlocks } from "./material-context.js";
 import { runnerPluginId, runnerToolId } from "./coding-runners.js";
-import type { Asset, ContextMaterialV2, Execution, ExecutionAuthority, GoalDetailV2, GoalOutputRefV2, GoalPlanProposalV2, GoalPlanRevisionV2, GoalResourceRefV2, GoalV2, OpportunityAggregate, Principal, ResourceRef, Thread, Workspace, WorkspaceMembership } from "@mn/contracts";
-import { appendKernelEvent, assertCurrentExecutionAuthorization, findModelPrice, KernelError, sha256, type AgentOsKernel, type KernelStore, type KernelTransaction, type ModelConnection } from "@mn/kernel";
+import type { CoordinationAttemptV2, CoordinationBindingV2, CoordinationRunV2, GoalTeamPlanRevisionV2, Job, Asset, ContextMaterialV2, Execution, ExecutionAuthority, GoalDetailV2, GoalOutputRefV2, GoalPlanProposalV2, GoalPlanRevisionV2, GoalResourceRefV2, GoalV2, OpportunityAggregate, Principal, ResourceRef, Thread, Workspace, WorkspaceMembership } from "@mn/contracts";
+import { appendKernelEvent, assertCurrentCoordinationAuthorization, assertCurrentExecutionAuthorization, findModelPrice, KernelError, sha256, type AgentOsKernel, type KernelStore, type KernelTransaction, type ModelConnection } from "@mn/kernel";
 import { buildRepositoryIndex, createCodeEvidence, createGovernanceSnapshot, createHarnessSnapshot, digest as codingDigest, type Candidate, type CodingControlPlaneCommitment, type CodingExecutionResult, type CodingTask, type GateResult, type GovernanceSnapshot, type HarnessSnapshot, type RepositoryIndex, type Spec } from "@mn/plugin-coding";
 import { createHash } from "node:crypto";
 import type { PluginDefinitionV1 } from "@mn/plugin-sdk";
@@ -26,7 +26,7 @@ const RESULT_NAMESPACE = "goal.result";
 interface GoalResult { readonly id: string; readonly tenantId: string; readonly workspaceId: string; readonly goalId: string; readonly planRevisionId: string; readonly executionId: string; readonly generation: number; readonly streamVersion: 1; readonly text: string; readonly digest: string; readonly sourceRefs: readonly GoalResourceRefV2[] }
 function fail(code: string, message: string): never { throw new KernelError(code, message, "刷新目标、资料和执行状态后重试"); }
 function scopeOf(goal: GoalV2): GoalScope { return { tenantId: goal.tenantId, workspaceId: goal.workspaceId, principalId: goal.principalId }; }
-function resource(tx: KernelTransaction, scope: GoalScope, ref: GoalResourceRefV2, validateSource?: ContextSourceValidator): void {
+export function assertGoalResource(tx: KernelTransaction, scope: GoalScope, ref: GoalResourceRefV2, validateSource?: ContextSourceValidator): void {
   if (validateSource?.(tx, scope, ref)) return;
   const value = tx.getProjection<{ tenantId?: string; workspaceId: string; streamVersion: number; digest?: string; protectedPayloadRef?: string; protected?: boolean }>(ref.namespace, ref.resourceId);
   if (ref.namespace === "coding.execution") {
@@ -46,7 +46,7 @@ function frozenRef(tx: KernelTransaction, namespace: string, resourceId: string)
   if (!value || !Number.isSafeInteger(value.streamVersion)) fail("GOAL_RESOURCE_UNAVAILABLE", "所选会话的资料不可用");
   return { namespace, resourceId, streamVersion: value.streamVersion, digest: value.digest ?? sha256(value) };
 }
-function domainInputDigest(tx: KernelTransaction, thread: Thread, executionId?: string): string {
+export function goalDomainInputDigest(tx: KernelTransaction, thread: Thread, executionId?: string): string {
   if (thread.pluginId !== "coding") return sha256({ resourceRef: thread.resourceRef ?? null });
   const task = thread.resourceRef && tx.getProjection<CodingTask>("coding.task", thread.resourceRef.resourceId);
   if (!task || task.workspaceId !== thread.workspaceId) fail("GOAL_THREAD_INVALID", "代码任务输入不可用");
@@ -85,6 +85,29 @@ function executionPlan(tx: KernelTransaction, execution: Execution): { goal: Goa
 }
 export function assertGoalExecutionResources(tx: KernelTransaction, execution: Execution, validateSource: ContextSourceValidator = validateBusinessContextSource): void {
   assertExecutionContextSources(tx, execution, validateSource);
+  const teamJob = tx.listProjections<Job>("job").find(job => job.payload.executionId === execution.id && (job.payload.coordination as unknown as CoordinationBindingV2 | undefined)?.runId);
+  const binding = teamJob?.payload.coordination as unknown as CoordinationBindingV2 | undefined;
+  if (binding?.runId) {
+    const run = tx.getProjection<CoordinationRunV2>("coordination.run", binding.runId!);
+    const goal = tx.getProjection<GoalV2>(GOAL_NAMESPACE, binding.aggregateId);
+    const plan = goal?.planRevisionId && tx.getProjection<GoalTeamPlanRevisionV2>(GOAL_PLAN_NAMESPACE, goal.planRevisionId);
+    const node = plan && plan.kind === "team-v1" && plan.nodes.find(item => item.id === binding.nodeId && item.kind === "agent");
+    const model = node && node.kind === "agent" && tx.getProjection<ModelConnection>("modelConnection", node.executor.modelBindingId);
+    const thread = goal && tx.getProjection<Thread>("thread", goal.threadId);
+    const member = goal && tx.getProjection<WorkspaceMembership>("membership", `${goal.workspaceId}:${execution.initiatedBy}`);
+    const deliveryAttempt = run && tx.listProjections<CoordinationAttemptV2>("coordination.attempt").find(item => item.runId === run.id && item.nodeId === "delivery");
+    if (!run || !goal || !plan || !node || node.kind !== "agent" || goal.coordinationRef?.runId !== run.id
+      || goal.planRevisionId !== run.revisionId || plan.digest !== run.revisionDigest || goal.tenantId !== execution.tenantId || goal.workspaceId !== execution.workspaceId
+      || goal.cancellationRequestedAt || ["accepted", "cancelled"].includes(goal.status) || !member || member.removedAt
+      || member.streamVersion !== goal.authorization?.membershipStreamVersion || goal.authorization?.planDigest !== plan.digest || goal.authorization.principalId !== execution.initiatedBy
+      || !model || model.tenantId !== goal.tenantId || model.status !== "ready" || model.streamVersion !== node.executor.modelConnectionStreamVersion || model.defaultModel !== node.executor.model
+      || !thread || goalDomainInputDigest(tx, thread, deliveryAttempt?.executionId) !== plan.domainInputDigest) fail("GOAL_AUTHORIZATION_STALE", "团队授权、来源或执行配置已变化");
+    const { digest, ...body } = plan;
+    if (sha256(body) !== digest) fail("GOAL_PLAN_CHANGED", "团队计划摘要无效");
+    assertCurrentCoordinationAuthorization(tx, execution);
+    for (const ref of goal.resourceRefs) assertGoalResource(tx, scopeOf(goal), ref, validateSource);
+    return;
+  }
   const bound = executionPlan(tx, execution); if (!bound) return;
   const { goal, plan } = bound;
   const member = tx.getProjection<WorkspaceMembership>("membership", `${goal.workspaceId}:${execution.initiatedBy}`);
@@ -98,9 +121,9 @@ export function assertGoalExecutionResources(tx: KernelTransaction, execution: E
   if (!principal || principal.disabledAt || !workspace?.activePluginIds.includes(plan.pluginId) || goal.cancellationRequestedAt || ["cancelled", "accepted"].includes(goal.status) || !member || member.removedAt || member.streamVersion !== goal.authorization?.membershipStreamVersion
     || goal.authorization.principalId !== execution.initiatedBy || goal.authorization.planDigest !== plan.digest
     || !bindingValid
-    || !thread || thread.tenantId !== goal.tenantId || thread.workspaceId !== goal.workspaceId || thread.pluginId !== plan.pluginId || domainInputDigest(tx, thread, execution.id) !== plan.domainInputDigest) fail("GOAL_AUTHORIZATION_STALE", "目标授权、任务输入或模型版本已变化");
+    || !thread || thread.tenantId !== goal.tenantId || thread.workspaceId !== goal.workspaceId || thread.pluginId !== plan.pluginId || goalDomainInputDigest(tx, thread, execution.id) !== plan.domainInputDigest) fail("GOAL_AUTHORIZATION_STALE", "目标授权、任务输入或模型版本已变化");
   assertCurrentExecutionAuthorization(tx, execution);
-  for (const ref of goal.resourceRefs) resource(tx, scopeOf(goal), ref, validateSource);
+  for (const ref of goal.resourceRefs) assertGoalResource(tx, scopeOf(goal), ref, validateSource);
 }
 export function createHostGoalRuntime(options: HostGoalRuntimeOptions) {
   options = { ...options, validateContextSource: options.validateContextSource ?? validateBusinessContextSource };
@@ -127,7 +150,7 @@ export function createHostGoalRuntime(options: HostGoalRuntimeOptions) {
     const dataScopes: ResourceRef[] = thread.pluginId === "coding" ? goal.resourceRefs.filter(ref => ref.namespace === "coding.repository").map(ref => ({ namespace: "repository", resourceId: ref.resourceId })) : [];
     const agentDefinitionId = thread.pluginId === "coding" ? "coding.builtin" : thread.resourceRef ? "opc.opportunity-validator" : "opc.business-assistant";
     if (!definition.contributions.agents.some(agent => agent.id === agentDefinitionId)) fail("GOAL_EXECUTOR_UNAVAILABLE", "插件缺少目标执行者");
-    return { threadStreamVersion: thread.streamVersion, domainInputDigest: domainInputDigest(tx, thread), pluginId: thread.pluginId as "opc" | "coding", pluginVersion: definition.version,
+    return { threadStreamVersion: thread.streamVersion, domainInputDigest: goalDomainInputDigest(tx, thread), pluginId: thread.pluginId as "opc" | "coding", pluginVersion: definition.version,
       ...(definition.manifest ? { pluginPackageSha256: definition.manifest.packageSha256 } : {}), agentDefinitionId,
       modelBindingId: runnerId === "builtin" ? modelBindingId : `runner:${runnerId}`, modelConnectionStreamVersion: runner?.streamVersion ?? model!.streamVersion, model: runner ? "CLI 自有模型" : model!.defaultModel, runnerId, toolIds, dataScopes,
       ...(runner ? { runnerBinding: { configurationStreamVersion: runner.streamVersion, identityDigest: runner.identityDigest } } : {}),
@@ -179,7 +202,7 @@ export function createHostGoalRuntime(options: HostGoalRuntimeOptions) {
       const materialQuery = `${goal.objective}\n${JSON.stringify(plan.deliverables)}`;
       const materialBytes = Math.floor(16 * 1024 / Math.max(1, assetRefs.length));
       for (const ref of assetRefs) {
-        const asset = await options.store.transact(scope.tenantId, tx => { resource(tx, scope, ref, options.validateContextSource); return tx.getProjection<Asset>('asset', ref.resourceId)!; });
+        const asset = await options.store.transact(scope.tenantId, tx => { assertGoalResource(tx, scope, ref, options.validateContextSource); return tx.getProjection<Asset>('asset', ref.resourceId)!; });
         const extraction = await readAssetExtraction({ store: options.store, cas: options.cas, protectedPayloadKeyProvider: options.keyProvider, tenantId: scope.tenantId, principalId: scope.principalId, asset });
         if (extraction.status === 'unreadable' || !extraction.blocks.length) fail('GOAL_MATERIAL_UNREADABLE', '资料未提取出可用内容');
         const blocks = selectMaterialBlocks(extraction.blocks, materialQuery, materialBytes);
@@ -200,7 +223,7 @@ export function createHostGoalRuntime(options: HostGoalRuntimeOptions) {
       } else records = await createProtectedRuntimeStore({ ...options, ...scope }).readExecution(goal.executionRef.executionId);
     }
     const ports: GoalApplicationPorts = {
-      assertResources(tx, currentScope, refs) { for (const ref of refs) resource(tx, currentScope, ref, options.validateContextSource); },
+      assertResources(tx, currentScope, refs) { for (const ref of refs) assertGoalResource(tx, currentScope, ref, options.validateContextSource); },
       assertPlan(tx, current) {
         const expected = proposal(tx, current.goal, current.plan.modelBindingId, current.plan.runnerId);
         for (const key of Object.keys(expected) as (keyof GoalPlanProposalV2)[]) if (sha256(expected[key] ?? null) !== sha256(current.plan[key] ?? null)) fail("GOAL_PLAN_CHANGED", "执行配置已变化，请重新规划并授权");
@@ -254,14 +277,14 @@ export function createHostGoalRuntime(options: HostGoalRuntimeOptions) {
         return { executionStreamVersion: current.execution.streamVersion, generation: current.execution.generation, ...(usage ? { usage } : {}), ...(outputs ? { outputs } : {}) };
       },
       assertAcceptance(tx, current) {
-        for (const ref of current.plan.resourceRefs) resource(tx, scope, ref, options.validateContextSource);
+        for (const ref of current.plan.resourceRefs) assertGoalResource(tx, scope, ref, options.validateContextSource);
         const execution = current.goal.executionRef && tx.getProjection<Execution>("execution", current.goal.executionRef.executionId);
         if (!execution || execution.status !== "completed" || execution.generation !== current.goal.executionRef?.generation) fail("GOAL_EXECUTION_STALE", "验收执行版本已变化");
         assertExecutionContextSources(tx, execution, options.validateContextSource);
         if (current.plan.pluginId === "coding") {
           if (sha256(codingOutput(tx, current.goal, current.plan, execution)) !== sha256(current.deliverySet.items)) fail("GOAL_EVIDENCE_INVALID", "验收成果与当前权威证据不一致");
         } else for (const output of current.deliverySet.items) {
-          resource(tx, scope, output.resourceRef);
+          assertGoalResource(tx, scope, output.resourceRef);
           const result = tx.getProjection<GoalResult>(RESULT_NAMESPACE, output.resourceRef.resourceId);
           if (!result || result.executionId !== execution.id || result.generation !== execution.generation || result.planRevisionId !== current.plan.id || result.digest !== output.digest) fail("GOAL_EVIDENCE_INVALID", "验收答复与固定执行不一致");
         }
@@ -273,7 +296,7 @@ export function createHostGoalRuntime(options: HostGoalRuntimeOptions) {
     };
     return { ...options, ...scope, ports };
   }
-  return { service, proposal,
+  return { service, proposal, codingOutput,
     async observeInBackground(input: GoalServiceOptions & { goalId: string }) {
       const detail = await getGoalForCoordination(input);
       const accountingOnly = Boolean(detail.goal.cancellationRequestedAt);

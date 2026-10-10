@@ -22,8 +22,10 @@ export const API_OPERATIONS_V2 = [
   { method: "get", path: "/v2/plugins/opc/business", operationId: "getOpcBusiness", mutation: false, versioned: false },
   { method: "post", path: "/v2/plugins/opc/business/commands", operationId: "commandOpcBusiness", mutation: true, versioned: true },
   { method: "get", path: "/v2/workspaces/{workspaceId}/goals", operationId: "listGoals", mutation: false, versioned: false },
+  { method: "get", path: "/v2/workspaces/{workspaceId}/team-templates", operationId: "listTeamTemplates", mutation: false, versioned: false },
   { method: "post", path: "/v2/workspaces/{workspaceId}/goals", operationId: "createGoal", mutation: true, versioned: false },
   { method: "get", path: "/v2/goals/{goalId}", operationId: "getGoal", mutation: false, versioned: false },
+  { method: "get", path: "/v2/goals/{goalId}/nodes", operationId: "getGoalNodes", mutation: false, versioned: false },
   { method: "post", path: "/v2/goals/{goalId}/plan-revisions", operationId: "proposeGoalPlan", mutation: true, versioned: true },
   { method: "post", path: "/v2/goals/{goalId}/commands", operationId: "commandGoal", mutation: true, versioned: true },
   { method: "post", path: "/v2/goals/{goalId}/acceptances", operationId: "acceptGoalDelivery", mutation: true, versioned: true },
@@ -168,7 +170,7 @@ export function createOpenApiDocument(): JsonObject {
       for (const name of ["generation", "fencingToken"]) parameters.push({ in: "query", name, required: true, schema: { type: "integer", minimum: 1 } });
     }
     if (["listInbox", "listMemories", "listDeliverables", "getHealth"].includes(operation.operationId)) parameters.push({ in: "query", name: "workspaceId", required: false, schema: { type: "string" } });
-    if (["listActivity", "getGoal"].includes(operation.operationId)) parameters.push({ in: "query", name: "workspaceId", required: true, schema: { type: "string" } });
+    if (["listActivity", "getGoal", "getGoalNodes"].includes(operation.operationId)) parameters.push({ in: "query", name: "workspaceId", required: true, schema: { type: "string" } });
     if (operation.operationId === "listMemories") parameters.push({ in: "query", name: "namespace", required: false, schema: { type: "string" } });
     if ([
       "getOpcBusiness",

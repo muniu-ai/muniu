@@ -39,6 +39,10 @@ mn business context customer CUSTOMER_ID --workspace WORKSPACE_ID --json
 
 资料上传始终使用受保护 Asset，支持 TXT、Markdown、CSV、JSON、PDF、DOCX 和 XLSX，每份不超过 20 MB。上传返回 `asset` 和 `sourceRef`；将 `sourceRef` 加入 `mn goal create --file` 输入的 `resourceRefs`，无需把资料全文复制到 `objective`。`digest` 原样取 Host 返回值，不使用本地文件摘要替代。
 
+团队执行需要显式选择。先用 `mn goal templates --workspace <id>` 查看可用模板，再用 `mn goal plan <goal-id> --workspace <id> --version <版本> --team research-summary --model <连接-id>` 生成待审阅计划。模板还包括 `business-proposal` 和 `code-delivery`，首版均使用内置模型。省略 `--team` 时沿用单 Agent 调度。
+
+`mn goal nodes <goal-id> --workspace <id>` 返回步骤、尝试记录和当前允许的操作。团队可用 `goal pause`、`goal resume` 控制；人工节点使用 `goal decide --node <节点-id> --decision continue|stop`。变更仍须指定目标、工作区及 `--version`，计划和执行控制可附 `--key`，响应丢失时用原参数与原键重试。结果未知时按 Host 提供的核对方式处理。
+
 `--key` 是这次上传的请求标识。响应丢失时保持文件、工作区和标识不变，重新运行同一命令；CLI 不自动重发。省略时按既有约定生成随机请求标识。提取结果保留 `complete`、`partial` 或 `unreadable` 状态、遗漏说明与页码、段落或单元格位置，提取成功不代表 Agent 已阅读全部资料。
 
 业务上下文支持 `customer`、`order`、`delivery` 和 `review`，返回当前授权下的事实正文与版本引用。资料或经营记录变化后，应重新读取并审阅计划；读取上下文不修改经营台账。已有 `mn opc business show` 和 `command` 保持原语义。

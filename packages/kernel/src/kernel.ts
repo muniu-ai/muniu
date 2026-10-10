@@ -17,14 +17,18 @@ import type {
   WorkspaceMembership,
   WorkspaceRole,
   CodingRunnerId,
+  CoordinationBindingV2,
+  ResourceRef,
 } from "@mn/contracts";
+import { KernelCoordination, settleCoordinatedTurnInTransaction, settleCoordinationUsageInTransaction, reconcileCoordinationAttemptInTransaction,
+  type CreateCoordinationRunInput, type AdmitCoordinatedTurnInput, type CompleteCoordinationControlInput } from './coordination.js';
 import { acceptMemory, rejectMemory } from "./memory.js";
 import { assertCurrentApprovalAuthorization, assertCurrentExecutionAuthorization, authorityAllowsIntent, computeExecutionAuthorityCommitment, hasUnsettledToolCalls } from "./authority.js";
 import { sha256 } from "./canonical.js";
 import { KernelError, StreamVersionConflictError } from "./errors.js";
 import { transitionExecution, type ExecutionCommand } from "./execution.js";
 import type { InboxItem, ModelConnection } from "./models.js";
-import type { KernelStore, KernelTransaction } from "./store.js";
+import type { KernelJobSettlement, KernelStore, KernelTransaction } from "./store.js";
 import { appendKernelEvent } from "./projections.js";
 import { expireExecutionApprovals } from "./approvals.js";
 
@@ -46,7 +50,7 @@ export interface PreparedMemoryPayload {
 }
 
 export interface SubmitTurnInput {
-  readonly coordination?: { readonly aggregateType: string; readonly aggregateId: string; readonly revisionId: string };
+  readonly coordination?: CoordinationBindingV2;
   readonly pluginPackageSha256?: string;
   readonly preparedMessage?: {
     readonly protectedPayloadRef: string;
@@ -423,16 +427,23 @@ export class AgentOsKernel {
     idempotencyKey: string,
     input: { readonly workspaceId: string; readonly subject: string; readonly pluginId: string },
   ): Promise<Thread> {
-    return this.mutation(tenantId, "thread.create", idempotencyKey, input, (transaction) => {
+    return this.store.transact(tenantId, tx => this.createThreadInTransaction(tx, tenantId, actorId, idempotencyKey, input));
+  }
+
+  createThreadInTransaction(transaction: KernelTransaction, tenantId: string, actorId: string, idempotencyKey: string,
+    input: { readonly id?: string; readonly workspaceId: string; readonly subject: string; readonly pluginId: string; readonly resourceRef?: ResourceRef }): Thread {
+    return this.mutationInTransaction(transaction, tenantId, "thread.create", idempotencyKey, input, (transaction) => {
       const workspace = transaction.getProjection<Workspace>("workspace", input.workspaceId);
       if (!workspace) throw new KernelError("WORKSPACE_NOT_FOUND", "工作区不存在", "刷新工作区列表");
       if (!workspace.activePluginIds.includes(input.pluginId)) {
         throw new KernelError("PLUGIN_NOT_ACTIVE", "工作区尚未启用此插件", "先在工作区启用插件");
       }
       const now = this.now();
-      const id = this.nextId("thread");
+      const id = input.id ?? this.nextId("thread");
+      if (transaction.getProjection("thread", id)) throw new KernelError("THREAD_EXISTS", "会话已存在", "使用已有会话或新的幂等键");
       const thread: Thread = {
         id, tenantId, workspaceId: input.workspaceId, subject: input.subject.trim(), pluginId: input.pluginId,
+        ...(input.resourceRef ? { resourceRef: input.resourceRef } : {}),
         streamVersion: 1, createdAt: now, updatedAt: now,
       };
       transaction.putProjection("thread", id, thread);
@@ -442,6 +453,48 @@ export class AgentOsKernel {
       });
       return thread;
     });
+  }
+
+  private coordinationPorts(): KernelCoordination {
+    return new KernelCoordination({ now: this.now,
+      createThread: (tx, tenant, actor, key, input) => this.createThreadInTransaction(tx, tenant, actor, key, input),
+      submitTurn: (tx, tenant, actor, key, input) => this.submitTurnInTransaction(tx, tenant, actor, key, input),
+      cancelExecution: (tx, tenant, actor, key, execution) => { this.commandExecutionInTransaction(tx, tenant, actor, key, execution.id, execution.streamVersion, 'cancel'); },
+    });
+  }
+
+  createCoordinationRunInTransaction(tx: KernelTransaction, tenantId: string, actorId: string, key: string, input: CreateCoordinationRunInput) {
+    return this.mutationInTransaction(tx, tenantId, 'coordination.create', key, input, current => this.coordinationPorts().create(current, tenantId, actorId, input));
+  }
+
+  admitCoordinatedTurnInTransaction(tx: KernelTransaction, tenantId: string, actorId: string, key: string, input: AdmitCoordinatedTurnInput) {
+    const { preparedMessage: _prepared, ...request } = input;
+    return this.mutationInTransaction(tx, tenantId, `coordination.admit:${input.runId}`, key, request, current => this.coordinationPorts().admit(current, tenantId, actorId, input));
+  }
+
+  completeCoordinationControlInTransaction(tx: KernelTransaction, tenantId: string, actorId: string, key: string, input: CompleteCoordinationControlInput) {
+    return this.mutationInTransaction(tx, tenantId, `coordination.control:${input.runId}`, key, input, current => this.coordinationPorts().control(current, tenantId, actorId, input));
+  }
+
+  commandCoordinationRunInTransaction(tx: KernelTransaction, tenantId: string, actorId: string, key: string,
+    input: { readonly runId: string; readonly expectedStreamVersion: number; readonly status: 'active' | 'paused' | 'cancelled' | 'superseded' }) {
+    return this.mutationInTransaction(tx, tenantId, `coordination.command:${input.runId}`, key, input,
+      current => this.coordinationPorts().command(current, tenantId, actorId, input.runId, input.expectedStreamVersion, input.status));
+  }
+
+  settleCoordinatedTurnInTransaction(tx: KernelTransaction, tenantId: string, input: KernelJobSettlement) {
+    return settleCoordinatedTurnInTransaction(tx, tenantId, input);
+  }
+
+  reconcileCoordinationAttemptInTransaction(tx: KernelTransaction, tenantId: string, actorId: string,
+    input: Parameters<typeof reconcileCoordinationAttemptInTransaction>[3]) {
+    return reconcileCoordinationAttemptInTransaction(tx, tenantId, actorId, input);
+  }
+
+  settleCoordinationUsageInTransaction(tx: KernelTransaction, tenantId: string, actorId: string, key: string,
+    input: Parameters<typeof settleCoordinationUsageInTransaction>[3]) {
+    return this.mutationInTransaction(tx, tenantId, `coordination.usage:${input.attemptId}`, key, input,
+      current => settleCoordinationUsageInTransaction(current, tenantId, actorId, input));
   }
 
   async createExecution(
@@ -586,7 +639,7 @@ export class AgentOsKernel {
         attempts: 0,
         availableAt: timestamp,
         fencingToken: 0,
-        idempotencyKey: `execution:${executionId}:generation:1`,
+        idempotencyKey: input.coordination?.attemptId ? `coordination:${input.coordination.attemptId}` : `execution:${executionId}:generation:1`,
         streamVersion: 1,
         createdAt: timestamp,
         updatedAt: timestamp,

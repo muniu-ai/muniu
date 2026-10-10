@@ -17,9 +17,20 @@
 | `packages/kernel` | 通用执行、授权、审批、事件与恢复控制，不导入产品插件或行业执行服务 |
 | `packages/agent-runtime` | Scope、AgentHandle、Inbox、Session 和执行预算，通过端口持久化 |
 | `packages/business-execution` | Host 与 Worker 共用的私有行业执行服务，保存询价候选和报价动作的控制状态；不是插件 SDK |
+| `packages/task-orchestration` | Host 使用的私有纯规则模块：通用目标预算与验收校验、固定团队模板、依赖准入和就绪节点计算；产品插件不得导入 |
 | `plugins/*` | OPC、Coding 与外部 Runner 的产品定义和贡献，由 Host 装配 |
 | `packages/storage` | SQLite、PostgreSQL、CAS、加密与投影重建实现 |
 | `apps/worker` | 根据已提交 Job、权限、租约与 fencing token 执行处理器 |
+
+## 持久团队与目标
+
+Goal 保留目标、来源和验收要求。旧单执行者计划与新 `team-v1` 计划共用 `goal.state`、`goal.plan` 和目标事件流；团队计划显式固定模板、模型、能力及输入输出版本。用户必须选择团队并授权，首版没有自动团队推荐或自主重规划。当前交付范围与验证进度见[实施计划](proposals/agent-os-delivery-2026-10-10.md)和[P2 记录](verification/agent-os-p2-2026-10-10.md)。
+
+Host 负责校验当前成员、来源和真实插件能力，持久化计划与调度意图；私有编排模块只计算确定性规则，不跨模块写表。Kernel 的协调事务端口原子提交节点尝试、Execution、Authority、Job、预算预留、事件及 outbox。Worker 持租约和 fencing token 执行节点，终结节点与请求后继唤醒也在同一事务内完成。Host 恢复循环根据持久事实汇合，等待期间不占用父 Worker，没有新增工作流数据库。
+
+每个执行节点使用独立会话和明确的前置输出，来源保护随上下文继承。权限取父授权与角色能力的交集，预算和期限累计计算。首版采用最多三个并行执行节点、十二个累计节点、二十四次累计尝试及一层委派上限；更严格的工作区约束优先，成员不可自主追加子 Agent。费用未知时保留预留，结果未知时禁止重放。
+
+研究与经营节点使用只读内置 Agent；人工决定和汇合节点不领取 Worker。代码团队的主节点封装现有 Coding 全流程，独立复核节点使用只读 OPC 能力；仍需不可变 Spec、Governance、Harness、Gate、Evidence、沙箱与人工批准。模型复核不能取代这些事实或用户成果验收。
 
 ## Scope 与贡献解析
 
@@ -191,7 +202,7 @@ discover → specify → impact → implement → verify → approve → learn
 
 ## Shell 与视图
 
-一级导航是首页、工作区、收件箱、成果和活动；Agents、集成与设置默认折叠。插件只能贡献二级路由、首页卡片和命令，不能替换全局安全、审批或设置页面。
+一级导航以工作台、任务、经营、资料与成果为主；能力、连接和设置放在二级入口。插件只能贡献二级路由、首页卡片和命令，不能替换全局安全、审批或设置页面。
 
 经营视图与专业视图共享 API 和事件，只改变展示密度。会话按工作区与业务对象组织；工具日志折叠为阶段与结果卡；自然语言输入先生成可审阅结构对象。以上交互原则参考了 [Vibe Cola 的 Mod 设计](https://colaos.ai/blog/vibe-cola-mod-design/) 与 [ColaOS Memory](https://docs.colaos.ai/en/memory-and-preferences/)，没有复制其代码、协议或插件实现。
 

@@ -2,6 +2,7 @@
 import type { Execution, ExecutionAuthority, GoalBudgetV2, GoalDeliverableSpecV2, GoalDeliveryAcceptanceV2, GoalDeliverySetV2, GoalDetailV2, GoalExecutionObservationV2, GoalOutputRefV2, GoalPlanProposalV2, GoalPlanRevisionV2, GoalResourceRefV2, GoalUsageV2, GoalV2, Job, Principal, Thread, Workspace, WorkspaceMembership } from "@mn/contracts";
 import { appendKernelEvent, hasUnsettledToolCalls, KernelError, sha256, type KernelStore, type KernelTransaction } from "@mn/kernel";
 import type { ContentAddressedStorage, KeyProvider } from "@mn/storage";
+import { GoalRuleError, validateDeliverableSpecs, validateGoalBudget, validateGoalUsage } from "@mn/task-orchestration";
 
 export interface GoalScope { readonly tenantId: string; readonly workspaceId: string; readonly principalId: string }
 export interface GoalPlanContext { readonly goal: GoalV2; readonly plan: GoalPlanRevisionV2 }
@@ -48,10 +49,10 @@ function mutationKey(value: string): void {
   if (typeof value !== "string" || !value.trim() || value.length > 200) fail("IDEMPOTENCY_KEY_REQUIRED", "目标变更需要有效幂等键");
 }
 function integer(value: number, minimum = 0): boolean { return Number.isSafeInteger(value) && value >= minimum; }
-function usage(value: GoalUsageV2): void {
-  if (!value || !integer(value.tokens) || typeof value.costMinorUnits !== "string" || !/^(0|[1-9][0-9]{0,23})$/u.test(value.costMinorUnits)
-    || typeof value.currency !== "string" || !/^[A-Z]{3}$/u.test(value.currency)) fail("GOAL_BUDGET_INVALID", "预算与用量必须是非负整数及有效币种");
+function rules(validate: () => void): void {
+  try { validate(); } catch (error) { if (error instanceof GoalRuleError) fail(error.code, error.message); throw error; }
 }
+function usage(value: GoalUsageV2): void { rules(() => validateGoalUsage(value)); }
 function authorized(tx: KernelTransaction, options: GoalScope): WorkspaceMembership {
   const workspace = tx.getProjection<Workspace>("workspace", options.workspaceId);
   const member = tx.getProjection<WorkspaceMembership>("membership", `${options.workspaceId}:${options.principalId}`);
@@ -157,16 +158,7 @@ export async function createGoal(options: GoalServiceOptions & { readonly thread
   protect(options); mutationKey(options.idempotencyKey);
   const input = copy({ threadId: options.threadId, objective: options.objective, resourceRefs: options.resourceRefs, budget: options.budget, deliverables: options.deliverables });
   if (!input.objective?.trim() || input.objective.length > 16000 || !input.threadId?.trim()) fail("GOAL_INPUT_INVALID", "请填写目标并选择会话");
-  usage({ tokens: input.budget?.maxTokens, costMinorUnits: input.budget?.maxCostMinorUnits, currency: input.budget?.currency });
-  if (!integer(input.budget.maxDurationMs, 1)) fail("GOAL_BUDGET_INVALID", "执行期限必须是正整数");
-  if (!Array.isArray(input.deliverables) || !input.deliverables.length || input.deliverables.length > 20
-    || !input.deliverables.some(item => item.required) || new Set(input.deliverables.map(item => item.key)).size !== input.deliverables.length) fail("GOAL_INPUT_INVALID", "目标需要唯一且明确的必需交付项");
-  for (const item of input.deliverables) {
-    key(item.key);
-    if (!item.title?.trim() || item.title.length > 200 || typeof item.required !== "boolean" || !Array.isArray(item.criteria)
-      || !item.criteria.length || item.criteria.length > 20 || new Set(item.criteria.map((criterion: GoalDeliverableSpecV2["criteria"][number]) => criterion.id)).size !== item.criteria.length) fail("GOAL_INPUT_INVALID", "交付项需要明确验收标准");
-    for (const criterion of item.criteria) { key(criterion.id); if (!criterion.description?.trim() || criterion.description.length > 2000) fail("GOAL_INPUT_INVALID", "验收标准无效"); }
-  }
+  rules(() => { validateGoalBudget(input.budget); validateDeliverableSpecs(input.deliverables); });
   const scope = `goal.create:${options.workspaceId}:${options.principalId}`, digest = sha256(input);
   return options.store.transact(options.tenantId, tx => {
     authorized(tx, options);
@@ -276,7 +268,7 @@ export async function startGoal(options: GoalMutationOptions & { readonly planRe
     if (tx.listProjections<Execution>("execution").some(execution => execution.threadId === goal.threadId
       && !["completed", "failed", "cancelled"].includes(execution.status))
       || tx.listProjections<GoalV2>(GOAL_NAMESPACE).some(other => other.id !== goal.id && other.threadId === goal.threadId
-        && other.executionRef && other.reservation?.status !== "settled")) fail("GOAL_THREAD_BUSY", "会话仍有活动执行或待核实用量");
+        && (other.executionRef || other.coordinationRef) && other.reservation?.status !== "settled")) fail("GOAL_THREAD_BUSY", "会话仍有活动执行或待核实用量");
     resources(tx, options, goal.resourceRefs); options.ports.assertPlan(tx, { goal, plan });
     const next: GoalV2 = { ...goal, status: "running", reservation: { status: "reserved" }, authorization: {
       planDigest: plan.digest, principalId: options.principalId, membershipStreamVersion: authorized(tx, options).streamVersion } };

@@ -4,6 +4,7 @@ import type { Principal } from "@mn/contracts";
 import { readAgentReadiness, type CodingAgentRuntimeReadiness } from "./agent-readiness.js";
 import { publicModelConnection, selectModelConnection, preferredModelConnectionId, setDefaultModelConnection } from "./model-connections.js";
 import { randomUUID } from "node:crypto";
+import { createHostTeamRuntime } from "./team-runtime.js";
 import { dispatchGoalRequest } from "./goals-api.js";
 import { GOAL_NAMESPACE, readGoalForAccounting, reconcileGoalUsage } from "./goals.js";
 import { createHostGoalRuntime, assertGoalExecutionResources } from "./goal-runtime.js";
@@ -1255,10 +1256,14 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           : await commandOpcBusiness({ ...scoped, expectedStreamVersion: expectedVersion(body!), command: body!.command, idempotencyKey: mutationKey as string });
         return json(result, 200, traceId);
       }
-      if (/^\/v2\/workspaces\/[^/]+\/goals$/u.test(url.pathname) || url.pathname.startsWith("/v2/goals/")) {
+      if (/^\/v2\/workspaces\/[^/]+\/(?:goals|team-templates)$/u.test(url.pathname) || url.pathname.startsWith("/v2/goals/")) {
         if (!protectedJournal || !options.cas || !options.protectedPayloadKeyProvider) throw new KernelError("GOAL_PROTECTED_STORAGE_REQUIRED", "目标需要受保护的事件存储", "配置受保护存储后重试");
         const result = await dispatchGoalRequest({ request, store: options.store, kernel, cas: options.cas, keyProvider: options.protectedPayloadKeyProvider,
           protectedJournal, now, id: nextId, tenantId: TENANT_ID, principalId: ACTOR_ID,
+          teamSandboxAvailable: async workspaceId => {
+            await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId, "operate");
+            try { return (await options.agentRuntimeReadiness?.({ tenantId: TENANT_ID, workspaceId }))?.sandbox === "available"; } catch { return false; }
+          },
           validateRunner: async (workspaceId, runnerId) => {
             const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId, "operate");
             await requireRunnerPluginTool(TENANT_ID, workspace, runnerId);
@@ -1708,7 +1713,8 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
             return options.store.transact(TENANT_ID, transaction => {
               const goalOwned = transaction.listProjections<GoalV2>(GOAL_NAMESPACE)
                 .some(goal => goal.threadId === threadId && goal.workspaceId === workspaceId && !["accepted", "cancelled", "failed"].includes(goal.status));
-              if (goalOwned) throw new KernelError("GOAL_EXECUTION_ENTRY_REQUIRED", "此会话由目标计划管理", "通过目标入口开始、刷新或取消执行");
+              const teamOwned = transaction.listProjections<import("@mn/contracts").CoordinationAttemptV2>("coordination.attempt").some(attempt => attempt.threadId === threadId);
+              if (goalOwned || teamOwned) throw new KernelError("GOAL_EXECUTION_ENTRY_REQUIRED", "此会话由目标计划管理", "通过目标入口开始、刷新或取消执行");
               return kernel.submitTurnInTransaction(transaction, TENANT_ID, ACTOR_ID, mutationKey as string, {
               workspaceId,
               threadId,
@@ -1769,7 +1775,8 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         const execution = await projectionGet<Execution>(options.store, TENANT_ID, "execution", executionId);
         if (!execution) throw new KernelError("EXECUTION_NOT_FOUND", "执行不存在", "刷新执行列表");
         await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, execution.workspaceId, "operate");
-        if (!["follow_up", "steer"].includes(String(body.command)) && await options.store.transact(TENANT_ID, tx => tx.listProjections<GoalV2>(GOAL_NAMESPACE).some(goal => goal.executionRef?.executionId === execution.id))) {
+        if (await options.store.transact(TENANT_ID, tx => tx.listProjections<import("@mn/contracts").CoordinationAttemptV2>("coordination.attempt").some(attempt => attempt.executionId === execution.id)
+          || (!["follow_up", "steer"].includes(String(body.command)) && tx.listProjections<GoalV2>(GOAL_NAMESPACE).some(goal => goal.executionRef?.executionId === execution.id)))) {
           throw new KernelError("GOAL_EXECUTION_ENTRY_REQUIRED", "此执行由固定目标计划管理", "通过目标入口刷新或取消执行");
         }
         if (execution.pluginId === "industry") {
@@ -3039,8 +3046,8 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
     const pending: { tenantId: string; goal: GoalV2 }[] = [];
     for (const tenantId of tenantIds) {
       const goals = await options.store.transact(tenantId, tx => tx.listProjections<GoalV2>(GOAL_NAMESPACE)
-        .filter(goal => goal.executionRef && goal.status !== "accepted"
-          && (goal.reservation?.status !== "settled" || ["running", "waiting_approval", "needs_reconciliation"].includes(goal.status))));
+        .filter(goal => (goal.executionRef || goal.coordinationRef) && goal.status !== "accepted"
+          && (goal.reservation?.status !== "settled" || ["running", "waiting_approval", "pausing", "paused", "needs_reconciliation"].includes(goal.status))));
       pending.push(...goals.map(goal => ({ tenantId, goal })));
     }
     if (!pending.length) { goalCursor = 0; return; }
@@ -3050,8 +3057,15 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
       const { tenantId, goal } = pending[(start + offset) % pending.length]!;
       try {
         const tenantRuntime = await runtimeForTenant(tenantId);
-        const runtime = createHostGoalRuntime({ store: options.store, kernel, cas: options.cas, keyProvider: options.protectedPayloadKeyProvider,
-          protectedJournal, now, id: nextId, definitions: [tenantRuntime.plugins.definition("opc"), tenantRuntime.plugins.definition("coding"), tenantRuntime.plugins.definition("runner-codex-cli"), tenantRuntime.plugins.definition("runner-claude-cli")].filter((value): value is PluginDefinitionV1 => Boolean(value)) });
+        const runtimeOptions = { store: options.store, kernel, cas: options.cas, keyProvider: options.protectedPayloadKeyProvider,
+          protectedJournal, now, id: nextId, definitions: [tenantRuntime.plugins.definition("opc"), tenantRuntime.plugins.definition("coding"), tenantRuntime.plugins.definition("runner-codex-cli"), tenantRuntime.plugins.definition("runner-claude-cli")].filter((value): value is PluginDefinitionV1 => Boolean(value)) };
+        if (goal.coordinationRef) {
+          let sandboxAvailable = false;
+          try { sandboxAvailable = (await options.agentRuntimeReadiness?.({ tenantId, workspaceId: goal.workspaceId }))?.sandbox === "available"; } catch { /* unavailable is fail-closed */ }
+          await createHostTeamRuntime({ ...runtimeOptions, sandboxAvailable }).observeInBackground({ tenantId, workspaceId: goal.workspaceId, principalId: goal.principalId }, goal.id);
+          continue;
+        }
+        const runtime = createHostGoalRuntime(runtimeOptions);
         const detail = await readGoalForAccounting({ store: options.store, tenantId, goalId: goal.id });
         const scope = { tenantId, workspaceId: goal.workspaceId, principalId: goal.authorization?.principalId ?? goal.principalId };
         try {

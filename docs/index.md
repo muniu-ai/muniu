@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | 使用者：第一次启动 | [快速开始](./quickstart.md) → [OPC 经营管理](./guides/business.md) 或 [Coding](./guides/coding.md) | 可连接的本机 Host、工作区与第一个任务 |
 | 脚本使用者：操作已有服务 | [CLI 使用](./guides/cli.md) → [CLI 参考](./reference/cli.md) 或 [API 路由](./reference/api-routes.md) | 明确的参数、返回格式与并发规则 |
-| 使用者：按目标执行并接收成果 | [目标与验收](./guides/goals.md) | 绑定现有 OPC/Coding 会话的单执行者计划与逐项验收 |
+| 使用者：按目标执行并接收成果 | [目标与验收](./guides/goals.md) | 单 Agent 或显式固定团队计划、进度和逐项验收 |
 | 开发者：定位代码和修改行为 | [核心概念](./concepts.md) → [架构](./architecture.md) → [开发指南](./development.md) | 模块职责、事实来源与验证命令 |
 | Agent：接手仓库任务 | [仓库规则](https://github.com/muniu-ai/muniu/blob/main/AGENTS.md) → [Agent 工作指南](./agent-guide.md) | 最小阅读路径、改动边界与交付要求 |
 | 插件作者：增加业务能力 | [插件开发](./plugin-authoring.md) → [插件运维](./reference/plugins.md) | 公共 SDK 边界、签名与生命周期规则 |
@@ -34,6 +34,7 @@ CLI 帮助、API 路由表、OpenAPI 和内置插件目录由源码生成。改�
 - [安全边界](./security/overview.md)、[日志脱敏](./security/redaction-policy.md)、[密钥扫描](./security/secret-scanning.md)：理解信任与数据处理规则。
 - [macOS 发布](./release/macos.md)、[签名与公证](./release/apple-developer-id.md)：制作和验收安装包；源码构建成功不代表已完成分发验收。
 - [架构决策](./adr/index.md)：理解已采用的版本和模块边界。
+- [经营到交付实施计划](./proposals/agent-os-delivery-2026-10-10.md)：当前获批 P0—P5 分期；P2 固定团队的进度与未验证项见[本轮记录](./verification/agent-os-p2-2026-10-10.md)。
 - [多 Agent、多模型提案](./proposals/agent-os-multi-agent-optimization-2026-10-09.md)：总体设计与分期；本次采用范围见 [S0 复用审查](./verification/agent-os-s0-reuse-2026-10-09.md)、[S1 决策](./adr/0013-goal-delivery-orchestration.md)和[验证记录](./verification/agent-os-s1-2026-10-09.md)。
 - [OPC 经营管理体系](./proposals/opc-business-management-2026-10-09.md)：完整经营领域、曾鸣著作依据及产品实施分期。
 - [工程验收记录](./verification/application-boundaries-2026-09-28.md)：查看对应提交的实际检查及未完成项。

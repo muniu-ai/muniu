@@ -58,10 +58,11 @@ try {
     const context = (await (await fetch(`${apiUrl}/v2/workspaces/${workspace.id}/business-context/${kind}/${kind}`)).json()).data;
     assert.ok((await composer.getByLabel("任务目标", { exact: true }).inputValue()).includes(context.title));
     await composer.getByRole("button", { name: "准备执行计划", exact: true }).click();
-    await page.getByRole("button", { name: "确认计划并启动", exact: true }).waitFor();
+    await page.getByRole("button", { name: "确认计划并启动", exact: true }).waitFor().catch(async caught => { throw new Error(`${kind}: ${caught.message}\n${await page.locator("main").innerText()}`); });
     if (kind === "customer") assert.equal(goals[0].threadId, goals[1].threadId, "只更新资料版本应复用已保存会话");
     assert.ok(goals.at(-1).resourceRefs.some(ref => ref.namespace === `opc.business.${kind}` && ref.resourceId === kind && ref.streamVersion === version && ref.digest === context.sourceRef.digest));
     assert.equal(goals.at(-1).objective.includes(context.content), false);
+    await page.getByRole("tab", { name: "目标", exact: true }).click();
     const sources = page.getByRole("region", { name: "任务资料来源", exact: true });
     await sources.getByText(context.title, { exact: true }).waitFor();
     await sources.getByRole("button", { name: `查看业务资料：${context.title}`, exact: true }).click();

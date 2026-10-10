@@ -15,13 +15,19 @@ export function goalMutationSchema(operationId: string): JsonObject | undefined 
     deliverables: array(object(["key", "title", "required", "criteria"], { key: string, title: string, required: { type: "boolean" }, criteria: array(criterion, 1, 20) }), 1, 1),
   });
   const minor = { type: "string", pattern: "^(0|[1-9][0-9]{0,17})$" };
-  if (operationId === "proposeGoalPlan") return { ...object(["workspaceId", "expectedStreamVersion"], { ...base, modelBindingId: string,
-    scheduling: object(["runnerId", "strategy"], { runnerId: { enum: ["auto", "builtin", "codex-cli", "claude-cli"] }, strategy: { enum: ["quality", "balanced", "cost"] }, modelBindingId: string, expectedValueMinorUnits: minor, timeCostMinorUnitsPerHour: minor }),
-  }), oneOf: [{ required: ["modelBindingId"] }, { required: ["scheduling"] }] };
+  if (operationId === "proposeGoalPlan") return { oneOf: [
+    object(["workspaceId", "expectedStreamVersion", "modelBindingId"], { ...base, modelBindingId: string }),
+    object(["workspaceId", "expectedStreamVersion", "scheduling"], { ...base,
+      scheduling: object(["runnerId", "strategy"], { runnerId: { enum: ["auto", "builtin", "codex-cli", "claude-cli"] }, strategy: { enum: ["quality", "balanced", "cost"] }, modelBindingId: string, expectedValueMinorUnits: minor, timeCostMinorUnitsPerHour: minor }),
+    }),
+    object(["workspaceId", "expectedStreamVersion", "kind", "templateId", "templateVersion", "modelBindingId"], { ...base,
+      kind: { const: "team-v1" }, templateId: { enum: ["research-summary", "business-proposal", "code-delivery"] }, templateVersion: { const: "1" }, modelBindingId: string }),
+  ] };
   if (operationId === "commandGoal") return { oneOf: [
     object(["workspaceId", "expectedStreamVersion", "command", "usage", "source"], { ...base, command: { const: "record_external_usage" }, source: { type: "string", minLength: 1, maxLength: 2000 }, usage: object(["tokens", "costMinorUnits", "currency"], { tokens: version, costMinorUnits: minor, currency: { type: "string", pattern: "^[A-Z]{3}$" } }) }),
     object(["workspaceId", "expectedStreamVersion", "command", "planRevisionId", "planDigest"], { ...base, command: { const: "start" }, planRevisionId: string, planDigest: string }),
-    object(["workspaceId", "expectedStreamVersion", "command"], { ...base, command: { enum: ["refresh", "cancel"] } }),
+    object(["workspaceId", "expectedStreamVersion", "command"], { ...base, command: { enum: ["refresh", "cancel", "pause", "resume"] } }),
+    object(["workspaceId", "expectedStreamVersion", "command", "nodeId", "decision"], { ...base, command: { const: "decide" }, nodeId: string, decision: { enum: ["continue", "stop"] } }),
   ] };
   if (operationId === "acceptGoalDelivery") return object(["workspaceId", "expectedStreamVersion", "deliverySetId", "criteriaVersion", "items"], {
     ...base, deliverySetId: string, criteriaVersion: string,

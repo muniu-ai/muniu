@@ -8,9 +8,11 @@ export interface ApiInputsV2 {
   readonly commandOpcBusiness: { readonly path?: Record<string, never>; readonly body: { readonly "workspaceId": string; readonly "expectedStreamVersion": number; readonly "command": ({ readonly "type": "plan.record"; readonly "planId": string; readonly "title": string; readonly "period": { readonly "start": string; readonly "end": string; }; readonly "targetCustomer": string; readonly "valueProposition": string; readonly "focus": readonly (string)[]; readonly "resources": string; readonly "reviewOn": string; }) | ({ readonly "type": "customer.record"; readonly "customerId": string; readonly "name": string; readonly "source": string; readonly "need": string; readonly "contact"?: string; readonly "followUpOn"?: string; }) | ({ readonly "type": "service.record"; readonly "serviceId": string; readonly "title": string; readonly "currency": "CNY"; readonly "priceMinor": string; readonly "inScope": readonly (string)[]; readonly "outOfScope": readonly (string)[]; readonly "acceptanceCriteria": readonly (string)[]; }) | ({ readonly "type": "quote.create"; readonly "quoteId": string; readonly "customerId": string; readonly "serviceId": string; readonly "serviceVersion": number; readonly "quantity": number; readonly "discountMinor": string; readonly "validUntil": string; readonly "dueOn": string; readonly "notes"?: string; }) | ({ readonly "type": "quote.confirm"; readonly "quoteId": string; readonly "orderId": string; readonly "confirmedOn": string; readonly "sourceRef": string; }) | ({ readonly "type": "order.record"; readonly "orderId": string; readonly "customerId": string; readonly "serviceId": string; readonly "serviceVersion": number; readonly "quantity": number; readonly "agreedAmountMinor": string; readonly "contractedOn": string; readonly "dueOn": string; readonly "sourceRef": string; readonly "opening": { readonly "asOf": string; readonly "receivedMinor": string; readonly "deliveredPercent": number; readonly "accepted": boolean; readonly "sourceRef": string; }; }) | ({ readonly "type": "order.adjust"; readonly "adjustmentId": string; readonly "orderId": string; readonly "amountDeltaMinor": string; readonly "effectiveOn": string; readonly "dueOn"?: string; readonly "reason": string; readonly "sourceRef": string; }) | ({ readonly "type": "delivery.record"; readonly "deliveryId": string; readonly "orderId": string; readonly "title": string; readonly "deliveredOn": string; readonly "artifactRef": string; readonly "progressPercent": number; readonly "notes"?: string; }) | ({ readonly "type": "acceptance.record"; readonly "acceptanceId": string; readonly "orderId": string; readonly "deliveryIds": readonly (string)[]; readonly "acceptedOn": string; readonly "customerConfirmationRef": string; readonly "complete": boolean; }) | ({ readonly "type": "payment.record"; readonly "paymentId": string; readonly "orderId": string; readonly "amountMinor": string; readonly "receivedOn": string; readonly "sourceRef": string; }) | ({ readonly "type": "payment.reverse"; readonly "reversalId": string; readonly "paymentId": string; readonly "reversedOn": string; readonly "reason": string; readonly "sourceRef": string; }) | ({ readonly "type": "refund.record"; readonly "refundId": string; readonly "paymentId"?: string; readonly "openingOrderId"?: string; readonly "amountMinor": string; readonly "refundedOn": string; readonly "reason": string; readonly "sourceRef": string; }) | ({ readonly "type": "expense.record"; readonly "expenseId": string; readonly "orderId"?: string; readonly "category": string; readonly "description": string; readonly "amountMinor": string; readonly "paidOn": string; readonly "sourceRef": string; }) | ({ readonly "type": "review.record"; readonly "reviewId": string; readonly "period": { readonly "start": string; readonly "end": string; }; readonly "explanation": string; readonly "nextDecisions": readonly (string)[]; }); }; };
   readonly listGoals: { readonly path: { readonly workspaceId: string; }; };
   readonly createGoal: { readonly path: { readonly workspaceId: string; }; readonly body: { readonly "threadId": string; readonly "objective": string; readonly "resourceRefs": readonly ({ readonly "namespace": string; readonly "resourceId": string; readonly "streamVersion": number; readonly "digest"?: string; })[]; readonly "budget": { readonly "maxTokens": number; readonly "maxCostMinorUnits": string; readonly "currency": string; readonly "maxDurationMs": number; }; readonly "deliverables": readonly ({ readonly "key": string; readonly "title": string; readonly "required": boolean; readonly "criteria": readonly ({ readonly "id": string; readonly "description": string; })[]; })[]; }; };
+  readonly listTeamTemplates: { readonly path: { readonly workspaceId: string; }; };
   readonly getGoal: { readonly path: { readonly goalId: string; }; readonly query: { readonly workspaceId: string; }; };
-  readonly proposeGoalPlan: { readonly path: { readonly goalId: string; }; readonly body: (unknown) | (unknown); };
-  readonly commandGoal: { readonly path: { readonly goalId: string; }; readonly body: ({ readonly "workspaceId": string; readonly "expectedStreamVersion": number; readonly "command": "record_external_usage"; readonly "source": string; readonly "usage": { readonly "tokens": number; readonly "costMinorUnits": string; readonly "currency": string; }; }) | ({ readonly "workspaceId": string; readonly "expectedStreamVersion": number; readonly "command": "start"; readonly "planRevisionId": string; readonly "planDigest": string; }) | ({ readonly "workspaceId": string; readonly "expectedStreamVersion": number; readonly "command": "refresh" | "cancel"; }); };
+  readonly getGoalNodes: { readonly path: { readonly goalId: string; }; readonly query: { readonly workspaceId: string; }; };
+  readonly proposeGoalPlan: { readonly path: { readonly goalId: string; }; readonly body: ({ readonly "workspaceId": string; readonly "expectedStreamVersion": number; readonly "modelBindingId": string; }) | ({ readonly "workspaceId": string; readonly "expectedStreamVersion": number; readonly "scheduling": { readonly "runnerId": "auto" | "builtin" | "codex-cli" | "claude-cli"; readonly "strategy": "quality" | "balanced" | "cost"; readonly "modelBindingId"?: string; readonly "expectedValueMinorUnits"?: string; readonly "timeCostMinorUnitsPerHour"?: string; }; }) | ({ readonly "workspaceId": string; readonly "expectedStreamVersion": number; readonly "kind": "team-v1"; readonly "templateId": "research-summary" | "business-proposal" | "code-delivery"; readonly "templateVersion": "1"; readonly "modelBindingId": string; }); };
+  readonly commandGoal: { readonly path: { readonly goalId: string; }; readonly body: ({ readonly "workspaceId": string; readonly "expectedStreamVersion": number; readonly "command": "record_external_usage"; readonly "source": string; readonly "usage": { readonly "tokens": number; readonly "costMinorUnits": string; readonly "currency": string; }; }) | ({ readonly "workspaceId": string; readonly "expectedStreamVersion": number; readonly "command": "start"; readonly "planRevisionId": string; readonly "planDigest": string; }) | ({ readonly "workspaceId": string; readonly "expectedStreamVersion": number; readonly "command": "refresh" | "cancel" | "pause" | "resume"; }) | ({ readonly "workspaceId": string; readonly "expectedStreamVersion": number; readonly "command": "decide"; readonly "nodeId": string; readonly "decision": "continue" | "stop"; }); };
   readonly acceptGoalDelivery: { readonly path: { readonly goalId: string; }; readonly body: { readonly "workspaceId": string; readonly "expectedStreamVersion": number; readonly "deliverySetId": string; readonly "criteriaVersion": string; readonly "items": readonly ({ readonly "key": string; readonly "digest": string; readonly "reviewedCriterionIds": readonly (string)[]; })[]; }; };
   readonly createBusinessAction: { readonly path?: Record<string, never>; readonly body: { readonly "schemaVersion": "1"; readonly "action": "issueQuotePackage"; readonly "expectedStreamVersion": 0; readonly "workspaceId": string; readonly "customerId": string; readonly "quoteId": string; readonly "quoteVersion": string; readonly "decisionId": string; readonly "templateId": string; readonly "templateVersion": string; readonly "renderVersion": string; readonly "exportFormat": "pdf"; readonly "issueDate": string; }; };
   readonly getBusinessAction: { readonly path: { readonly actionId: string; }; };
@@ -1141,7 +1143,29 @@ export const API_INPUT_FIELDS_V2 = {
       "required": true
     }
   ],
+  "listTeamTemplates": [
+    {
+      "name": "workspaceId",
+      "location": "path",
+      "required": true,
+      "type": "string"
+    }
+  ],
   "getGoal": [
+    {
+      "name": "goalId",
+      "location": "path",
+      "required": true,
+      "type": "string"
+    },
+    {
+      "name": "workspaceId",
+      "location": "query",
+      "required": true,
+      "type": "string"
+    }
+  ],
+  "getGoalNodes": [
     {
       "name": "goalId",
       "location": "path",
@@ -1161,66 +1185,6 @@ export const API_INPUT_FIELDS_V2 = {
       "location": "path",
       "required": true,
       "type": "string"
-    },
-    {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 200,
-      "name": "workspaceId",
-      "location": "body",
-      "required": true
-    },
-    {
-      "type": "integer",
-      "minimum": 0,
-      "name": "expectedStreamVersion",
-      "location": "body",
-      "required": true
-    },
-    {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 200,
-      "name": "modelBindingId",
-      "location": "body",
-      "required": false
-    },
-    {
-      "type": "object",
-      "additionalProperties": false,
-      "required": false,
-      "properties": {
-        "runnerId": {
-          "enum": [
-            "auto",
-            "builtin",
-            "codex-cli",
-            "claude-cli"
-          ]
-        },
-        "strategy": {
-          "enum": [
-            "quality",
-            "balanced",
-            "cost"
-          ]
-        },
-        "modelBindingId": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 200
-        },
-        "expectedValueMinorUnits": {
-          "type": "string",
-          "pattern": "^(0|[1-9][0-9]{0,17})$"
-        },
-        "timeCostMinorUnitsPerHour": {
-          "type": "string",
-          "pattern": "^(0|[1-9][0-9]{0,17})$"
-        }
-      },
-      "name": "scheduling",
-      "location": "body"
     }
   ],
   "commandGoal": [

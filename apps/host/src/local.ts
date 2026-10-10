@@ -33,6 +33,7 @@ import { createOpcModelContextReader } from "./opc-model-context.js";
 import { assertGoalExecutionResources } from "./goal-runtime.js";
 import { createEnterpriseFilePluginRepository } from "./enterprise-plugin-repository.js";
 import type { ModelSecretStore } from "./secrets.js";
+import { inspectLocalCodingSandbox } from "./local-sandbox-readiness.js";
 
 const LOCAL_WORKER_LOCK = "agent-os-0.2-local-bundle";
 
@@ -101,6 +102,8 @@ export async function startLocalAgentOsHost(options: StartLocalHostOptions = {})
     let workerFailure: unknown;
     let workerStarted = false;
     let workerLoop = Promise.resolve();
+    let sandboxInspection: ReturnType<typeof inspectLocalCodingSandbox> | undefined;
+    const inspectSandbox = () => sandboxInspection ??= inspectLocalCodingSandbox().finally(() => { sandboxInspection = undefined; });
     const host = await createAgentOsHost({
       ...business,
       store,
@@ -116,10 +119,10 @@ export async function startLocalAgentOsHost(options: StartLocalHostOptions = {})
       ...(options.pluginExecutionControl ? { pluginExecutionControl: options.pluginExecutionControl } : {}),
       ...(options.pluginProjections ? { pluginProjections: options.pluginProjections } : {}),
       ...(options.runnerIdentityInspector ? { runnerIdentityInspector: options.runnerIdentityInspector } : {}),
-      agentRuntimeReadiness: () => ({
-        worker: workerStarted && workerFailure === undefined && !stopWorker.signal.aborted ? "available" : "unavailable",
-        sandbox: process.platform === "darwin" ? "unknown" : "unavailable",
-      }),
+      agentRuntimeReadiness: async () => {
+        const sandbox = await inspectSandbox();
+        return { worker: workerStarted && workerFailure === undefined && !stopWorker.signal.aborted ? "available" : "unavailable", sandbox };
+      },
       readiness: async () => {
         const base = await options.readiness?.() ?? { ready: true, issues: [] };
         const issues = [...base.issues, ...(maintenanceFailed ? [{

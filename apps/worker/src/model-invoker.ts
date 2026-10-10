@@ -27,6 +27,7 @@ export async function invokeBudgetedByokModel(options: {
   readonly limits: ModelBudgetLimits;
   readonly invoke: ByokModelInvoker;
   readonly quote: ByokModelQuoter;
+  readonly assertAllowed?: () => Promise<void>;
 }): Promise<ModelResponse> {
   const request = structuredClone(options.input.request);
   assertModelContextLimit(request, findModelPrice(options.input.presetId, options.input.model)?.maxInputTokens);
@@ -39,6 +40,7 @@ export async function invokeBudgetedByokModel(options: {
   if (state.overrun) throw new ExecutionBudgetExceededError("model_overrun");
   if (state.pendingRequests) throw new ExecutionBudgetExceededError("model_unknown");
   if (state.allocatedTokens >= state.limits.maxTokens) throw new ExecutionBudgetExceededError("tokens");
+  await options.assertAllowed?.();
   let quote: ByokModelQuote;
   try { quote = await options.quote(input); }
   catch (error) {
@@ -47,7 +49,10 @@ export async function invokeBudgetedByokModel(options: {
   }
   assertModelContextLimit({ ...request, maxOutputTokens: quote.maxOutputTokens }, findModelPrice(input.presetId, input.model)?.maxInputTokens);
   return completeWithModelBudget({ store: options.store, limits: options.limits, modelKey: `${input.presetId}:${input.model}`,
-    request, quote, signal: input.signal, complete: (limitedRequest, signal) => options.invoke({ ...input, request: limitedRequest, signal }) });
+    request, quote, signal: input.signal, complete: async (limitedRequest, signal) => {
+      await options.assertAllowed?.();
+      return options.invoke({ ...input, request: limitedRequest, signal });
+    } });
 }
 
 export type ModelFetch = (

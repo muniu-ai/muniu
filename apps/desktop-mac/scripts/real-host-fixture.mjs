@@ -18,7 +18,7 @@ const appOrigin = process.env.MN_FIXTURE_APP_ORIGIN;
 const mode = process.env.MN_FIXTURE_MODE ?? "onboarding";
 if (!Number.isSafeInteger(port) || port <= 0 || !appOrigin) throw new Error("缺少真实 Host fixture 配置");
 
-const stateRoot = ["goals", "tasks", "onboarding", "business", "coding", "repositories"].includes(mode) ? await mkdtemp(join(tmpdir(), `muniu-${mode}-ui-`)) : undefined;
+const stateRoot = ["goals", "teams", "tasks", "onboarding", "business", "coding", "repositories"].includes(mode) ? await mkdtemp(join(tmpdir(), `muniu-${mode}-ui-`)) : undefined;
 const store = stateRoot ? new SqliteStorage({ databaseFile: join(stateRoot, "state.sqlite3"), hmacKey: randomBytes(32) }) : new InMemoryKernelStore();
 const now = () => new Date().toISOString();
 const id = (kind) => `${kind}-${randomUUID()}`;
@@ -43,6 +43,7 @@ const keyProvider = new InMemoryKeyProvider(randomBytes(32));
 const secretStore = { async save(account) { return `keychain://muniu.v2/${account}`; }, async read() { return "fixture-key"; } };
 const host = await createAgentOsHost({
   ...signedUiPluginFixture(),
+  ...(mode === "teams" ? { goalPollIntervalMs: 50 } : {}),
   store,
   cas,
   protectedPayloadKeyProvider: keyProvider,
@@ -62,19 +63,19 @@ const agentSimulation = mode === "opc"
   ? setInterval(() => void simulateOpcAgent(), 50)
   : undefined;
 let goalWorkerBusy = false;
-const goalWorker = ["goals", "tasks"].includes(mode) ? new AgentOsWorker({ id: "goal-ui-worker", store,
+const goalWorker = ["goals", "tasks", "teams"].includes(mode) ? new AgentOsWorker({ id: "goal-ui-worker", store,
   lock: { engineLockDigest: "fixture", expectedEngineLockDigest: "fixture", pluginLockDigest: "fixture", expectedPluginLockDigest: "fixture" },
   handlers: { "agent.execution.run": createKernelAgentTurnHandler({ store, secretStore, approvalKernel: host.kernel,
     runtimeProtection: { cas, keyProvider }, assertExecutionResources: assertGoalExecutionResources,
     resolveThreadContext: createOpcModelContextReader({ store, cas, protectedPayloadKeyProvider: keyProvider }),
-    modelInvoker: async ({ request }) => ({ text: request.messages.some(message => message.content.includes("你是木牛经营助手")) ? "## 经营建议\n\n区分 **事实** 与建议；缺少收支资料。\n\n| 行动 | 完成条件 |\n| --- | --- |\n| 核对订单 | 确认交付日期 |\n\n<img src=x onerror=alert(1)>" : "三个验证问题：近期如何获客、现有方式有哪些不足、是否愿意参加下一轮访谈。现有资料是研究起点，付费意愿仍属待验证假设。", toolCalls: [], usage: { inputTokens: 10, cachedInputTokens: 0, outputTokens: 20 } }),
-    modelQuoter: async () => ({ inputTokenLimit: 100, maxOutputTokens: 100, rates: { id: "fixture", currency: "CNY", inputNanoMinorUnitsPerToken: "0", cachedInputNanoMinorUnitsPerToken: "0", outputNanoMinorUnitsPerToken: "0" } }),
+    modelInvoker: async ({ request }) => ({ text: mode === "teams" && request.messages.some(message => message.content.includes("当前职责：独立复核")) ? JSON.stringify({ decision: "pass", findings: [] }) : request.messages.some(message => message.content.includes("你是木牛经营助手")) ? "## 经营建议\n\n区分 **事实** 与建议；缺少收支资料。\n\n| 行动 | 完成条件 |\n| --- | --- |\n| 核对订单 | 确认交付日期 |\n\n<img src=x onerror=alert(1)>" : "三个验证问题：近期如何获客、现有方式有哪些不足、是否愿意参加下一轮访谈。现有资料是研究起点，付费意愿仍属待验证假设。", toolCalls: [], usage: { inputTokens: 10, cachedInputTokens: 0, outputTokens: 20 } }),
+    modelQuoter: async () => ({ inputTokenLimit: mode === "teams" ? 2000 : 100, maxOutputTokens: mode === "teams" ? 500 : 100, rates: { id: "fixture", currency: "CNY", inputNanoMinorUnitsPerToken: "0", cachedInputNanoMinorUnitsPerToken: "0", outputNanoMinorUnitsPerToken: "0" } }),
   }) },
 }) : undefined;
 const goalWorkerTimer = goalWorker ? setInterval(() => {
   if (goalWorkerBusy) return;
   goalWorkerBusy = true;
-  void store.transact("local", tx => tx.listProjections("goal.state").some(goal => mode === "tasks" || goal.objective === "验证目标成果验收"))
+  void store.transact("local", tx => tx.listProjections("goal.state").some(goal => ["tasks", "teams"].includes(mode) || goal.objective === "验证目标成果验收"))
     .then(enabled => enabled ? goalWorker.pollOnce() : undefined)
     .catch(error => process.stderr.write(`目标 fixture 失败：${error.message}\n`)).finally(() => { goalWorkerBusy = false; });
 }, 100) : undefined;

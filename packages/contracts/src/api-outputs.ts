@@ -3,7 +3,7 @@ import type { AgentReadinessReportV1 } from "./agent-readiness.js";
 // SPDX-License-Identifier: Apache-2.0
 import type { AgentCatalogV2, CodingReconciliationDecisionV2, CodingReconciliationViewV2 } from "./api.js";
 import type { JsonObject, JsonValue } from "./json.js";
-import type { GoalDetailV2, GoalV2 } from "./goals.js";
+import type { GoalDetailV2, GoalResponseV2, GoalTeamProgressV2, GoalV2, TeamTemplateSummaryV1 } from "./goals.js";
 import type {
   Approval, Asset, AssetTombstone, CodingRunnerConfigurationV1, Deliverable, Execution,
   MemoryRecord, MemoryTombstone, PluginInstallation, PluginPurgeResult, RunnerBinaryInspectionV1,
@@ -272,10 +272,12 @@ export interface ApiOutputsV2 {
   readonly commandOpcBusiness: BusinessManagementViewV1;
   readonly listGoals: readonly GoalV2[];
   readonly createGoal: GoalDetailV2;
-  readonly getGoal: GoalDetailV2;
-  readonly proposeGoalPlan: GoalDetailV2;
-  readonly commandGoal: GoalDetailV2;
-  readonly acceptGoalDelivery: GoalDetailV2;
+  readonly getGoal: GoalResponseV2;
+  readonly proposeGoalPlan: GoalResponseV2;
+  readonly commandGoal: GoalResponseV2;
+  readonly acceptGoalDelivery: GoalResponseV2;
+  readonly listTeamTemplates: readonly TeamTemplateSummaryV1[];
+  readonly getGoalNodes: GoalTeamProgressV2;
   readonly createBusinessAction: BusinessActionV1;
   readonly getBusinessAction: BusinessActionV1;
   readonly reconcileBusinessAction: BusinessActionV1;

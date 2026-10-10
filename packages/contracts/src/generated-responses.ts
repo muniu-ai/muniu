@@ -21,16 +21,25 @@ export const API_OUTPUT_SCHEMAS_V2: Readonly<Record<string, JsonObject>> = {
     "$ref": "#/components/schemas/OutputGoalDetailV2"
   },
   "getGoal": {
-    "$ref": "#/components/schemas/OutputGoalDetailV2"
+    "$ref": "#/components/schemas/OutputGoalResponseV2"
   },
   "proposeGoalPlan": {
-    "$ref": "#/components/schemas/OutputGoalDetailV2"
+    "$ref": "#/components/schemas/OutputGoalResponseV2"
   },
   "commandGoal": {
-    "$ref": "#/components/schemas/OutputGoalDetailV2"
+    "$ref": "#/components/schemas/OutputGoalResponseV2"
   },
   "acceptGoalDelivery": {
-    "$ref": "#/components/schemas/OutputGoalDetailV2"
+    "$ref": "#/components/schemas/OutputGoalResponseV2"
+  },
+  "listTeamTemplates": {
+    "type": "array",
+    "items": {
+      "$ref": "#/components/schemas/OutputTeamTemplateSummaryV1"
+    }
+  },
+  "getGoalNodes": {
+    "$ref": "#/components/schemas/OutputGoalTeamProgressV2"
   },
   "createBusinessAction": {
     "$ref": "#/components/schemas/OutputBusinessActionV1"
@@ -491,6 +500,10 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
         "anyOf": [
           {
             "type": "string",
+            "const": "review"
+          },
+          {
+            "type": "string",
             "const": "customer"
           },
           {
@@ -500,10 +513,6 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
           {
             "type": "string",
             "const": "delivery"
-          },
-          {
-            "type": "string",
-            "const": "review"
           }
         ]
       },
@@ -1532,6 +1541,10 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
       },
       {
         "type": "string",
+        "const": "paused"
+      },
+      {
+        "type": "string",
         "const": "needs_reconciliation"
       },
       {
@@ -1553,6 +1566,10 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
       {
         "type": "string",
         "const": "awaiting_authorization"
+      },
+      {
+        "type": "string",
+        "const": "pausing"
       },
       {
         "type": "string",
@@ -1681,6 +1698,22 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
       },
       "executionRef": {
         "$ref": "#/components/schemas/OutputGoalExecutionRefV2"
+      },
+      "coordinationRef": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "runId",
+          "planRevisionId"
+        ],
+        "properties": {
+          "runId": {
+            "type": "string"
+          },
+          "planRevisionId": {
+            "type": "string"
+          }
+        }
       },
       "reservation": {
         "type": "object",
@@ -2328,6 +2361,1153 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
             "$ref": "#/components/schemas/OutputGoalDeliverySetV2"
           }
         ]
+      }
+    }
+  },
+  "OutputTeamTemplateIdV1": {
+    "anyOf": [
+      {
+        "type": "string",
+        "const": "research-summary"
+      },
+      {
+        "type": "string",
+        "const": "business-proposal"
+      },
+      {
+        "type": "string",
+        "const": "code-delivery"
+      }
+    ]
+  },
+  "OutputGoalPlanProposalV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "domainInputDigest",
+      "threadStreamVersion",
+      "pluginId",
+      "pluginVersion",
+      "agentDefinitionId",
+      "modelBindingId",
+      "modelConnectionStreamVersion",
+      "model",
+      "runnerId",
+      "toolIds",
+      "dataScopes",
+      "autoAllowedEffects"
+    ],
+    "properties": {
+      "domainInputDigest": {
+        "type": "string"
+      },
+      "threadStreamVersion": {
+        "type": "number"
+      },
+      "pluginId": {
+        "anyOf": [
+          {
+            "type": "string",
+            "const": "opc"
+          },
+          {
+            "type": "string",
+            "const": "coding"
+          }
+        ]
+      },
+      "pluginVersion": {
+        "type": "string"
+      },
+      "pluginPackageSha256": {
+        "type": "string"
+      },
+      "agentDefinitionId": {
+        "type": "string"
+      },
+      "modelBindingId": {
+        "type": "string"
+      },
+      "modelConnectionStreamVersion": {
+        "type": "number"
+      },
+      "model": {
+        "type": "string"
+      },
+      "runnerId": {
+        "anyOf": [
+          {
+            "type": "string",
+            "const": "builtin"
+          },
+          {
+            "type": "string",
+            "const": "claude-cli"
+          },
+          {
+            "type": "string",
+            "const": "codex-cli"
+          }
+        ]
+      },
+      "runnerBinding": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "configurationStreamVersion",
+          "identityDigest"
+        ],
+        "properties": {
+          "configurationStreamVersion": {
+            "type": "number"
+          },
+          "identityDigest": {
+            "type": "string"
+          }
+        }
+      },
+      "scheduling": {
+        "$ref": "#/components/schemas/OutputAgentSchedulingDecisionV2"
+      },
+      "toolIds": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "dataScopes": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputResourceRef"
+        }
+      },
+      "autoAllowedEffects": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputToolEffectClass"
+        }
+      }
+    }
+  },
+  "OutputTeamCapabilityRefV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "version",
+      "digest"
+    ],
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "version": {
+        "type": "string"
+      },
+      "digest": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputTeamNodeInputV1": {
+    "anyOf": [
+      {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "kind"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "const": "goal"
+          }
+        }
+      },
+      {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "kind",
+          "resourceRef"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "const": "source"
+          },
+          "resourceRef": {
+            "$ref": "#/components/schemas/OutputGoalResourceRefV2"
+          }
+        }
+      },
+      {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "kind",
+          "nodeId",
+          "outputKey"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "const": "node_output"
+          },
+          "nodeId": {
+            "type": "string"
+          },
+          "outputKey": {
+            "type": "string"
+          }
+        }
+      }
+    ]
+  },
+  "OutputTeamOutputKindV1": {
+    "anyOf": [
+      {
+        "type": "string",
+        "const": "analysis"
+      },
+      {
+        "type": "string",
+        "const": "artifact"
+      },
+      {
+        "type": "string",
+        "const": "evidence"
+      },
+      {
+        "type": "string",
+        "const": "self_assessment"
+      },
+      {
+        "type": "string",
+        "const": "review"
+      },
+      {
+        "type": "string",
+        "const": "decision"
+      }
+    ]
+  },
+  "OutputTeamNodeOutputSpecV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "key",
+      "kind",
+      "description"
+    ],
+    "properties": {
+      "key": {
+        "type": "string"
+      },
+      "kind": {
+        "$ref": "#/components/schemas/OutputTeamOutputKindV1"
+      },
+      "description": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputTeamAgentNodeV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "kind",
+      "roleId",
+      "executor",
+      "capabilityRef",
+      "budget",
+      "id",
+      "title",
+      "dependsOn",
+      "inputs",
+      "outputs"
+    ],
+    "properties": {
+      "kind": {
+        "type": "string",
+        "const": "agent"
+      },
+      "roleId": {
+        "type": "string"
+      },
+      "executor": {
+        "$ref": "#/components/schemas/OutputGoalPlanProposalV2"
+      },
+      "capabilityRef": {
+        "$ref": "#/components/schemas/OutputTeamCapabilityRefV1"
+      },
+      "budget": {
+        "$ref": "#/components/schemas/OutputGoalBudgetV2"
+      },
+      "review": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "independent",
+          "producerNodeIds"
+        ],
+        "properties": {
+          "independent": {
+            "type": "boolean",
+            "const": true
+          },
+          "producerNodeIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "id": {
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      },
+      "dependsOn": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "inputs": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputTeamNodeInputV1"
+        }
+      },
+      "outputs": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputTeamNodeOutputSpecV1"
+        }
+      }
+    }
+  },
+  "OutputTeamHumanDecisionNodeV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "kind",
+      "prompt",
+      "choices",
+      "id",
+      "title",
+      "dependsOn",
+      "inputs",
+      "outputs"
+    ],
+    "properties": {
+      "kind": {
+        "type": "string",
+        "const": "human_decision"
+      },
+      "prompt": {
+        "type": "string"
+      },
+      "choices": {
+        "type": "array",
+        "items": {
+          "anyOf": [
+            {
+              "type": "string",
+              "const": "continue"
+            },
+            {
+              "type": "string",
+              "const": "stop"
+            }
+          ]
+        }
+      },
+      "id": {
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      },
+      "dependsOn": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "inputs": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputTeamNodeInputV1"
+        }
+      },
+      "outputs": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputTeamNodeOutputSpecV1"
+        }
+      }
+    }
+  },
+  "OutputTeamJoinNodeV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "kind",
+      "mappings",
+      "id",
+      "title",
+      "dependsOn",
+      "inputs",
+      "outputs"
+    ],
+    "properties": {
+      "kind": {
+        "type": "string",
+        "const": "join"
+      },
+      "mappings": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "outputKey",
+            "fromNodeId",
+            "fromOutputKey"
+          ],
+          "properties": {
+            "outputKey": {
+              "type": "string"
+            },
+            "fromNodeId": {
+              "type": "string"
+            },
+            "fromOutputKey": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "id": {
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      },
+      "dependsOn": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "inputs": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputTeamNodeInputV1"
+        }
+      },
+      "outputs": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputTeamNodeOutputSpecV1"
+        }
+      }
+    }
+  },
+  "OutputTeamPlanNodeV1": {
+    "anyOf": [
+      {
+        "$ref": "#/components/schemas/OutputTeamAgentNodeV1"
+      },
+      {
+        "$ref": "#/components/schemas/OutputTeamHumanDecisionNodeV1"
+      },
+      {
+        "$ref": "#/components/schemas/OutputTeamJoinNodeV1"
+      }
+    ]
+  },
+  "OutputTeamDeliverableBindingV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "deliverableKey",
+      "nodeId",
+      "outputKey"
+    ],
+    "properties": {
+      "deliverableKey": {
+        "type": "string"
+      },
+      "nodeId": {
+        "type": "string"
+      },
+      "outputKey": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputTeamPlanLimitsV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "maxParallelNodes",
+      "maxDelegationDepth",
+      "maxNodes",
+      "maxAttempts",
+      "maxReworkRounds"
+    ],
+    "properties": {
+      "maxParallelNodes": {
+        "type": "number"
+      },
+      "maxDelegationDepth": {
+        "type": "number"
+      },
+      "maxNodes": {
+        "type": "number"
+      },
+      "maxAttempts": {
+        "type": "number"
+      },
+      "maxReworkRounds": {
+        "type": "number"
+      }
+    }
+  },
+  "OutputGoalTeamPlanRevisionV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "goalId",
+      "threadId",
+      "revision",
+      "inputVersion",
+      "criteriaVersion",
+      "budget",
+      "resourceRefs",
+      "deliverables",
+      "digest",
+      "createdAt",
+      "kind",
+      "template",
+      "pluginId",
+      "domainInputDigest",
+      "threadStreamVersion",
+      "nodes",
+      "deliverableBindings",
+      "limits"
+    ],
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "goalId": {
+        "type": "string"
+      },
+      "threadId": {
+        "type": "string"
+      },
+      "revision": {
+        "type": "number"
+      },
+      "inputVersion": {
+        "type": "number"
+      },
+      "criteriaVersion": {
+        "type": "string"
+      },
+      "budget": {
+        "$ref": "#/components/schemas/OutputGoalBudgetV2"
+      },
+      "resourceRefs": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputGoalResourceRefV2"
+        }
+      },
+      "deliverables": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputGoalDeliverableSpecV2"
+        }
+      },
+      "digest": {
+        "type": "string"
+      },
+      "createdAt": {
+        "type": "string"
+      },
+      "kind": {
+        "type": "string",
+        "const": "team-v1"
+      },
+      "template": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "version",
+          "digest"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/OutputTeamTemplateIdV1"
+          },
+          "version": {
+            "type": "string",
+            "const": "1"
+          },
+          "digest": {
+            "type": "string"
+          }
+        }
+      },
+      "pluginId": {
+        "anyOf": [
+          {
+            "type": "string",
+            "const": "opc"
+          },
+          {
+            "type": "string",
+            "const": "coding"
+          }
+        ]
+      },
+      "domainInputDigest": {
+        "type": "string"
+      },
+      "threadStreamVersion": {
+        "type": "number"
+      },
+      "nodes": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputTeamPlanNodeV1"
+        }
+      },
+      "deliverableBindings": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputTeamDeliverableBindingV1"
+        }
+      },
+      "limits": {
+        "$ref": "#/components/schemas/OutputTeamPlanLimitsV1"
+      }
+    }
+  },
+  "OutputGoalTeamDetailV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "goal",
+      "plan",
+      "deliverySet"
+    ],
+    "properties": {
+      "goal": {
+        "$ref": "#/components/schemas/OutputGoalV2"
+      },
+      "plan": {
+        "$ref": "#/components/schemas/OutputGoalTeamPlanRevisionV2"
+      },
+      "deliverySet": {
+        "anyOf": [
+          {
+            "type": "null"
+          },
+          {
+            "$ref": "#/components/schemas/OutputGoalDeliverySetV2"
+          }
+        ]
+      },
+      "runId": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputGoalResponseV2": {
+    "anyOf": [
+      {
+        "$ref": "#/components/schemas/OutputGoalTeamDetailV2"
+      },
+      {
+        "$ref": "#/components/schemas/OutputGoalDetailV2"
+      }
+    ]
+  },
+  "OutputTeamTemplateSummaryV1": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "version",
+      "title",
+      "description",
+      "pluginId",
+      "nodeCount",
+      "available"
+    ],
+    "properties": {
+      "id": {
+        "$ref": "#/components/schemas/OutputTeamTemplateIdV1"
+      },
+      "version": {
+        "type": "string",
+        "const": "1"
+      },
+      "title": {
+        "type": "string"
+      },
+      "description": {
+        "type": "string"
+      },
+      "pluginId": {
+        "anyOf": [
+          {
+            "type": "string",
+            "const": "opc"
+          },
+          {
+            "type": "string",
+            "const": "coding"
+          }
+        ]
+      },
+      "nodeCount": {
+        "type": "number"
+      },
+      "available": {
+        "anyOf": [
+          {
+            "type": "boolean",
+            "const": false
+          },
+          {
+            "type": "boolean",
+            "const": true
+          }
+        ]
+      },
+      "unavailableReason": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputGoalTeamNodeProgressV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "nodeId",
+      "title",
+      "status",
+      "attempts",
+      "outputRefs"
+    ],
+    "properties": {
+      "nodeId": {
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      },
+      "status": {
+        "anyOf": [
+          {
+            "type": "string",
+            "const": "queued"
+          },
+          {
+            "type": "string",
+            "const": "running"
+          },
+          {
+            "type": "string",
+            "const": "waiting_approval"
+          },
+          {
+            "type": "string",
+            "const": "paused"
+          },
+          {
+            "type": "string",
+            "const": "needs_reconciliation"
+          },
+          {
+            "type": "string",
+            "const": "completed"
+          },
+          {
+            "type": "string",
+            "const": "failed"
+          },
+          {
+            "type": "string",
+            "const": "cancelled"
+          },
+          {
+            "type": "string",
+            "const": "pending"
+          },
+          {
+            "type": "string",
+            "const": "awaiting_decision"
+          }
+        ]
+      },
+      "attempts": {
+        "type": "number"
+      },
+      "blockedReason": {
+        "type": "string"
+      },
+      "executionId": {
+        "type": "string"
+      },
+      "outputRefs": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputGoalResourceRefV2"
+        }
+      }
+    }
+  },
+  "OutputGoalTeamActionV2": {
+    "anyOf": [
+      {
+        "type": "string",
+        "const": "start"
+      },
+      {
+        "type": "string",
+        "const": "pause"
+      },
+      {
+        "type": "string",
+        "const": "resume"
+      },
+      {
+        "type": "string",
+        "const": "cancel"
+      },
+      {
+        "type": "string",
+        "const": "decide"
+      }
+    ]
+  },
+  "OutputCoordinationBudgetV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "currency",
+      "maxTokens",
+      "maxCostMinorUnits"
+    ],
+    "properties": {
+      "currency": {
+        "type": "string"
+      },
+      "maxTokens": {
+        "type": "number"
+      },
+      "maxCostMinorUnits": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputCoordinationAttemptV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "groupId",
+      "workspaceId",
+      "runId",
+      "revisionId",
+      "nodeId",
+      "ordinal",
+      "executionId",
+      "generation",
+      "threadId",
+      "jobId",
+      "requestDigest",
+      "status",
+      "reservation",
+      "id",
+      "tenantId",
+      "streamVersion",
+      "createdAt",
+      "updatedAt"
+    ],
+    "properties": {
+      "groupId": {
+        "type": "string"
+      },
+      "workspaceId": {
+        "type": "string"
+      },
+      "runId": {
+        "type": "string"
+      },
+      "revisionId": {
+        "type": "string"
+      },
+      "nodeId": {
+        "type": "string"
+      },
+      "ordinal": {
+        "type": "number"
+      },
+      "executionId": {
+        "type": "string"
+      },
+      "generation": {
+        "type": "number"
+      },
+      "threadId": {
+        "type": "string"
+      },
+      "jobId": {
+        "type": "string"
+      },
+      "requestDigest": {
+        "type": "string"
+      },
+      "status": {
+        "anyOf": [
+          {
+            "type": "string",
+            "const": "queued"
+          },
+          {
+            "type": "string",
+            "const": "paused"
+          },
+          {
+            "type": "string",
+            "const": "interrupted"
+          },
+          {
+            "type": "string",
+            "const": "needs_reconciliation"
+          },
+          {
+            "type": "string",
+            "const": "completed"
+          },
+          {
+            "type": "string",
+            "const": "failed"
+          },
+          {
+            "type": "string",
+            "const": "cancelled"
+          }
+        ]
+      },
+      "reservation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "budget",
+          "status"
+        ],
+        "properties": {
+          "budget": {
+            "$ref": "#/components/schemas/OutputCoordinationBudgetV2"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "reserved"
+              },
+              {
+                "type": "string",
+                "const": "settled"
+              }
+            ]
+          },
+          "usage": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "currency",
+              "tokens",
+              "costMinorUnits"
+            ],
+            "properties": {
+              "currency": {
+                "type": "string"
+              },
+              "tokens": {
+                "type": "number"
+              },
+              "costMinorUnits": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "id": {
+        "type": "string"
+      },
+      "tenantId": {
+        "type": "string"
+      },
+      "streamVersion": {
+        "type": "number"
+      },
+      "createdAt": {
+        "type": "string"
+      },
+      "updatedAt": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputCoordinationControlV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "workspaceId",
+      "runId",
+      "revisionId",
+      "nodeId",
+      "kind",
+      "decision",
+      "decidedBy",
+      "evidenceDigest",
+      "id",
+      "tenantId",
+      "streamVersion",
+      "createdAt",
+      "updatedAt"
+    ],
+    "properties": {
+      "workspaceId": {
+        "type": "string"
+      },
+      "runId": {
+        "type": "string"
+      },
+      "revisionId": {
+        "type": "string"
+      },
+      "nodeId": {
+        "type": "string"
+      },
+      "kind": {
+        "anyOf": [
+          {
+            "type": "string",
+            "const": "human_decision"
+          },
+          {
+            "type": "string",
+            "const": "join"
+          }
+        ]
+      },
+      "decision": {
+        "anyOf": [
+          {
+            "type": "string",
+            "const": "rejected"
+          },
+          {
+            "type": "string",
+            "const": "approved"
+          }
+        ]
+      },
+      "decidedBy": {
+        "type": "string"
+      },
+      "evidenceDigest": {
+        "type": "string"
+      },
+      "id": {
+        "type": "string"
+      },
+      "tenantId": {
+        "type": "string"
+      },
+      "streamVersion": {
+        "type": "number"
+      },
+      "createdAt": {
+        "type": "string"
+      },
+      "updatedAt": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputGoalTeamProgressV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "goalId",
+      "planRevisionId",
+      "nodes",
+      "allowedActions",
+      "attempts",
+      "decisions"
+    ],
+    "properties": {
+      "goalId": {
+        "type": "string"
+      },
+      "planRevisionId": {
+        "type": "string"
+      },
+      "runId": {
+        "type": "string"
+      },
+      "nodes": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputGoalTeamNodeProgressV2"
+        }
+      },
+      "allowedActions": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputGoalTeamActionV2"
+        }
+      },
+      "attempts": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputCoordinationAttemptV2"
+        }
+      },
+      "decisions": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputCoordinationControlV2"
+        }
       }
     }
   },
@@ -6011,15 +7191,15 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
     "anyOf": [
       {
         "type": "string",
+        "const": "stop"
+      },
+      {
+        "type": "string",
         "const": "pursue"
       },
       {
         "type": "string",
         "const": "revise"
-      },
-      {
-        "type": "string",
-        "const": "stop"
       }
     ]
   },
@@ -6198,14 +7378,14 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
       "interviews"
     ],
     "properties": {
+      "decision": {
+        "$ref": "#/components/schemas/OutputDecision"
+      },
       "title": {
         "type": "string"
       },
       "workspaceId": {
         "type": "string"
-      },
-      "decision": {
-        "$ref": "#/components/schemas/OutputDecision"
       },
       "id": {
         "type": "string"

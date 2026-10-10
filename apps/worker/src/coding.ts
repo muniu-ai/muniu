@@ -55,6 +55,8 @@ import type {
 import { CODING_RUNNER_CONFIGURATION_NAMESPACE } from "@mn/contracts";
 import {
   assertCurrentExecutionAuthorization,
+  assertCurrentCoordinationAuthorization,
+  settleCoordinatedTurnInTransaction,
   assertCurrentToolApproval,
   recordToolAdmission,
   hasUnsettledToolCalls,
@@ -456,22 +458,29 @@ export function createCodingExecutionWorkerHandler(options: CodingExecutionWorke
   };
 }
 
+function assertCodingInvocation(tx: KernelTransaction, state: CodingState, job: StoredJob, occurredAt: string,
+  assertResources?: (transaction: KernelTransaction, execution: Execution) => void, validateSource?: ContextSourceValidator): Execution {
+  const execution = tx.getProjection<Execution>("execution", state.execution.id);
+  if (!execution || execution.generation !== state.execution.generation) throw new StaleFencingTokenError(job.id);
+  if (execution.status === "needs_reconciliation") throw new CodingWorkerOutcomeError(execution.id, "needs_reconciliation", "外部操作结果需要人工核对");
+  const control = tx.getProjection<{ generation: number; command: string }>("execution-control", execution.id);
+  if (control?.generation === execution.generation && control.command === "cancel") throw new RuntimeControlError("cancelled");
+  if (control?.generation === execution.generation && control.command === "interrupt") throw new RuntimeControlError("interrupted");
+  if (execution.status === "cancelled" || execution.status === "paused" || execution.status === "interrupted") throw new RuntimeControlError(execution.status);
+  assertCurrentExecutionAuthorization(tx, execution);
+  assertExecutionContextSources(tx, execution, validateSource);
+  assertCurrentCoordinationAuthorization(tx, execution, occurredAt);
+  assertResources?.(tx, execution);
+  return execution;
+}
+
 function finalizeCodingRuntime(tx: KernelTransaction, records: readonly RuntimeRecord[], state: CodingState,
   job: StoredJob, context: CodingWorkerJobContext, occurredAt: string,
   assertResources?: (transaction: KernelTransaction, execution: Execution) => void, validateSource?: ContextSourceValidator): void | (() => void) {
   if (records.some(record => record.type === "model/request" || record.type === "model/reserved" || record.type === "tool/started"
     || record.type === "job/started" || record.type === "subagent/reserved"
     || (record.type === "execution/status" && record.payload.status === "completed"))) {
-    const execution = tx.getProjection<Execution>("execution", state.execution.id);
-    if (!execution || execution.generation !== state.execution.generation) throw new StaleFencingTokenError(job.id);
-    if (execution.status === "needs_reconciliation") throw new CodingWorkerOutcomeError(execution.id, "needs_reconciliation", "外部操作结果需要人工核对");
-    const control = tx.getProjection<{ generation: number; command: string }>("execution-control", execution.id);
-    if (control?.generation === execution.generation && control.command === "cancel") throw new RuntimeControlError("cancelled");
-    if (control?.generation === execution.generation && control.command === "interrupt") throw new RuntimeControlError("interrupted");
-    if (execution.status === "cancelled" || execution.status === "paused" || execution.status === "interrupted") throw new RuntimeControlError(execution.status);
-    assertCurrentExecutionAuthorization(tx, execution);
-    assertExecutionContextSources(tx, execution, validateSource);
-    assertResources?.(tx, execution);
+    const execution = assertCodingInvocation(tx, state, job, occurredAt, assertResources, validateSource);
     for (const record of records) {
       if (record.type === "tool/started" && typeof record.payload.toolCallId === "string") {
         assertCurrentToolApproval(tx, execution.id, record.payload.toolCallId, occurredAt);
@@ -516,7 +525,7 @@ function finalizeCodingRuntime(tx: KernelTransaction, records: readonly RuntimeR
       publicPayload: { workspaceId: execution.workspaceId, status: domainStatus } });
   if (!context.acknowledgeJobSettlement) return;
   if (!tx.settleJob) throw new Error("存储未实现事务内 Job 终结，Coding Worker 已拒绝提交终态");
-  const receipt = tx.settleJob({ jobId: job.id, workerId: context.workerId, fencingToken: context.fencingToken,
+  const receipt = settleCoordinatedTurnInTransaction(tx, job.tenantId, { jobId: job.id, workerId: context.workerId, fencingToken: context.fencingToken,
     outcome: status === "completed" || status === "paused" ? "completed" : "failed",
     value: status === "completed" || status === "paused" ? { executionId: execution.id, status }
       : { code: status === "cancelled" ? "EXECUTION_CANCELLED" : "JOB_EXECUTION_FAILED",
@@ -701,6 +710,8 @@ function createCodingTurnHandler(options: CodingExecutionWorkerOptions) {
       secretStore: options.secretStore,
       modelInvoker: options.modelInvoker,
       modelQuoter: options.modelQuoter,
+      assertModelInvocation: async () => { await store.transact(job.tenantId, tx =>
+        assertCodingInvocation(tx, state, job, now(), options.assertExecutionResources, options.runtimeProtection?.validateContextSource)); },
       signal: context.signal,
       now,
     });
@@ -1274,6 +1285,7 @@ async function loadCodingState(
     if (!execution) throw new Error("Execution 不存在");
     if (execution.status === "needs_reconciliation") throw new CodingWorkerOutcomeError(execution.id, "needs_reconciliation", "外部操作结果需要人工核对");
     assertCurrentExecutionAuthorization(transaction, execution);
+    assertCurrentCoordinationAuthorization(transaction, execution);
     const authority = transaction.getProjection<ExecutionAuthority>("authority", execution.authorityId);
     if (!authority) throw new Error("Execution Authority 不存在");
     const thread = transaction.getProjection<Thread>("thread", execution.threadId);
@@ -2292,7 +2304,7 @@ class BuiltinCodingRunner implements ManagedCodingRunner {
       request: effectiveRequest,
       signal: this.#options.signal,
     }, store: this.#options.runtime, limits: this.#options.authority.budget,
-      invoke: this.#options.modelInvoker, quote: this.#options.modelQuoter });
+      invoke: this.#options.modelInvoker, quote: this.#options.modelQuoter, assertAllowed: this.#options.assertModelInvocation });
     await this.#options.runtime.append({
       executionId: this.#options.execution.id,
       type: "model/response",
@@ -2460,6 +2472,7 @@ interface BuiltinRunnerOptions {
   readonly secretStore: CodingModelSecretReader;
   readonly modelInvoker: ByokModelInvoker;
   readonly modelQuoter: ByokModelQuoter;
+  readonly assertModelInvocation: () => Promise<void>;
   readonly signal: AbortSignal;
   readonly now: () => string;
 }
@@ -4031,7 +4044,7 @@ function settleCodingJob(
     throw new Error("存储未实现事务内 Job 终结，Coding Worker 已拒绝提交终态");
   }
   const completed = result.status === "completed" || result.status === "needs_human_decision";
-  return transaction.settleJob({
+  return settleCoordinatedTurnInTransaction(transaction, job.tenantId, {
     jobId: job.id,
     workerId: context.workerId,
     fencingToken: context.fencingToken,

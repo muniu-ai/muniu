@@ -4,9 +4,12 @@ import type {
   JsonObject,
   JsonValue,
   KernelEventV1,
+  Job,
+  Execution,
 } from "@mn/contracts";
 import { computeEventDigest, computeEventHmac } from "@mn/contracts";
 import { StreamVersionConflictError } from "./errors.js";
+import { appendKernelEvent } from './projections.js';
 
 export interface IdempotencyRecord {
   readonly tenantId: string;
@@ -230,6 +233,27 @@ export class InMemoryKernelStore implements KernelStore {
           error.code = "STALE_FENCING_TOKEN";
           throw error;
         }
+      },
+      settleJob: (input) => {
+        transaction.assertJobLease!(input);
+        const job = transaction.getProjection<Job>('job', input.jobId)!;
+        const { leaseOwner: _owner, leaseExpiresAt: _expiry, ...withoutLease } = job;
+        const next = { ...withoutLease, status: input.outcome, streamVersion: job.streamVersion + 1, updatedAt: input.occurredAt };
+        transaction.putProjection('job', job.id, next);
+        appendKernelEvent(transaction, { tenantId, aggregateType: 'job', aggregateId: job.id, expectedStreamVersion: job.streamVersion,
+          type: `job.${input.outcome}`, actorId: `worker:${input.workerId}`, generation: 1, correlationId: `job:${job.id}:${input.fencingToken}`, publicPayload: { status: input.outcome } });
+        if (job.kind === 'agent.execution.run' && typeof job.payload.executionId === 'string') {
+          const execution = transaction.getProjection<Execution>('execution', job.payload.executionId);
+          if (!execution) throw new Error('Execution 不存在');
+          if (!['completed', 'failed', 'cancelled', 'needs_reconciliation', 'interrupted'].includes(execution.status)) {
+            const status = input.outcome === 'completed' && input.value && typeof input.value === 'object' && !Array.isArray(input.value) && (input.value as JsonObject).status === 'paused' ? 'paused' : input.outcome;
+            transaction.putProjection('execution', execution.id, { ...execution, status, streamVersion: execution.streamVersion + 1, updatedAt: input.occurredAt });
+            appendKernelEvent(transaction, { tenantId, aggregateType: 'execution', aggregateId: execution.id, expectedStreamVersion: execution.streamVersion,
+              type: `execution.${status}`, actorId: `worker:${input.workerId}`, executionId: execution.id, generation: execution.generation,
+              correlationId: `job:${job.id}:${input.fencingToken}`, publicPayload: { status } });
+          }
+        }
+        return { ...input, settled: true };
       },
       invalidateJob: (input) => {
         const key = `${tenantId}:${input.jobId}`;

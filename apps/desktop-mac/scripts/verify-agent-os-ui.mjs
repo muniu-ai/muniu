@@ -9,7 +9,7 @@ import { chromium } from "playwright-core";
 import { businessDateAt } from "../../../packages/contracts/dist/index.js";
 
 const mode = process.argv[2] ?? "onboarding";
-if (!new Set(["onboarding", "opc", "coding", "goals", "business", "startup", "repositories", "tasks", "refresh"]).has(mode)) throw new Error(`未知验证模式：${mode}`);
+if (!new Set(["onboarding", "opc", "coding", "goals", "teams", "business", "startup", "repositories", "tasks", "refresh"]).has(mode)) throw new Error(`未知验证模式：${mode}`);
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const desktopDir = resolve(scriptDir, "..");
 const repoRoot = resolve(desktopDir, "..", "..");
@@ -68,6 +68,7 @@ try {
   if (mode === "coding") await verifyCoding(page, requests);
   if (mode === "repositories") await verifyRepositories(page, requests);
   if (mode === "goals") await verifyGoals(page, requests);
+  if (mode === "teams") await verifyTeams(page, requests);
   if (mode === "tasks") await verifyTasks(page, requests);
   if (mode === "business") await verifyBusiness(page, requests);
   if (mode === "refresh") await verifyRefresh(page);
@@ -1288,7 +1289,9 @@ async function verifyTasks(page, requestLog) {
   await acceptance.getByRole("checkbox").nth(1).check();
   await acceptance.getByRole("button", { name: "接收成果", exact: true }).click();
   await page.getByRole("status").filter({ hasText: /^已验收$/u }).waitFor();
+  await page.getByRole("tab", { name: "进展", exact: true }).click();
   if (await page.getByRole("button", { name: "补充说明", exact: true }).isEnabled()) throw new Error("结束后不能隐式开启额度外执行");
+  await page.getByRole("tab", { name: "成果", exact: true }).click();
   await page.getByRole("link", { name: "下载成果", exact: true }).waitFor();
   await acceptance.getByRole("heading", { name: "经营建议", exact: true }).waitFor();
   await acceptance.getByRole("table").waitFor();
@@ -1329,4 +1332,54 @@ async function verifyRefresh(page) {
   if (!restored.ok) throw new Error("外部入口启用插件失败");
   await page.getByRole("button", { name: "Coding", exact: true }).waitFor();
   await page.unroute(`${apiUrl}/v2/inbox?*`);
+}
+
+
+async function verifyTeams(page, requestLog) {
+  await page.getByRole("button", { name: "委派任务", exact: true }).click();
+  const composer = page.getByRole("form", { name: "委派新任务" });
+  if (!await composer.getByRole("radio", { name: "单 Agent", exact: true }).isChecked()) throw new Error("团队不能默认启用");
+  await composer.getByLabel("任务目标", { exact: true }).fill("核对客户需求，形成经营方案与待确认事实");
+  await composer.getByLabel("验收要求", { exact: true }).fill("区分事实与建议\n说明资料缺口");
+  await composer.getByRole("radio", { name: "经营方案", exact: true }).check();
+  await composer.getByLabel("团队执行模型", { exact: true }).locator("option").first().waitFor({ state: "attached" });
+  await composer.getByRole("button", { name: "准备执行计划", exact: true }).click();
+  const detail = page.getByRole("region", { name: "目标详情", exact: true });
+  await detail.getByRole("tabpanel", { name: "计划", exact: true }).waitFor();
+  await detail.getByRole("region", { name: "执行计划", exact: true }).getByText(/模板版本 1/u).waitFor();
+  if (await detail.getByRole("tab").count() !== 4) throw new Error("任务详情缺少四个视图");
+  await detail.getByRole("button", { name: "确认计划并启动", exact: true }).click();
+  await detail.getByRole("button", { name: "确认并继续", exact: true }).waitFor({ timeout: 30000 });
+  const { runCli } = await import("../../cli/dist/index.js");
+  const plannedRequest = requestLog.find(request => request.body?.kind === "team-v1");
+  const goalId = plannedRequest.path.split("/")[3], workspaceId = plannedRequest.body.workspaceId;
+  async function cli(args) {
+    const lines = [];
+    const code = await runCli(["goal", ...args, "--workspace", workspaceId, "--json"], { apiUrl, io: { stdout: line => lines.push(line), stderr: line => lines.push(line) } });
+    if (code !== 0) throw new Error(`CLI 团队跟进失败：${lines.join("\n")}`);
+    return JSON.parse(lines.at(-1)).data;
+  }
+  const nodeState = await cli(["nodes", goalId]);
+  if (!nodeState.nodes.some(node => node.nodeId === "confirm" && node.status === "awaiting_decision")) throw new Error("CLI 未读到 Desktop 当前等待节点");
+  const current = await cli(["show", goalId]);
+  const paused = await cli(["pause", goalId, "--version", String(current.goal.streamVersion), "--key", "ui-cli-team-pause"]);
+  if (!["pausing", "paused"].includes(paused.goal.status)) throw new Error("CLI 暂停未被 Host 记录");
+  await detail.getByRole("button", { name: "恢复", exact: true }).waitFor();
+  if (await detail.getByRole("button", { name: "确认并继续", exact: true }).count()) throw new Error("暂停后不得继续人工决定");
+  await detail.getByRole("button", { name: "恢复", exact: true }).click();
+  await detail.getByRole("button", { name: "确认并继续", exact: true }).click();
+  await detail.getByRole("status").filter({ hasText: /^待验收$/u }).waitFor({ timeout: 30000 });
+  const acceptance = detail.getByRole("region", { name: "成果验收", exact: true });
+  await acceptance.getByText(/经营建议/u).waitFor();
+  for (const checkbox of await acceptance.getByRole("checkbox").all()) await checkbox.check();
+  await acceptance.getByRole("button", { name: "接收成果", exact: true }).click();
+  await detail.getByRole("status").filter({ hasText: /^已验收$/u }).waitFor();
+  const plan = requestLog.find(request => request.body?.kind === "team-v1");
+  if (plan?.body?.templateId !== "business-proposal" || plan.body.templateVersion !== "1" || !plan.body.modelBindingId) throw new Error("团队计划未固定模板版本与模型");
+  const decide = requestLog.find(request => request.body?.command === "decide");
+  if (decide?.body?.nodeId !== "confirm" || decide.body.decision !== "continue") throw new Error("人工决定未绑定等待节点");
+  const commands = requestLog.filter(request => ["start", "pause", "resume", "decide"].includes(request.body?.command));
+  if (commands.length !== 3 || commands.some(request => !request.key || !Number.isInteger(request.body.expectedStreamVersion))) throw new Error("团队控制缺少版本与请求身份");
+  await assertViewportFit(page);
+  await page.screenshot({ path: join(temporaryRoot, "team-accepted.png"), fullPage: true, animations: "disabled" });
 }

@@ -28,6 +28,9 @@ import {
 import {
   AgentOsKernel,
   assertCurrentExecutionAuthorization,
+  assertCurrentCoordinationAuthorization,
+  settleCoordinatedTurnInTransaction,
+  interruptCoordinatedExecutionInTransaction,
   assertCurrentToolApproval,
   recordToolAdmission,
   type KernelJobSettlementReceipt,
@@ -257,11 +260,14 @@ export class AgentOsWorker {
   readonly #claimOptions: JobClaimOptions;
   readonly #now: () => Date;
   readonly #leaseRenewIntervalMs: number;
+  readonly #coordinationStore?: KernelStore;
 
   constructor(options: AgentOsWorkerOptions) {
     if (!options.id.trim()) throw new TypeError("Worker id 不能为空");
     this.#id = options.id;
     this.#store = options.store;
+    this.#coordinationStore = 'transact' in options.store && typeof options.store.transact === 'function'
+      ? options.store as unknown as KernelStore : undefined;
     this.#lock = options.lock;
     this.#handlers = Object.freeze({ ...options.handlers });
     this.#handlerReadiness = workerHandlerReadiness(
@@ -327,6 +333,14 @@ export class AgentOsWorker {
       });
     }, this.#leaseRenewIntervalMs);
     try {
+      if (coordinatedJob(job)) {
+        if (!this.#coordinationStore) throw new Error('团队执行需要事务存储，已拒绝派发');
+        await this.#coordinationStore.transact(job.tenantId, tx => {
+          const execution = tx.getProjection<Execution>('execution', requiredPayloadString(job.payload, 'executionId'));
+          if (!execution) throw new Error('Execution 不存在');
+          assertCurrentCoordinationAuthorization(tx, execution, this.#now().toISOString());
+        });
+      }
       const execution = handler(job, {
         workerId: this.#id,
         fencingToken: job.fencingToken,
@@ -336,12 +350,15 @@ export class AgentOsWorker {
       });
       const result = await Promise.race([execution, leaseLost]);
       if (settlement) return { status: settledWorkerStatus(settlement), jobId: job.id };
+      const coordinated = await this.#settleCoordinated(job, 'completed', result);
+      if (coordinated) return { status: settledWorkerStatus(coordinated), jobId: job.id };
       await this.#store.completeJob(job.id, this.#id, job.fencingToken, result, this.#now().toISOString());
       return { status: "completed", jobId: job.id };
     } catch (error) {
       if (settlement) return { status: settledWorkerStatus(settlement), jobId: job.id };
       if (stopSignal?.aborted) {
         try {
+          if (await this.#settleCoordinated(job, 'failed', { code: 'EXECUTION_INTERRUPTED' }, 'interrupted')) return { status: 'interrupted', jobId: job.id };
           await this.#store.interruptJob(
             job.id,
             this.#id,
@@ -368,6 +385,7 @@ export class AgentOsWorker {
       if (error instanceof UnknownExternalSideEffectError) {
         const occurredAt = this.#now().toISOString();
         try {
+          if (await this.#settleCoordinated(job, 'failed', { code: 'UNKNOWN_EXTERNAL_SIDE_EFFECT' }, 'needs_reconciliation')) return { status: 'needs_reconciliation', jobId: job.id };
           await this.#store.markNeedsReconciliation(error.executionId, {
             jobId: job.id,
             workerId: this.#id,
@@ -386,6 +404,7 @@ export class AgentOsWorker {
       }
       if (error instanceof AgentExecutionInterruptedError) {
         try {
+          if (await this.#settleCoordinated(job, 'failed', { code: 'EXECUTION_INTERRUPTED' }, 'interrupted')) return { status: 'interrupted', jobId: job.id };
           await this.#store.interruptJob(
             job.id,
             this.#id,
@@ -405,6 +424,7 @@ export class AgentOsWorker {
       }
       if (error instanceof AgentExecutionCancelledError) {
         try {
+          if (await this.#settleCoordinated(job, 'failed', { code: 'EXECUTION_CANCELLED' })) return { status: 'cancelled', jobId: job.id };
           await this.#store.failJob(
             job.id,
             this.#id,
@@ -430,8 +450,21 @@ export class AgentOsWorker {
     }
   }
 
+  async #settleCoordinated(job: StoredJob, outcome: 'completed' | 'failed', value: JsonValue,
+    interruption?: 'interrupted' | 'needs_reconciliation'): Promise<KernelJobSettlementReceipt | undefined> {
+    if (!coordinatedJob(job)) return undefined;
+    if (!this.#coordinationStore) throw new Error('团队执行需要事务存储，已拒绝终结');
+    const input = { jobId: job.id, workerId: this.#id, fencingToken: job.fencingToken, outcome, value, occurredAt: this.#now().toISOString() };
+    return this.#coordinationStore.transact(job.tenantId, tx => {
+      if (interruption) interruptCoordinatedExecutionInTransaction(tx, job.tenantId, input, interruption);
+      return settleCoordinatedTurnInTransaction(tx, job.tenantId, input);
+    });
+  }
+
   async #failKnown(job: StoredJob, code: string, message: string, retryable: boolean): Promise<WorkerPollResult> {
     try {
+      const coordinated = await this.#settleCoordinated(job, 'failed', safeFailure(code, message, retryable));
+      if (coordinated) return { status: settledWorkerStatus(coordinated), jobId: job.id };
       await this.#store.failJob(
         job.id, this.#id, job.fencingToken,
         safeFailure(code, message, retryable), this.#now().toISOString(),
@@ -444,9 +477,14 @@ export class AgentOsWorker {
   }
 }
 
+function coordinatedJob(job: StoredJob): boolean {
+  const binding = job.payload.coordination;
+  return typeof binding === 'object' && binding !== null && !Array.isArray(binding) && typeof (binding as JsonObject).runId === 'string';
+}
+
 function settledWorkerStatus(
   receipt: KernelJobSettlementReceipt,
-): "completed" | "failed" | "cancelled" {
+): "completed" | "failed" | "cancelled" | "interrupted" | "needs_reconciliation" {
   if (receipt.outcome === "completed") return "completed";
   const failure = typeof receipt.value === "object"
     && receipt.value !== null
@@ -454,6 +492,8 @@ function settledWorkerStatus(
     ? receipt.value as JsonObject
     : undefined;
   const failureCode = typeof failure?.code === "string" ? failure.code : undefined;
+  if (failureCode === 'UNKNOWN_EXTERNAL_SIDE_EFFECT') return 'needs_reconciliation';
+  if (failureCode === 'EXECUTION_INTERRUPTED') return 'interrupted';
   return failureCode === "EXECUTION_CANCELLED" ? "cancelled" : "failed";
 }
 
@@ -660,6 +700,7 @@ export function createKernelAgentTurnHandler(
         if (execution.status === "needs_reconciliation") throw new UnknownExternalSideEffectError(execution.id);
         if (execution.status === "interrupted" || execution.status === "paused") throw new AgentExecutionInterruptedError(execution.id);
         assertCurrentExecutionAuthorization(transaction, execution);
+        assertCurrentCoordinationAuthorization(transaction, execution, (options.now ?? (() => new Date().toISOString()))());
         options.assertExecutionResources?.(transaction, execution);
         const authority = transaction.getProjection<ExecutionAuthority>("authority", execution.authorityId);
         if (!authority) throw new Error("Execution Authority 不存在");
@@ -716,6 +757,19 @@ export function createKernelAgentTurnHandler(
           }),
         });
       }
+      const assertModelInvocation = (transaction: KernelTransaction): void => {
+        const current = transaction.getProjection<Execution>("execution", executionId);
+        if (!current || current.generation !== state.execution.generation) throw new StaleFencingTokenError(job.id);
+        if (current.status === "needs_reconciliation") throw new UnknownExternalSideEffectError(executionId);
+        const control = transaction.getProjection<{ generation: number; command: string }>("execution-control", executionId);
+        if (control?.generation === state.execution.generation && control.command === "cancel") throw new RuntimeControlError("cancelled");
+        if (control?.generation === state.execution.generation && control.command === "interrupt") throw new RuntimeControlError("interrupted");
+        if (current.status === "cancelled" || current.status === "interrupted" || current.status === "paused") throw new RuntimeControlError(current.status);
+        assertCurrentExecutionAuthorization(transaction, current);
+        assertExecutionContextSources(transaction, current, options.runtimeProtection?.validateContextSource);
+        assertCurrentCoordinationAuthorization(transaction, current, (options.now ?? (() => new Date().toISOString()))());
+        options.assertExecutionResources?.(transaction, current);
+      };
       executionScope.register("llm", {
         id: llmId,
         complete: async (request, context) => {
@@ -739,7 +793,8 @@ export function createKernelAgentTurnHandler(
               apiKey,
               request,
               signal: context.signal,
-            }, store: agentStore, limits: state.authority.budget, invoke: invokeModel, quote: quoteModel });
+            }, store: agentStore, limits: state.authority.budget, invoke: invokeModel, quote: quoteModel,
+              assertAllowed: () => runtimeStore.transact(job.tenantId, assertModelInvocation) });
           } catch (error) {
             if (error instanceof ModelTransportError || error instanceof ExecutionBudgetExceededError
               || error instanceof RuntimeControlError || error instanceof StaleFencingTokenError) throw error;
@@ -778,15 +833,7 @@ export function createKernelAgentTurnHandler(
         if (records.some(record => record.type === "model/request" || record.type === "model/reserved" || record.type === "tool/started"
           || record.type === "job/started" || record.type === "subagent/reserved"
           || (record.type === "execution/status" && record.payload.status === "completed"))) {
-          const current = transaction.getProjection<Execution>("execution", executionId);
-          if (!current || current.generation !== state.execution.generation) throw new StaleFencingTokenError(job.id);
-          if (current.status === "needs_reconciliation") throw new UnknownExternalSideEffectError(executionId);
-          const control = transaction.getProjection<{ generation: number; command: string }>("execution-control", executionId);
-          if (control?.generation === state.execution.generation && control.command === "interrupt") throw new RuntimeControlError("interrupted");
-          if (current.status === "cancelled" || current.status === "interrupted" || current.status === "paused") throw new RuntimeControlError(current.status);
-          assertCurrentExecutionAuthorization(transaction, current);
-          assertExecutionContextSources(transaction, current, options.runtimeProtection?.validateContextSource);
-          options.assertExecutionResources?.(transaction, current);
+          assertModelInvocation(transaction);
           for (const record of records) {
             if (record.type === "tool/started" && typeof record.payload.toolCallId === "string") {
               assertCurrentToolApproval(transaction, executionId, record.payload.toolCallId, (options.now ?? (() => new Date().toISOString()))());
@@ -808,7 +855,7 @@ export function createKernelAgentTurnHandler(
         if ((current.status === "cancelled" || current.status === "paused" || current.status === "interrupted")
           && current.status !== status) throw new RuntimeControlError(current.status);
         if (!transaction.settleJob) throw new Error("存储未实现事务内 Job 终结，Worker 已拒绝提交终态");
-        const receipt = transaction.settleJob({
+        const receipt = settleCoordinatedTurnInTransaction(transaction, job.tenantId, {
           jobId: job.id, workerId: context.workerId, fencingToken: context.fencingToken,
           outcome: status === "completed" || status === "paused" ? "completed" : "failed",
           value: status === "completed" || status === "paused" ? { executionId, status } : status === "cancelled"

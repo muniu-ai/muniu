@@ -35,6 +35,7 @@
 | `packages/plugin-sdk` | 产品插件获准使用的公共能力边界 |
 | `packages/storage` | SQLite、PostgreSQL、CAS、密钥、备份与完整性校验 |
 | `packages/business-execution` | 第一方私有业务执行服务，由 Host 与 Worker 调用；不是公共插件 SDK |
+| `packages/task-orchestration` | Host 使用的私有目标与团队纯规则模块；不写持久状态，不向产品插件开放 |
 | `plugins/opc`、`plugins/coding` | 产品领域逻辑、命令、事件与 UI 贡献 |
 | `plugins/runner-*` | 用户显式选择的外部 CLI Runner Adapter |
 | `vendor` | 固定版本的上游代码；修改前读 [vendor/AGENTS.md](https://github.com/muniu-ai/muniu/blob/main/vendor/AGENTS.md) |

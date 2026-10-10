@@ -109,7 +109,7 @@ export interface GoalDeliveryAcceptanceV2 {
   readonly acceptedAt: string;
   readonly items: readonly { readonly key: string; readonly digest: string; readonly reviewedCriterionIds: readonly string[] }[];
 }
-export type GoalStatusV2 = "draft" | "awaiting_authorization" | "running" | "waiting_approval"
+export type GoalStatusV2 = "draft" | "awaiting_authorization" | "running" | "waiting_approval" | "pausing" | "paused"
   | "needs_reconciliation" | "failed" | "awaiting_acceptance" | "accepted" | "cancelled";
 export interface GoalV2 {
   readonly id: string;
@@ -129,6 +129,7 @@ export interface GoalV2 {
   readonly updatedAt: string;
   readonly planRevisionId?: string;
   readonly executionRef?: GoalExecutionRefV2;
+  readonly coordinationRef?: { readonly runId: string; readonly planRevisionId: string };
   readonly reservation?: { readonly status: "reserved" | "unknown" | "settled"; readonly actual?: GoalUsageV2 };
   readonly authorization?: { readonly planDigest: string; readonly principalId: string; readonly membershipStreamVersion: number };
   readonly deliverySetId?: string;
@@ -137,3 +138,6 @@ export interface GoalV2 {
   readonly reasonCode?: string;
 }
 export interface GoalDetailV2 { readonly goal: GoalV2; readonly plan: GoalPlanRevisionV2 | null; readonly deliverySet: GoalDeliverySetV2 | null }
+
+export * from "./team-goals.js";
+export * from "./goal-team-progress.js";

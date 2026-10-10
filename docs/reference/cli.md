@@ -42,12 +42,17 @@
 
 目标与验收：
   mn goal list --workspace <工作区 ID>
+  mn goal templates --workspace <工作区 ID>
   mn goal show <目标 ID> --workspace <工作区 ID>
+  mn goal nodes <目标 ID> --workspace <工作区 ID>
   mn goal create --workspace <工作区 ID> --file <目标 JSON 文件>
   mn goal plan <目标 ID> --workspace <工作区 ID> --version <目标版本> [--runner auto|builtin|codex-cli|claude-cli] [--strategy quality|balanced|cost] [--model <连接 ID>]
+  mn goal plan <目标 ID> --workspace <工作区 ID> --version <目标版本> --team research-summary|business-proposal|code-delivery --model <连接 ID> [--key <幂等键>]
   mn goal start <目标 ID> --workspace <工作区 ID> --version <目标版本> --plan <计划 ID> --plan-digest <计划摘要>
   mn goal refresh <目标 ID> --workspace <工作区 ID> --version <目标版本>
   mn goal cancel <目标 ID> --workspace <工作区 ID> --version <目标版本>
+  mn goal pause|resume <目标 ID> --workspace <工作区 ID> --version <目标版本> [--key <幂等键>]
+  mn goal decide <目标 ID> --workspace <工作区 ID> --version <目标版本> --node <节点 ID> --decision continue|stop [--key <幂等键>]
   mn goal usage <目标 ID> --workspace <工作区 ID> --version <目标版本> --file <用量 JSON 文件>
   mn goal accept <目标 ID> --workspace <工作区 ID> --version <目标版本> --file <验收 JSON 文件>
 

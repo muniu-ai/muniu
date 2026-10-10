@@ -48,8 +48,10 @@ curl --fail-with-body --silent --show-error http://127.0.0.1:7318/v2/workspaces
 | `GET` | `/v2/plugins/opc/business` | `getOpcBusiness` | — | — |
 | `POST` | `/v2/plugins/opc/business/commands` | `commandOpcBusiness` | 必需 | 必需 |
 | `GET` | `/v2/workspaces/{workspaceId}/goals` | `listGoals` | — | — |
+| `GET` | `/v2/workspaces/{workspaceId}/team-templates` | `listTeamTemplates` | — | — |
 | `POST` | `/v2/workspaces/{workspaceId}/goals` | `createGoal` | 必需 | — |
 | `GET` | `/v2/goals/{goalId}` | `getGoal` | — | — |
+| `GET` | `/v2/goals/{goalId}/nodes` | `getGoalNodes` | — | — |
 | `POST` | `/v2/goals/{goalId}/plan-revisions` | `proposeGoalPlan` | 必需 | 必需 |
 | `POST` | `/v2/goals/{goalId}/commands` | `commandGoal` | 必需 | 必需 |
 | `POST` | `/v2/goals/{goalId}/acceptances` | `acceptGoalDelivery` | 必需 | 必需 |
