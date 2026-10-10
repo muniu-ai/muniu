@@ -1,6 +1,8 @@
+import { assertAssetMembership, assertDerivedAssetProvenance } from './asset-provenance.js';
+import { assertContextSource, type ContextSourceValidator } from '@mn/worker';
 // SPDX-License-Identifier: Apache-2.0
 
-import type { Asset } from "@mn/contracts";
+import type { Asset, GoalResourceRefV2 } from "@mn/contracts";
 import { KernelError, type KernelStore } from "@mn/kernel";
 import type { OpportunityAggregate } from "@mn/plugin-opc";
 import type { ContentAddressedStorage, KeyProvider } from "@mn/storage";
@@ -15,6 +17,8 @@ interface OpcSourceOptions {
   readonly protectedPayloadKeyProvider?: KeyProvider;
   readonly tenantId: string;
   readonly workspaceId: string;
+  readonly principalId?: string;
+  readonly validateContextSource?: ContextSourceValidator;
 }
 
 export interface HydratedOpcOpportunity {
@@ -24,6 +28,7 @@ export interface HydratedOpcOpportunity {
     })[];
   };
   readonly interviewRawRecords: ReadonlyMap<string, string>;
+  readonly sourceRefs: readonly GoalResourceRefV2[];
 }
 
 export async function validateOpcCommandSources(
@@ -62,11 +67,13 @@ export async function hydrateOpcOpportunity(
 ): Promise<HydratedOpcOpportunity> {
   const interviewRawRecords = new Map<string, string>();
   const interviews = [];
+  const sources = new Map<string, GoalResourceRefV2>();
+  const source = (asset: Asset) => sources.set(asset.id, { namespace: "asset", resourceId: asset.id, streamVersion: asset.streamVersion, digest: asset.digest });
   for (const signal of options.opportunity.signals) {
     if (signal.sourceKind !== "file") continue;
     const asset = await loadSourceAsset(options, signal.sourceAssetId ?? "");
     const content = await readSourceContent(options, asset);
-    content.fill(0);
+    source(asset); content.fill(0);
   }
   for (const interview of options.opportunity.interviews) {
     const asset = await loadSourceAsset(options, interview.rawRecordAssetId);
@@ -78,12 +85,19 @@ export async function hydrateOpcOpportunity(
     } finally {
       content.fill(0);
     }
+    source(asset);
     interviewRawRecords.set(interview.rawRecordAssetId, rawRecord);
     interviews.push({ ...interview, rawRecord });
   }
+  await options.store.transact(options.tenantId, tx => {
+    const scope = { tenantId: options.tenantId, workspaceId: options.workspaceId };
+    if (options.principalId) assertAssetMembership(tx, { ...scope, principalId: options.principalId });
+    for (const ref of sources.values()) assertContextSource(tx, scope, ref, options.validateContextSource);
+  });
   return {
     opportunity: { ...options.opportunity, interviews },
     interviewRawRecords,
+    sourceRefs: [...sources.values()],
   };
 }
 
@@ -111,6 +125,13 @@ async function loadSourceAsset(options: OpcSourceOptions, assetId: string): Prom
       "选择当前工作区中的附件",
     );
   }
+  if (asset.provenance) {
+    if (!options.principalId) throw new KernelError('WORKSPACE_ACCESS_DENIED', '读取派生资料需要当前身份', '从已授权的任务入口读取');
+    await options.store.transact(options.tenantId, tx => {
+      const scope = { tenantId: options.tenantId, workspaceId: options.workspaceId, principalId: options.principalId! };
+      assertAssetMembership(tx, scope); assertDerivedAssetProvenance(tx, scope, asset, options.validateContextSource);
+    });
+  }
   return asset;
 }
 
@@ -127,6 +148,7 @@ async function readSourceContent(options: OpcSourceOptions, asset: Asset): Promi
     store: options.store,
     cas: options.cas,
     tenantId: options.tenantId,
+    principalId: options.principalId, validateContextSource: options.validateContextSource,
     asset,
     ...(options.protectedPayloadKeyProvider
       ? { protectedPayloadKeyProvider: options.protectedPayloadKeyProvider }

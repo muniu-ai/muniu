@@ -31,3 +31,9 @@ export * from "./memories.js";
 export * from './followups.js';
 
 export * from "./team-skills.js";
+export * from './task-collaboration.js';
+export * from './asset-provenance.js';
+export * from './goal-exports.js';
+export * from './goal-export-api-schema.js';
+export * from './mcp.js';
+export * from './mcp-api-schema.js';

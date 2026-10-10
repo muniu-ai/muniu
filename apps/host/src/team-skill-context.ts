@@ -1,3 +1,4 @@
+import { validateMcpContextSource } from './mcp-sources.js';
 // SPDX-License-Identifier: Apache-2.0
 import type { GoalCoordinatedPlanProposalV2, GoalCoordinatedPlanV2, GoalResourceRefV2, GoalTeamPlanProposalV2, GoalV2, Principal, TeamSkillRefV2, TeamSkillVersionV2, Workspace, WorkspaceMembership } from '@mn/contracts';
 import { KernelError, sha256, type KernelTransaction } from '@mn/kernel';
@@ -19,12 +20,20 @@ export function assertTeamSkillReader(tx: KernelTransaction, scope: GoalScope, o
     || !principal || principal.tenantId !== scope.tenantId || principal.disabledAt || !['owner', 'operator'].includes(member.workspaceRole)) fail('WORKSPACE_ACCESS_DENIED');
   if (owner && (member.workspaceRole !== 'owner' || principal.kind !== 'human')) fail('TEAM_SKILL_OWNER_REQUIRED');
 }
+const currentSkillSource: ContextSourceValidator = (tx, scope, ref) =>
+  validateMcpContextSource(tx, scope, ref) || validateTeamSkillContextSource(tx, scope, ref) || validateBusinessContextSource(tx, scope, ref);
+const historicalSkillSource: ContextSourceValidator = (tx, scope, ref) => {
+  // A workflow's historical business proof cannot make an obsolete memory current again.
+  if (ref.namespace === 'memory') assertContextSource(tx, scope, ref, currentSkillSource);
+  return validateMcpContextSource(tx, scope, ref) || validateTeamSkillContextSource(tx, scope, ref) || validateHistoricalBusinessContextSource(tx, scope, ref);
+};
 function provenance(tx: KernelTransaction, scope: { tenantId: string; workspaceId: string }, ref: GoalResourceRefV2): void {
   if (isBusinessContextRef(ref)) { validateHistoricalBusinessContextSource(tx, scope, ref); return; }
   if (!['asset', 'opc.opportunity', 'coding.repository'].includes(ref.namespace)) fail('TEAM_SKILL_SOURCE_INVALID');
   const value = tx.getProjection<{ tenantId?: string; workspaceId: string; protectedPayloadRef?: string; protected?: boolean }>(ref.namespace, ref.resourceId);
   if (!value || value.workspaceId !== scope.workspaceId || (value.tenantId !== scope.tenantId && !(value.tenantId === undefined && ref.namespace !== 'asset'))) fail('TEAM_SKILL_SOURCE_REVOKED');
   if (ref.namespace === 'asset' && (tx.getProjection('assetTombstone', ref.resourceId) || !value.protected || !value.protectedPayloadRef || !tx.getProjection('protectedPayloadKey', value.protectedPayloadRef))) fail('TEAM_SKILL_SOURCE_REVOKED');
+  if (ref.namespace === 'asset') assertContextSource(tx, scope, ref, historicalSkillSource);
 }
 function validateVersion(tx: KernelTransaction, scope: { tenantId: string; workspaceId: string }, version: TeamSkillVersionV2 | undefined): TeamSkillVersionV2 {
   if (!version || version.tenantId !== scope.tenantId || version.workspaceId !== scope.workspaceId || version.streamVersion !== 1
@@ -34,7 +43,7 @@ function validateVersion(tx: KernelTransaction, scope: { tenantId: string; works
   for (const ref of version.sourceRefs) provenance(tx, scope, ref);
   for (const role of version.roles) for (const ref of role.sourceRefs) {
     if (ref.namespace !== 'asset' && !isBusinessContextRef(ref)) fail('TEAM_SKILL_SOURCE_INVALID');
-    assertContextSource(tx, scope, ref, validateBusinessContextSource);
+    assertContextSource(tx, scope, ref, currentSkillSource);
   }
   return version;
 }

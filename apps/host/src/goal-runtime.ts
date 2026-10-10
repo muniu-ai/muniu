@@ -10,7 +10,7 @@ import { buildRepositoryIndex, createCodeEvidence, createGovernanceSnapshot, cre
 import { createHash } from "node:crypto";
 import type { PluginDefinitionV1 } from "@mn/plugin-sdk";
 import { storeProtectedJson, type ContentAddressedStorage, type KeyProvider } from "@mn/storage";
-import { assertExecutionContextSources, assertModelContextLimit, createProtectedRuntimeStore, readProtectedRuntimePayload, saveExecutionContext, type ContextSourceValidator } from "@mn/worker";
+import { assertContextSource, assertExecutionContextSources, assertModelContextLimit, createProtectedRuntimeStore, readProtectedRuntimePayload, saveExecutionContext, type ContextSourceValidator } from "@mn/worker";
 import type { RuntimeRecord } from "@mn/agent-runtime";
 import { advanceGoal, getGoal, getGoalForCoordination, observeGoalInBackground, GOAL_NAMESPACE, GOAL_PLAN_NAMESPACE, type GoalApplicationPorts, type GoalMutationOptions, type GoalScope, type GoalServiceOptions } from "./goals.js";
 import { executionMetering } from "./execution-metering.js";
@@ -34,6 +34,15 @@ interface GoalResult { readonly id: string; readonly tenantId: string; readonly 
 function fail(code: string, message: string): never { throw new KernelError(code, message, "刷新目标、资料和执行状态后重试"); }
 function scopeOf(goal: GoalV2): GoalScope { return { tenantId: goal.tenantId, workspaceId: goal.workspaceId, principalId: goal.principalId }; }
 export function assertGoalResource(tx: KernelTransaction, scope: GoalScope, ref: GoalResourceRefV2, validateSource?: ContextSourceValidator): void {
+  if (ref.namespace === "asset") {
+    try { assertContextSource(tx,scope,ref,validateSource); }
+    catch (error) {
+      if (error instanceof KernelError && error.code === "CONTEXT_SOURCE_REVOKED") fail("GOAL_RESOURCE_REVOKED", "目标资料已删除或撤权");
+      if (error instanceof KernelError && error.code === "CONTEXT_SOURCE_CHANGED") fail("GOAL_RESOURCE_CHANGED", "目标资料或版本已变化");
+      throw error;
+    }
+    return;
+  }
   if (validateSource?.(tx, scope, ref)) return;
   const value = tx.getProjection<{ tenantId?: string; workspaceId: string; streamVersion: number; digest?: string; protectedPayloadRef?: string; protected?: boolean }>(ref.namespace, ref.resourceId);
   if (ref.namespace === "coding.execution") {
@@ -236,7 +245,7 @@ export function createHostGoalRuntime(options: HostGoalRuntimeOptions) {
       const materialBytes = Math.floor(16 * 1024 / Math.max(1, assetRefs.length));
       for (const ref of assetRefs) {
         const asset = await options.store.transact(scope.tenantId, tx => { assertGoalResource(tx, scope, ref, options.validateContextSource); return tx.getProjection<Asset>('asset', ref.resourceId)!; });
-        const extraction = await readAssetExtraction({ store: options.store, cas: options.cas, protectedPayloadKeyProvider: options.keyProvider, tenantId: scope.tenantId, principalId: scope.principalId, asset });
+        const extraction = await readAssetExtraction({ store: options.store, cas: options.cas, protectedPayloadKeyProvider: options.keyProvider, tenantId: scope.tenantId, principalId: scope.principalId, asset, validateContextSource: options.validateContextSource });
         if (extraction.status === 'unreadable' || !extraction.blocks.length) fail('GOAL_MATERIAL_UNREADABLE', '资料未提取出可用内容');
         const blocks = selectMaterialBlocks(extraction.blocks, materialQuery, materialBytes);
         const selection = { strategy: 'keyword-v1' as const, queryDigest: sha256(materialQuery), totalBlockCount: extraction.blocks.length, maxBytes: materialBytes };

@@ -1,3 +1,5 @@
+import { mcpMutationSchema } from './mcp-api-schema.js';
+import { createGoalExportSchema } from './goal-export-api-schema.js';
 import { followupMutationSchema } from './followup-api-schema.js';
 import { teamSkillVersionCreateSchema, teamSkillEvaluationRegisterSchema, teamSkillEvaluationSubmitSchema, teamSkillCommandSchema } from './team-skill-api-schema.js';
 import { CORE_API_ROUTES } from "./api.js";
@@ -37,6 +39,18 @@ export const API_OPERATIONS_V2 = [
   { method: "get", path: "/v2/workspaces/{workspaceId}/goals", operationId: "listGoals", mutation: false, versioned: false },
   { method: "get", path: "/v2/workspaces/{workspaceId}/team-templates", operationId: "listTeamTemplates", mutation: false, versioned: false },
   { method: "post", path: "/v2/workspaces/{workspaceId}/goals", operationId: "createGoal", mutation: true, versioned: false },
+  { method: "get", path: "/v2/goals/{goalId}/assignment", operationId: "getGoalAssignment", mutation: false, versioned: false },
+  { method: "put", path: "/v2/goals/{goalId}/assignment", operationId: "setGoalAssignment", mutation: true, versioned: true },
+  { method: "post", path: "/v2/notifications/{notificationId}/commands", operationId: "commandNotification", mutation: true, versioned: true },
+  { method: "get", path: "/v2/goals/{goalId}/exports", operationId: "listGoalExports", mutation: false, versioned: false },
+  { method: "get", path: "/v2/goals/{goalId}/exports/{exportId}", operationId: "getGoalExport", mutation: false, versioned: false },
+  { method: "post", path: "/v2/goals/{goalId}/exports", operationId: "createGoalExport", mutation: true, versioned: true },
+  { method: "get", path: "/v2/workspaces/{workspaceId}/mcp/connections", operationId: "listMcpConnections", mutation: false, versioned: false },
+  { method: "post", path: "/v2/workspaces/{workspaceId}/mcp/connections", operationId: "createMcpConnection", mutation: true, versioned: true },
+  { method: "post", path: "/v2/workspaces/{workspaceId}/mcp/connections/{connectionId}/commands", operationId: "commandMcpConnection", mutation: true, versioned: true },
+  { method: "post", path: "/v2/workspaces/{workspaceId}/mcp/connections/{connectionId}/requests", operationId: "createMcpRequest", mutation: true, versioned: true },
+  { method: "get", path: "/v2/workspaces/{workspaceId}/mcp/requests", operationId: "listMcpRequests", mutation: false, versioned: false },
+  { method: "get", path: "/v2/workspaces/{workspaceId}/mcp/requests/{requestId}", operationId: "getMcpRequest", mutation: false, versioned: false },
   { method: "get", path: "/v2/goals/{goalId}", operationId: "getGoal", mutation: false, versioned: false },
   { method: "get", path: "/v2/goals/{goalId}/nodes", operationId: "getGoalNodes", mutation: false, versioned: false },
   { method: "post", path: "/v2/goals/{goalId}/plan-revisions", operationId: "proposeGoalPlan", mutation: true, versioned: true },
@@ -127,8 +141,10 @@ export const API_OPERATIONS_V2 = [
 ] as const satisfies readonly ApiOperationV2[];
 
 function successStatus(operationId: string): "200" | "201" | "202" {
-  if (operationId === "createTurn") return "202";
+  if (["createTurn", "createMcpRequest"].includes(operationId)) return "202";
   if ([
+    "createGoalExport",
+    "createMcpConnection",
     "createBusinessAction",
     "createBusinessCandidate",
     "createWorkspace",
@@ -190,7 +206,7 @@ export function createOpenApiDocument(): JsonObject {
       for (const name of ["generation", "fencingToken"]) parameters.push({ in: "query", name, required: true, schema: { type: "integer", minimum: 1 } });
     }
     if (["listInbox", "listMemories", "listDeliverables", "getHealth"].includes(operation.operationId)) parameters.push({ in: "query", name: "workspaceId", required: false, schema: { type: "string" } });
-    if (["listActivity", "getGoal", "getGoalNodes", "listOpcBusinessCandidates", "getOpcBusinessCandidate"].includes(operation.operationId)) parameters.push({ in: "query", name: "workspaceId", required: true, schema: { type: "string" } });
+    if (["getGoalAssignment", "listGoalExports", "getGoalExport", "listActivity", "getGoal", "getGoalNodes", "listOpcBusinessCandidates", "getOpcBusinessCandidate"].includes(operation.operationId)) parameters.push({ in: "query", name: "workspaceId", required: true, schema: { type: "string" } });
     if (operation.operationId === "listOpcBusinessCandidates") parameters.push({ in: "query", name: "goalId", required: false, schema: { type: "string" } });
     if (operation.operationId === "getBusinessContext") parameters.push(
       { in: "query", name: "version", required: false, schema: { type: "integer", minimum: 1 } },
@@ -439,7 +455,8 @@ export function createOpenApiDocument(): JsonObject {
                     type: "string",
                     enum: [
                       "text/plain", "text/markdown", "application/json", "text/csv",
-                      "application/pdf", "image/png", "image/jpeg", "image/webp",
+                      "application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "image/png", "image/jpeg", "image/webp",
                     ],
                   },
                   contentBase64: { type: "string", contentEncoding: "base64" },
@@ -589,6 +606,14 @@ export function createOpenApiDocument(): JsonObject {
 }
 
 function mutationSchema(operationId: string, versioned: boolean): JsonObject {
+  const mcp = mcpMutationSchema(operationId); if (mcp) return mcp;
+  if (operationId === 'createGoalExport') return createGoalExportSchema();
+  if (operationId === 'setGoalAssignment' || operationId === 'commandNotification') return {
+    type: 'object', additionalProperties: false, required: ['workspaceId', 'expectedStreamVersion', operationId === 'setGoalAssignment' ? 'responsiblePrincipalId' : 'command'],
+    properties: { workspaceId: { type: 'string', minLength: 1, maxLength: 200 }, expectedStreamVersion: { type: 'integer', minimum: 0 },
+      ...(operationId === 'setGoalAssignment' ? { responsiblePrincipalId: { anyOf: [{ type: 'null' }, { type: 'string', minLength: 1, maxLength: 200 }] } }
+        : { command: { enum: ['mark_read', 'mark_unread'] } }) }
+  };
   const followup = followupMutationSchema(operationId); if (followup) return followup;
   if (operationId === "createTeamSkillVersion") return teamSkillVersionCreateSchema();
   if (operationId === "registerTeamSkillEvaluation") return teamSkillEvaluationRegisterSchema();

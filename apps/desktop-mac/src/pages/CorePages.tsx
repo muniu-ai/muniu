@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Activity, AlertCircle, ArrowRight, Bot, Check, Clock3, FileCheck2, KeyRound, Lightbulb, ShieldCheck, Sparkles, X } from "lucide-react";
-import type { BusinessManagementViewV1, GoalV2, ProductNavigationV2 } from "@mn/contracts";
+import type { BusinessManagementViewV1, GoalV2, GoalListItemV2, ProductNavigationV2 } from "@mn/contracts";
 import type { AgentOsClient } from "../api";
 import { EmptyState } from "../components/Status";
 import { RunnerConfiguration } from "../components/RunnerConfiguration";
+import { assignmentLabel, NotificationActions } from "../components/TaskCollaboration";
 import { MemoryPanel } from "../components/MemoryPanel";
 import { ModelConnections } from "../components/ModelConnections";
 import type { ActivitySummary, AgentCatalog, CodingReconciliationDecision, CodingReconciliationView, DeliverableSummary, HomeSummary, InboxItemSummary, MemorySummary, ViewMode, WorkspaceMemberSummary, WorkspaceSummary } from "../types";
 
-export function HomePage({ summary, goals, business, onGoal, onObject, onNavigate }: { readonly summary: HomeSummary; readonly goals: readonly GoalV2[]; readonly business?: BusinessManagementViewV1; readonly onGoal: (id: string) => void; readonly onObject: (target?: ProductNavigationV2) => void; readonly onNavigate: (page: string) => void }) {
+export function HomePage({ summary, goals, business, onGoal, onObject, onNavigate }: { readonly summary: HomeSummary; readonly goals: readonly GoalListItemV2[]; readonly business?: BusinessManagementViewV1; readonly onGoal: (id: string) => void; readonly onObject: (target?: ProductNavigationV2) => void; readonly onNavigate: (page: string) => void }) {
   return <div className="page-stack">
     <section className="hero-panel">
       <div><p className="eyebrow">今天</p><h2>{summary.todayActions[0]?.title ?? "工作区已经就绪"}</h2><p>{summary.todayActions[0]?.detail ?? "描述经营或研发目标，补充资料，审阅执行计划后开始工作。"}</p></div>
@@ -34,7 +35,7 @@ export function HomePage({ summary, goals, business, onGoal, onObject, onNavigat
         </div>
       </section>
     </div>
-    <section className="panel"><PanelHeading title="正在推进" action="全部任务" onAction={() => onNavigate("goals")} /><div className="action-list">{goals.filter(goal => ["running", "waiting_approval", "pausing"].includes(goal.status)).map(goal => <button key={goal.id} onClick={() => onGoal(goal.id)}><span><strong>{goal.objective.split("\n")[0]}</strong><small>{goalStatus(goal)} · 额度 {goal.budget.currency} {goal.budget.maxCostMinorUnits} 分</small></span><ArrowRight size={16} /></button>)}</div>{!goals.some(goal => ["running", "waiting_approval", "pausing"].includes(goal.status)) && <p>暂无运行中的任务。</p>}</section>
+    <section className="panel"><PanelHeading title="正在推进" action="全部任务" onAction={() => onNavigate("goals")} /><div className="action-list">{goals.filter(goal => ["running", "waiting_approval", "pausing"].includes(goal.status)).map(goal => <button key={goal.id} onClick={() => onGoal(goal.id)}><span><strong>{goal.objective.split("\n")[0]}</strong><small>{goalStatus(goal)} · {assignmentLabel(goal.assignment)} · 额度 {goal.budget.currency} {goal.budget.maxCostMinorUnits} 分</small></span><ArrowRight size={16} /></button>)}</div>{!goals.some(goal => ["running", "waiting_approval", "pausing"].includes(goal.status)) && <p>暂无运行中的任务。</p>}</section>
     {business && <section className="panel"><PanelHeading title="经营关注" action="经营总览" onAction={() => onNavigate("opc")} /><div className="action-list">{business.summary.orders.filter(order => !order.accepted || BigInt(order.outstandingMinor) > 0n).slice(0, 8).map(order => <button key={order.orderId} onClick={() => onObject({ pluginId: "opc", resourceRef: { namespace: "opc.order", resourceId: order.orderId } })}><span><strong>{business.state.customers.find(customer => customer.id === business.state.orders.find(item => item.id === order.orderId)?.customerId)?.name ?? "订单"}</strong><small>{order.overdue ? "已逾期 · " : ""}交付 {order.deliveredPercent}% · {order.accepted ? "客户已验收" : "待客户验收"}</small></span><ArrowRight size={16} /></button>)}</div></section>}
     <section className="panel"><PanelHeading title="最近成果" action="查看全部" onAction={() => onNavigate("deliverables")} /><GoalDeliverables goals={goals} onGoal={onGoal} /><DeliverableList showEmpty={!goals.some(goal => goal.deliverySetId)} items={summary.recentDeliverables} onOpen={(item) => onObject(item.navigation)} /></section>
   </div>;
@@ -143,8 +144,9 @@ export function InboxPage({ workspaceId, summary, api, onChanged, onOpen }: { re
       <header><span className="pill risk"><AlertCircle size={13} />需要处理</span></header>
       <h3>{item.title}</h3><p className="intent">{item.summary}</p>
       {(item.navigation || item.kind === "credential") && <button className="secondary-button" onClick={() => onOpen(item)}>
-        {item.kind === "credential" ? "检查模型连接" : item.kind === "notice" ? "查看跟进任务" : "打开会话处理"}<ArrowRight size={15} />
+        {item.kind === "credential" ? "检查模型连接" : item.kind === "notice" ? (item.noticeType === "followup" ? "查看跟进任务" : "查看任务") : "打开会话处理"}<ArrowRight size={15} />
       </button>}
+      {item.kind === "notice" && <NotificationActions api={api} workspaceId={workspaceId} item={item} onChanged={()=>{void refreshInbox();void onChanged();}} /> }
       {item.revocationId && item.streamVersion !== undefined && <>
         <p>重新发起删除会永久销毁对应密钥，无法恢复。此操作仅限工作区所有者。</p>
         <button className="danger-button" disabled={busyId === item.id} onClick={() => void retryErasure(item)}>

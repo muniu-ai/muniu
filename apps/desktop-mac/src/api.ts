@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { apiPath, matchApiOperation, parseApiResponse, type ApiPath, type JsonApiOperationIdV2, type ApiOutputsV2 } from "@mn/contracts/client";
-import type { CreateTeamSkillVersionV2, RegisterTeamSkillEvaluationV2, SubmitTeamSkillEvaluationV2, CommandTeamSkillV2, CreateFollowupV2, CommandFollowupV2, TeamSkillRefV2 } from "@mn/contracts";
+import type { SetGoalAssignmentV2, CommandNotificationV2, CreateGoalExportV2, CreateMcpConnectionV2, CommandMcpConnectionV2, CreateMcpRequestV2, CreateTeamSkillVersionV2, RegisterTeamSkillEvaluationV2, SubmitTeamSkillEvaluationV2, CommandTeamSkillV2, CreateFollowupV2, CommandFollowupV2, TeamSkillRefV2 } from "@mn/contracts";
 import type { AgentSchedulingRequestV2, GoalDeliveryItemDecisionV2, GoalReworkPreviewV2, OpcBusinessCandidateDetailV2, OpcBusinessCandidateOriginV2, GoalUsageV2, BusinessCommandV1, BusinessPeriodV1, BusinessContextTargetV2, CodingRunnerId, ExternalCodingRunnerId, ConfirmCodingRunnerMutationBodyV2, GoalBudgetV2, GoalDeliverableSpecV2, GoalDetailV2, GoalResourceRefV2, GoalResponseV2, ProposeTeamGoalPlanV2 } from "@mn/contracts";
 import type {
   AgentThreadSummary,
@@ -59,6 +59,18 @@ export class AgentOsClient {
   }
   goals(workspaceId: string) { return this.request(apiPath("listGoals", { workspaceId })); }
   goal(workspaceId: string, goalId: string) { return this.request(apiPath("getGoal", { goalId }, { workspaceId })); }
+  goalAssignment(workspaceId: string, goalId: string) { return this.request(apiPath("getGoalAssignment", {goalId}, {workspaceId})); }
+  setGoalAssignment(goalId: string, input: SetGoalAssignmentV2, key: string) { return this.request(apiPath("setGoalAssignment", {goalId}), {method:"PUT",headers:{"Idempotency-Key":key},body:JSON.stringify(input)}); }
+  commandNotification(notificationId: string, input: CommandNotificationV2, key: string) { return this.request(apiPath("commandNotification", {notificationId}), {method:"POST",headers:{"Idempotency-Key":key},body:JSON.stringify(input)}); }
+  goalExports(workspaceId: string, goalId: string) { return this.request(apiPath("listGoalExports", {goalId}, {workspaceId})); }
+  goalExport(workspaceId: string, goalId: string, exportId: string) { return this.request(apiPath("getGoalExport", {goalId,exportId}, {workspaceId})); }
+  createGoalExport(goalId: string, input: CreateGoalExportV2, key: string) { return this.request(apiPath("createGoalExport", {goalId}), {method:"POST",headers:{"Idempotency-Key":key},body:JSON.stringify(input)}); }
+  mcpRequests(workspaceId: string) { return this.request(apiPath("listMcpRequests", {workspaceId})); }
+  mcpConnections(workspaceId: string) { return this.request(apiPath("listMcpConnections", {workspaceId})); }
+  createMcpConnection(workspaceId: string, input: CreateMcpConnectionV2, key: string) { return this.request(apiPath("createMcpConnection", {workspaceId}), {method:"POST",headers:{"Idempotency-Key":key},body:JSON.stringify(input)}); }
+  commandMcpConnection(workspaceId: string, connectionId: string, input: CommandMcpConnectionV2, key: string) { return this.request(apiPath("commandMcpConnection", {workspaceId,connectionId}), {method:"POST",headers:{"Idempotency-Key":key},body:JSON.stringify(input)}); }
+  createMcpRequest(workspaceId: string, connectionId: string, input: CreateMcpRequestV2, key: string) { return this.request(apiPath("createMcpRequest", {workspaceId,connectionId}), {method:"POST",headers:{"Idempotency-Key":key},body:JSON.stringify(input)}); }
+  mcpRequest(workspaceId: string, requestId: string) { return this.request(apiPath("getMcpRequest", {workspaceId,requestId})); }
   teamTemplates(workspaceId: string) { return this.request(apiPath("listTeamTemplates", { workspaceId })); }
   goalNodes(workspaceId: string, goalId: string) { return this.request(apiPath("getGoalNodes", { goalId }, { workspaceId })); }
   createGoal(workspaceId: string, input: { threadId: string; objective: string; resourceRefs: readonly GoalResourceRefV2[]; budget: GoalBudgetV2; deliverables: readonly GoalDeliverableSpecV2[] }, requestKey?: string) {
@@ -329,11 +341,16 @@ export class AgentOsClient {
   }
   asset(assetId: string) { return this.request(apiPath("getAsset", { assetId })); }
   assetExtraction(assetId: string) { return this.request(apiPath("getAssetExtraction", { assetId })); }
-  async assetContent(assetId: string, signal?: AbortSignal): Promise<Blob> {
+  async assetContent(assetId: string, signal?: AbortSignal, expectedBytes?: number): Promise<Blob> {
     const response = await fetch(`${this.baseUrl}${apiPath("downloadAsset", { assetId })}`, { ...(signal ? { signal } : {}) });
     if (!response.ok) throw new AgentOsApiError({ code: `ASSET_HTTP_${response.status}`, message: "无法读取资料原文",
       action: "确认资料仍存在且拥有读取权限后重试", fieldIssues: [], traceId: response.headers.get("x-trace-id") ?? "unknown", retryable: response.status >= 500 }, response.status);
-    return response.blob();
+    if (expectedBytes === undefined) return response.blob();
+    if (!Number.isSafeInteger(expectedBytes) || expectedBytes < 1 || expectedBytes > 20 * 1024 * 1024 || (response.headers.has("content-length") && Number(response.headers.get("content-length")) !== expectedBytes) || !response.body) throw new Error("成果下载大小无效");
+    const reader = response.body.getReader(), parts: Uint8Array[] = []; let size = 0;
+    try { for (;;) { signal?.throwIfAborted(); const {value,done} = await reader.read(); if (done) break; size += value.byteLength; if (size > expectedBytes) { await reader.cancel(); throw new Error("成果下载超过记录大小"); } parts.push(value); } } finally { reader.releaseLock(); }
+    if (size !== expectedBytes) throw new Error("成果下载不完整");
+    return new Blob(parts, {type:response.headers.get("content-type")??"application/octet-stream"});
   }
   async uploadAsset(workspaceId: string, file: File, protectedValue: boolean, requestKey?: string) {
     const [asset] = await this.request(apiPath("createAssets", { }), {

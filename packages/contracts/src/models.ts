@@ -244,6 +244,7 @@ export interface Deliverable extends VersionedEntity {
 }
 
 export interface Asset extends VersionedEntity {
+  readonly provenance?: import('./asset-provenance.js').AssetProvenanceV2;
   readonly workspaceId: WorkspaceId;
   readonly digest: string;
   readonly mediaType: string;

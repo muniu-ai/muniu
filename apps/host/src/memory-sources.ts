@@ -1,10 +1,11 @@
+import { validateMcpContextSource } from './mcp-sources.js';
 // SPDX-License-Identifier: Apache-2.0
 import type { GoalResourceRefV2, MemoryProvenanceV2, Principal, Workspace, WorkspaceMembership } from '@mn/contracts';
 import { assertMemoryProvenance, KernelError, sha256, type KernelTransaction, type MemorySourceScope, type MemorySourceValidationPort } from '@mn/kernel';
 import { assertContextSource, assertExecutionContextSources, assertMemoryOriginExecution, createEncryptedMemoryReader, type EncryptedMemoryReaderOptions } from '@mn/worker';
 import { validateTeamSkillContextSource } from './team-skill-context.js';
 import { assertBusinessContextRef, isBusinessContextRef, validateBusinessContextSource } from './business-context.js';
-const currentMemorySource = (tx:KernelTransaction,scope:{tenantId:string;workspaceId:string},ref:GoalResourceRefV2) => validateTeamSkillContextSource(tx,scope,ref) || validateBusinessContextSource(tx,scope,ref);
+const currentMemorySource = (tx:KernelTransaction,scope:{tenantId:string;workspaceId:string},ref:GoalResourceRefV2) => validateMcpContextSource(tx,scope,ref) || validateTeamSkillContextSource(tx,scope,ref) || validateBusinessContextSource(tx,scope,ref);
 export function assertMemoryWorkspace(tx: KernelTransaction, scope: MemorySourceScope, access: 'view'|'operate'|'review'|'owner'='view'): void {
  const workspace=tx.getProjection<Workspace>('workspace',scope.workspaceId),principal=tx.getProjection<Principal>('principal',scope.principalId);
  const member=tx.getProjection<WorkspaceMembership>('membership',`${scope.workspaceId}:${scope.principalId}`);

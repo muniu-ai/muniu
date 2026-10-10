@@ -4,6 +4,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import "./ci-prerequisites.test.mjs";
 import "./secret-scanning.test.mjs";
+import "./npm-license-evidence.test.mjs";
 
 import {
   findSecretFindings,

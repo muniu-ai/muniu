@@ -116,6 +116,9 @@ test("Helm chart deploys matching Host and Worker replicas with fail-closed read
   assert.match(config, /production worker requires vault\.address/u);
   assert.match(worker, /MN_VAULT_TOKEN/u);
   assert.match(values, /supportedKinds:\n\s+- system\.noop\n\s+- agent\.execution\.run/u);
+  assert.match(values, /- mcp\.resource\.read/u);
+  assert.match(read("deploy/helm/muniu/values-industry.example.yaml"), /- mcp\.resource\.read/u);
+  assert.doesNotMatch(read("deploy/helm/muniu/values-kind.yaml"), /- mcp\.resource\.read/u);
   assert.match(values, /pluginRepository:\n\s+enabled:\s+false/u);
   assert.match(config, /MN_PLUGIN_REPOSITORY_INDEX/u);
   assert.match(config, /MN_PLUGIN_TRUSTED_ROOTS/u);
@@ -320,7 +323,8 @@ test("enterprise Worker ships a production Agent execution bootstrap", async (t)
   assert.match(host, /MN_WORKER_SUPPORTED_KINDS/u);
   assert.equal(typeof handlers["agent.execution.run"], "function");
   assert.deepEqual(module.supportedKinds, ["system.noop", "agent.execution.run",
-    "coding.reconciliation.verify", "coding.sandbox.cleanup"]);
+    "mcp.resource.read", "coding.reconciliation.verify", "coding.sandbox.cleanup"]);
+  assert.equal(typeof handlers["mcp.resource.read"], "function");
   assert.equal(typeof handlers["coding.reconciliation.verify"], "function");
   assert.equal(typeof handlers["coding.sandbox.cleanup"], "function");
   assert.match(builtin, /VaultModelSecretStore/u);

@@ -19,7 +19,8 @@ const templates = [
   { label: "排查问题", kind: "coding", objective: "排查并修复以下问题：\n\n复现步骤：\n实际表现：\n预期表现：", criteria: "说明原因和影响范围\n用回归检查证明修复有效\n不修改无关功能" },
 ] as const;
 
-export function TaskComposer({ api, workspaceId, pluginIds, repositories, repositoryId, onRepository, onRegisterRepository, onCreated, onSettings, visible, businessTarget, skillTrial }: {
+export function TaskComposer({ api, workspaceId, pluginIds, repositories, repositoryId, onRepository, onRegisterRepository, onCreated, onSettings, visible, businessTarget, skillTrial, importedMaterials }: {
+  readonly importedMaterials?: {readonly refs:readonly GoalResourceRefV2[];readonly sequence:number};
   readonly skillTrial?: { readonly version: TeamSkillVersionV2; readonly sequence: number };
   readonly businessTarget?: BusinessContextTargetV2 & { readonly sequence: number };
   readonly visible: boolean; readonly api: AgentOsClient; readonly workspaceId: string; readonly pluginIds: readonly string[];
@@ -131,6 +132,30 @@ export function TaskComposer({ api, workspaceId, pluginIds, repositories, reposi
     try { await prepareMaterial(material); }
     finally { readLock.current = false; if (mounted.current) setReading(false); }
   }
+
+  const importEpoch = useRef(0);
+  useEffect(() => {
+    if (!importedMaterials) return;
+    if (locked || readLock.current) { setError("当前资料仍在准备，请完成后重新选入 MCP 资料。"); return; }
+    const request = ++importEpoch.current; readLock.current = true; setReading(true); setError(undefined);
+    void (async () => {
+      try {
+        const refs = importedMaterials.refs.filter(ref => !materials.some(item => item.asset?.id === ref.resourceId));
+        if (materials.length + refs.length > 6) throw new Error("最多添加 6 份资料，请先移除不需要的内容。");
+        const additions: Material[] = [];
+        for (const ref of refs) {
+          const asset = await api.asset(ref.resourceId);
+          if (ref.namespace !== "asset" || asset.workspaceId !== workspaceId || !asset.protected || asset.streamVersion !== ref.streamVersion || asset.digest !== ref.digest) throw new Error("导入资料的版本或权限已变化，请重新读取。");
+          const extraction = await api.assetExtraction(asset.id);
+          if (extraction.assetRef.digest !== ref.digest || extraction.assetRef.streamVersion !== ref.streamVersion) throw new Error("资料提取版本不一致");
+          additions.push({id:crypto.randomUUID(),name:asset.fileName,file:new File([],asset.fileName,{type:asset.mediaType}),text:"",asset,extraction,status:"ready"});
+        }
+        if (mounted.current && request === importEpoch.current) setMaterials(items => [...items,...additions]);
+      } catch(caught) { if (mounted.current && request === importEpoch.current) setError(caught instanceof AgentOsApiError ? caught.detail.message : (caught as Error).message); }
+      finally { if (request === importEpoch.current) {readLock.current=false;if(mounted.current)setReading(false);} }
+    })();
+    return () => { importEpoch.current++; readLock.current=false; };
+  }, [importedMaterials?.sequence]);
 
   async function addFiles(files: readonly File[]) {
     if (readLock.current || locked) return;

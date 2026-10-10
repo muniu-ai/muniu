@@ -1,3 +1,4 @@
+import { validateHostContextSource } from './context-source-validation.js';
 // SPDX-License-Identifier: Apache-2.0
 import type { Execution, FollowupPolicyV2, FollowupRunV2, GoalPlanRevisionV2, GoalResourceRefV2, GoalV2, Job, Principal, Workspace, WorkspaceMembership } from '@mn/contracts';
 import { KernelError, sha256, type KernelTransaction, type ModelConnection } from '@mn/kernel';
@@ -30,7 +31,7 @@ export function followupGrantDigest(tx: KernelTransaction, policy: FollowupStore
 export function followupResources(tx: KernelTransaction, policy: FollowupStoredPolicy, selected?: readonly GoalResourceRefV2[]): void {
   const scope = { tenantId: policy.tenantId, workspaceId: policy.workspaceId, principalId: policy.principalId }, watch = policy.definition.trigger.sourceRef;
   for (const ref of selected ?? policy.definition.resourceRefs) {
-    if (ref.namespace === 'asset') assertAssetReader(tx, scope, ref);
+    if (ref.namespace === 'asset') assertAssetReader(tx, scope, ref, validateHostContextSource);
     else if (isBusinessContextRef(ref)) {
       const dynamic = !selected && ref.namespace === watch.namespace && ref.resourceId === watch.resourceId;
       readBusinessContext(tx, scope, dynamic ? { kind: ref.namespace.slice('opc.business.'.length) as 'customer', resourceId: ref.resourceId } : ref);

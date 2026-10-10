@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
+import { randomUUID } from "node:crypto";
+import { lazyVaultMcpSecretStore } from "./lib/enterprise-mcp-secrets.mjs";
 
 import { createNodePublicWebReader } from "@mn/plugin-opc";
-import { createEnterpriseFilePluginRepository, createSignedWorkerResolver, createOpcModelContextReader, assertGoalExecutionResources, validateHostContextSource, createHostMemoryReader } from "@mn/host";
+import { createMcpWorkerPorts, createEnterpriseFilePluginRepository, createSignedWorkerResolver, createOpcModelContextReader, assertGoalExecutionResources, validateHostContextSource, createHostMemoryReader } from "@mn/host";
 import {
   createCodingReconciliationVerificationWorkerHandler,
   createCodingSandboxCleanupWorkerHandler,
   createKernelAgentTurnHandler,
+  createMcpReadWorkerHandler,
   createInClusterKubernetesApi,
   KubernetesCodingExecutor,
   UnknownExternalSideEffectError,
@@ -18,7 +21,7 @@ const fixtureMode = process.env.MN_WORKER_FIXTURE_MODE === "true";
 export const supportedKinds = Object.freeze([
   "system.noop",
   "agent.execution.run",
-  ...(!fixtureMode ? ["coding.reconciliation.verify", "coding.sandbox.cleanup"] : []),
+  ...(!fixtureMode ? ["mcp.resource.read", "coding.reconciliation.verify", "coding.sandbox.cleanup"] : []),
   ...(fixtureMode ? [
     "fixture.echo",
     "fixture.wait",
@@ -125,6 +128,11 @@ export async function createHandlers(context) {
   return Object.freeze({
     ...common,
     "agent.execution.run": turnHandler,
+    "mcp.resource.read": createMcpReadWorkerHandler(createMcpWorkerPorts({ store: context.store, cas: context.cas,
+      keyProvider: context.protectedPayloadKeyProvider, protectedJournal: true, now: () => new Date().toISOString(), id: () => randomUUID(),
+      secrets: context.mcpSecrets ?? lazyVaultMcpSecretStore(() => ({ address: process.env.MN_VAULT_ADDR, token: process.env.MN_VAULT_TOKEN,
+        mount: process.env.MN_VAULT_KV_MOUNT ?? "secret", namespace: process.env.MN_VAULT_NAMESPACE })),
+      ...(context.mcpTransport ? { transport: context.mcpTransport } : {}) })),
     "coding.reconciliation.verify": createCodingReconciliationVerificationWorkerHandler({
       store: context.store, sandboxRoot: `${sandboxRoot}/candidates`, commandExecutor: executor, runtimeProtection,
     }),

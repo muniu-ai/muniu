@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readExportBytes, saveExportFile } from "./export-file.js";
 import { randomUUID } from "node:crypto";
 import { apiPath, operationInputFields, matchApiOperation, parseApiResponse, type ApiPath, type JsonApiOperationIdV2, type ApiOutputsV2 } from "@mn/contracts/client";
 import { homedir } from "node:os";
@@ -36,6 +37,8 @@ const HELP = `木牛 Agent OS 0.2
   memory            审阅记忆提案与来源
   followup          显式启用、暂停和停止业务跟进
   goal              管理目标、计划和成果验收
+  mcp               授权只读资料连接、发现和导入
+  notification      标记本地通知已读或未读
   asset             上传受保护资料、查看提取内容与来源位置
   business          读取客户、订单、交付和复盘的版本资料
   backup            创建、校验或恢复本地加密备份
@@ -53,6 +56,24 @@ const HELP = `木牛 Agent OS 0.2
   mn asset upload --workspace <工作区 ID> --file <资料路径> [--key <上传请求标识>] --json
   mn asset extract <资料 ID> --json
   mn business context <customer|service|quote|order|delivery|review> <对象 ID> --workspace <工作区 ID> --json
+
+责任与文件交付：
+  mn goal assignment <目标 ID> --workspace <工作区 ID>
+  mn goal assign <目标 ID> --workspace <工作区 ID> --version <责任版本> --responsible <成员 ID> [--key <幂等键>]
+  mn goal unassign <目标 ID> --workspace <工作区 ID> --version <责任版本> [--key <幂等键>]
+  mn goal exports <目标 ID> --workspace <工作区 ID>
+  mn goal export <目标 ID> --workspace <工作区 ID> --plan <计划 ID> --delivery-set <成果集 ID> --output-key <成果项> --output-digest <摘要> --format pdf|docx|xlsx [--key <幂等键>]
+  mn goal export-save <目标 ID> --workspace <工作区 ID> --export <导出 ID> --output <新文件路径>
+  mn notification read|unread <通知 ID> --workspace <工作区 ID> --version <通知版本> [--key <幂等键>]
+
+MCP 只读连接：
+  mn mcp list --workspace <工作区 ID>
+  mn mcp requests --workspace <工作区 ID>
+  mn mcp create --workspace <工作区 ID> --file <授权 JSON> [--key <幂等键>]
+  mn mcp enable|disable <连接 ID> --workspace <工作区 ID> --version <连接版本> [--key <幂等键>]
+  mn mcp rotate <连接 ID> --workspace <工作区 ID> --version <连接版本> --credential-file <凭据文件> [--key <幂等键>]
+  mn mcp request <连接 ID> --workspace <工作区 ID> --version <连接版本> --file <读取请求 JSON> [--key <幂等键>]
+  mn mcp show <读取请求 ID> --workspace <工作区 ID>
 
 目标与验收：
   mn goal list --workspace <工作区 ID>
@@ -195,11 +216,16 @@ class ApiClient {
     return this.request(path, { method: "GET" });
   }
 
+  async exportContent(assetId: string, byteLength: number): Promise<Buffer> {
+    const response=await this.fetchImplementation(`${this.baseUrl}${apiPath("downloadAsset",{assetId})}`,{method:"GET"});
+    if(!response.ok) throw new ApiRequestError({code:"EXPORT_DOWNLOAD_DENIED",message:`成果下载失败（${response.status}）`,action:"核对来源权限后重试",fieldIssues:[],traceId:response.headers.get("X-Trace-Id")??"unknown",retryable:response.status>=500},response.status);
+    return readExportBytes(response,byteLength);
+  }
   async readiness(): Promise<ApiOutputsV2["getReadiness"]> {
     return this.request(apiPath("getReadiness", { }), { method: "GET" }, new Set([503]));
   }
 
-  async mutate<K extends JsonApiOperationIdV2>(path: ApiPath<K>, body: unknown, method: "POST" | "PATCH" | "DELETE" = "POST", requestKey?: string): Promise<ApiOutputsV2[K]> {
+  async mutate<K extends JsonApiOperationIdV2>(path: ApiPath<K>, body: unknown, method: "POST" | "PUT" | "PATCH" | "DELETE" = "POST", requestKey?: string): Promise<ApiOutputsV2[K]> {
     return this.request(path, {
       method,
       headers: {
@@ -389,9 +415,35 @@ async function businessCandidate(parsed: ParsedArguments, api: ApiClient): Promi
  return {command:`business candidate ${action}`,data,human:JSON.stringify(data,null,2)};
 }
 
+async function goalDeliveryCommand(parsed:ParsedArguments,api:ApiClient):Promise<CliResult>{
+ const action=parsed.positional[0]!,goalId=parsed.positional[1],workspaceId=flag(parsed,"workspace",true)!;
+ if(!goalId)throw new CliUsageError("缺少目标 ID");let data:unknown;
+ if(action==="assignment"||action==="exports"){assertAllowedFlags(parsed,["workspace"]);data=action==="assignment"?await api.get(apiPath("getGoalAssignment",{goalId},{workspaceId})):await api.get(apiPath("listGoalExports",{goalId},{workspaceId}));}
+ else if(action==="assign"||action==="unassign"){assertAllowedFlags(parsed,["workspace","version","responsible","key"]);flag(parsed,"version",true);const version=integerFlag(parsed,"version",0);if(version<0)throw new CliUsageError("责任版本不能为负数");if(action==="unassign"&&parsed.flags.has("responsible"))throw new CliUsageError("取消分配不能指定负责人");data=await api.mutate(apiPath("setGoalAssignment",{goalId}),{workspaceId,expectedStreamVersion:version,responsiblePrincipalId:action==="assign"?flag(parsed,"responsible",true)!:null},"PUT",flag(parsed,"key"));}
+ else if(action==="export"){assertAllowedFlags(parsed,["workspace","plan","delivery-set","output-key","output-digest","format","key"]);const format=flag(parsed,"format",true)!;if(!["pdf","docx","xlsx"].includes(format))throw new CliUsageError("导出格式只能是 pdf、docx 或 xlsx");data=await api.mutate(apiPath("createGoalExport",{goalId}),{workspaceId,expectedStreamVersion:0,planRevisionId:flag(parsed,"plan",true)!,deliverySetId:flag(parsed,"delivery-set",true)!,outputKey:flag(parsed,"output-key",true)!,outputDigest:flag(parsed,"output-digest",true)!,format},"POST",flag(parsed,"key"));}
+ else{assertAllowedFlags(parsed,["workspace","export","output"]);const output=flag(parsed,"output",true)!,record=await api.get(apiPath("getGoalExport",{goalId,exportId:flag(parsed,"export",true)!},{workspaceId}));const bytes=await api.exportContent(record.assetRef.resourceId,record.byteLength);await saveExportFile(record,bytes,output);data={exportId:record.id,saved:true,fileName:basename(output),byteLength:record.byteLength,contentSha256:record.contentSha256};}
+ return{command:`goal ${action}`,data,human:JSON.stringify(data,null,2)};
+}
+async function notificationCommand(parsed:ParsedArguments,api:ApiClient):Promise<CliResult>{
+ assertAllowedFlags(parsed,["workspace","version","key"]);const action=parsed.positional[0],notificationId=parsed.positional[1];if(!notificationId||!action||!["read","unread"].includes(action))throw new CliUsageError("notification 支持 read、unread，必须指定通知 ID");flag(parsed,"version",true);const version=integerFlag(parsed,"version",0);if(version<0)throw new CliUsageError("通知版本不能为负数");const data=await api.mutate(apiPath("commandNotification",{notificationId}),{workspaceId:flag(parsed,"workspace",true)!,expectedStreamVersion:version,command:action==="read"?"mark_read":"mark_unread"},"POST",flag(parsed,"key"));return{command:`notification ${action}`,data,human:JSON.stringify(data,null,2)};
+}
+async function mcpCommand(parsed:ParsedArguments,api:ApiClient):Promise<CliResult>{
+ const action=parsed.positional[0]??"list",workspaceId=flag(parsed,"workspace",true)!,id=parsed.positional[1];let data:unknown;
+ if(action==="list"||action==="requests"){assertAllowedFlags(parsed,["workspace"]);data=await api.get(apiPath(action==="list"?"listMcpConnections":"listMcpRequests",{workspaceId}));}
+ else if(action==="show"){assertAllowedFlags(parsed,["workspace"]);if(!id)throw new CliUsageError("缺少读取请求 ID");data=await api.get(apiPath("getMcpRequest",{workspaceId,requestId:id}));}
+ else if(action==="create"){assertAllowedFlags(parsed,["workspace","file","key"]);data=await api.mutate(apiPath("createMcpConnection",{workspaceId}),{...await goalFile(parsed),expectedStreamVersion:0},"POST",flag(parsed,"key"));}
+ else {if(!id)throw new CliUsageError("缺少 MCP 连接 ID");flag(parsed,"version",true);const expectedStreamVersion=integerFlag(parsed,"version",0);if(expectedStreamVersion<1)throw new CliUsageError("连接版本必须为正整数");
+  if(action==="request"){assertAllowedFlags(parsed,["workspace","version","file","key"]);data=await api.mutate(apiPath("createMcpRequest",{workspaceId,connectionId:id}),{...await goalFile(parsed),expectedStreamVersion},"POST",flag(parsed,"key"));}
+  else if(["enable","disable","rotate"].includes(action)){assertAllowedFlags(parsed,["workspace","version","credential-file","key"]);if(action!=="rotate"&&parsed.flags.has("credential-file"))throw new CliUsageError("只有更新凭据使用 --credential-file");const bearerToken=action==="rotate"?(await readFile(flag(parsed,"credential-file",true)!,"utf8")).trim():undefined;if(action==="rotate"&&(!bearerToken||bearerToken.length>16384))throw new CliUsageError("凭据文件为空或过大");data=await api.mutate(apiPath("commandMcpConnection",{workspaceId,connectionId:id}),{expectedStreamVersion,command:action==="rotate"?"rotate_credential":action,...(bearerToken?{bearerToken}:{})},"POST",flag(parsed,"key"));}
+  else throw new CliUsageError("mcp 支持 list、requests、create、enable、disable、rotate、request、show");
+ }
+ return{command:`mcp ${action}`,data,human:JSON.stringify(data,null,2)};
+}
+
 async function goal(parsed: ParsedArguments, api: ApiClient): Promise<CliResult> {
   const action = parsed.positional[0] ?? "list";
   const command = `goal ${action}`;
+  if (["assignment","assign","unassign","exports","export","export-save"].includes(action)) return goalDeliveryCommand(parsed,api);
   if (action === "templates") {
     assertAllowedFlags(parsed, ["workspace"]);
     const data = await api.get(apiPath("listTeamTemplates", { workspaceId: flag(parsed, "workspace", true)! }));
@@ -1262,6 +1314,8 @@ export async function runCli(arguments_: readonly string[], dependencies: CliDep
       case "opc": result = await opc(parsed, api); break;
       case "code": result = await code(parsed, api); break;
       case "skill": case "memory": case "followup": result = await reuseCommand(command as "skill" | "memory" | "followup", parsed, api); break;
+      case "mcp": result = await mcpCommand(parsed, api); break;
+      case "notification": result = await notificationCommand(parsed, api); break;
       case "goal": result = await goal(parsed, api); break;
       case "asset": result = await assetCommand(parsed, api); break;
       case "business": result = await businessContext(parsed, api); break;

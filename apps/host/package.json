@@ -37,9 +37,15 @@
     "@mn/worker": "0.2.0",
     "pdfjs-dist": "6.4.299",
     "saxes": "6.0.0",
-    "yauzl": "3.4.0"
+    "yauzl": "3.4.0",
+    "pdfkit": "0.20.2",
+    "fontkit": "2.0.4",
+    "yazl": "3.3.1"
   },
   "devDependencies": {
-    "@types/yauzl": "3.4.0"
+    "@types/yauzl": "3.4.0",
+    "@types/pdfkit": "0.17.6",
+    "@types/yazl": "3.3.1",
+    "@types/fontkit": "2.0.8"
   }
 }

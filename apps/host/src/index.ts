@@ -28,3 +28,8 @@ export * from "./memory-sources.js";
 export * from "./memory-api.js";
 
 export { validateHostContextSource, validateHistoricalHostContextSource } from "./context-source-validation.js";
+
+export { createMcpWorkerPorts } from "./mcp-resources.js";
+export type { McpOptions } from "./mcp-resources.js";
+export type { McpSecretStore, McpSecretScope } from "./mcp-sources.js";
+export type { McpTransport } from "./mcp-transport.js";

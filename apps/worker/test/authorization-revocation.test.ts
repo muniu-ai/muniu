@@ -17,6 +17,7 @@ async function fixture(t: TestContext, hooks: {
   readonly quote?: () => Promise<void>;
   readonly revalidate?: () => Promise<void>;
   readonly execute?: () => Promise<void>;
+  readonly context?: (execution: Execution | undefined) => void;
 } = {}) {
   const root = await mkdtemp(join(tmpdir(), "muniu-revocation-"));
   const store = new SqliteStorage({ databaseFile: join(root, "state.sqlite3"), hmacKey: Buffer.alloc(32, 1) });
@@ -45,6 +46,7 @@ async function fixture(t: TestContext, hooks: {
   const handler = createKernelAgentTurnHandler({ store, runtimeProtection: protection, now: () => NOW,
     controlPollIntervalMs: 60_000, approvalPollIntervalMs: 1,
     secretStore: { read: async () => "fixture-secret" },
+    resolveThreadContext: async (...args: unknown[]) => { hooks.context?.(args[1] as Execution | undefined); return undefined; },
     modelQuoter: async () => {
       await hooks.quote?.();
       return { inputTokenLimit: 10, maxOutputTokens: 10, rates: { id: "fixture", currency: "CNY",
@@ -179,4 +181,14 @@ test("工具在途取消会阻断后续模型请求，并保留待核对状态",
   assert.equal(f.modelCalls(), 1);
   assert.equal(f.toolCalls(), 1);
   assert.equal((await f.worker.pollOnce()).status, "idle");
+});
+
+
+test("资料读取回调绑定实际执行和发起人，不能借用会话中的其他身份", async t => {
+  let received: Execution | undefined;
+  const f = await fixture(t, { context: execution => { received = execution; throw new Error('fixture context stop'); } });
+  await f.worker.pollOnce();
+  assert.equal(received?.id, f.execution.id);
+  assert.equal(received?.initiatedBy, 'operator');
+  assert.equal(f.modelCalls(), 0);
 });

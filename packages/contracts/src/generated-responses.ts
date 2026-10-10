@@ -2,6 +2,51 @@
 // SPDX-License-Identifier: Apache-2.0
 import type { JsonObject } from "./json.js";
 export const API_OUTPUT_SCHEMAS_V2: Readonly<Record<string, JsonObject>> = {
+  "getGoalAssignment": {
+    "$ref": "#/components/schemas/OutputGoalAssignmentDetailV2"
+  },
+  "setGoalAssignment": {
+    "$ref": "#/components/schemas/OutputGoalAssignmentDetailV2"
+  },
+  "commandNotification": {
+    "$ref": "#/components/schemas/OutputInboxItemV2"
+  },
+  "listGoalExports": {
+    "type": "array",
+    "items": {
+      "$ref": "#/components/schemas/OutputGoalExportV2"
+    }
+  },
+  "getGoalExport": {
+    "$ref": "#/components/schemas/OutputGoalExportV2"
+  },
+  "createGoalExport": {
+    "$ref": "#/components/schemas/OutputGoalExportV2"
+  },
+  "listMcpConnections": {
+    "type": "array",
+    "items": {
+      "$ref": "#/components/schemas/OutputMcpConnectionV2"
+    }
+  },
+  "createMcpConnection": {
+    "$ref": "#/components/schemas/OutputMcpConnectionV2"
+  },
+  "commandMcpConnection": {
+    "$ref": "#/components/schemas/OutputMcpConnectionV2"
+  },
+  "createMcpRequest": {
+    "$ref": "#/components/schemas/OutputMcpRequestV2"
+  },
+  "listMcpRequests": {
+    "type": "array",
+    "items": {
+      "$ref": "#/components/schemas/OutputMcpRequestV2"
+    }
+  },
+  "getMcpRequest": {
+    "$ref": "#/components/schemas/OutputMcpRequestV2"
+  },
   "listTeamSkills": {
     "$ref": "#/components/schemas/OutputTeamSkillListV2"
   },
@@ -47,7 +92,7 @@ export const API_OUTPUT_SCHEMAS_V2: Readonly<Record<string, JsonObject>> = {
   "listGoals": {
     "type": "array",
     "items": {
-      "$ref": "#/components/schemas/OutputGoalV2"
+      "$ref": "#/components/schemas/OutputGoalListItemV2"
     }
   },
   "createGoal": {
@@ -507,6 +552,797 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
       "$ref": "#/components/schemas/OutputJsonValue"
     }
   },
+  "OutputGoalAssignmentV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "goalId",
+      "workspaceId",
+      "streamVersion",
+      "responsiblePrincipalId"
+    ],
+    "properties": {
+      "goalId": {
+        "type": "string"
+      },
+      "workspaceId": {
+        "type": "string"
+      },
+      "streamVersion": {
+        "type": "number"
+      },
+      "responsiblePrincipalId": {
+        "anyOf": [
+          {
+            "type": "null"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "updatedAt": {
+        "type": "string"
+      },
+      "updatedBy": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputWorkspaceRole": {
+    "anyOf": [
+      {
+        "type": "string",
+        "const": "owner"
+      },
+      {
+        "type": "string",
+        "const": "operator"
+      },
+      {
+        "type": "string",
+        "const": "reviewer"
+      },
+      {
+        "type": "string",
+        "const": "viewer"
+      }
+    ]
+  },
+  "OutputAssignmentMemberV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "principalId",
+      "displayName",
+      "workspaceRole",
+      "available"
+    ],
+    "properties": {
+      "principalId": {
+        "type": "string"
+      },
+      "displayName": {
+        "type": "string"
+      },
+      "workspaceRole": {
+        "$ref": "#/components/schemas/OutputWorkspaceRole"
+      },
+      "available": {
+        "anyOf": [
+          {
+            "type": "boolean",
+            "const": false
+          },
+          {
+            "type": "boolean",
+            "const": true
+          }
+        ]
+      },
+      "unavailableReason": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputGoalAssignmentSummaryV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "streamVersion",
+      "responsible"
+    ],
+    "properties": {
+      "streamVersion": {
+        "type": "number"
+      },
+      "responsible": {
+        "anyOf": [
+          {
+            "type": "null"
+          },
+          {
+            "$ref": "#/components/schemas/OutputAssignmentMemberV2"
+          }
+        ]
+      }
+    }
+  },
+  "OutputGoalAssignmentDetailV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "assignment",
+      "summary",
+      "members",
+      "allowedActions"
+    ],
+    "properties": {
+      "assignment": {
+        "$ref": "#/components/schemas/OutputGoalAssignmentV2"
+      },
+      "summary": {
+        "$ref": "#/components/schemas/OutputGoalAssignmentSummaryV2"
+      },
+      "members": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputAssignmentMemberV2"
+        }
+      },
+      "allowedActions": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "assign",
+          "clear"
+        ],
+        "properties": {
+          "assign": {
+            "anyOf": [
+              {
+                "type": "boolean",
+                "const": false
+              },
+              {
+                "type": "boolean",
+                "const": true
+              }
+            ]
+          },
+          "clear": {
+            "anyOf": [
+              {
+                "type": "boolean",
+                "const": false
+              },
+              {
+                "type": "boolean",
+                "const": true
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  "OutputResourceRef": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "namespace",
+      "resourceId"
+    ],
+    "properties": {
+      "namespace": {
+        "type": "string"
+      },
+      "resourceId": {
+        "type": "string"
+      },
+      "digest": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputInboxItemV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "tenantId",
+      "workspaceId",
+      "kind",
+      "title",
+      "summary",
+      "createdAt",
+      "status"
+    ],
+    "properties": {
+      "noticeType": {
+        "anyOf": [
+          {
+            "type": "string",
+            "const": "delivery"
+          },
+          {
+            "type": "string",
+            "const": "assignment"
+          },
+          {
+            "type": "string",
+            "const": "followup"
+          }
+        ]
+      },
+      "readState": {
+        "anyOf": [
+          {
+            "type": "string",
+            "const": "read"
+          },
+          {
+            "type": "string",
+            "const": "unread"
+          }
+        ]
+      },
+      "allowedActions": {
+        "type": "array",
+        "items": {
+          "anyOf": [
+            {
+              "type": "string",
+              "const": "mark_read"
+            },
+            {
+              "type": "string",
+              "const": "mark_unread"
+            }
+          ]
+        }
+      },
+      "id": {
+        "type": "string"
+      },
+      "tenantId": {
+        "type": "string"
+      },
+      "workspaceId": {
+        "type": "string"
+      },
+      "executionId": {
+        "type": "string"
+      },
+      "navigation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "pluginId",
+          "threadId"
+        ],
+        "properties": {
+          "pluginId": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "resourceRef": {
+            "$ref": "#/components/schemas/OutputResourceRef"
+          }
+        }
+      },
+      "revocationId": {
+        "type": "string"
+      },
+      "streamVersion": {
+        "type": "number"
+      },
+      "kind": {
+        "anyOf": [
+          {
+            "type": "string",
+            "const": "approval"
+          },
+          {
+            "type": "string",
+            "const": "agent_question"
+          },
+          {
+            "type": "string",
+            "const": "credential"
+          },
+          {
+            "type": "string",
+            "const": "failure"
+          },
+          {
+            "type": "string",
+            "const": "reconciliation"
+          },
+          {
+            "type": "string",
+            "const": "notice"
+          }
+        ]
+      },
+      "title": {
+        "type": "string"
+      },
+      "summary": {
+        "type": "string"
+      },
+      "risk": {
+        "type": "string"
+      },
+      "resourceSummary": {
+        "type": "string"
+      },
+      "expiresAt": {
+        "type": "string"
+      },
+      "createdAt": {
+        "type": "string"
+      },
+      "status": {
+        "anyOf": [
+          {
+            "type": "string",
+            "const": "open"
+          },
+          {
+            "type": "string",
+            "const": "resolved"
+          }
+        ]
+      }
+    }
+  },
+  "OutputGoalExportSourceV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "goalId",
+      "planRevisionId",
+      "deliverySetId",
+      "outputKey",
+      "outputDigest"
+    ],
+    "properties": {
+      "goalId": {
+        "type": "string"
+      },
+      "planRevisionId": {
+        "type": "string"
+      },
+      "deliverySetId": {
+        "type": "string"
+      },
+      "outputKey": {
+        "type": "string"
+      },
+      "outputDigest": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputGoalExportFormatV2": {
+    "anyOf": [
+      {
+        "type": "string",
+        "const": "pdf"
+      },
+      {
+        "type": "string",
+        "const": "docx"
+      },
+      {
+        "type": "string",
+        "const": "xlsx"
+      }
+    ]
+  },
+  "OutputGoalResourceRefV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "streamVersion",
+      "namespace",
+      "resourceId"
+    ],
+    "properties": {
+      "streamVersion": {
+        "type": "number"
+      },
+      "namespace": {
+        "type": "string"
+      },
+      "resourceId": {
+        "type": "string"
+      },
+      "digest": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputGoalExportV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "tenantId",
+      "workspaceId",
+      "goalId",
+      "streamVersion",
+      "source",
+      "format",
+      "fileName",
+      "mediaType",
+      "byteLength",
+      "contentSha256",
+      "assetRef",
+      "rendererVersion",
+      "accepted",
+      "createdAt"
+    ],
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "tenantId": {
+        "type": "string"
+      },
+      "workspaceId": {
+        "type": "string"
+      },
+      "goalId": {
+        "type": "string"
+      },
+      "streamVersion": {
+        "type": "number",
+        "const": 1
+      },
+      "source": {
+        "$ref": "#/components/schemas/OutputGoalExportSourceV2"
+      },
+      "format": {
+        "$ref": "#/components/schemas/OutputGoalExportFormatV2"
+      },
+      "fileName": {
+        "type": "string"
+      },
+      "mediaType": {
+        "type": "string"
+      },
+      "byteLength": {
+        "type": "number"
+      },
+      "contentSha256": {
+        "type": "string"
+      },
+      "assetRef": {
+        "$ref": "#/components/schemas/OutputGoalResourceRefV2"
+      },
+      "rendererVersion": {
+        "type": "string"
+      },
+      "fontSha256": {
+        "type": "string"
+      },
+      "accepted": {
+        "anyOf": [
+          {
+            "type": "boolean",
+            "const": false
+          },
+          {
+            "type": "boolean",
+            "const": true
+          }
+        ]
+      },
+      "createdAt": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputMcpConnectionV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "workspaceId",
+      "label",
+      "endpoint",
+      "protocolVersion",
+      "status",
+      "streamVersion",
+      "digest",
+      "credentialConfigured",
+      "expiresAt",
+      "uriPrefixes",
+      "maxRequests",
+      "usedRequests",
+      "allowedActions"
+    ],
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "workspaceId": {
+        "type": "string"
+      },
+      "label": {
+        "type": "string"
+      },
+      "endpoint": {
+        "type": "string"
+      },
+      "protocolVersion": {
+        "type": "string",
+        "const": "2026-07-28"
+      },
+      "status": {
+        "anyOf": [
+          {
+            "type": "string",
+            "const": "disabled"
+          },
+          {
+            "type": "string",
+            "const": "enabled"
+          }
+        ]
+      },
+      "streamVersion": {
+        "type": "number"
+      },
+      "digest": {
+        "type": "string"
+      },
+      "credentialConfigured": {
+        "anyOf": [
+          {
+            "type": "boolean",
+            "const": false
+          },
+          {
+            "type": "boolean",
+            "const": true
+          }
+        ]
+      },
+      "expiresAt": {
+        "type": "string"
+      },
+      "uriPrefixes": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "maxRequests": {
+        "type": "number"
+      },
+      "usedRequests": {
+        "type": "number"
+      },
+      "allowedActions": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "request",
+          "disable",
+          "enable",
+          "rotateCredential"
+        ],
+        "properties": {
+          "request": {
+            "anyOf": [
+              {
+                "type": "boolean",
+                "const": false
+              },
+              {
+                "type": "boolean",
+                "const": true
+              }
+            ]
+          },
+          "disable": {
+            "anyOf": [
+              {
+                "type": "boolean",
+                "const": false
+              },
+              {
+                "type": "boolean",
+                "const": true
+              }
+            ]
+          },
+          "enable": {
+            "anyOf": [
+              {
+                "type": "boolean",
+                "const": false
+              },
+              {
+                "type": "boolean",
+                "const": true
+              }
+            ]
+          },
+          "rotateCredential": {
+            "anyOf": [
+              {
+                "type": "boolean",
+                "const": false
+              },
+              {
+                "type": "boolean",
+                "const": true
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  "OutputMcpResourceV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "uri",
+      "name"
+    ],
+    "properties": {
+      "uri": {
+        "type": "string"
+      },
+      "name": {
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      },
+      "description": {
+        "type": "string"
+      },
+      "mimeType": {
+        "type": "string"
+      }
+    }
+  },
+  "OutputMcpResourceTemplateV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "uriTemplate",
+      "name",
+      "supported"
+    ],
+    "properties": {
+      "uriTemplate": {
+        "type": "string"
+      },
+      "name": {
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      },
+      "description": {
+        "type": "string"
+      },
+      "mimeType": {
+        "type": "string"
+      },
+      "supported": {
+        "anyOf": [
+          {
+            "type": "boolean",
+            "const": false
+          },
+          {
+            "type": "boolean",
+            "const": true
+          }
+        ]
+      }
+    }
+  },
+  "OutputMcpRequestV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "workspaceId",
+      "connectionId",
+      "streamVersion",
+      "kind",
+      "status"
+    ],
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "workspaceId": {
+        "type": "string"
+      },
+      "connectionId": {
+        "type": "string"
+      },
+      "streamVersion": {
+        "type": "number"
+      },
+      "kind": {
+        "anyOf": [
+          {
+            "type": "string",
+            "const": "resources"
+          },
+          {
+            "type": "string",
+            "const": "templates"
+          },
+          {
+            "type": "string",
+            "const": "read"
+          }
+        ]
+      },
+      "status": {
+        "anyOf": [
+          {
+            "type": "string",
+            "const": "queued"
+          },
+          {
+            "type": "string",
+            "const": "running"
+          },
+          {
+            "type": "string",
+            "const": "needs_reconciliation"
+          },
+          {
+            "type": "string",
+            "const": "completed"
+          },
+          {
+            "type": "string",
+            "const": "failed"
+          }
+        ]
+      },
+      "resources": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputMcpResourceV2"
+        }
+      },
+      "templates": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputMcpResourceTemplateV2"
+        }
+      },
+      "nextCursor": {
+        "type": "string"
+      },
+      "assetRefs": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputGoalResourceRefV2"
+        }
+      },
+      "reasonCode": {
+        "type": "string"
+      }
+    }
+  },
   "OutputTeamSkillSummaryV2": {
     "type": "object",
     "additionalProperties": false,
@@ -636,29 +1472,6 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
         "const": "code-delivery"
       }
     ]
-  },
-  "OutputGoalResourceRefV2": {
-    "type": "object",
-    "additionalProperties": false,
-    "required": [
-      "streamVersion",
-      "namespace",
-      "resourceId"
-    ],
-    "properties": {
-      "streamVersion": {
-        "type": "number"
-      },
-      "namespace": {
-        "type": "string"
-      },
-      "resourceId": {
-        "type": "string"
-      },
-      "digest": {
-        "type": "string"
-      }
-    }
   },
   "OutputTeamSkillRoleV2": {
     "type": "object",
@@ -3304,6 +4117,166 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
       }
     }
   },
+  "OutputGoalListItemV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "tenantId",
+      "workspaceId",
+      "principalId",
+      "threadId",
+      "objective",
+      "inputVersion",
+      "criteriaVersion",
+      "deliverables",
+      "resourceRefs",
+      "budget",
+      "status",
+      "streamVersion",
+      "createdAt",
+      "updatedAt",
+      "assignment"
+    ],
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "tenantId": {
+        "type": "string"
+      },
+      "workspaceId": {
+        "type": "string"
+      },
+      "principalId": {
+        "type": "string"
+      },
+      "threadId": {
+        "type": "string"
+      },
+      "objective": {
+        "type": "string"
+      },
+      "inputVersion": {
+        "type": "number"
+      },
+      "criteriaVersion": {
+        "type": "string"
+      },
+      "deliverables": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputGoalDeliverableSpecV2"
+        }
+      },
+      "resourceRefs": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputGoalResourceRefV2"
+        }
+      },
+      "budget": {
+        "$ref": "#/components/schemas/OutputGoalBudgetV2"
+      },
+      "status": {
+        "$ref": "#/components/schemas/OutputGoalStatusV2"
+      },
+      "streamVersion": {
+        "type": "number"
+      },
+      "createdAt": {
+        "type": "string"
+      },
+      "updatedAt": {
+        "type": "string"
+      },
+      "planRevisionId": {
+        "type": "string"
+      },
+      "executionRef": {
+        "$ref": "#/components/schemas/OutputGoalExecutionRefV2"
+      },
+      "coordinationRef": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "runId",
+          "planRevisionId"
+        ],
+        "properties": {
+          "runId": {
+            "type": "string"
+          },
+          "planRevisionId": {
+            "type": "string"
+          }
+        }
+      },
+      "reservation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "unknown"
+              },
+              {
+                "type": "string",
+                "const": "reserved"
+              },
+              {
+                "type": "string",
+                "const": "settled"
+              }
+            ]
+          },
+          "actual": {
+            "$ref": "#/components/schemas/OutputGoalUsageV2"
+          }
+        }
+      },
+      "authorization": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "planDigest",
+          "principalId",
+          "membershipStreamVersion"
+        ],
+        "properties": {
+          "planDigest": {
+            "type": "string"
+          },
+          "principalId": {
+            "type": "string"
+          },
+          "membershipStreamVersion": {
+            "type": "number"
+          }
+        }
+      },
+      "deliverySetId": {
+        "type": "string"
+      },
+      "acceptanceId": {
+        "type": "string"
+      },
+      "cancellationRequestedAt": {
+        "type": "string"
+      },
+      "reasonCode": {
+        "type": "string"
+      },
+      "assignment": {
+        "$ref": "#/components/schemas/OutputGoalAssignmentSummaryV2"
+      }
+    }
+  },
   "OutputGoalV2": {
     "type": "object",
     "additionalProperties": false,
@@ -3685,25 +4658,6 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
         "type": "string"
       },
       "evidenceDigest": {
-        "type": "string"
-      }
-    }
-  },
-  "OutputResourceRef": {
-    "type": "object",
-    "additionalProperties": false,
-    "required": [
-      "namespace",
-      "resourceId"
-    ],
-    "properties": {
-      "namespace": {
-        "type": "string"
-      },
-      "resourceId": {
-        "type": "string"
-      },
-      "digest": {
         "type": "string"
       }
     }
@@ -7281,26 +8235,6 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
       }
     ]
   },
-  "OutputWorkspaceRole": {
-    "anyOf": [
-      {
-        "type": "string",
-        "const": "owner"
-      },
-      {
-        "type": "string",
-        "const": "operator"
-      },
-      {
-        "type": "string",
-        "const": "reviewer"
-      },
-      {
-        "type": "string",
-        "const": "viewer"
-      }
-    ]
-  },
   "OutputWorkspaceMembership": {
     "type": "object",
     "additionalProperties": false,
@@ -7957,117 +8891,6 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
       }
     }
   },
-  "OutputInboxItemV2": {
-    "type": "object",
-    "additionalProperties": false,
-    "required": [
-      "id",
-      "tenantId",
-      "workspaceId",
-      "kind",
-      "title",
-      "summary",
-      "createdAt",
-      "status"
-    ],
-    "properties": {
-      "id": {
-        "type": "string"
-      },
-      "tenantId": {
-        "type": "string"
-      },
-      "workspaceId": {
-        "type": "string"
-      },
-      "executionId": {
-        "type": "string"
-      },
-      "navigation": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "pluginId",
-          "threadId"
-        ],
-        "properties": {
-          "pluginId": {
-            "type": "string"
-          },
-          "threadId": {
-            "type": "string"
-          },
-          "resourceRef": {
-            "$ref": "#/components/schemas/OutputResourceRef"
-          }
-        }
-      },
-      "revocationId": {
-        "type": "string"
-      },
-      "streamVersion": {
-        "type": "number"
-      },
-      "kind": {
-        "anyOf": [
-          {
-            "type": "string",
-            "const": "approval"
-          },
-          {
-            "type": "string",
-            "const": "agent_question"
-          },
-          {
-            "type": "string",
-            "const": "credential"
-          },
-          {
-            "type": "string",
-            "const": "failure"
-          },
-          {
-            "type": "string",
-            "const": "reconciliation"
-          },
-          {
-            "type": "string",
-            "const": "notice"
-          }
-        ]
-      },
-      "title": {
-        "type": "string"
-      },
-      "summary": {
-        "type": "string"
-      },
-      "risk": {
-        "type": "string"
-      },
-      "resourceSummary": {
-        "type": "string"
-      },
-      "expiresAt": {
-        "type": "string"
-      },
-      "createdAt": {
-        "type": "string"
-      },
-      "status": {
-        "anyOf": [
-          {
-            "type": "string",
-            "const": "open"
-          },
-          {
-            "type": "string",
-            "const": "resolved"
-          }
-        ]
-      }
-    }
-  },
   "OutputActivityV2": {
     "type": "object",
     "additionalProperties": false,
@@ -8096,6 +8919,104 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
       }
     }
   },
+  "OutputAssetProvenanceV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "version",
+      "kind",
+      "producer",
+      "sourceRefs"
+    ],
+    "properties": {
+      "version": {
+        "type": "number",
+        "const": 1
+      },
+      "kind": {
+        "anyOf": [
+          {
+            "type": "string",
+            "const": "goal_export"
+          },
+          {
+            "type": "string",
+            "const": "mcp_resource"
+          }
+        ]
+      },
+      "producer": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "namespace",
+          "resourceId"
+        ],
+        "properties": {
+          "namespace": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "goal.export"
+              },
+              {
+                "type": "string",
+                "const": "mcp.resourceRead"
+              }
+            ]
+          },
+          "resourceId": {
+            "type": "string"
+          }
+        }
+      },
+      "sourceRefs": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/OutputGoalResourceRefV2"
+        }
+      },
+      "proof": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "projections",
+          "protectedPayloadRefs"
+        ],
+        "properties": {
+          "projections": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "namespace",
+                "resourceId",
+                "digest"
+              ],
+              "properties": {
+                "namespace": {
+                  "type": "string"
+                },
+                "resourceId": {
+                  "type": "string"
+                },
+                "digest": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "protectedPayloadRefs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  },
   "OutputAsset": {
     "type": "object",
     "additionalProperties": false,
@@ -8113,6 +9034,9 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
       "updatedAt"
     ],
     "properties": {
+      "provenance": {
+        "$ref": "#/components/schemas/OutputAssetProvenanceV2"
+      },
       "workspaceId": {
         "type": "string"
       },
@@ -8445,15 +9369,15 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
         "anyOf": [
           {
             "type": "string",
-            "const": "revoked"
-          },
-          {
-            "type": "string",
             "const": "readable"
           },
           {
             "type": "string",
             "const": "stale"
+          },
+          {
+            "type": "string",
+            "const": "revoked"
           },
           {
             "type": "string",
@@ -8644,15 +9568,15 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
         "anyOf": [
           {
             "type": "string",
-            "const": "revoked"
-          },
-          {
-            "type": "string",
             "const": "readable"
           },
           {
             "type": "string",
             "const": "stale"
+          },
+          {
+            "type": "string",
+            "const": "revoked"
           },
           {
             "type": "string",
@@ -9227,6 +10151,10 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
         "anyOf": [
           {
             "type": "string",
+            "const": "revoked"
+          },
+          {
+            "type": "string",
             "const": "failed"
           },
           {
@@ -9244,10 +10172,6 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
           {
             "type": "string",
             "const": "disabled"
-          },
-          {
-            "type": "string",
-            "const": "revoked"
           }
         ]
       },
@@ -9946,11 +10870,11 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
     "anyOf": [
       {
         "type": "string",
-        "const": "stop"
+        "const": "revise"
       },
       {
         "type": "string",
-        "const": "revise"
+        "const": "stop"
       },
       {
         "type": "string",

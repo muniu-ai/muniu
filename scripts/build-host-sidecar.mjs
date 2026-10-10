@@ -10,19 +10,23 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { build } from "esbuild";
+import { verifyExportFont } from "./verify-export-font.mjs";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const defaultOutput = path.join(rootDir, "apps/desktop-mac/src-tauri/binaries");
 const outputArgument = process.argv.find((argument) => argument.startsWith("--output-dir="));
 const binariesDir = outputArgument ? path.resolve(outputArgument.slice("--output-dir=".length)) : defaultOutput;
 const smoke = process.argv.includes("--smoke");
-const unknown = process.argv.slice(2).filter((argument) => argument !== "--smoke" && !argument.startsWith("--output-dir="));
+const assetsSmoke = smoke || process.argv.includes("--assets-smoke");
+const unknown = process.argv.slice(2).filter((argument) => argument !== "--smoke" && argument !== "--assets-smoke" && !argument.startsWith("--output-dir="));
 if (unknown.length > 0) throw new Error(`未知参数：${unknown.join(", ")}`);
 
 const buildDir = realpathSync(await mkdtemp(path.join(tmpdir(), "mn-host-sidecar-")));
 const bundlePath = path.join(buildDir, "mn-host.cjs");
 const entryPath = path.join(buildDir, "mn-host-entry.ts");
 const pdfChildBundlePath = path.join(buildDir, "pdf-extraction-child.cjs");
+const exportChildBundlePath = path.join(buildDir, "goal-export-child.cjs");
+const fontPath = path.join(buildDir, "NotoSansCJKsc-Regular.otf");
 const packageConfigPath = path.join(buildDir, "package.json");
 const packagedDir = path.join(buildDir, "pkg");
 const pkgBin = path.join(rootDir, "node_modules/.bin/pkg");
@@ -33,10 +37,21 @@ const manifestPath = path.join(binariesDir, "mn-host-build.json");
 
 try {
   if (process.platform !== "darwin") throw new Error("mn-host macOS sidecar 只能在 macOS 构建");
+  const exportFont = verifyExportFont();
+  cpSync(path.join(rootDir, "apps/host/assets/fonts/noto-sans-cjk/NotoSansCJKsc-Regular.otf"), fontPath);
+  cpSync(path.join(rootDir, "apps/host/assets/fonts/noto-sans-cjk/OFL.txt"), path.join(buildDir, "NotoSansCJK-OFL.txt"));
   mkdirSync(packagedDir, { recursive: true });
   mkdirSync(binariesDir, { recursive: true });
   writeFileSync(entryPath, `import { extractDocument } from ${JSON.stringify(path.join(rootDir, "apps/host/src/document-extraction.ts"))};
-if (process.argv.includes("--mn-pdf-smoke")) {
+import { renderGoalExport } from ${JSON.stringify(path.join(rootDir, "apps/host/src/goal-export-renderer.ts"))};
+if (process.argv.includes("--mn-export-smoke")) {
+  (async () => { const values = []; for (const format of ["docx", "pdf", "xlsx"]) {
+    const rendered = await renderGoalExport(format, {title:"木牛导出",text:"中文交付 CNY 1,234.56",sourceLabel:"fixed-smoke",accepted:false,createdAt:"2026-10-10T00:00:00Z"});
+    const extracted = await extractDocument({fileName:"smoke."+format,mediaType:rendered.mediaType,bytes:rendered.bytes});
+    if (extracted.status !== "complete" || !extracted.blocks.some(block => block.text.includes("中文交付"))) throw Error("content mismatch");
+    values.push({format,bytes:rendered.bytes.length,status:extracted.status}); }
+    process.stdout.write(JSON.stringify(values)); })().catch(error => {process.stderr.write("Packaged export failed: "+(error?.code ?? "UNKNOWN"));process.exitCode=1;});
+} else if (process.argv.includes("--mn-pdf-smoke")) {
   extractDocument({ fileName: "smoke.pdf", mediaType: "application/pdf", bytes: Buffer.from(${JSON.stringify(smokePdfBytes().toString("base64"))}, "base64") })
     .then(result => process.stdout.write(JSON.stringify(result)))
     .catch(error => { process.stderr.write("Packaged PDF extraction failed: " + (error?.code ?? "UNKNOWN") + " " + (error?.message ?? "") + "\\n"); process.exitCode = 1; });
@@ -51,6 +66,16 @@ if (process.argv.includes("--mn-pdf-smoke")) {
     logLevel: "info",
   });
   await build({
+    entryPoints: [path.join(rootDir, "apps/host/src/goal-export-worker.ts")],
+    outfile: exportChildBundlePath, bundle: true, platform: "node", format: "cjs", target: "node22",
+    sourcemap: false, legalComments: "eof", mainFields: ["main", "module"],
+    define: { "import.meta.url": "__mnHostImportMetaUrl" },
+    banner: { js: "const __mnHostImportMetaUrl = require('node:url').pathToFileURL(__filename).href;" },
+    logLevel: "info",
+  });
+  const exportCode = readFileSync(exportChildBundlePath,"utf8");
+  if (/\beval\s*\(|\bnew\s+Function\s*\(/u.test(exportCode)) throw Error("Export child contains dynamic code generation");
+  await build({
     entryPoints: [entryPath],
     outfile: bundlePath,
     bundle: true,
@@ -63,7 +88,7 @@ if (process.argv.includes("--mn-pdf-smoke")) {
     banner: { js: "const __mnHostImportMetaUrl = require('node:url').pathToFileURL(__filename).href;" },
     logLevel: "info",
   });
-  writeFileSync(packageConfigPath, JSON.stringify({ private: true, pkg: { assets: ["pdf-extraction-child.cjs"] } }));
+  writeFileSync(packageConfigPath, JSON.stringify({ private: true, pkg: { assets: ["pdf-extraction-child.cjs", "goal-export-child.cjs", "NotoSansCJKsc-Regular.otf", "NotoSansCJK-OFL.txt"] } }));
   execFileSync(pkgBin, [
     bundlePath,
     "--config", packageConfigPath,
@@ -93,6 +118,7 @@ if (process.argv.includes("--mn-pdf-smoke")) {
     service: "mn-host",
     source: "apps/host/src/main.ts",
     node: "22",
+    exportRenderer: { version: "1", pdfkit: "0.20.2", fontkit: "2.0.4", yazl: "3.3.1", font: exportFont },
     targets: {
       "aarch64-apple-darwin": sha256(arm64Path),
       "x86_64-apple-darwin": sha256(x64Path),
@@ -100,13 +126,16 @@ if (process.argv.includes("--mn-pdf-smoke")) {
     },
   };
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o644 });
-  if (smoke) {
+  if (assetsSmoke) {
+    const exports = JSON.parse(execFileSync(universalPath,["--mn-export-smoke"],{timeout:30000,encoding:"utf8",env:{TZ:"UTC"}}));
+    if (exports.length !== 3 || exports.some(value => value.status !== "complete")) throw Error("打包导出自检失败");
+    process.stdout.write("打包 DOCX/PDF/XLSX 导出与独立提取验证通过\n");
     const extracted = JSON.parse(execFileSync(universalPath, ["--mn-pdf-smoke"], {
       timeout: 15_000, encoding: "utf8", env: { TZ: "UTC" },
     }));
     if (extracted.status !== "complete" || extracted.blocks[0]?.text !== "packaged PDF extraction") throw new Error("打包后的 PDF 子进程提取结果不符");
     process.stdout.write("打包 PDF 子进程提取验证通过\n");
-    await smokeCurrentArchitecture(universalPath);
+    if (smoke) await smokeCurrentArchitecture(universalPath);
   }
   process.stdout.write(`mn-host sidecar 已生成：${binariesDir}\n`);
 } finally {

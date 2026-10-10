@@ -31,3 +31,11 @@ Muniu Agent OS 0.2 does not redistribute the Anthropic Claude Agent SDK or platf
 `LICENSES/BSD-3-Clause.txt` is available for components that use that license. Its presence does not prove that any particular component is shipped.
 
 `THIRD_PARTY_NPM_LICENSES.json` and `THIRD_PARTY_CARGO_LICENSES.json` record locked dependency licenses. The release-time inventories and SPDX SBOM are authoritative for the bytes in a release artifact.
+
+## Noto Sans CJK export font
+
+The unmodified `NotoSansCJKsc-Regular.otf` used by local PDF export is from `notofonts/noto-cjk` commit `523d033d6cb47f4a80c58a35753646f5c3608a78`, upstream path `Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf`. Copyright © 2014–2021 Adobe. It is distributed under SIL Open Font License 1.1, not Apache-2.0. The exact upstream license, SHA-256 hashes and source manifest are retained in `apps/host/assets/fonts/noto-sans-cjk/`. The PDF renderer embeds subsets without modifying the shipped font. No system font is copied and no font is fetched during export.
+
+Local export uses the locked PDFKit, fontkit and yazl packages; their licenses and integrity values are recorded in `THIRD_PARTY_NPM_LICENSES.json`.
+
+PDFKit's transitive dependency `png-js` 2.0.0 includes an MIT license but omits the `license` field in its package metadata. Its unmodified license and copyright notice (Copyright (c) 2017 Devon Govett) are retained in `LICENSES/png-js-MIT.txt`. `docs/upstream-provenance/npm-license-evidence.json` pins the npm tarball URL, integrity and original license SHA-256. The inventory and policy check use this evidence only when both the installed package and retained notice match; other missing or unknown licenses continue to fail the gate.

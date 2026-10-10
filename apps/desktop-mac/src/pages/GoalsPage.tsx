@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import type { AgentSchedulingRequestV2, BusinessContextTargetV2, GoalResponseV2, GoalCoordinatedDetailV2, GoalReworkPreviewV2, GoalTeamProgressV2, TeamTemplateIdV1, TeamTemplateSummaryV1, GoalStatusV2, GoalV2, ModelConnectionV2, Thread, TeamSkillVersionV2 } from "@mn/contracts";
+import type { AgentSchedulingRequestV2, BusinessContextTargetV2, GoalResponseV2, GoalResourceRefV2, GoalCoordinatedDetailV2, GoalReworkPreviewV2, GoalTeamProgressV2, TeamTemplateIdV1, TeamTemplateSummaryV1, GoalStatusV2, GoalListItemV2, ModelConnectionV2, Thread, TeamSkillVersionV2 } from "@mn/contracts";
 import { GoalDetailViews, type GoalDetailView } from "../components/GoalDetailViews";
 import { GoalPlanView, formatTeamCost } from "../components/GoalPlanView";
 import { GoalProgressView } from "../components/GoalProgressView";
@@ -12,6 +12,8 @@ import { ReworkPreview } from "../components/ReworkPreview";
 import { BusinessCandidatesPanel } from "../components/BusinessCandidatesPanel";
 import { ResultText } from "../components/ResultText";
 import { TaskComposer } from "../components/TaskComposer";
+import { GoalAssignmentPanel, assignmentLabel } from "../components/TaskCollaboration";
+import { GoalExports } from "../components/GoalExports";
 import { GoalSources } from "../components/GoalSources";
 import { ThreadAgentPanel } from "../components/ThreadAgentPanel";
 import type { CodingRepositorySummary } from "../types";
@@ -24,7 +26,8 @@ type PendingGoalMutation = { goalId: string; uncertain: boolean; work: () => Pro
 const labels: Record<GoalStatusV2, string> = { draft: "草稿", awaiting_authorization: "待确认计划", running: "执行中", waiting_approval: "等待审批", pausing: "正在暂停", paused: "已暂停",
   needs_reconciliation: "待核对", failed: "未完成", awaiting_acceptance: "待验收", accepted: "已验收", cancelled: "已取消" };
 
-export function GoalsPage({ target, api, workspaceId, onOpenThread, pluginIds, repositories, repositoryId, onRepository, onRegisterRepository, onSettings, newTaskRequest, active, onTaskCreated, businessTarget, onRecordDelivery, skillTrial }: {
+export function GoalsPage({ target, api, workspaceId, onOpenThread, pluginIds, repositories, repositoryId, onRepository, onRegisterRepository, onSettings, newTaskRequest, active, onTaskCreated, businessTarget, onRecordDelivery, skillTrial, importedMaterials }: {
+  readonly importedMaterials?: {readonly refs:readonly GoalResourceRefV2[];readonly sequence:number};
   readonly skillTrial?: { readonly version: TeamSkillVersionV2; readonly sequence: number };
   readonly target?: { readonly id: string; readonly sequence: number };
   readonly api: AgentOsClient; readonly workspaceId: string; readonly onOpenThread: (thread: Thread) => void;
@@ -38,7 +41,8 @@ export function GoalsPage({ target, api, workspaceId, onOpenThread, pluginIds, r
   const [existing, setExisting] = useState(false);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("all");
-  const [goals, setGoals] = useState<readonly GoalV2[]>([]);
+  const [responsibleFilter, setResponsibleFilter] = useState("all");
+  const [goals, setGoals] = useState<readonly GoalListItemV2[]>([]);
   const [threads, setThreads] = useState<readonly Thread[]>([]);
   const [models, setModels] = useState<readonly ModelConnectionV2[]>([]);
   const [detail, setDetail] = useState<GoalResponseV2>();
@@ -239,12 +243,12 @@ export function GoalsPage({ target, api, workspaceId, onOpenThread, pluginIds, r
       <button className={!detail || ["accepted", "cancelled", "failed"].includes(detail.goal.status) ? "primary-button" : "secondary-button"} disabled={busy} onClick={startNewTask}>新建任务</button></header>
     {error && <ErrorState detail={error} onRetry={() => detail ? void perform(() => api.goal(workspaceId, detail.goal.id)) : void refreshList().then(() => setError(undefined)).catch(caught => setError(message(caught)))} />}
     {loading ? <Loading label="正在读取目标…" /> : <div className="goal-layout">
-      <section className="panel goal-list" aria-label="目标列表"><h2>工作区任务</h2><input aria-label="搜索任务" placeholder="搜索任务" value={query} onChange={event => setQuery(event.target.value)} /><select aria-label="筛选任务状态" value={filter} onChange={event => setFilter(event.target.value)}><option value="all">全部状态</option><option value="active">进行中</option><option value="awaiting_acceptance">待验收</option><option value="accepted">已验收</option></select>
-        {goals.length === 0 ? <EmptyState title="还没有任务" detail="描述想要的结果，或从模板开始。" /> : goals.filter(goal => goal.objective.toLowerCase().includes(query.toLowerCase()) && (filter === "all" || (filter === "active" ? ["draft", "awaiting_authorization", "running", "waiting_approval", "pausing", "paused"].includes(goal.status) : goal.status === filter))).map(goal =>
+      <section className="panel goal-list" aria-label="目标列表"><h2>工作区任务</h2><input aria-label="搜索任务" placeholder="搜索任务" value={query} onChange={event => setQuery(event.target.value)} /><select aria-label="筛选任务状态" value={filter} onChange={event => setFilter(event.target.value)}><option value="all">全部状态</option><option value="active">进行中</option><option value="awaiting_acceptance">待验收</option><option value="accepted">已验收</option></select><select aria-label="筛选任务负责人" value={responsibleFilter} onChange={event=>setResponsibleFilter(event.target.value)}><option value="all">全部负责人</option><option value="unassigned">未分配负责人</option>{[...new Map(goals.flatMap(goal=>goal.assignment?.responsible?[[goal.assignment.responsible.principalId,goal.assignment.responsible] as const]:[])).values()].map(member=><option key={member.principalId} value={member.principalId}>{member.displayName}</option>)}</select>
+        {goals.length === 0 ? <EmptyState title="还没有任务" detail="描述想要的结果，或从模板开始。" /> : goals.filter(goal => (responsibleFilter === "all" || (responsibleFilter === "unassigned" ? !goal.assignment?.responsible : goal.assignment?.responsible?.principalId === responsibleFilter)) && goal.objective.toLowerCase().includes(query.toLowerCase()) && (filter === "all" || (filter === "active" ? ["draft", "awaiting_authorization", "running", "waiting_approval", "pausing", "paused"].includes(goal.status) : goal.status === filter))).map(goal =>
           <button key={goal.id} className={`goal-list-item ${detail?.goal.id === goal.id ? "selected" : ""}`} disabled={busy} onClick={() => void perform(() => api.goal(workspaceId, goal.id), goal.id)}>
-            <strong>{goal.objective.split("\n")[0]}</strong><small>{goal.id === detail?.goal.id ? "当前目标" : labels[goal.status]}</small></button>)}
+            <strong>{goal.objective.split("\n")[0]}</strong><small>{goal.id === detail?.goal.id ? "当前目标" : labels[goal.status]}</small><small>{assignmentLabel(goal.assignment)}</small></button>)}
       </section>
-      <section className="panel task-compose-panel" hidden={Boolean(detail)}><div hidden={existing}><TaskComposer skillTrial={skillTrial} businessTarget={businessTarget} visible={active && !detail && !existing} api={api} workspaceId={workspaceId} pluginIds={pluginIds} repositories={repositories} repositoryId={repositoryId} onRepository={onRepository} onRegisterRepository={onRegisterRepository} onSettings={onSettings} onCreated={next => { navigationSequence.current += 1; setDetail(next); setError(undefined); void refreshList(); onTaskCreated(); }} /></div>
+      <section className="panel task-compose-panel" hidden={Boolean(detail)}><div hidden={existing}><TaskComposer importedMaterials={importedMaterials} skillTrial={skillTrial} businessTarget={businessTarget} visible={active && !detail && !existing} api={api} workspaceId={workspaceId} pluginIds={pluginIds} repositories={repositories} repositoryId={repositoryId} onRepository={onRepository} onRegisterRepository={onRegisterRepository} onSettings={onSettings} onCreated={next => { navigationSequence.current += 1; setDetail(next); setError(undefined); void refreshList(); onTaskCreated(); }} /></div>
         <button className="quiet-button existing-task-toggle" onClick={() => setExisting(value => !value)}>{existing ? "返回新任务" : "关联已有任务"}</button>
         {existing && <form className="form-stack" onSubmit={event => void create(event)}><h2>创建目标</h2>
         <div className="field"><label htmlFor="goal-objective">预期结果</label><textarea id="goal-objective" rows={3} value={objective} required maxLength={16000} disabled={busy} onChange={event => setObjective(event.target.value)} /></div>
@@ -264,7 +268,7 @@ export function GoalsPage({ target, api, workspaceId, onOpenThread, pluginIds, r
         {mutationLocked && !busy && <div role="alert"><p>上次操作的结果尚未确认，请使用原请求继续核对。</p><button className="secondary-button" onClick={() => void retryMutation(pendingMutation!)}>重试上次操作</button></div>}
         <GoalDetailViews value={view} onChange={setView} panels={{
           goal: <>
-        <h3>任务与约束</h3><pre className="goal-brief-preview">{detail.goal.objective}</pre>
+        <GoalAssignmentPanel key={detail.goal.id} api={api} workspaceId={workspaceId} goalId={detail.goal.id} onChanged={()=>{void refreshList();onTaskCreated();}} /><h3>任务与约束</h3><pre className="goal-brief-preview">{detail.goal.objective}</pre>
         <GoalSources key={detail.goal.id} api={api} workspaceId={workspaceId} resourceRefs={detail.goal.resourceRefs} />
         <p>额度：{formatTeamCost(detail.goal.budget.maxCostMinorUnits, detail.goal.budget.currency)} · {detail.goal.budget.maxTokens} tokens · {detail.goal.budget.maxDurationMs / 60_000} 分钟</p>
         {detail.goal.reservation && <p>用量：{detail.goal.reservation.status === "settled" ? `${detail.goal.reservation.actual?.costMinorUnits ?? "0"} 分 ${detail.goal.budget.currency}，${detail.goal.reservation.actual?.tokens ?? 0} tokens` : detail.goal.reservation.status === "unknown" ? "待核对，额度继续保留" : "已预留"}</p>}
@@ -304,7 +308,7 @@ export function GoalsPage({ target, api, workspaceId, onOpenThread, pluginIds, r
           results: <>
         {detail.deliverySet ? <section aria-label="成果验收"><h3>成果与检查</h3><p>先查看任务成果，再确认各项内容标准。程序检查不代替内容判断。</p>
           {detail.deliverySet.items.map(output => { const spec = detail.goal.deliverables.find(item => item.key === output.key); return <article className="goal-output" key={output.key}><strong>{spec?.title ?? output.key}</strong>
-            <ResultText text={output.preview} /><a className="quiet-button" download="木牛任务成果.md" href={`data:text/markdown;charset=utf-8,${encodeURIComponent(output.preview)}`}>下载成果</a>
+            <ResultText text={output.preview} /><GoalExports api={api} workspaceId={workspaceId} source={{goalId:detail.goal.id,planRevisionId:detail.plan!.id,deliverySetId:detail.deliverySet!.id,outputKey:output.key,outputDigest:output.digest}} /><a className="quiet-button" download="木牛任务成果.md" href={`data:text/markdown;charset=utf-8,${encodeURIComponent(output.preview)}`}>下载成果</a>
             <ul>{output.checks.map(check => <li key={check.checkId}>{check.status === "passed" ? "通过" : "未通过"} · {checkLabel(check.checkId)}</li>)}</ul>
             {spec?.criteria.map(criterion => { const key = JSON.stringify([output.key, criterion.id]); return <label className="goal-criterion" key={criterion.id}>
               <input type="checkbox" disabled={busy || detail.goal.status !== "awaiting_acceptance"} checked={detail.goal.status === "accepted" || reviewed.has(key)} onChange={event => {
@@ -322,7 +326,7 @@ export function GoalsPage({ target, api, workspaceId, onOpenThread, pluginIds, r
         {detail.deliveryReview && <section aria-label="验收与返工历史"><h3>验收与返工记录</h3>{detail.deliveryReview.decisions.map(decision=><article key={decision.id}><p>{new Date(decision.decidedAt).toLocaleString("zh-CN")}</p><ul>{decision.items.map(item=><li key={item.key}>{detail.goal.deliverables.find(spec=>spec.key===item.key)?.title??item.key} · {item.decision==="accept"?"已接收":item.decision==="defer"?"暂缓":"要求修改"}{item.decision==="request_changes"?`：${item.instruction}`:item.decision==="defer"&&item.reason?`：${item.reason}`:""}</li>)}</ul>
           {decision.id===latestDecision?.id&&needsRework&&!detail.deliveryReview?.reworks.some(rework=>rework.decisionId===decision.id)&&<button className="secondary-button" disabled={busy||mutationLocked||Boolean(reworkBlockedReason)} onClick={()=>void mutate(async key=>{const preview=await api.previewGoalRework(detail,decision.id,key);if(selectedGoalId.current===detail.goal.id)cachedReworkPreview.current=preview;const request=previewSequence.current;const fresh=await api.goal(workspaceId,detail.goal.id);if(request===previewSequence.current&&selectedGoalId.current===detail.goal.id&&reworkPreviewMatches(preview,fresh))setReworkPreview(preview);return fresh;})}>预览返工</button>}
         </article>)}
-        {detail.deliveryReview.history.map(history=><details key={history.planRevisionId}><summary>历史计划修订 {history.revision} · {history.deliverySet?.items.length??0} 项成果</summary>{history.usage&&<p>截至此修订累计费用：{formatTeamCost(history.usage.costMinorUnits,history.usage.currency)}</p>}{history.deliverySet?.items.map(item=><article key={item.key}><h4>{detail.goal.deliverables.find(spec=>spec.key===item.key)?.title??item.key}</h4><ResultText text={item.preview}/><p>成果摘要：{item.digest}</p></article>)}</details>)}
+        {detail.deliveryReview.history.map(history=><details key={history.planRevisionId}><summary>历史计划修订 {history.revision} · {history.deliverySet?.items.length??0} 项成果</summary>{history.usage&&<p>截至此修订累计费用：{formatTeamCost(history.usage.costMinorUnits,history.usage.currency)}</p>}{history.deliverySet?.items.map(item=><article key={item.key}><h4>{detail.goal.deliverables.find(spec=>spec.key===item.key)?.title??item.key}</h4><ResultText text={item.preview}/><GoalExports api={api} workspaceId={workspaceId} source={{goalId:detail.goal.id,planRevisionId:history.planRevisionId,deliverySetId:history.deliverySet!.id,outputKey:item.key,outputDigest:item.digest}} /><p>成果摘要：{item.digest}</p></article>)}</details>)}
         </section>}
         {reworkPreview?.goalId===detail.goal.id&&reworkPreview.sourcePlanRevisionId===detail.plan?.id&&reworkPreview.expectedGoalStreamVersion===detail.goal.streamVersion&&<ReworkPreview preview={reworkPreview} disabled={busy||mutationLocked||Boolean(reworkBlockedReason)} onCancel={()=>{cachedReworkPreview.current=undefined;setReworkPreview(undefined);}} onConfirm={()=>void mutate(key=>api.reworkGoal(detail,reworkPreview,key))}/>}
           </>,

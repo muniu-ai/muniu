@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-import type { Execution, ExecutionContextV2, GoalResourceRefV2, MemoryRecord, ShareGrant } from '@mn/contracts';
+import type { Asset, Execution, ExecutionContextV2, GoalResourceRefV2, MemoryRecord, ShareGrant } from '@mn/contracts';
 import { appendKernelEvent, KernelError, sha256, type KernelTransaction } from '@mn/kernel';
 
 export type ContextSourceValidator = (tx: KernelTransaction, scope: { tenantId: string; workspaceId: string }, ref: GoalResourceRefV2) => boolean;
@@ -15,13 +15,24 @@ export function assertMemoryOriginExecution(tx: KernelTransaction, scope: { tena
     throw new KernelError('CONTEXT_SOURCE_REVOKED', '记忆的原执行已失效', '重新选择原始来源');
   return source;
 }
+// A leaf Host validator may re-enter this public function for memory or skill sources.
+const nestedSourceChecks = new WeakMap<KernelTransaction, Set<string>>();
+const sourceValidatorIds = new WeakMap<ContextSourceValidator, number>();
+let nextSourceValidatorId = 0;
 export function assertContextSource(tx: KernelTransaction, scope: { tenantId: string; workspaceId: string }, ref: GoalResourceRefV2, validateSource?: ContextSourceValidator): void {
-  assertSource(tx, scope, ref, validateSource, new Set(), new Set());
+  if (validateSource && !sourceValidatorIds.has(validateSource)) sourceValidatorIds.set(validateSource, ++nextSourceValidatorId);
+  const key = JSON.stringify([scope.tenantId, scope.workspaceId, ref.namespace, ref.resourceId, ref.streamVersion, ref.digest, validateSource ? sourceValidatorIds.get(validateSource) : 0]);
+  const active = nestedSourceChecks.get(tx) ?? new Set<string>();
+  if (active.has(key) || active.size >= 32) throw new KernelError('CONTEXT_INVALID', '跨模块资料来源形成循环或过深', '重新选择原始来源');
+  nestedSourceChecks.set(tx, active); active.add(key);
+  try { assertSource(tx, scope, ref, validateSource, new Set(), new Set()); }
+  finally { active.delete(key); if (!active.size) nestedSourceChecks.delete(tx); }
 }
 function assertSource(tx: KernelTransaction, scope: { tenantId: string; workspaceId: string }, ref: GoalResourceRefV2,
   validateSource: ContextSourceValidator | undefined, ancestors: ReadonlySet<string>, checked: Set<string>): void {
   const identity = JSON.stringify(["source", ref.namespace, ref.resourceId, ref.streamVersion, ref.digest]);
   if (checked.has(identity)) return;
+  if (checked.size >= 1024) throw new KernelError('CONTEXT_INVALID', '资料来源数量超过限额', '缩小资料范围');
   if (validateSource?.(tx, scope, ref)) { checked.add(identity); return; }
   const tombstone = ref.namespace === 'asset' || ref.namespace === 'memory'
     ? tx.getProjection<{workspaceId:string}>(`${ref.namespace}Tombstone`, ref.resourceId) : undefined;
@@ -66,6 +77,29 @@ function assertSource(tx: KernelTransaction, scope: { tenantId: string; workspac
   if (ref.namespace === 'asset' && (tx.getProjection('assetTombstone', ref.resourceId)
     || (value.protected && (!value.protectedPayloadRef || !tx.getProjection('protectedPayloadKey', value.protectedPayloadRef))))) {
     throw new KernelError('CONTEXT_SOURCE_REVOKED', '资料已删除或撤权', '移除旧资料及依赖它的历史后重新委派');
+  }
+  if (ref.namespace === 'asset' && (value as Asset).provenance) {
+    const asset = value as Asset, provenance = asset.provenance!, key = `asset:${ref.resourceId}`;
+    if (!asset.protected || provenance.version !== 1 || !['goal_export','mcp_resource'].includes(provenance.kind)
+      || provenance.producer?.namespace !== (provenance.kind === 'goal_export' ? 'goal.export' : 'mcp.resourceRead')
+      || !provenance.producer.resourceId || !Array.isArray(provenance.sourceRefs) || !provenance.sourceRefs.length
+      || provenance.sourceRefs.length > 256 || ancestors.has(key) || ancestors.size >= 32) {
+      throw new KernelError('CONTEXT_INVALID', '派生资料来源无效、形成循环或超过限额', '重新生成资料');
+    }
+    const path = new Set([...ancestors, key]);
+    for (const source of provenance.sourceRefs) assertSource(tx, scope, source, validateSource, path, checked);
+    const proof = provenance.proof;
+    if (proof) {
+      if (!Array.isArray(proof.projections) || proof.projections.length > 256 || !Array.isArray(proof.protectedPayloadRefs) || proof.protectedPayloadRefs.length > 256)
+        throw new KernelError('CONTEXT_INVALID', '派生资料证据超过限额', '重新生成资料');
+      for (const evidence of proof.projections) {
+        const record = tx.getProjection(evidence.namespace, evidence.resourceId);
+        if (!record || !/^[a-f0-9]{64}$/u.test(evidence.digest) || sha256(record) !== evidence.digest)
+          throw new KernelError('CONTEXT_SOURCE_CHANGED', '成果权威证据已变化', '重新核对原成果');
+      }
+      for (const id of proof.protectedPayloadRefs) if (!tx.getProjection('protectedPayloadKey', id))
+        throw new KernelError('CONTEXT_SOURCE_REVOKED', '成果原始内容已撤权', '重新核对原成果授权');
+    }
   }
   checked.add(identity);
 }

@@ -49,8 +49,8 @@ function activation(tx: KernelTransaction, options: GoalScope, skillId: string):
 function validateEvidenceRefs(tx: KernelTransaction, options: TeamSkillServiceOptions, value: TeamSkillEvaluationV2): void {
   verifyRecord(value);
   readTeamSkillVersion(tx, options, value.skillRef);
-  if (value.reportRef) assertAssetReader(tx, options, value.reportRef);
-  for (const evidence of value.evidence) assertAssetReader(tx, options, evidence.artifactRef);
+  if (value.reportRef) assertAssetReader(tx, options, value.reportRef, options.ports.validateContextSource);
+  for (const evidence of value.evidence) assertAssetReader(tx, options, evidence.artifactRef, options.ports.validateContextSource);
 }
 function evaluations(tx: KernelTransaction, options: TeamSkillServiceOptions, skill: TeamSkillVersionV2): TeamSkillEvaluationV2[] {
   return tx.listProjections<TeamSkillEvaluationV2>(EVALUATION).filter(value => value.tenantId === options.tenantId && value.workspaceId === options.workspaceId
@@ -153,7 +153,7 @@ export async function createTeamSkillVersion(options: TeamSkillServiceOptions, r
     for (const role of input.roles) for (const ref of role.sourceRefs) {
       if (ref.namespace !== 'asset' && !ref.namespace.startsWith('opc.business.')) fail('TEAM_SKILL_SOURCE_INVALID');
       assertContextSource(tx, options, ref, options.ports.validateContextSource);
-      if (ref.namespace === 'asset') assertAssetReader(tx, options, ref);
+      if (ref.namespace === 'asset') assertAssetReader(tx, options, ref, options.ports.validateContextSource);
     }
     const nextVersion = String(Number(current?.latestVersion ?? 0) + 1);
     const value: TeamSkillVersionV2 = record({ schemaVersion: '1' as const, id: teamSkillVersionId(options.workspaceId, input.skillId, nextVersion), tenantId: options.tenantId, workspaceId: options.workspaceId,
@@ -187,10 +187,10 @@ function evaluation(tx: KernelTransaction, options: TeamSkillServiceOptions, ski
   validateEvidenceRefs(tx, options, value); return value;
 }
 async function readJson(options: TeamSkillServiceOptions, ref: GoalResourceRefV2, maxBytes: number): Promise<{ json: any; plaintextDigest: string; byteLength: number }> {
-  const asset = await options.store.transact(options.tenantId, tx => { guard(tx, options, true); const asset = assertAssetReader(tx, options, ref);
+  const asset = await options.store.transact(options.tenantId, tx => { guard(tx, options, true); const asset = assertAssetReader(tx, options, ref, options.ports.validateContextSource);
     if (ref.namespace !== 'asset' || asset.mediaType !== 'application/json' || asset.byteLength > maxBytes) fail('TEAM_SKILL_REPORT_TOO_LARGE'); return asset; });
-  const bytes = await readAssetContent({ store: options.store, cas: options.cas, protectedPayloadKeyProvider: options.keyProvider, tenantId: options.tenantId, asset });
-  await options.store.transact(options.tenantId, tx => { guard(tx, options, true); assertAssetReader(tx, options, ref); });
+  const bytes = await readAssetContent({ store: options.store, cas: options.cas, protectedPayloadKeyProvider: options.keyProvider, tenantId: options.tenantId, principalId: options.principalId, asset, validateContextSource: options.ports.validateContextSource });
+  await options.store.transact(options.tenantId, tx => { guard(tx, options, true); assertAssetReader(tx, options, ref, options.ports.validateContextSource); });
   try { return { json: JSON.parse(bytes.toString('utf8')), plaintextDigest: createHash('sha256').update(bytes).digest('hex'), byteLength: bytes.byteLength }; }
   catch { return fail('TEAM_SKILL_REPORT_INVALID'); } finally { bytes.fill(0); }
 }
@@ -230,7 +230,7 @@ export async function submitTeamSkillEvaluation(options: TeamSkillServiceOptions
     guard(tx, options, true); const current = evaluation(tx, options, skillId, evaluationId), receipt = replay<TeamSkillEvaluationV2>(tx, options, `submit:${evaluationId}`, key, input);
     if (receipt.cached) { validateEvidenceRefs(tx, options, receipt.cached); return receipt.cached; }
     if (current.streamVersion !== input.expectedStreamVersion || current.digest !== fixed.digest || current.status !== 'awaiting_report') fail('STREAM_VERSION_CONFLICT');
-    assertAssetReader(tx, options, input.reportRef); for (const evidence of input.evidence) assertAssetReader(tx, options, evidence.artifactRef);
+    assertAssetReader(tx, options, input.reportRef, options.ports.validateContextSource); for (const evidence of input.evidence) assertAssetReader(tx, options, evidence.artifactRef, options.ports.validateContextSource);
     const { digest: _digest, ...body } = current;
     const result: TeamSkillEvaluationV2 = record({ ...body, streamVersion: current.streamVersion + 1, status: 'evaluated' as const,
       releaseGate: fixed.executionMode === 'measured' && comparison.releaseGate === 'passed' ? 'passed' as const : 'blocked' as const,

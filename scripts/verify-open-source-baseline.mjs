@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { verifyLargeExportAsset } from './verify-export-font.mjs';
 
 import {
   findSecretFindings,
@@ -261,8 +262,11 @@ for (const relativePath of tracked) {
   const absolutePath = path.join(root, relativePath);
   if (!existsSync(absolutePath)) continue;
   const size = statSync(absolutePath).size;
-  if (size > 5 * 1024 * 1024) fail("tracked file exceeds 5 MiB: " + relativePath);
   const buffer = readFileSync(absolutePath);
+  if (size > 5 * 1024 * 1024) {
+    try { if (!verifyLargeExportAsset(relativePath, buffer)) fail("tracked file exceeds 5 MiB: " + relativePath); }
+    catch { fail("large export asset provenance mismatch: " + relativePath); }
+  }
   const text = buffer.toString("utf8");
   if (text.includes(localAbsolutePath)) fail("local absolute path in " + relativePath);
   if (text.includes(obsoleteRepositoryPath)) fail("obsolete repository URL in " + relativePath);

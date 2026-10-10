@@ -30,6 +30,7 @@ worker:
   supportedKinds:
     - system.noop
     - agent.execution.run
+    - mcp.resource.read
     - coding.reconciliation.verify
     - coding.sandbox.cleanup
   resources:

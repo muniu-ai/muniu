@@ -19,6 +19,18 @@ export interface ApiInputsV2 {
   readonly listGoals: { readonly path: { readonly workspaceId: string; }; };
   readonly createGoal: { readonly path: { readonly workspaceId: string; }; readonly body: { readonly "threadId": string; readonly "objective": string; readonly "resourceRefs": readonly ({ readonly "namespace": string; readonly "resourceId": string; readonly "streamVersion": number; readonly "digest"?: string; })[]; readonly "budget": { readonly "maxTokens": number; readonly "maxCostMinorUnits": string; readonly "currency": string; readonly "maxDurationMs": number; }; readonly "deliverables": readonly ({ readonly "key": string; readonly "title": string; readonly "required": boolean; readonly "criteria": readonly ({ readonly "id": string; readonly "description": string; })[]; })[]; }; };
   readonly listTeamTemplates: { readonly path: { readonly workspaceId: string; }; };
+  readonly getGoalAssignment: { readonly path: { readonly goalId: string; }; readonly query: { readonly workspaceId: string; }; };
+  readonly setGoalAssignment: { readonly path: { readonly goalId: string; }; readonly body: { readonly "workspaceId": string; readonly "expectedStreamVersion": number; readonly "responsiblePrincipalId": (null) | (string); }; };
+  readonly commandNotification: { readonly path: { readonly notificationId: string; }; readonly body: { readonly "workspaceId": string; readonly "expectedStreamVersion": number; readonly "command": "mark_read" | "mark_unread"; }; };
+  readonly listGoalExports: { readonly path: { readonly goalId: string; }; readonly query: { readonly workspaceId: string; }; };
+  readonly createGoalExport: { readonly path: { readonly goalId: string; }; readonly body: { readonly "workspaceId": string; readonly "expectedStreamVersion": 0; readonly "planRevisionId": string; readonly "deliverySetId": string; readonly "outputKey": string; readonly "outputDigest": string; readonly "format": "docx" | "pdf" | "xlsx"; }; };
+  readonly getGoalExport: { readonly path: { readonly goalId: string; readonly exportId: string; }; readonly query: { readonly workspaceId: string; }; };
+  readonly listMcpConnections: { readonly path: { readonly workspaceId: string; }; };
+  readonly createMcpConnection: { readonly path: { readonly workspaceId: string; }; readonly body: { readonly "expectedStreamVersion": 0; readonly "label": string; readonly "endpoint": string; readonly "bearerToken"?: string; readonly "expiresAt": string; readonly "uriPrefixes": readonly (string)[]; readonly "maxRequests": number; }; };
+  readonly commandMcpConnection: { readonly path: { readonly workspaceId: string; readonly connectionId: string; }; readonly body: { readonly "expectedStreamVersion": number; readonly "command": "enable" | "disable" | "rotate_credential"; readonly "bearerToken"?: string; }; };
+  readonly createMcpRequest: { readonly path: { readonly workspaceId: string; readonly connectionId: string; }; readonly body: { readonly "expectedStreamVersion": number; readonly "kind": "resources" | "templates" | "read"; readonly "cursor"?: string; readonly "selection"?: { readonly "catalogRequestId": string; readonly "uri"?: string; readonly "uriTemplate"?: string; readonly "variables"?: {  readonly [key: string]: unknown; }; }; }; };
+  readonly listMcpRequests: { readonly path: { readonly workspaceId: string; }; };
+  readonly getMcpRequest: { readonly path: { readonly workspaceId: string; readonly requestId: string; }; };
   readonly getGoal: { readonly path: { readonly goalId: string; }; readonly query: { readonly workspaceId: string; }; };
   readonly getGoalNodes: { readonly path: { readonly goalId: string; }; readonly query: { readonly workspaceId: string; }; };
   readonly proposeGoalPlan: { readonly path: { readonly goalId: string; }; readonly body: ({ readonly "workspaceId": string; readonly "expectedStreamVersion": number; readonly "modelBindingId": string; }) | ({ readonly "workspaceId": string; readonly "expectedStreamVersion": number; readonly "scheduling": { readonly "runnerId": "auto" | "builtin" | "codex-cli" | "claude-cli"; readonly "strategy": "quality" | "balanced" | "cost"; readonly "modelBindingId"?: string; readonly "expectedValueMinorUnits"?: string; readonly "timeCostMinorUnitsPerHour"?: string; }; }) | ({ readonly "workspaceId": string; readonly "expectedStreamVersion": number; readonly "kind": "team-v1"; readonly "templateId": "research-summary" | "business-proposal" | "code-delivery"; readonly "templateVersion": "1"; readonly "modelBindingId": string; readonly "skillRef"?: { readonly "id": string; readonly "version": string; readonly "digest": string; }; }); };
@@ -65,7 +77,7 @@ export interface ApiInputsV2 {
   readonly listActivity: { readonly path?: Record<string, never>; readonly query: { readonly workspaceId: string; }; };
   readonly decideApproval: { readonly path: { readonly approvalId: string; }; readonly body: { readonly "expectedStreamVersion": number; readonly "decision": "approve_once" | "deny"; }; };
   readonly listDeliverables: { readonly path?: Record<string, never>; readonly query?: { readonly workspaceId?: string; }; };
-  readonly createAssets: { readonly path?: Record<string, never>; readonly body: { readonly "workspaceId": string; readonly "expectedStreamVersion": 0; readonly "attachments": readonly ({ readonly "fileName": string; readonly "mediaType": "text/plain" | "text/markdown" | "application/json" | "text/csv" | "application/pdf" | "image/png" | "image/jpeg" | "image/webp"; readonly "contentBase64": string; readonly "protected"?: boolean; })[]; }; };
+  readonly createAssets: { readonly path?: Record<string, never>; readonly body: { readonly "workspaceId": string; readonly "expectedStreamVersion": 0; readonly "attachments": readonly ({ readonly "fileName": string; readonly "mediaType": "text/plain" | "text/markdown" | "application/json" | "text/csv" | "application/pdf" | "application/vnd.openxmlformats-officedocument.wordprocessingml.document" | "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" | "image/png" | "image/jpeg" | "image/webp"; readonly "contentBase64": string; readonly "protected"?: boolean; })[]; }; };
   readonly getAsset: { readonly path: { readonly assetId: string; }; };
   readonly deleteAsset: { readonly path: { readonly assetId: string; }; readonly body: { readonly "expectedStreamVersion": number; readonly "reason": string; }; };
   readonly getAssetExtraction: { readonly path: { readonly assetId: string; }; };
@@ -2022,6 +2034,395 @@ export const API_INPUT_FIELDS_V2 = {
       "type": "string"
     }
   ],
+  "getGoalAssignment": [
+    {
+      "name": "goalId",
+      "location": "path",
+      "required": true,
+      "type": "string"
+    },
+    {
+      "name": "workspaceId",
+      "location": "query",
+      "required": true,
+      "type": "string"
+    }
+  ],
+  "setGoalAssignment": [
+    {
+      "name": "goalId",
+      "location": "path",
+      "required": true,
+      "type": "string"
+    },
+    {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "name": "workspaceId",
+      "location": "body",
+      "required": true
+    },
+    {
+      "type": "integer",
+      "minimum": 0,
+      "name": "expectedStreamVersion",
+      "location": "body",
+      "required": true
+    },
+    {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      ],
+      "name": "responsiblePrincipalId",
+      "location": "body",
+      "required": true
+    }
+  ],
+  "commandNotification": [
+    {
+      "name": "notificationId",
+      "location": "path",
+      "required": true,
+      "type": "string"
+    },
+    {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "name": "workspaceId",
+      "location": "body",
+      "required": true
+    },
+    {
+      "type": "integer",
+      "minimum": 0,
+      "name": "expectedStreamVersion",
+      "location": "body",
+      "required": true
+    },
+    {
+      "enum": [
+        "mark_read",
+        "mark_unread"
+      ],
+      "name": "command",
+      "location": "body",
+      "required": true
+    }
+  ],
+  "listGoalExports": [
+    {
+      "name": "goalId",
+      "location": "path",
+      "required": true,
+      "type": "string"
+    },
+    {
+      "name": "workspaceId",
+      "location": "query",
+      "required": true,
+      "type": "string"
+    }
+  ],
+  "createGoalExport": [
+    {
+      "name": "goalId",
+      "location": "path",
+      "required": true,
+      "type": "string"
+    },
+    {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "name": "workspaceId",
+      "location": "body",
+      "required": true
+    },
+    {
+      "const": 0,
+      "name": "expectedStreamVersion",
+      "location": "body",
+      "required": true
+    },
+    {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "name": "planRevisionId",
+      "location": "body",
+      "required": true
+    },
+    {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "name": "deliverySetId",
+      "location": "body",
+      "required": true
+    },
+    {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "name": "outputKey",
+      "location": "body",
+      "required": true
+    },
+    {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$",
+      "name": "outputDigest",
+      "location": "body",
+      "required": true
+    },
+    {
+      "enum": [
+        "docx",
+        "pdf",
+        "xlsx"
+      ],
+      "name": "format",
+      "location": "body",
+      "required": true
+    }
+  ],
+  "getGoalExport": [
+    {
+      "name": "goalId",
+      "location": "path",
+      "required": true,
+      "type": "string"
+    },
+    {
+      "name": "exportId",
+      "location": "path",
+      "required": true,
+      "type": "string"
+    },
+    {
+      "name": "workspaceId",
+      "location": "query",
+      "required": true,
+      "type": "string"
+    }
+  ],
+  "listMcpConnections": [
+    {
+      "name": "workspaceId",
+      "location": "path",
+      "required": true,
+      "type": "string"
+    }
+  ],
+  "createMcpConnection": [
+    {
+      "name": "workspaceId",
+      "location": "path",
+      "required": true,
+      "type": "string"
+    },
+    {
+      "const": 0,
+      "name": "expectedStreamVersion",
+      "location": "body",
+      "required": true
+    },
+    {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "name": "label",
+      "location": "body",
+      "required": true
+    },
+    {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048,
+      "name": "endpoint",
+      "location": "body",
+      "required": true
+    },
+    {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8192,
+      "name": "bearerToken",
+      "location": "body",
+      "required": false
+    },
+    {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048,
+      "name": "expiresAt",
+      "location": "body",
+      "required": true
+    },
+    {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2048
+      },
+      "name": "uriPrefixes",
+      "location": "body",
+      "required": true
+    },
+    {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000,
+      "name": "maxRequests",
+      "location": "body",
+      "required": true
+    }
+  ],
+  "commandMcpConnection": [
+    {
+      "name": "workspaceId",
+      "location": "path",
+      "required": true,
+      "type": "string"
+    },
+    {
+      "name": "connectionId",
+      "location": "path",
+      "required": true,
+      "type": "string"
+    },
+    {
+      "type": "integer",
+      "minimum": 1,
+      "name": "expectedStreamVersion",
+      "location": "body",
+      "required": true
+    },
+    {
+      "enum": [
+        "enable",
+        "disable",
+        "rotate_credential"
+      ],
+      "name": "command",
+      "location": "body",
+      "required": true
+    },
+    {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8192,
+      "name": "bearerToken",
+      "location": "body",
+      "required": false
+    }
+  ],
+  "createMcpRequest": [
+    {
+      "name": "workspaceId",
+      "location": "path",
+      "required": true,
+      "type": "string"
+    },
+    {
+      "name": "connectionId",
+      "location": "path",
+      "required": true,
+      "type": "string"
+    },
+    {
+      "type": "integer",
+      "minimum": 1,
+      "name": "expectedStreamVersion",
+      "location": "body",
+      "required": true
+    },
+    {
+      "enum": [
+        "resources",
+        "templates",
+        "read"
+      ],
+      "name": "kind",
+      "location": "body",
+      "required": true
+    },
+    {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "name": "cursor",
+      "location": "body",
+      "required": false
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": false,
+      "properties": {
+        "catalogRequestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "uri": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "uriTemplate": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "variables": {
+          "type": "object",
+          "maxProperties": 20,
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        }
+      },
+      "name": "selection",
+      "location": "body"
+    }
+  ],
+  "listMcpRequests": [
+    {
+      "name": "workspaceId",
+      "location": "path",
+      "required": true,
+      "type": "string"
+    }
+  ],
+  "getMcpRequest": [
+    {
+      "name": "workspaceId",
+      "location": "path",
+      "required": true,
+      "type": "string"
+    },
+    {
+      "name": "requestId",
+      "location": "path",
+      "required": true,
+      "type": "string"
+    }
+  ],
   "getGoal": [
     {
       "name": "goalId",
@@ -3236,6 +3637,8 @@ export const API_INPUT_FIELDS_V2 = {
               "application/json",
               "text/csv",
               "application/pdf",
+              "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
               "image/png",
               "image/jpeg",
               "image/webp"

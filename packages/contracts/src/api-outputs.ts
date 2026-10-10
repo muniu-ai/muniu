@@ -1,3 +1,4 @@
+import type { GoalAssignmentDetailV2, GoalListItemV2 } from "./task-collaboration.js";
 // SPDX-License-Identifier: Apache-2.0
 import type { MemoryAccessV2, MemoryActionV2, MemoryProvenanceV2 } from "./memories.js";
 import type { AssetExtractionV2 } from "./context.js";
@@ -31,6 +32,9 @@ export interface ProductNavigationV2 {
   readonly resourceRef?: Thread["resourceRef"];
 }
 export interface InboxItemV2 {
+  readonly noticeType?: "assignment" | "delivery" | "followup";
+  readonly readState?: "read" | "unread";
+  readonly allowedActions?: readonly ("mark_read" | "mark_unread")[];
   readonly id: string;
   readonly tenantId: string;
   readonly workspaceId: string;
@@ -271,6 +275,18 @@ export type CodingRunnerViewV2 =
 
 /** JSON extension points are explicit; every fixed Host operation has a concrete DTO. */
 export interface ApiOutputsV2 {
+  readonly getGoalAssignment: GoalAssignmentDetailV2;
+  readonly setGoalAssignment: GoalAssignmentDetailV2;
+  readonly commandNotification: InboxItemV2;
+  readonly listGoalExports: readonly import("./goal-exports.js").GoalExportV2[];
+  readonly getGoalExport: import("./goal-exports.js").GoalExportV2;
+  readonly createGoalExport: import("./goal-exports.js").GoalExportV2;
+  readonly listMcpConnections: readonly import("./mcp.js").McpConnectionV2[];
+  readonly createMcpConnection: import("./mcp.js").McpConnectionV2;
+  readonly commandMcpConnection: import("./mcp.js").McpConnectionV2;
+  readonly createMcpRequest: import("./mcp.js").McpRequestV2;
+  readonly listMcpRequests: readonly import("./mcp.js").McpRequestV2[];
+  readonly getMcpRequest: import("./mcp.js").McpRequestV2;
   readonly listTeamSkills: import("./team-skills.js").TeamSkillListV2;
   readonly createTeamSkillVersion: import("./team-skills.js").TeamSkillDetailV2;
   readonly getTeamSkill: import("./team-skills.js").TeamSkillDetailV2;
@@ -284,7 +300,7 @@ export interface ApiOutputsV2 {
   readonly getBusinessContext: BusinessObjectContextV2;
   readonly getOpcBusiness: BusinessManagementViewV1;
   readonly commandOpcBusiness: BusinessManagementViewV1;
-  readonly listGoals: readonly GoalV2[];
+  readonly listGoals: readonly GoalListItemV2[];
   readonly createGoal: GoalDetailV2;
   readonly getGoal: GoalResponseV2;
   readonly proposeGoalPlan: GoalResponseV2;

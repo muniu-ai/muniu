@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "packages": [
+    {
+      "name": "png-js",
+      "version": "2.0.0",
+      "resolved": "https://registry.npmjs.org/png-js/-/png-js-2.0.0.tgz",
+      "integrity": "sha512-GdzJuUMc6ZSpxFJWVxtOH1bzYHym+TOnveqUjb+VJIbZWbZzyiRGFiKhbiielfpYbgMlhHVhsJ0FTazfuRFkMA==",
+      "license": "MIT",
+      "licensePath": "LICENSE",
+      "noticePath": "LICENSES/png-js-MIT.txt",
+      "licenseSha256": "bdb26a2ec815931ed6a38f3416362566204ee85ecdef96702b636402da4c75c3",
+      "reason": "The locked png-js 2.0.0 tarball omits package.json license metadata but includes the original MIT LICENSE, Copyright (c) 2017 Devon Govett. Both installed and retained notices must match this digest."
+    }
+  ]
+}

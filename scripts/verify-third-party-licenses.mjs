@@ -1,8 +1,10 @@
+import { verifyExportFont } from './verify-export-font.mjs';
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { validateLicenseInventory } from "./lib/open-source-policy.mjs";
+import { npmPackagesWithLicenseEvidence } from './lib/npm-license-evidence.mjs';
 import {
   cargoLockDigest,
   inventoryIdentity,
@@ -12,10 +14,9 @@ import {
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const packageLock = JSON.parse(readFileSync(path.join(root, "package-lock.json"), "utf8"));
-const npmPackages = Object.entries(packageLock.packages)
-  .filter(([location, entry]) => location.startsWith("node_modules/") && entry.link !== true)
-  .map(([location, entry]) => ({
-    name: `${entry.name ?? location.slice("node_modules/".length)}@${entry.version}`,
+const npmPackages = npmPackagesWithLicenseEvidence(packageLock, root)
+  .map((entry) => ({
+    name: `${entry.name}@${entry.version}`,
     license: entry.license ?? null
   }));
 
@@ -41,6 +42,8 @@ const cargoPackages = cargoInventory.packages.map((entry) => ({
   name: `${entry.name}@${entry.version}`,
   license: entry.license ?? null
 }));
+
+verifyExportFont();
 
 const failures = [
   ...validateLicenseInventory(npmPackages).map((entry) => `npm ${entry}`),

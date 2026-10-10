@@ -25,6 +25,8 @@
   memory            审阅记忆提案与来源
   followup          显式启用、暂停和停止业务跟进
   goal              管理目标、计划和成果验收
+  mcp               授权只读资料连接、发现和导入
+  notification      标记本地通知已读或未读
   asset             上传受保护资料、查看提取内容与来源位置
   business          读取客户、订单、交付和复盘的版本资料
   backup            创建、校验或恢复本地加密备份
@@ -42,6 +44,24 @@
   mn asset upload --workspace <工作区 ID> --file <资料路径> [--key <上传请求标识>] --json
   mn asset extract <资料 ID> --json
   mn business context <customer|service|quote|order|delivery|review> <对象 ID> --workspace <工作区 ID> --json
+
+责任与文件交付：
+  mn goal assignment <目标 ID> --workspace <工作区 ID>
+  mn goal assign <目标 ID> --workspace <工作区 ID> --version <责任版本> --responsible <成员 ID> [--key <幂等键>]
+  mn goal unassign <目标 ID> --workspace <工作区 ID> --version <责任版本> [--key <幂等键>]
+  mn goal exports <目标 ID> --workspace <工作区 ID>
+  mn goal export <目标 ID> --workspace <工作区 ID> --plan <计划 ID> --delivery-set <成果集 ID> --output-key <成果项> --output-digest <摘要> --format pdf|docx|xlsx [--key <幂等键>]
+  mn goal export-save <目标 ID> --workspace <工作区 ID> --export <导出 ID> --output <新文件路径>
+  mn notification read|unread <通知 ID> --workspace <工作区 ID> --version <通知版本> [--key <幂等键>]
+
+MCP 只读连接：
+  mn mcp list --workspace <工作区 ID>
+  mn mcp requests --workspace <工作区 ID>
+  mn mcp create --workspace <工作区 ID> --file <授权 JSON> [--key <幂等键>]
+  mn mcp enable|disable <连接 ID> --workspace <工作区 ID> --version <连接版本> [--key <幂等键>]
+  mn mcp rotate <连接 ID> --workspace <工作区 ID> --version <连接版本> --credential-file <凭据文件> [--key <幂等键>]
+  mn mcp request <连接 ID> --workspace <工作区 ID> --version <连接版本> --file <读取请求 JSON> [--key <幂等键>]
+  mn mcp show <读取请求 ID> --workspace <工作区 ID>
 
 目标与验收：
   mn goal list --workspace <工作区 ID>

@@ -1,4 +1,11 @@
-import { readFollowupNotices } from "./followup-notices.js";
+import { dispatchGoalExportRequest } from "./goal-exports-api.js";
+import { createHostGoalExportRuntime } from "./goal-exports-runtime.js";
+import { dispatchMcpRequest } from "./mcp-api.js";
+import { registerAuthenticatedPrincipal } from "./authenticated-principal.js";
+import type { McpSecretStore } from "./mcp-sources.js";
+import type { McpTransport } from "./mcp-transport.js";
+import { assertAssetMembership, assertDerivedAssetProvenance } from './asset-provenance.js';
+import { dispatchTaskCollaborationRequest, readLocalNotifications, recoverTaskNotifications } from "./task-collaboration.js";
 import { dispatchFollowupRequest } from "./followups-api.js";
 import { recoverFollowups } from "./followup-runtime.js";
 import { dispatchTeamSkillRequest } from "./team-skills-api.js";
@@ -183,6 +190,8 @@ export type TenantPluginInstallerFactory = (
 ) => PluginInstallerPort | undefined | Promise<PluginInstallerPort | undefined>;
 
 export interface AgentOsHostOptions {
+  readonly mcpSecrets?: McpSecretStore;
+  readonly mcpTransport?: McpTransport;
   readonly goalPollIntervalMs?: number;
   readonly businessProvider?: BusinessProviderPorts;
   readonly businessWorkspaceScopes?: readonly { readonly tenantId: string; readonly workspaceId: string }[];
@@ -315,7 +324,7 @@ function safeError(error: unknown, traceId: string): Response {
   } else if (error instanceof PluginPolicyError) {
     status = 422; code = error.code; message = error.message; action = error.action; retryable = false;
   } else if (error instanceof KernelError) {
-    status = ["STREAM_VERSION_CONFLICT", "BUSINESS_ACTION_CONFLICT", "IDEMPOTENCY_CONFLICT"].includes(error.code) ? 409
+    status = ["STREAM_VERSION_CONFLICT", "BUSINESS_ACTION_CONFLICT", "IDEMPOTENCY_CONFLICT", "IDEMPOTENCY_KEY_REUSED"].includes(error.code) ? 409
       : error.code === "REQUEST_BODY_TOO_LARGE" ? 413
         : error.code === "REQUEST_BODY_TIMEOUT" ? 408
           : error.code === "REQUEST_JSON_INVALID" ? 400
@@ -1238,10 +1247,32 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
       const TENANT_ID = identity.tenantId;
       const ACTOR_ID = identity.principalId;
       const ORGANIZATION_ROLES = identity.organizationRoles ?? [];
+      if (profile === "enterprise" && options.identityResolver) {
+        await registerAuthenticatedPrincipal({ store: options.store, tenantId: TENANT_ID, principalId: ACTOR_ID, now, id: nextId });
+      }
       const tenantRuntime = await runtimeForTenant(TENANT_ID);
       const tenantPlugins = tenantRuntime.plugins;
       const pluginInstaller = tenantRuntime.installer;
       await pluginInstaller?.synchronize?.();
+      if (/^\/v2\/goals\/[^/]+\/exports(?:\/|$)/u.test(url.pathname)) {
+        if (!protectedJournal || !options.cas || !options.protectedPayloadKeyProvider)
+          throw new KernelError("PROTECTED_PAYLOAD_UNAVAILABLE", "成果导出需要受保护的存储", "配置受保护存储后重试");
+        const runtimeOptions = { store: options.store, kernel, cas: options.cas, keyProvider: options.protectedPayloadKeyProvider,
+          protectedJournal, now, id: nextId,
+          definitions: [tenantPlugins.definition("opc"), tenantPlugins.definition("coding"), tenantPlugins.definition("runner-codex-cli"), tenantPlugins.definition("runner-claude-cli")].filter((value): value is PluginDefinitionV1 => Boolean(value)) };
+        const result = await dispatchGoalExportRequest({ ...runtimeOptions, ...createHostGoalExportRuntime(runtimeOptions),
+          request, tenantId: TENANT_ID, principalId: ACTOR_ID, ...(typeof mutationKey === "string" ? { mutationKey } : {}) });
+        if (result) return json(result.data, result.status, traceId);
+      }
+      if (/^\/v2\/workspaces\/[^/]+\/mcp(?:\/|$)/u.test(url.pathname)) {
+        if (!protectedJournal || !options.cas || !options.protectedPayloadKeyProvider)
+          throw new KernelError("PROTECTED_PAYLOAD_UNAVAILABLE", "MCP 资料接入需要受保护的存储", "配置受保护存储后重试");
+        const result = await dispatchMcpRequest({ store: options.store, cas: options.cas, keyProvider: options.protectedPayloadKeyProvider,
+          protectedJournal, now, id: nextId, request, tenantId: TENANT_ID, principalId: ACTOR_ID,
+          ...(options.mcpSecrets ? { secrets: options.mcpSecrets } : {}), ...(options.mcpTransport ? { transport: options.mcpTransport } : {}),
+          ...(typeof mutationKey === "string" ? { mutationKey } : {}) });
+        if (result) return json(result.data, result.status, traceId);
+      }
       const businessContextPath = /^\/v2\/workspaces\/([^/]+)\/business-context\/([^/]+)\/([^/]+)$/u.exec(url.pathname);
       if (businessContextPath && request.method === "GET") {
         if (!protectedJournal) throw new KernelError("BUSINESS_PROTECTED_STORAGE_REQUIRED", "经营资料需要受保护的事件存储", "配置受保护存储后重试");
@@ -1489,6 +1520,9 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         );
         return json(workspace, 201, traceId);
       }
+      const collaboration = await dispatchTaskCollaborationRequest({ request, store: options.store, protectedJournal, now, id: nextId,
+        tenantId: TENANT_ID, principalId: ACTOR_ID, ...(typeof mutationKey === "string" ? { mutationKey } : {}) });
+      if (collaboration) return json(collaboration.data, collaboration.status, traceId);
       const workspaceMatch = url.pathname.match(/^\/v2\/workspaces\/([^/]+)$/u);
       if (workspaceMatch && request.method === "GET") {
         const workspace = await authorizedWorkspace(
@@ -1968,7 +2002,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
           return { ...item, navigation: { threadId: thread.id, pluginId: thread.pluginId,
             ...(thread.resourceRef ? { resourceRef: thread.resourceRef } : {}) } };
         }));
-        const notices = await options.store.transact(TENANT_ID, tx => readFollowupNotices(tx, TENANT_ID, ACTOR_ID, workspaceId));
+        const notices = await options.store.transact(TENANT_ID, tx => readLocalNotifications(tx, TENANT_ID, ACTOR_ID, workspaceId));
         return json([...linked, ...notices.filter(item => !allowed || allowed.has(item.workspaceId))], 200, traceId);
       }
       const approvalMatch = url.pathname.match(/^\/v2\/approvals\/([^/]+)\/decisions$/u);
@@ -2042,13 +2076,18 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         if (!asset) return notFound(traceId);
         await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, asset.workspaceId);
         if (url.searchParams.size) throw new KernelError("INVALID_BODY", "附件接口不接受查询参数", "使用附件元数据或文件下载接口");
+        await options.store.transact(TENANT_ID, tx => {
+          const scope = { tenantId: TENANT_ID, workspaceId: asset.workspaceId, principalId: ACTOR_ID };
+          assertAssetMembership(tx, scope); assertDerivedAssetProvenance(tx, scope, asset, validateHistoricalHostContextSource);
+        });
         if (!assetMatch[2]) return json(asset, 200, traceId);
         if (!options.cas) throw new KernelError("ASSET_STORE_UNAVAILABLE", "成果文件暂不可用", "检查对象存储连接");
         if (assetMatch[2] === '/extraction') return json(await readAssetExtraction({
-          store: options.store, cas: options.cas, tenantId: TENANT_ID, principalId: ACTOR_ID, asset,
+          store: options.store, cas: options.cas, tenantId: TENANT_ID, principalId: ACTOR_ID, asset, validateContextSource: validateHistoricalHostContextSource,
           ...(options.protectedPayloadKeyProvider ? { protectedPayloadKeyProvider: options.protectedPayloadKeyProvider } : {}),
         }), 200, traceId);
         const content = await readAssetContent({
+          principalId: ACTOR_ID, validateContextSource: validateHistoricalHostContextSource,
           store: options.store,
           cas: options.cas,
           tenantId: TENANT_ID,
@@ -2057,15 +2096,20 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
             ? { protectedPayloadKeyProvider: options.protectedPayloadKeyProvider }
             : {}),
         });
-        await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, asset.workspaceId);
-        await options.store.transact(TENANT_ID, tx => assertContextSource(tx, { tenantId: TENANT_ID, workspaceId: asset.workspaceId }, { namespace: 'asset', resourceId: asset.id, streamVersion: asset.streamVersion, digest: asset.digest }));
-        return new Response(content, {
-          headers: {
-            "content-type": asset.mediaType,
-            "content-length": String(asset.byteLength),
-            "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(asset.fileName)}`,
-          },
-        });
+        try {
+          await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, asset.workspaceId);
+          await options.store.transact(TENANT_ID, tx => {
+            const scope = { tenantId: TENANT_ID, workspaceId: asset.workspaceId, principalId: ACTOR_ID };
+            assertAssetMembership(tx, scope); assertDerivedAssetProvenance(tx, scope, asset, validateHistoricalHostContextSource);
+          });
+          return new Response(content, {
+            headers: {
+              "content-type": asset.mediaType,
+              "content-length": String(asset.byteLength),
+              "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(asset.fileName)}`,
+            },
+          });
+        } finally { content.fill(0); }
       }
       if (assetMatch && !assetMatch[2] && request.method === "DELETE") {
         const body = await readBody(request);
@@ -2647,6 +2691,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         );
         if (!opportunity) throw new KernelError("NOT_FOUND", "机会不存在", "刷新机会列表");
         const hydrated = await hydrateOpcOpportunity({
+          principalId: ACTOR_ID, validateContextSource: validateHostContextSource,
           store: options.store,
           tenantId: TENANT_ID,
           workspaceId,
@@ -2665,6 +2710,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         const workspace = await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId, "operate");
         await ensurePluginsActive(TENANT_ID, workspace, tenantRuntime, ACTOR_ID);
         const sourceOptions = {
+          principalId: ACTOR_ID, validateContextSource: validateHostContextSource,
           store: options.store,
           tenantId: TENANT_ID,
           workspaceId,
@@ -2712,6 +2758,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         );
         if (!opportunity) throw new KernelError("NOT_FOUND", "机会不存在", "刷新机会列表");
         const hydrated = await hydrateOpcOpportunity({
+          principalId: ACTOR_ID, validateContextSource: validateHostContextSource,
           store: options.store,
           tenantId: TENANT_ID,
           workspaceId,
@@ -2735,6 +2782,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         const opportunity = await opcService.get(encodePluginWorkspace(TENANT_ID, workspaceId), opportunityId);
         if (!opportunity) throw new KernelError("NOT_FOUND", "机会不存在", "刷新机会列表");
         const hydrated = await hydrateOpcOpportunity({
+          principalId: ACTOR_ID, validateContextSource: validateHostContextSource,
           store: options.store,
           tenantId: TENANT_ID,
           workspaceId,
@@ -2917,6 +2965,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
     for (const tenantId of tenantIds) {
       if (recoveryStopped) return;
       const tenantRuntime = await runtimeForTenant(tenantId);
+      await recoverTaskNotifications({ store: options.store, protectedJournal, now, id: nextId, tenantId });
       await recoverFollowups({ store: options.store, kernel, cas: options.cas, keyProvider: options.protectedPayloadKeyProvider,
         protectedJournal, now, id: nextId, tenantId, validateContextSource: validateHostContextSource,
         definitions: [tenantRuntime.plugins.definition("opc"), tenantRuntime.plugins.definition("coding")].filter((value): value is PluginDefinitionV1 => Boolean(value)) });
@@ -2999,7 +3048,7 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         const headers: Record<string, string> = Object.fromEntries(response.headers);
         if (origin) {
           headers["access-control-allow-origin"] = origin;
-          headers["access-control-allow-methods"] = "GET,POST,PATCH,DELETE,OPTIONS";
+          headers["access-control-allow-methods"] = "GET,POST,PUT,PATCH,DELETE,OPTIONS";
           headers["access-control-allow-headers"] = "Content-Type,Idempotency-Key,Last-Event-ID,X-Trace-Id";
           headers.vary = "Origin";
         }

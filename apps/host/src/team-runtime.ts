@@ -408,7 +408,7 @@ export function createHostTeamRuntime(rawOptions: HostTeamRuntimeOptions) {
       const query = `${goal.objective}\n${node.title}\n${JSON.stringify(plan.deliverables)}`, maxBytes = Math.floor(16 * 1024 / Math.max(1, assets.length));
       for (const ref of assets) {
         const asset = await options.store.transact(scope.tenantId, tx => { assertSources(tx, scope, [ref]); return tx.getProjection<Asset>('asset', ref.resourceId)!; });
-        const extraction = await readAssetExtraction({ store: options.store, cas: options.cas, protectedPayloadKeyProvider: options.keyProvider, ...scope, asset });
+        const extraction = await readAssetExtraction({ store: options.store, cas: options.cas, protectedPayloadKeyProvider: options.keyProvider, ...scope, asset, validateContextSource: options.validateContextSource });
         if (extraction.status === 'unreadable' || !extraction.blocks.length) fail('GOAL_MATERIAL_UNREADABLE', '节点资料无法读取');
         const blocks = selectMaterialBlocks(extraction.blocks, query, maxBytes);
         const selection = { strategy: 'keyword-v1' as const, queryDigest: sha256(query), totalBlockCount: extraction.blocks.length, maxBytes };

@@ -48,6 +48,7 @@ export default defineConfig({
           { text: "目标与验收", link: "/guides/goals" },
           { text: "团队技能试用与评测", link: "/guides/team-skill-evaluation" },
           { text: "任务资料与业务来源", link: "/guides/materials" },
+          { text: "MCP 只读资料", link: "/guides/mcp-resources" },
           { text: "模型与外部 Agent", link: "/guides/agents-and-models" },
           { text: "CLI 使用", link: "/guides/cli" },
           { text: "故障排查", link: "/troubleshooting" },
@@ -72,6 +73,7 @@ export default defineConfig({
           { text: "P2 持久团队验证", link: "/verification/agent-os-p2-2026-10-10" },
           { text: "P3 经营交付验证", link: "/verification/agent-os-p3-2026-10-10" },
           { text: "P4 复用与跟进验证", link: "/verification/agent-os-p4-2026-10-10" },
+          { text: "P5 接入与交付验证", link: "/verification/agent-os-p5-2026-10-10" },
         ],
       },
       {

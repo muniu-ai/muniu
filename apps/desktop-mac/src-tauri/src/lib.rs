@@ -3,11 +3,12 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
-use std::time::Duration;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tauri_plugin_shell::{process::CommandChild, process::CommandEvent, ShellExt};
+mod binary_export;
 
 const HOST_ADDRESS: &str = "127.0.0.1";
 const HOST_PORT: u16 = 7318;
@@ -190,6 +191,29 @@ async fn choose_repository_directory(app: tauri::AppHandle) -> Result<Option<Str
     .map_err(|_| "文件夹选择未完成，请重试".to_string())?
 }
 
+static EXPORT_TICKETS: OnceLock<Mutex<binary_export::ExportTickets>> = OnceLock::new();
+fn export_tickets() -> &'static Mutex<binary_export::ExportTickets> { EXPORT_TICKETS.get_or_init(|| Mutex::new(binary_export::ExportTickets::default())) }
+#[tauri::command]
+async fn prepare_binary_export(app: tauri::AppHandle, file_name: String, media_type: String, content_sha256: String, byte_length: usize) -> Result<Option<String>, String> {
+    binary_export::validate_metadata(&file_name, &media_type, &content_sha256, byte_length)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let extension = binary_export::extension(&media_type)?;
+        let selected = app.dialog().file().set_title("保存任务成果").set_file_name(&file_name).add_filter("任务成果", &[extension]).blocking_save_file();
+        let Some(selected) = selected else { return Ok(None); };
+        let path = selected.into_path().map_err(|_| "保存位置不是本地文件".to_string())?;
+        export_tickets().lock().map_err(|_| "保存凭据不可用".to_string())?.issue(path, media_type, content_sha256, byte_length, Instant::now()).map(Some)
+    }).await.map_err(|_| "保存位置未选择".to_string())?
+}
+#[tauri::command]
+async fn commit_binary_export(ticket: String, content_base64: String) -> Result<(), String> {
+    let selected = export_tickets().lock().map_err(|_| "保存凭据不可用".to_string())?.take(&ticket, Instant::now())?;
+    tauri::async_runtime::spawn_blocking(move || selected.commit(&content_base64)).await.map_err(|_| "文件保存任务未完成".to_string())?
+}
+#[tauri::command]
+fn discard_binary_export(ticket: String) -> Result<(), String> {
+    export_tickets().lock().map_err(|_| "保存凭据不可用".to_string())?.discard(&ticket); Ok(())
+}
+
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(
@@ -219,6 +243,9 @@ pub fn run() {
             read_desktop_settings,
             write_desktop_settings,
             save_json_export,
+            prepare_binary_export,
+            commit_binary_export,
+            discard_binary_export,
             choose_repository_directory
         ])
         .build(tauri::generate_context!())

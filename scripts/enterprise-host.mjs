@@ -1,5 +1,6 @@
-#!/usr/bin/env node
 // SPDX-License-Identifier: Apache-2.0
+import { VaultMcpSecretStore } from "./lib/enterprise-mcp-secrets.mjs";
+#!/usr/bin/env node
 
 import { createHash } from "node:crypto";
 
@@ -194,6 +195,8 @@ const host = await createAgentOsHost({
   store,
   cas,
   secretStore,
+  ...(vaultConfigured ? { mcpSecrets: new VaultMcpSecretStore({ address: process.env.MN_VAULT_ADDR, token: process.env.MN_VAULT_TOKEN,
+    mount: process.env.MN_VAULT_KV_MOUNT ?? "secret", namespace: process.env.MN_VAULT_NAMESPACE }) } : {}),
   protectedPayloadKeyProvider,
   ...business,
   ...(enterprisePlugins ? {

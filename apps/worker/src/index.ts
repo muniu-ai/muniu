@@ -74,6 +74,7 @@ export * from "./business-provider.js";
 export * from "./business-candidates.js";
 export * from "./coding.js";
 export * from "./memory.js";
+export * from "./mcp-read.js";
 
 export * from "./model-invoker.js";
 
@@ -641,7 +642,7 @@ export interface AgentExecutionStore extends WorkerJobStore, KernelStore {}
 export interface KernelAgentTurnHandlerOptions {
   readonly assertExecutionResources?: (transaction: KernelTransaction, execution: Execution) => void;
   readonly scopeContext?: AgentScope["context"];
-  readonly resolveThreadContext?: (thread: Thread) => Promise<string | undefined>;
+  readonly resolveThreadContext?: (thread: Thread, execution: Execution) => Promise<string | undefined>;
   readonly resolvePluginWorker?: (execution: Execution) => Promise<PluginWorkerV1>;
   readonly store: AgentExecutionStore;
   readonly secretStore: ModelSecretReader;
@@ -861,7 +862,7 @@ export function createKernelAgentTurnHandler(
           id: (sequence) => `${executionId}:runtime:${sequence}`,
         });
       const history = await readThreadHistory(runtimeStore, agentStore, state.execution, options.runtimeProtection?.validateContextSource);
-      const threadContext = await options.resolveThreadContext?.(state.thread);
+      const threadContext = await options.resolveThreadContext?.(state.thread, state.execution);
       const surface = new DefaultSessionSurface();
       return {
         executionId,

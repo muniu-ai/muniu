@@ -159,3 +159,15 @@ test('推荐策略只使用有效已测记录和新任务匹配；停用、撤�
   assert.equal(unavailable.stopControl?.expectedStreamVersion, 3);
   assert.doesNotMatch(JSON.stringify(unavailable), /核对反证/u);
 });
+test('通用技能来源中的派生Asset继承上游撤权，不仅检查导出文件自己的key',async t=>{
+ const f=await fixture(t),saved=await f.create(),scope={tenantId:'local',workspaceId:f.options.workspaceId};
+ const source={namespace:'asset',resourceId:'origin',streamVersion:1,digest:'a'.repeat(64)};
+ await f.alter('asset','origin',{id:'origin',...scope,streamVersion:1,digest:source.digest,protected:true,protectedPayloadRef:'origin-key'});
+ await f.alter('protectedPayloadKey','origin-key',{id:'origin-key'});await f.alter('protectedPayloadKey','derived-key',{id:'derived-key'});
+ await f.alter('asset','derived',{id:'derived',...scope,streamVersion:1,digest:'b'.repeat(64),protected:true,protectedPayloadRef:'derived-key',provenance:{version:1,kind:'goal_export',producer:{namespace:'goal.export',resourceId:'export'},sourceRefs:[source]}});
+ const {digest:_digest,...body}=saved.version;const next={...body,sourceRefs:[{namespace:'asset',resourceId:'derived',streamVersion:1,digest:'b'.repeat(64)}]},version={...next,digest:sha256(next)};await f.alter('team.skillVersion',version.id,version);
+ const ref={namespace:'team.skillVersion',resourceId:version.id,streamVersion:1,digest:version.digest};
+ await f.store.transact('local',tx=>{assert.equal(validateTeamSkillContextSource(tx,scope,ref),true);});
+ await f.alter('assetTombstone','origin',{...scope,id:'origin'});
+ await assert.rejects(f.store.transact('local',tx=>validateTeamSkillContextSource(tx,scope,ref)),{code:'CONTEXT_SOURCE_REVOKED'});
+});

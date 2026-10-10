@@ -1,3 +1,6 @@
+import { MacOsMcpSecretStore } from "./mcp-secrets.js";
+import { createMcpWorkerPorts } from "./mcp-resources.js";
+import { randomUUID } from "node:crypto";
 import { validateHostContextSource } from "./context-source-validation.js";
 import { createHostMemoryReader } from "./memory-sources.js";
 import { homedir } from "node:os";
@@ -7,6 +10,7 @@ import { acquireLocalStateLock, FileCas, MacOsKeychainKeyProvider, SqliteStorage
 import { createNodePublicWebReader } from "@mn/plugin-opc";
 import {
   AgentOsWorker,
+  createMcpReadWorkerHandler,
   createCodingReconciliationVerificationWorkerHandler,
   createCodingSandboxCleanupWorkerHandler,
   createKernelAgentTurnHandler,
@@ -86,6 +90,7 @@ export async function startLocalAgentOsHost(options: StartLocalHostOptions = {})
     });
     if (pendingRestore) throw new Error("恢复目录尚未完成验证，不能启动；请重新从备份恢复到新的状态目录");
     const secretStore = options.secretStore ?? new MacOsKeychainSecretStore();
+    const mcpSecrets = options.mcpSecrets ?? new MacOsMcpSecretStore();
     const hmacKey = await secretStore.getOrCreateBytes("event-hmac", 32);
     const store = new SqliteStorage({ databaseFile: paths.database, hmacKey });
     ownedStore = store;
@@ -111,6 +116,8 @@ export async function startLocalAgentOsHost(options: StartLocalHostOptions = {})
       cas,
       protectedPayloadKeyProvider,
       secretStore,
+      mcpSecrets,
+      ...(options.mcpTransport ? { mcpTransport: options.mcpTransport } : {}),
       ...(options.modelProbe ? { modelProbe: options.modelProbe } : {}),
       ...(options.officialPlugins ? { officialPlugins: options.officialPlugins } : {}),
       ...(options.pluginInstaller ? { pluginInstaller: options.pluginInstaller } : {}),
@@ -193,6 +200,9 @@ export async function startLocalAgentOsHost(options: StartLocalHostOptions = {})
         expectedPluginLockDigest: LOCAL_WORKER_LOCK,
       },
       handlers: {
+        "mcp.resource.read": createMcpReadWorkerHandler(createMcpWorkerPorts({ store, cas, keyProvider: protectedPayloadKeyProvider,
+          protectedJournal: true, secrets: mcpSecrets, now: options.now ?? (() => new Date().toISOString()), id: options.id ?? (() => randomUUID()),
+          ...(options.mcpTransport ? { transport: options.mcpTransport } : {}) })),
         "agent.execution.run": turnHandler,
         "coding.reconciliation.verify": reconciliationVerificationHandler,
         "coding.sandbox.cleanup": sandboxCleanupHandler,
@@ -208,7 +218,7 @@ export async function startLocalAgentOsHost(options: StartLocalHostOptions = {})
         }) } : {}),
       },
       tenantId: "local",
-      kinds: ["agent.execution.run", "coding.reconciliation.verify", "coding.sandbox.cleanup",
+      kinds: ["mcp.resource.read", "agent.execution.run", "coding.reconciliation.verify", "coding.sandbox.cleanup",
         ...(business?.businessProvider ? ["business.action.execute"] : []),
         ...(business?.businessProvider.inquiries ? ["business.candidate.extract"] : [])],
     });

@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
-import type { GoalDeliveryAcceptanceV2, GoalDeliveryDecisionV2, GoalDeliverySetV2, GoalOutputRefV2, GoalPlanV2, GoalReworkV2, GoalV2, WorkspaceMembership } from '@mn/contracts';
+import type { AssetProvenanceV2, GoalExportSourceV2, GoalDeliveryAcceptanceV2, GoalDeliveryDecisionV2, GoalDeliverySetV2, GoalOutputRefV2, GoalPlanV2, GoalReworkV2, GoalV2 } from '@mn/contracts';
 import { KernelError, sha256, type KernelTransaction } from '@mn/kernel';
 import { assertBusinessAccess } from './business-management.js';
 import { validateHostContextSource, validateHistoricalHostContextSource } from './context-source-validation.js';
 import { assertGoalResource } from './goal-runtime.js';
 import { freezeProducedGoalItems, GOAL_PRODUCED_OUTPUT_NAMESPACE, parseProducedGoalItems, type FrozenProducedGoalItem } from './goal-produced-output.js';
 import type { OpcBusinessCandidateOptions } from './opc-business-candidates.js';
+import { assertAssetMembership, type AssetAccessScope } from './asset-provenance.js';
 import type { GoalDeliveryHistoryRecord } from './goal-delivery-service.js';
 
 export interface GoalOutputAccessContext { readonly goal: GoalV2; readonly plan: GoalPlanV2; readonly deliverySet: GoalDeliverySetV2 }
@@ -32,12 +33,23 @@ function accepted(tx: KernelTransaction, context: GoalOutputAccessContext, outpu
 }
 
 /** Reads fixed output proof without creating projections, decisions, or derived artifacts. */
-export function createGoalOutputAccess(options: GoalOutputAccessOptions): OpcBusinessCandidateOptions['ports'] {
+export interface FixedGoalOutputProof { readonly origin: GoalExportSourceV2; readonly sourceRefs: GoalOutputRefV2['sourceRefs']; readonly proposals: import('@mn/contracts').OpcBusinessProposalV2[] | readonly import('@mn/contracts').OpcBusinessProposalV2[]; readonly accepted: boolean; readonly context: GoalOutputAccessContext; readonly output: GoalOutputRefV2; readonly proof: NonNullable<AssetProvenanceV2['proof']> }
+export function createGoalOutputReader(options: GoalOutputAccessOptions): {readOutput(tx:KernelTransaction,scope:AssetAccessScope,origin:GoalExportSourceV2,purpose:Purpose):FixedGoalOutputProof} {
   return { readOutput(tx, scope, origin, purpose) {
-    assertBusinessAccess(tx, scope, purpose !== 'read');
-    const membership = tx.getProjection<WorkspaceMembership>('membership', `${scope.workspaceId}:${scope.principalId}`);
-    if (!membership || membership.tenantId !== scope.tenantId || membership.workspaceId !== scope.workspaceId
-      || membership.principalId !== scope.principalId || !['owner', 'operator'].includes(membership.workspaceRole)) invalid('WORKSPACE_ACCESS_DENIED');
+    assertAssetMembership(tx,scope,purpose !== 'read');
+    const projections = new Map<string,{namespace:string;resourceId:string;digest:string}>(), protectedPayloadRefs = new Set<string>(), executions = new Set<string>();
+    const underlying = tx;
+    tx = new Proxy(tx,{get(target,key){
+      if (key === 'putProjection' || key === 'deleteProjection' || key === 'appendEvent' || key === 'putIdempotency' || key === 'putJob' || key === 'putOutbox' || key === 'settleJob' || key === 'invalidateJob') return () => invalid('GOAL_OUTPUT_READ_ONLY');
+      if (key === 'getProjection') return (namespace:string,id:string) => {
+        const value = underlying.getProjection(namespace,id);
+        if(value && (/^(coding\.|goal\.)/.test(namespace) && namespace !== 'goal.state' || ['execution','execution.context','agent-runtime'].includes(namespace))) projections.set(namespace+':'+id,{namespace,resourceId:id,digest:sha256(value)});
+        if(namespace === 'execution' && value) executions.add(id);
+        if(namespace === 'protectedPayloadKey' && value) protectedPayloadRefs.add(id);
+        return value;
+      };
+      const value=Reflect.get(target,key);return typeof value === 'function' ? value.bind(target) : value;
+    }});
     const current = tx.getProjection<GoalV2>('goal.state', origin.goalId);
     if (!current || current.tenantId !== scope.tenantId || current.workspaceId !== scope.workspaceId) invalid('GOAL_NOT_FOUND');
     if (purpose !== 'read' && (current.planRevisionId !== origin.planRevisionId || current.deliverySetId !== origin.deliverySetId
@@ -104,6 +116,19 @@ export function createGoalOutputAccess(options: GoalOutputAccessOptions): OpcBus
       proposals = value.proposals;
     } else proposals = plan.outputFormat === 'items-v1'
       ? parseProducedGoalItems(output.preview, plan.deliverables, output.sourceRefs).find(item => item.key === output.key)?.proposals ?? [] : [];
-    return { origin, sourceRefs: output.sourceRefs, proposals, accepted: accepted(tx, context, output) };
+    for(const executionId of executions) {
+      const runtime = tx.getProjection<{records:readonly {protectedPayloadRef?:string}[]}>('agent-runtime',executionId);
+      for(const record of runtime?.records ?? []) if(record.protectedPayloadRef) {
+        if(!tx.getProjection('protectedPayloadKey',record.protectedPayloadRef)) invalid('CONTEXT_SOURCE_REVOKED');
+        protectedPayloadRefs.add(record.protectedPayloadRef);
+      }
+    }
+    if(projections.size > 256 || protectedPayloadRefs.size > 256) invalid('GOAL_OUTPUT_PROOF_LIMIT');
+    return { origin, sourceRefs: output.sourceRefs, proposals, accepted: accepted(tx, context, output),context,output,proof:{projections:[...projections.values()],protectedPayloadRefs:[...protectedPayloadRefs]} };
   } };
+}
+
+export function createGoalOutputAccess(options: GoalOutputAccessOptions): OpcBusinessCandidateOptions['ports'] {
+  const reader=createGoalOutputReader(options);
+  return {readOutput(tx,scope,origin,purpose){assertBusinessAccess(tx,scope,purpose !== 'read');return reader.readOutput(tx,scope,origin,purpose);}};
 }

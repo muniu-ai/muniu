@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { sha256, type KernelTransaction } from '@mn/kernel';
-import { createGoalOutputAccess } from '../src/goal-output-access.js';
+import { createGoalOutputAccess,createGoalOutputReader } from '../src/goal-output-access.js';
 
 function fixture() {
   const records = new Map<string, any>(), scope = { tenantId: 't', workspaceId: 'w', principalId: 'u' };
@@ -104,4 +104,13 @@ test('返工保留项从原计划回源，修改项仅解析待修改交付项�
   assert.equal(f.read('create', retainedOrigin).accepted, false);
   assert.equal(f.read('create', { ...retainedOrigin, outputKey: 'addition', outputDigest: output.digest }).proposals[0]?.key, 'new-review');
   f.records.delete('goal.rework:rw'); assert.throws(() => f.read('read', retainedOrigin));
+});
+
+test('中立成果读取检查已移除成员，允许只读角色且保留全部证明和响应密钥',()=>{
+ const f=fixture();f.put('membership','w:u',{tenantId:'t',workspaceId:'w',principalId:'u',workspaceRole:'viewer'});
+ f.put('execution','e',{id:'e',tenantId:'t',workspaceId:'w'});f.put('agent-runtime','e',{records:[{protectedPayloadRef:'response-key'}]});f.put('protectedPayloadKey','response-key',{id:'response-key'});
+ const reader=createGoalOutputReader({assertDelivery(tx){tx.getProjection('execution','e');}}),read=()=>reader.readOutput(f.tx,f.scope,f.origin,'read');
+ const proof=read();assert.ok(proof.proof.projections.some(x=>x.namespace==='goal.plan'));assert.deepEqual(proof.proof.protectedPayloadRefs,['response-key']);
+ f.records.delete('protectedPayloadKey:response-key');assert.throws(read,{code:'CONTEXT_SOURCE_REVOKED'});
+ f.put('membership','w:u',{tenantId:'t',workspaceId:'w',principalId:'u',workspaceRole:'owner',removedAt:'now'});assert.throws(read,{code:'WORKSPACE_ACCESS_DENIED'});
 });

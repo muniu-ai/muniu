@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "cargoLockSha256": "ffac3d7a1a772a3e00625f5b2a50d62c44e151df8abd8117edbfb420242d4e20",
+  "cargoLockSha256": "632fbbe788b5e43288ca14228598c3849d4febbef0755d71b771d2ac2265eb18",
   "source": "crates.io version API",
   "packages": [
     {

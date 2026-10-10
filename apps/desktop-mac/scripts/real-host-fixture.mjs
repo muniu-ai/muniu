@@ -8,7 +8,8 @@ import { createAgentOsHost } from "../../host/dist/index.js";
 import { validateHostContextSource } from "../../host/dist/context-source-validation.js";
 import { assertGoalExecutionResources } from "../../host/dist/goal-runtime.js";
 import { createOpcModelContextReader } from "../../host/dist/index.js";
-import { AgentOsWorker, createKernelAgentTurnHandler } from "../../worker/dist/index.js";
+import { createMcpWorkerPorts } from "../../host/dist/mcp-resources.js";
+import { AgentOsWorker, createMcpReadWorkerHandler, createKernelAgentTurnHandler } from "../../worker/dist/index.js";
 import { KernelProjectionRuntimeStore, PersistentModelBudget } from "../../../packages/agent-runtime/dist/index.js";
 import { InMemoryKernelStore } from "../../../packages/kernel/dist/index.js";
 import { InMemoryKeyProvider, SqliteStorage } from "../../../packages/storage/dist/index.js";
@@ -42,7 +43,15 @@ const cas = {
 };
 const keyProvider = new InMemoryKeyProvider(randomBytes(32));
 const secretStore = { async save(account) { return `keychain://muniu.v2/${account}`; }, async read() { return "fixture-key"; } };
+const mcpFixture = process.env.MN_FIXTURE_MCP === "1";
+const mcpTransport = async ({method,params,assertAllowed}) => {
+  await assertAllowed?.();
+  if(method === "resources/list") return {resultType:"complete",resources:[{uri:"doc:report",name:"MCP 合成资料",mimeType:"text/plain"}]};
+  if(method === "resources/templates/list") return {resultType:"complete",resourceTemplates:[{uriTemplate:"doc:{name}",name:"按名称读取资料",mimeType:"text/plain"}]};
+  return {resultType:"complete",contents:[{uri:params.uri,mimeType:"text/plain",text:"MCP 合成事实：交付前核对来源与范围。"}]};
+};
 const host = await createAgentOsHost({
+  ...(mcpFixture ? {mcpTransport} : {}),
   ...signedUiPluginFixture(),
   ...(["teams","delivery","reuse"].includes(mode) ? { goalPollIntervalMs: 50 } : {}),
   store,
@@ -66,7 +75,7 @@ const agentSimulation = mode === "opc"
 let goalWorkerBusy = false;
 const goalWorker = ["goals", "tasks", "teams", "delivery", "reuse"].includes(mode) ? new AgentOsWorker({ id: "goal-ui-worker", store,
   lock: { engineLockDigest: "fixture", expectedEngineLockDigest: "fixture", pluginLockDigest: "fixture", expectedPluginLockDigest: "fixture" },
-  handlers: { "agent.execution.run": createKernelAgentTurnHandler({ store, secretStore, approvalKernel: host.kernel,
+  handlers: { ...(mcpFixture ? {"mcp.resource.read":createMcpReadWorkerHandler(createMcpWorkerPorts({store,cas,keyProvider,protectedJournal:true,transport:mcpTransport,now,id}))} : {}), "agent.execution.run": createKernelAgentTurnHandler({ store, secretStore, approvalKernel: host.kernel,
     runtimeProtection: { cas, keyProvider, validateContextSource: validateHostContextSource }, assertExecutionResources: assertGoalExecutionResources,
     resolveThreadContext: createOpcModelContextReader({ store, cas, protectedPayloadKeyProvider: keyProvider }),
     modelInvoker: async ({ request }) => ({ text: mode === "reuse" ? reuseModelText(request) : mode === "delivery" ? deliveryModelText(request) : mode === "teams" && request.messages.some(message => message.content.includes("当前职责：独立复核")) ? JSON.stringify({ decision: "pass", findings: [] }) : request.messages.some(message => message.content.includes("你是木牛经营助手")) ? "## 经营建议\n\n区分 **事实** 与建议；缺少收支资料。\n\n| 行动 | 完成条件 |\n| --- | --- |\n| 核对订单 | 确认交付日期 |\n\n<img src=x onerror=alert(1)>" : "三个验证问题：近期如何获客、现有方式有哪些不足、是否愿意参加下一轮访谈。现有资料是研究起点，付费意愿仍属待验证假设。", toolCalls: [], usage: { inputTokens: 10, cachedInputTokens: 0, outputTokens: 20 } }),

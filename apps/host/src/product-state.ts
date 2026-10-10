@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-import { readFollowupNotices } from "./followup-notices.js";
+import { readLocalNotifications } from "./task-collaboration.js";
 import { appendKernelEvent } from "@mn/kernel";
 
 import type { Approval, Asset, Deliverable, DeliverableSummaryV2, Execution, ExecutionAuthority, JsonObject, ProductNavigationV2, Thread, Workspace, CodingTaskSummaryV2 } from "@mn/contracts";
@@ -751,7 +751,7 @@ export async function workspaceHome(store: KernelStore, tenantId: string, worksp
       ],
       blockers: [...inbox.filter((item) => item.kind !== "approval").map((item) => ({
         id: item.id, title: item.title, detail: item.summary,
-      })), ...(principalId ? readFollowupNotices(transaction, tenantId, principalId, workspaceId).map(item => ({ id: item.id, title: item.title, detail: item.summary, ...(item.navigation ? { navigation: item.navigation } : {}) })) : [])],
+      })), ...(principalId ? readLocalNotifications(transaction, tenantId, principalId, workspaceId).filter(item => item.readState !== "read").map(item => ({ id: item.id, title: item.title, detail: item.summary, ...(item.navigation ? { navigation: item.navigation } : {}) })) : [])],
       approvals: inbox.filter((item) => item.kind === "approval").flatMap((item) => {
         const approval = approvalsById.get(item.id.replace(/^approval:/u, ""));
         return approval ? [{

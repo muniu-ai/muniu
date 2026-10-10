@@ -3,8 +3,10 @@ import { appendKernelEvent } from "@mn/kernel";
 
 import { createHash } from "node:crypto";
 
-import type { Asset, AssetTombstone, JsonObject, Workspace } from "@mn/contracts";
-import { KernelError, sha256, type KernelStore } from "@mn/kernel";
+import type { Asset, AssetProvenanceV2, AssetTombstone, JsonObject, Workspace } from "@mn/contracts";
+import { KernelError, sha256, type KernelStore, type KernelTransaction } from "@mn/kernel";
+import type { ContextSourceValidator } from '@mn/worker';
+import { assertAssetMembership, assertDerivedAssetProvenance, validateAssetProvenanceInput, type AssetAccessScope } from './asset-provenance.js';
 import {
   AttachmentValidationError,
   EnvelopeCipher,
@@ -62,6 +64,51 @@ export interface ReadAssetContentOptions {
   readonly protectedPayloadKeyProvider?: KeyProvider;
   readonly tenantId: string;
   readonly asset: Asset;
+  readonly principalId?: string;
+  readonly validateContextSource?: ContextSourceValidator;
+}
+
+export interface PreparedProtectedAsset {
+  readonly asset: Asset;
+  readonly contentSha256: string;
+  readonly keyRecord: ProtectedPayloadKeyRecordV1;
+}
+const preparedAssets = new WeakSet<PreparedProtectedAsset>();
+export async function prepareProtectedAsset(options: {
+  readonly cas: ContentAddressedStorage; readonly keyProvider: KeyProvider; readonly tenantId: string; readonly workspaceId: string;
+  readonly assetId: string; readonly fileName: string; readonly mediaType: string; readonly bytes: Uint8Array;
+  readonly now: () => string; readonly id: (kind: string) => string;
+}): Promise<PreparedProtectedAsset> {
+  const bytes = Buffer.from(options.bytes);
+  try {
+    validateAttachments([{fileName:options.fileName,mediaType:options.mediaType,bytes}]);
+    const contentSha256 = createHash('sha256').update(bytes).digest('hex'), createdAt = options.now();
+    const protectedPayloadRef = options.id('protected-payload');
+    const encrypted = await new EnvelopeCipher(options.keyProvider).encrypt(bytes, {tenantId:options.tenantId,purpose:`asset:${options.assetId}`});
+    const ciphertext = Buffer.from(encrypted.ciphertext,'base64');
+    const stored = await options.cas.put(ciphertext); verifyStoredObject(stored,ciphertext);
+    const asset: Asset = {id:options.assetId,tenantId:options.tenantId,workspaceId:options.workspaceId,streamVersion:1,
+      digest:stored.digest,byteLength:bytes.length,fileName:options.fileName,mediaType:options.mediaType,protected:true,protectedPayloadRef,createdAt,updatedAt:createdAt};
+    const prepared = Object.freeze({asset:Object.freeze(asset),contentSha256,keyRecord:Object.freeze({version:1 as const,id:protectedPayloadRef,workspaceId:options.workspaceId,
+      assetId:options.assetId,algorithm:encrypted.algorithm,nonce:encrypted.nonce,tag:encrypted.tag,context:encrypted.context,wrappedKey:encrypted.wrappedKey,createdAt})});
+    preparedAssets.add(prepared); return prepared;
+  } finally { bytes.fill(0); }
+}
+export function commitPreparedDerivedAssetInTransaction(tx: KernelTransaction, scope: AssetAccessScope,
+  prepared: PreparedProtectedAsset, provenance: AssetProvenanceV2,
+  options: {readonly now:()=>string;readonly id:(kind:string)=>string;readonly validateContextSource?:ContextSourceValidator}): Asset {
+  assertAssetMembership(tx,scope,true);
+  if (!preparedAssets.has(prepared) || prepared.asset.tenantId !== scope.tenantId || prepared.asset.workspaceId !== scope.workspaceId
+    || tx.getProjection('asset',prepared.asset.id) || tx.getProjection('assetTombstone',prepared.asset.id))
+    throw new KernelError('ASSET_PREPARATION_INVALID','派生资料准备状态无效','重新生成资料');
+  validateAssetProvenanceInput(provenance,prepared.asset.id);
+  const asset: Asset = {...prepared.asset,provenance:structuredClone(provenance)};
+  tx.putProjection(PROTECTED_PAYLOAD_KEY_NAMESPACE,prepared.keyRecord.id,prepared.keyRecord);
+  tx.putProjection('asset',asset.id,asset);
+  assertDerivedAssetProvenance(tx,scope,asset,options.validateContextSource);
+  appendKernelEvent(tx,{tenantId:scope.tenantId,aggregateType:'asset',aggregateId:asset.id,expectedStreamVersion:0,type:'asset.created',actorId:scope.principalId,
+    generation:0,correlationId:options.id('correlation'),publicPayload:{workspaceId:scope.workspaceId,digest:asset.digest,mediaType:asset.mediaType,byteLength:asset.byteLength,protected:true},protectedPayloadRef:asset.protectedPayloadRef});
+  return asset;
 }
 
 export interface DeleteAssetOptions {
@@ -344,6 +391,16 @@ export async function createAssets(options: CreateAssetsOptions): Promise<readon
 }
 
 export async function readAssetContent(options: ReadAssetContentOptions): Promise<Buffer> {
+  const checkDerived = () => options.store.transact(options.tenantId,tx => {
+    const current = tx.getProjection<Asset>('asset',options.asset.id);
+    if (!options.asset.provenance && !current?.provenance) return;
+    if (!options.principalId) throw new KernelError('WORKSPACE_ACCESS_DENIED','派生资料读取必须绑定当前身份','使用受保护资料读取入口');
+    const scope = {tenantId:options.tenantId,workspaceId:options.asset.workspaceId,principalId:options.principalId};
+    assertAssetMembership(tx,scope);
+    if (!current || sha256(current) !== sha256(options.asset)) throw new KernelError('CONTEXT_SOURCE_CHANGED','资料元信息已变化','刷新资料');
+    assertDerivedAssetProvenance(tx,scope,current,options.validateContextSource);
+  });
+  await checkDerived();
   const stored = await options.cas.get(options.asset.digest);
   verifyStoredObject({ digest: options.asset.digest, byteLength: options.asset.byteLength }, stored);
   if (!options.asset.protected) return Buffer.from(stored);
@@ -383,7 +440,7 @@ export async function readAssetContent(options: ReadAssetContentOptions): Promis
     plaintext.fill(0);
     throw new Error("Decrypted asset length does not match its descriptor");
   }
-  return plaintext;
+  try { await checkDerived(); return plaintext; } catch(error) { plaintext.fill(0); throw error; }
 }
 
 export async function deleteAsset(options: DeleteAssetOptions): Promise<AssetTombstone> {

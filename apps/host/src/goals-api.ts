@@ -1,3 +1,4 @@
+import { listAssignedGoals } from './task-collaboration.js';
 // SPDX-License-Identifier: Apache-2.0
 import { recordTeamExternalGoalUsage } from './team-goals.js';
 import { isBusinessContextRef, assertBusinessContextRef } from "./business-context.js";
@@ -42,7 +43,7 @@ export async function dispatchGoalRequest(options: GoalRequestOptions): Promise<
     const teamRuntime = createHostTeamRuntime(teamOptions);
     if (templates) return { status: 200, data: await teamRuntime.templates(scope) };
     const service = await createHostGoalRuntime(readOptions).service(scope);
-    if (collection) return { status: 200, data: await listGoals(service) };
+    if (collection) return { status: 200, data: await listAssignedGoals(service, await listGoals(service)) };
     const goalId = text(decodeURIComponent(item![1]!));
     if (item![2] === "nodes") return { status: 200, data: await teamRuntime.progress(scope, goalId) };
     const detail = await getGoalForCoordination({ ...service, goalId });
@@ -65,7 +66,7 @@ export async function dispatchGoalRequest(options: GoalRequestOptions): Promise<
     const bound = await options.store.transact(scope.tenantId, tx => goalThreadResources(tx, scope, threadId));
     if (selected.some(ref => ref.namespace !== "asset" && !isBusinessContextRef(ref) && !bound.some(item => item.namespace === ref.namespace && item.resourceId === ref.resourceId))) invalid();
     await options.store.transact(scope.tenantId, tx => {
-      for (const ref of selected.filter(item => item.namespace === "asset")) assertAssetReader(tx, scope, ref);
+      for (const ref of selected.filter(item => item.namespace === "asset")) assertAssetReader(tx, scope, ref, options.validateContextSource);
       for (const ref of selected.filter(isBusinessContextRef)) assertBusinessContextRef(tx, scope, ref);
     });
     if (new Set(selected.map(ref => `${ref.namespace}:${ref.resourceId}`)).size !== selected.length) invalid();

@@ -126,3 +126,35 @@ npm run test -w @mn/cli
 ```
 
 不要通过 CLI 参数传递模型密钥。模型连接应由 Desktop 向导创建，密钥由 Host 写入 Keychain 或企业密钥系统。
+
+## 责任、导出与只读连接
+
+```bash
+mn goal assignment GOAL_ID --workspace WORKSPACE_ID --json
+mn goal assign GOAL_ID --workspace WORKSPACE_ID --version 0 --responsible PRINCIPAL_ID --key ASSIGN_REQUEST --json
+mn goal unassign GOAL_ID --workspace WORKSPACE_ID --version ASSIGNMENT_VERSION --key CLEAR_REQUEST --json
+mn notification read NOTICE_ID --workspace WORKSPACE_ID --version NOTICE_VERSION --key READ_REQUEST --json
+mn goal export GOAL_ID --workspace WORKSPACE_ID --plan PLAN_ID --delivery-set SET_ID --output-key OUTPUT_KEY --output-digest OUTPUT_DIGEST --format pdf --key EXPORT_REQUEST --json
+mn goal exports GOAL_ID --workspace WORKSPACE_ID --json
+mn goal export-save GOAL_ID --workspace WORKSPACE_ID --export EXPORT_ID --output ./report.pdf --json
+```
+
+责任版本取 `goal assignment` 的 `assignment.streamVersion`，初次为 0。只允许选择 Host 标记可用的成员；赋责不改变任务读取权限、执行身份或授权。通知已读版本取收件箱记录，`notification unread` 可标回未读；这些操作不处理审批或验收。
+
+导出固定计划、成果集、成果项及摘要，支持 `pdf`、`docx` 和 `xlsx`。`goal export` 创建导出记录，`export-save` 读取同一记录并保存文件，下载失败无须重新生成。保存前检查类型、20 MiB 上限、长度和明文摘要；文件按私有权限创建，不覆盖已有文件或符号链接。导出记录的 `accepted` 仅表示导出时 Agent 成果是否已接收，不表示客户验收。
+
+```bash
+mn mcp create --workspace WORKSPACE_ID --file connection.json --key CONNECTION_REQUEST --json
+mn mcp list --workspace WORKSPACE_ID --json
+mn mcp requests --workspace WORKSPACE_ID --json
+mn mcp request CONNECTION_ID --workspace WORKSPACE_ID --version CONNECTION_VERSION --file request.json --key READ_REQUEST --json
+mn mcp show REQUEST_ID --workspace WORKSPACE_ID --json
+mn mcp disable CONNECTION_ID --workspace WORKSPACE_ID --version CONNECTION_VERSION --key DISABLE_REQUEST --json
+mn mcp rotate CONNECTION_ID --workspace WORKSPACE_ID --version CONNECTION_VERSION --credential-file ./credential.txt --key ROTATE_REQUEST --json
+```
+
+连接文件填写 `label`、HTTPS `endpoint`、`expiresAt`、`uriPrefixes` 和 `maxRequests`；需要身份验证时可填写 `bearerToken`，使用后妥善处理本地凭据文件。不要把凭据放进命令行参数。MCP 响应不返回凭据。
+
+读取请求文件先用 `{"kind":"resources"}` 或 `{"kind":"templates"}` 发现获准资料。应用重启后通过 `mcp requests` 找到已有请求，再使用 `mcp show` 读取；请求状态列表不返回资源正文或附件引用。请求返回后使用 `mcp show` 查询；只有 `completed` 才能选中目录结果。导入填写 `kind:"read"` 和 `selection:{catalogRequestId,uri}`；简单模板使用 `uriTemplate` 与 `variables`。分页使用上一页 `nextCursor`。读取次数包含目录、模板和资料读取，结果未知时先核对，不通过新请求重跑。
+
+导入返回受保护 `assetRefs`，可通过 `asset extract` 核对解析状态与位置，再明确加入目标 `resourceRefs`。快照版本不会随远端更新。连接只提供资料发现和读取，不开放工具调用、脚本或消息发送。响应丢失时保持请求参数和 `--key` 不变重试。

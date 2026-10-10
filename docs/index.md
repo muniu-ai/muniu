@@ -35,7 +35,7 @@ CLI 帮助、API 路由表、OpenAPI 和内置插件目录由源码生成。改�
 - [安全边界](./security/overview.md)、[日志脱敏](./security/redaction-policy.md)、[密钥扫描](./security/secret-scanning.md)：理解信任与数据处理规则。
 - [macOS 发布](./release/macos.md)、[签名与公证](./release/apple-developer-id.md)：制作和验收安装包；源码构建成功不代表已完成分发验收。
 - [架构决策](./adr/index.md)：理解已采用的版本和模块边界。
-- [经营到交付实施计划](./proposals/agent-os-delivery-2026-10-10.md)：当前获批 P0—P5 分期；参阅 [P2 固定团队验证](./verification/agent-os-p2-2026-10-10.md)、[P3 经营交付验证](./verification/agent-os-p3-2026-10-10.md)及 [P4 复用与跟进进度](./verification/agent-os-p4-2026-10-10.md)。
+- [经营到交付实施计划](./proposals/agent-os-delivery-2026-10-10.md)：当前获批 P0—P5 分期；参阅 [P2 固定团队验证](./verification/agent-os-p2-2026-10-10.md)、[P3 经营交付验证](./verification/agent-os-p3-2026-10-10.md)、[P4 复用与跟进验证](./verification/agent-os-p4-2026-10-10.md)及 [P5 接入与交付进度](./verification/agent-os-p5-2026-10-10.md)。
 - [多 Agent、多模型提案](./proposals/agent-os-multi-agent-optimization-2026-10-09.md)：总体设计与分期；本次采用范围见 [S0 复用审查](./verification/agent-os-s0-reuse-2026-10-09.md)、[S1 决策](./adr/0013-goal-delivery-orchestration.md)和[验证记录](./verification/agent-os-s1-2026-10-09.md)。
 - [OPC 经营管理体系](./proposals/opc-business-management-2026-10-09.md)：完整经营领域、曾鸣著作依据及产品实施分期。
 - [工程验收记录](./verification/application-boundaries-2026-09-28.md)：查看对应提交的实际检查及未完成项。

@@ -1,3 +1,4 @@
+import { McpConnectionsPanel } from "./components/McpConnectionsPanel";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity, Bot, Boxes, BriefcaseBusiness, ChevronDown, Code2, Command, FileCheck2,
@@ -11,7 +12,7 @@ import { RepositoryDialog } from "./components/RepositoryDialog";
 import { PluginBoundary } from "./components/PluginBoundary";
 import { PluginCard } from "./components/PluginSurface";
 import { PluginManager } from "./components/PluginManager";
-import type { BusinessContextTargetV2, BusinessManagementViewV1, GoalV2, TeamSkillVersionV2, ProductNavigationV2, WorkspacePluginSurfaceV1 } from "@mn/contracts";
+import type { BusinessContextTargetV2, BusinessManagementViewV1, GoalListItemV2, GoalResourceRefV2, TeamSkillVersionV2, ProductNavigationV2, WorkspacePluginSurfaceV1 } from "@mn/contracts";
 import { ErrorState, Loading } from "./components/Status";
 import {
   ActivityPage, AgentsPage, DeliverablesPage, HomePage, InboxPage, IntegrationsPage,
@@ -62,8 +63,9 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces, initi
   const [newTaskRequest, setNewTaskRequest] = useState(0);
   const [captureBusy, setCaptureBusy] = useState(false);
   const [notice, setNotice] = useState<string>();
-  const [goals, setGoals] = useState<readonly GoalV2[]>([]);
+  const [goals, setGoals] = useState<readonly GoalListItemV2[]>([]);
   const [business, setBusiness] = useState<BusinessManagementViewV1>();
+  const [importedMaterials,setImportedMaterials]=useState<{refs:readonly GoalResourceRefV2[];workspaceId:string;sequence:number}>();
   const [skillTrial, setSkillTrial] = useState<{ version: TeamSkillVersionV2; sequence: number }>();
   const [goalTarget, setGoalTarget] = useState<{ id: string; sequence: number }>();
   const [businessDelegationTarget, setBusinessDelegationTarget] = useState<BusinessContextTargetV2 & { readonly sequence: number }>();
@@ -280,7 +282,7 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces, initi
         {coreError && page === "home" && <ErrorState detail={coreError} action="检查 Host 后重试" onRetry={() => void refreshCore()} />}
         {!coreLoading && !coreError && page === "home" && <HomePage summary={home} goals={goals} business={business} onGoal={openGoal} onObject={openNavigation} onNavigate={(target) => setPage(target as PageId)} />}
         {page === "workspaces" && <WorkspacesPage workspaces={workspaces} currentId={workspace.id} members={members} onSelect={selectWorkspace} />}
-        <div hidden={page !== "goals"}><GoalsPage skillTrial={skillTrial} onRecordDelivery={draft=>{setBusinessTarget(undefined);setBusinessDeliveryDraft(current=>({...draft,sequence:(current?.sequence??0)+1}));setPage("opc");}} businessTarget={businessDelegationTarget} target={goalTarget} active={page === "goals"} onTaskCreated={() => { void refreshCoding(); void refreshCore(); }} key={workspace.id} pluginIds={workspace.activePluginIds} repositories={repositories} repositoryId={repositoryId} onRepository={setCaptureRepositoryId} onRegisterRepository={() => setRepositoryDialogOpen(true)} onSettings={() => setPage("settings")} newTaskRequest={newTaskRequest} api={api} workspaceId={workspace.id} onOpenThread={thread => {
+        <div hidden={page !== "goals"}><GoalsPage importedMaterials={importedMaterials?.workspaceId===workspace.id?importedMaterials:undefined} skillTrial={skillTrial} onRecordDelivery={draft=>{setBusinessTarget(undefined);setBusinessDeliveryDraft(current=>({...draft,sequence:(current?.sequence??0)+1}));setPage("opc");}} businessTarget={businessDelegationTarget} target={goalTarget} active={page === "goals"} onTaskCreated={() => { void refreshCoding(); void refreshCore(); }} key={workspace.id} pluginIds={workspace.activePluginIds} repositories={repositories} repositoryId={repositoryId} onRepository={setCaptureRepositoryId} onRegisterRepository={() => setRepositoryDialogOpen(true)} onSettings={() => setPage("settings")} newTaskRequest={newTaskRequest} api={api} workspaceId={workspace.id} onOpenThread={thread => {
           if (thread.pluginId === "coding") { setSelectedCodingTaskId(thread.resourceRef?.resourceId); setPage("coding"); }
           else { setSelectedOpportunityId(thread.resourceRef?.resourceId); setPage("opc-validation"); }
         }} /></div>
@@ -288,7 +290,7 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces, initi
         {page === "deliverables" && <DeliverablesPage items={deliverables} goals={goals} onGoal={openGoal} onOpen={(item) => openNavigation(item.navigation)} />}
         {page === "activity" && <ActivityPage items={activity} professional={professional} />}
         {page === "agents" && <div className="page-stack"><TeamSkillsPanel key={workspace.id} api={api} workspaceId={workspace.id} onTrial={version => { setBusinessDelegationTarget(undefined); setSkillTrial(current => ({ version, sequence: (current?.sequence ?? 0) + 1 })); setGoalTarget(undefined); setNewTaskRequest(value => value + 1); setPage("goals"); }} /><FollowupsPanel api={api} workspaceId={workspace.id} onGoal={openGoal} /><AgentsPage catalog={agentCatalog} /></div>}
-        {page === "integrations" && <IntegrationsPage onOpenSettings={() => setPage("settings")} />}
+        {page === "integrations" && <div className="page-stack"><IntegrationsPage onOpenSettings={() => setPage("settings")} /><McpConnectionsPanel key={workspace.id} api={api} workspaceId={workspace.id} onUse={refs=>{setImportedMaterials(current=>({refs,workspaceId:workspace.id,sequence:(current?.sequence??0)+1}));setGoalTarget(undefined);setNewTaskRequest(value=>value+1);setPage("goals");}} /></div>}
         {page === "settings" && <div className="page-stack"><SettingsPage workspace={workspace} memories={memories} api={api} onModeChanged={updateWorkspace} onMemoriesChanged={() => void refreshCore()} /><PluginManager api={api} workspace={workspace} onChanged={updateWorkspace} /></div>}
         {surfaces.flatMap((surface) => (surface.ui?.pages ?? []).filter((entry) => page === `plugin:${surface.pluginId}:${entry.routeId}`).map((entry) => <PluginBoundary key={`${surface.pluginId}:${surface.version}:${entry.routeId}`} pluginName={surface.pluginId}><div className="page-stack"><h1>{entry.title}</h1>{entry.cards.map((card, index) => <PluginCard key={index} card={card} pluginId={surface.pluginId} workspaceId={workspace.id} api={api} />)}</div></PluginBoundary>))}
         {page === "home" && surfaces.flatMap((surface) => (surface.ui?.widgets ?? []).map((widget) => <PluginBoundary key={`${surface.pluginId}:${surface.version}:${widget.widgetId}`} pluginName={surface.pluginId}><PluginCard card={widget.card} pluginId={surface.pluginId} workspaceId={workspace.id} api={api} /></PluginBoundary>))}
