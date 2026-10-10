@@ -30,7 +30,7 @@ const plan: GoalTeamPlanRevisionV2 = {
     { kind: "join", id: "join", title: "整理成果", dependsOn: ["confirm"], inputs: [], outputs: [{ key: "report", kind: "artifact", description: "最终调研报告" }], mappings: [{ outputKey: "report", fromNodeId: "review", fromOutputKey: "checked" }] },
   ],
 };
-export function teamPlanMarkup() { return renderToStaticMarkup(<GoalPlanView plan={plan} />); }
+export function teamPlanMarkup(overrides: Partial<GoalTeamPlanRevisionV2> = {}) { return renderToStaticMarkup(<GoalPlanView plan={{ ...plan, ...overrides }} />); }
 export function singlePlanMarkup() {
   return renderToStaticMarkup(<GoalPlanView plan={{ ...executor, id: plan.id, goalId: plan.goalId, threadId: plan.threadId, revision: 1, inputVersion: 1,
     criteriaVersion: plan.criteriaVersion, budget, resourceRefs: [source], deliverables: plan.deliverables, digest: "single", createdAt: plan.createdAt }} />);

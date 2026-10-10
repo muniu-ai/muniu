@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+import { teamSkillRefSchema } from "./team-skill-api-schema.js";
 import type { JsonObject } from "./json.js";
 
 export function goalMutationSchema(operationId: string): JsonObject | undefined {
@@ -21,7 +22,7 @@ export function goalMutationSchema(operationId: string): JsonObject | undefined 
       scheduling: object(["runnerId", "strategy"], { runnerId: { enum: ["auto", "builtin", "codex-cli", "claude-cli"] }, strategy: { enum: ["quality", "balanced", "cost"] }, modelBindingId: string, expectedValueMinorUnits: minor, timeCostMinorUnitsPerHour: minor }),
     }),
     object(["workspaceId", "expectedStreamVersion", "kind", "templateId", "templateVersion", "modelBindingId"], { ...base,
-      kind: { const: "team-v1" }, templateId: { enum: ["research-summary", "business-proposal", "code-delivery"] }, templateVersion: { const: "1" }, modelBindingId: string }),
+      kind: { const: "team-v1" }, templateId: { enum: ["research-summary", "business-proposal", "code-delivery"] }, templateVersion: { const: "1" }, modelBindingId: string, skillRef: teamSkillRefSchema() }),
   ] };
   if (operationId === "commandGoal") return { oneOf: [
     object(["workspaceId", "expectedStreamVersion", "command", "usage", "source"], { ...base, command: { const: "record_external_usage" }, source: { type: "string", minLength: 1, maxLength: 2000 }, usage: object(["tokens", "costMinorUnits", "currency"], { tokens: version, costMinorUnits: minor, currency: { type: "string", pattern: "^[A-Z]{3}$" } }) }),

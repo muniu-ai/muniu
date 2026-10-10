@@ -10,6 +10,8 @@ import type {
 import {
   canReadMemory,
   PROTECTED_PAYLOAD_KEY_NAMESPACE,
+  KernelError, sha256,
+  type MemorySourceScope, type MemorySourceValidationPort,
   type KernelStore,
 } from "@mn/kernel";
 import {
@@ -20,10 +22,11 @@ import {
 } from "@mn/storage";
 
 export interface AgentMemoryReader {
-  read(tenantId: string, memory: MemoryRecord): Promise<JsonObject>;
+  read(tenantId: string, memory: MemoryRecord, scope?: MemorySourceScope): Promise<JsonObject>;
 }
 
 export interface EncryptedMemoryReaderOptions {
+  readonly memorySources?: MemorySourceValidationPort;
   readonly store: KernelStore;
   readonly cas: ContentAddressedStorage;
   readonly keyProvider: KeyProvider;
@@ -33,7 +36,17 @@ export function createEncryptedMemoryReader(
   options: EncryptedMemoryReaderOptions,
 ): AgentMemoryReader {
   return {
-    async read(tenantId, memory) {
+    async read(tenantId, memory, scope) {
+      const assert = async () => options.store.transact(tenantId, tx => {
+        const current = tx.getProjection<MemoryRecord>('memory', memory.id);
+        if (!current || sha256(current) !== sha256(memory)) throw new KernelError('MEMORY_CHANGED', '记忆已变化', '重新读取记忆');
+        if (!current.protectedPayloadRef || !tx.getProjection(PROTECTED_PAYLOAD_KEY_NAMESPACE, current.protectedPayloadRef)) throw new KernelError('CONTEXT_SOURCE_REVOKED', '记忆的数据密钥已撤回', '重新选择有效记忆');
+        if (memory.provenance) {
+          if (!options.memorySources || !scope) throw new KernelError('MEMORY_SOURCE_VALIDATOR_REQUIRED', '记忆来源校验尚未配置', '检查 Host 组合配置');
+          options.memorySources.assert(tx, scope, memory.provenance, 'read');
+        }
+      });
+      await assert();
       if (!memory.protectedPayloadRef) {
         throw new Error(`Memory ${memory.id} does not have a protected payload`);
       }
@@ -43,7 +56,7 @@ export function createEncryptedMemoryReader(
           memory.protectedPayloadRef!,
         ));
       if (!keyRecord) throw new Error(`Memory ${memory.id} data key was destroyed`);
-      return readProtectedJson({
+      const value = await readProtectedJson({
         tenantId,
         workspaceId: memory.workspaceId,
         ownerType: "memory",
@@ -53,6 +66,8 @@ export function createEncryptedMemoryReader(
         cas: options.cas,
         keyProvider: options.keyProvider,
       });
+      await assert();
+      return value;
     },
   };
 }

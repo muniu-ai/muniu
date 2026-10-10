@@ -262,6 +262,7 @@ export interface AssetTombstone extends VersionedEntity {
 }
 
 export interface MemoryRecord extends VersionedEntity {
+  readonly provenance?: import("./memories.js").MemoryProvenanceV2;
   readonly workspaceId: WorkspaceId;
   readonly scopeType: "workspace" | "thread" | "resource" | "principal";
   readonly namespace: string;

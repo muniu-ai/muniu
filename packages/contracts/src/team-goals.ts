@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import type { GoalBudgetV2, GoalDeliverableSpecV2, GoalDeliverySetV2, GoalPlanProposalV2, GoalPlanRevisionV2, GoalResourceRefV2, GoalV2 } from "./goals.js";
+import type { TeamSkillRefV2 } from "./team-skills.js";
 import type { CodingRunnerId, ToolEffectClass } from "./models.js";
 
 export type TeamTemplateIdV1 = "research-summary" | "business-proposal" | "code-delivery";
@@ -77,6 +78,7 @@ export interface TeamDeliverableBindingV1 {
   readonly outputKey: string;
 }
 export interface GoalTeamPlanProposalV2 {
+  readonly skillRef?: TeamSkillRefV2;
   readonly outputFormat?: "items-v1";
   readonly kind: "team-v1";
   readonly template: { readonly id: TeamTemplateIdV1; readonly version: "1"; readonly digest: string };
@@ -126,6 +128,7 @@ export interface GoalTeamDetailV2 {
   readonly runId?: string;
 }
 export interface ProposeTeamGoalPlanV2 {
+  readonly skillRef?: TeamSkillRefV2;
   readonly workspaceId: string;
   readonly expectedStreamVersion: number;
   readonly kind: "team-v1";

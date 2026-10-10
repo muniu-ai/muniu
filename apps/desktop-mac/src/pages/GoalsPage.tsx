@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import type { AgentSchedulingRequestV2, BusinessContextTargetV2, GoalResponseV2, GoalCoordinatedDetailV2, GoalReworkPreviewV2, GoalTeamProgressV2, TeamTemplateIdV1, TeamTemplateSummaryV1, GoalStatusV2, GoalV2, ModelConnectionV2, Thread } from "@mn/contracts";
+import type { AgentSchedulingRequestV2, BusinessContextTargetV2, GoalResponseV2, GoalCoordinatedDetailV2, GoalReworkPreviewV2, GoalTeamProgressV2, TeamTemplateIdV1, TeamTemplateSummaryV1, GoalStatusV2, GoalV2, ModelConnectionV2, Thread, TeamSkillVersionV2 } from "@mn/contracts";
 import { GoalDetailViews, type GoalDetailView } from "../components/GoalDetailViews";
 import { GoalPlanView, formatTeamCost } from "../components/GoalPlanView";
 import { GoalProgressView } from "../components/GoalProgressView";
+import { SkillRecommendations } from "../components/SkillRecommendations";
 import { TeamSelector } from "../components/TeamSelector";
 import { AgentOsApiError, type AgentOsClient } from "../api";
 import { DeliveryDecisionForm } from "../components/DeliveryDecisionForm";
@@ -23,7 +24,8 @@ type PendingGoalMutation = { goalId: string; uncertain: boolean; work: () => Pro
 const labels: Record<GoalStatusV2, string> = { draft: "草稿", awaiting_authorization: "待确认计划", running: "执行中", waiting_approval: "等待审批", pausing: "正在暂停", paused: "已暂停",
   needs_reconciliation: "待核对", failed: "未完成", awaiting_acceptance: "待验收", accepted: "已验收", cancelled: "已取消" };
 
-export function GoalsPage({ target, api, workspaceId, onOpenThread, pluginIds, repositories, repositoryId, onRepository, onRegisterRepository, onSettings, newTaskRequest, active, onTaskCreated, businessTarget, onRecordDelivery }: {
+export function GoalsPage({ target, api, workspaceId, onOpenThread, pluginIds, repositories, repositoryId, onRepository, onRegisterRepository, onSettings, newTaskRequest, active, onTaskCreated, businessTarget, onRecordDelivery, skillTrial }: {
+  readonly skillTrial?: { readonly version: TeamSkillVersionV2; readonly sequence: number };
   readonly target?: { readonly id: string; readonly sequence: number };
   readonly api: AgentOsClient; readonly workspaceId: string; readonly onOpenThread: (thread: Thread) => void;
   readonly businessTarget?: BusinessContextTargetV2 & { readonly sequence: number };
@@ -242,7 +244,7 @@ export function GoalsPage({ target, api, workspaceId, onOpenThread, pluginIds, r
           <button key={goal.id} className={`goal-list-item ${detail?.goal.id === goal.id ? "selected" : ""}`} disabled={busy} onClick={() => void perform(() => api.goal(workspaceId, goal.id), goal.id)}>
             <strong>{goal.objective.split("\n")[0]}</strong><small>{goal.id === detail?.goal.id ? "当前目标" : labels[goal.status]}</small></button>)}
       </section>
-      <section className="panel task-compose-panel" hidden={Boolean(detail)}><div hidden={existing}><TaskComposer businessTarget={businessTarget} visible={active && !detail && !existing} api={api} workspaceId={workspaceId} pluginIds={pluginIds} repositories={repositories} repositoryId={repositoryId} onRepository={onRepository} onRegisterRepository={onRegisterRepository} onSettings={onSettings} onCreated={next => { navigationSequence.current += 1; setDetail(next); setError(undefined); void refreshList(); onTaskCreated(); }} /></div>
+      <section className="panel task-compose-panel" hidden={Boolean(detail)}><div hidden={existing}><TaskComposer skillTrial={skillTrial} businessTarget={businessTarget} visible={active && !detail && !existing} api={api} workspaceId={workspaceId} pluginIds={pluginIds} repositories={repositories} repositoryId={repositoryId} onRepository={onRepository} onRegisterRepository={onRegisterRepository} onSettings={onSettings} onCreated={next => { navigationSequence.current += 1; setDetail(next); setError(undefined); void refreshList(); onTaskCreated(); }} /></div>
         <button className="quiet-button existing-task-toggle" onClick={() => setExisting(value => !value)}>{existing ? "返回新任务" : "关联已有任务"}</button>
         {existing && <form className="form-stack" onSubmit={event => void create(event)}><h2>创建目标</h2>
         <div className="field"><label htmlFor="goal-objective">预期结果</label><textarea id="goal-objective" rows={3} value={objective} required maxLength={16000} disabled={busy} onChange={event => setObjective(event.target.value)} /></div>
@@ -270,6 +272,7 @@ export function GoalsPage({ target, api, workspaceId, onOpenThread, pluginIds, r
           </>,
           plan: <>
             {canPlan && <>
+              <SkillRecommendations key={detail.goal.id} api={api} workspaceId={workspaceId} goalId={detail.goal.id} disabled={busy || mutationLocked || !teamModel} onUse={version => { if (teamModel) void mutate(key => api.planTeamGoal(detail, { templateId: version.template.id, templateVersion: version.template.version, modelBindingId: teamModel.id, skillRef: { id: version.skillId, version: version.version, digest: version.digest } }, key)); }} />
               <TeamSelector value={teamTemplateId} onChange={setTeamTemplateId} disabled={busy || mutationLocked} templates={teamTemplates.map(template => ({ ...template,
                 available: template.available && template.pluginId === (detail.plan?.pluginId ?? thread?.pluginId),
                 unavailableReason: template.pluginId !== (detail.plan?.pluginId ?? thread?.pluginId) ? "该模板不适用于当前业务对象" : template.unavailableReason }))} />
@@ -325,7 +328,7 @@ export function GoalsPage({ target, api, workspaceId, onOpenThread, pluginIds, r
           </>,
         }} />
         <div className="goal-actions">{thread?.resourceRef && <button className="secondary-button" onClick={() => onOpenThread(thread)}>查看业务对象</button>}
-          {canPlan && <button className="secondary-button" disabled={busy || mutationLocked || !planReady} onClick={() => void mutate(key => teamTemplateId && teamModel ? api.planTeamGoal(detail, { templateId: teamTemplateId, templateVersion: "1", modelBindingId: teamModel.id }, key) : api.planGoal(detail, selection, key))}>生成计划</button>}
+          {canPlan && <button className="secondary-button" disabled={busy || mutationLocked || !planReady} onClick={() => void mutate(key => teamTemplateId && teamModel ? api.planTeamGoal(detail, { templateId: teamTemplateId, templateVersion: "1", modelBindingId: teamModel.id, ...(teamDetail?.plan.kind === "team-v1" && teamDetail.plan.skillRef && teamDetail.plan.template.id === teamTemplateId ? { skillRef: teamDetail.plan.skillRef } : {}) }, key) : api.planGoal(detail, selection, key))}>生成计划</button>}
           {detail.goal.status === "awaiting_authorization" && detail.plan && (!teamDetail || progress?.allowedActions.includes("start")) && <button className="primary-button" disabled={busy || mutationLocked || planDirty} onClick={() => void mutate(key => api.commandGoal(detail, "start", key))}>确认计划并启动</button>}
           {singleDetail?.goal.executionRef && <button className="secondary-button" disabled={busy || mutationLocked} onClick={() => void perform(() => api.commandGoal(detail, "refresh"))}>更新执行状态</button>}
           {!teamDetail && !["accepted", "cancelled"].includes(detail.goal.status) && <button className="secondary-button" disabled={busy || mutationLocked} onClick={() => void perform(() => api.commandGoal(detail, "cancel"))}>取消任务</button>}

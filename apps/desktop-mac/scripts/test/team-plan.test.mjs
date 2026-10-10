@@ -45,3 +45,8 @@ test("工作台保留暂停与正在暂停团队的直达入口", () => {
   assert.ok(html.includes("等待恢复的经营团队")); assert.ok(html.includes("已暂停"));
   assert.ok(html.includes("正在停止派发的团队")); assert.ok(html.includes("正在暂停"));
 });
+
+test("技能计划显示固定技能版本和摘要，不宣称跟随最新版本", () => {
+  const html = fixture.teamPlanMarkup({ skillRef: { id: 'skill', version: '3', digest: 'fixed-skill-digest' } });
+  assert.ok(html.includes('技能版本 3')); assert.ok(html.includes('fixed-skill-digest'));
+});

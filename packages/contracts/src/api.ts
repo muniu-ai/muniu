@@ -152,6 +152,14 @@ export interface CodingReconciliationViewV2 {
 }
 
 export const CORE_API_ROUTES = [
+  "/v2/workspaces/{workspaceId}/team-skills",
+  "/v2/workspaces/{workspaceId}/team-skills/{skillId}",
+  "/v2/workspaces/{workspaceId}/team-skills/{skillId}/evaluations",
+  "/v2/workspaces/{workspaceId}/team-skills/{skillId}/evaluations/{evaluationId}/results",
+  "/v2/workspaces/{workspaceId}/team-skills/{skillId}/commands",
+  "/v2/workspaces/{workspaceId}/followups",
+  "/v2/workspaces/{workspaceId}/followups/{policyId}",
+  "/v2/workspaces/{workspaceId}/followups/{policyId}/commands",
   "/v2/plugins/opc/business",
   "/v2/plugins/opc/business/commands",
   "/v2/workspaces/{workspaceId}/goals",

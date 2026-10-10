@@ -11,13 +11,15 @@ import { RepositoryDialog } from "./components/RepositoryDialog";
 import { PluginBoundary } from "./components/PluginBoundary";
 import { PluginCard } from "./components/PluginSurface";
 import { PluginManager } from "./components/PluginManager";
-import type { BusinessContextTargetV2, BusinessManagementViewV1, GoalV2, ProductNavigationV2, WorkspacePluginSurfaceV1 } from "@mn/contracts";
+import type { BusinessContextTargetV2, BusinessManagementViewV1, GoalV2, TeamSkillVersionV2, ProductNavigationV2, WorkspacePluginSurfaceV1 } from "@mn/contracts";
 import { ErrorState, Loading } from "./components/Status";
 import {
   ActivityPage, AgentsPage, DeliverablesPage, HomePage, InboxPage, IntegrationsPage,
   SettingsPage, WorkspacesPage,
 } from "./pages/CorePages";
 import { CodingPage, OpcPage } from "./pages/PluginPages";
+import { FollowupsPanel } from "./components/FollowupsPanel";
+import { TeamSkillsPanel } from "./components/TeamSkillsPanel";
 import { GoalsPage } from "./pages/GoalsPage";
 import { BusinessManagementPage, type BusinessDeliveryDraft } from "./pages/BusinessManagementPage";
 import type { BusinessStart } from "./Onboarding";
@@ -62,6 +64,7 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces, initi
   const [notice, setNotice] = useState<string>();
   const [goals, setGoals] = useState<readonly GoalV2[]>([]);
   const [business, setBusiness] = useState<BusinessManagementViewV1>();
+  const [skillTrial, setSkillTrial] = useState<{ version: TeamSkillVersionV2; sequence: number }>();
   const [goalTarget, setGoalTarget] = useState<{ id: string; sequence: number }>();
   const [businessDelegationTarget, setBusinessDelegationTarget] = useState<BusinessContextTargetV2 & { readonly sequence: number }>();
   const [businessDeliveryDraft,setBusinessDeliveryDraft]=useState<BusinessDeliveryDraft>();
@@ -181,11 +184,12 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces, initi
   function openGoal(id: string) { setGoalTarget(current => ({ id, sequence: (current?.sequence ?? 0) + 1 })); setPage("goals"); }
   function openNavigation(target?: ProductNavigationV2) {
     if (!target) { setPage("deliverables"); setNotice("没有可用的对象入口，请检查成果来源"); return; }
+    if (target.resourceRef?.namespace === "goal.state") { openGoal(target.resourceRef.resourceId); return; }
     const goal = target.threadId ? goals.find(item => item.threadId === target.threadId) : undefined;
     if (goal) { openGoal(goal.id); return; }
     if (target.resourceRef?.namespace === "opc.opportunity") { setSelectedOpportunityId(target.resourceRef.resourceId); setPage("opc-validation"); return; }
     if (target.resourceRef?.namespace === "coding.task") { setSelectedCodingTaskId(target.resourceRef.resourceId); setPage("coding"); return; }
-    if (target.resourceRef && ["opc.customer","opc.service","opc.quote","opc.order","opc.delivery","opc.review"].includes(target.resourceRef.namespace)) { setBusinessDeliveryDraft(undefined); setBusinessTarget(target.resourceRef); setPage("opc"); return; }
+    if (target.resourceRef && ["opc.customer","opc.service","opc.quote","opc.order","opc.delivery","opc.review"].includes(target.resourceRef.namespace)) { setBusinessDeliveryDraft(undefined); setSkillTrial(undefined); setBusinessTarget(target.resourceRef); setPage("opc"); return; }
     setNotice("该对象暂无可用详情，请从任务列表核对来源"); setPage("goals");
   }
 
@@ -221,7 +225,7 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces, initi
   }
 
   function selectWorkspace(next: WorkspaceSummary) {
-    setRepositoryDialogOpen(false);
+    setRepositoryDialogOpen(false); setSkillTrial(undefined);
     setGoals([]); setBusiness(undefined); setBusinessDelegationTarget(undefined); setBusinessDeliveryDraft(undefined); setGoalTarget(undefined); setBusinessTarget(undefined); setOpportunities([]); setCodingTasks([]); setHome(emptyHome); setDeliverables([]);
     setCaptureRepositoryId(undefined); setCodingRepositories([]); setRepositoryTarget(undefined);
     setWorkspace(next); setCaptureText(""); setSelectedOpportunityId(undefined); setSelectedCodingTaskId(undefined); setPage(next.viewMode === "business" && next.activePluginIds.includes("opc") ? "opc" : "home");
@@ -276,14 +280,14 @@ export function WorkspaceShell({ api, initialWorkspace, initialWorkspaces, initi
         {coreError && page === "home" && <ErrorState detail={coreError} action="检查 Host 后重试" onRetry={() => void refreshCore()} />}
         {!coreLoading && !coreError && page === "home" && <HomePage summary={home} goals={goals} business={business} onGoal={openGoal} onObject={openNavigation} onNavigate={(target) => setPage(target as PageId)} />}
         {page === "workspaces" && <WorkspacesPage workspaces={workspaces} currentId={workspace.id} members={members} onSelect={selectWorkspace} />}
-        <div hidden={page !== "goals"}><GoalsPage onRecordDelivery={draft=>{setBusinessTarget(undefined);setBusinessDeliveryDraft(current=>({...draft,sequence:(current?.sequence??0)+1}));setPage("opc");}} businessTarget={businessDelegationTarget} target={goalTarget} active={page === "goals"} onTaskCreated={() => { void refreshCoding(); void refreshCore(); }} key={workspace.id} pluginIds={workspace.activePluginIds} repositories={repositories} repositoryId={repositoryId} onRepository={setCaptureRepositoryId} onRegisterRepository={() => setRepositoryDialogOpen(true)} onSettings={() => setPage("settings")} newTaskRequest={newTaskRequest} api={api} workspaceId={workspace.id} onOpenThread={thread => {
+        <div hidden={page !== "goals"}><GoalsPage skillTrial={skillTrial} onRecordDelivery={draft=>{setBusinessTarget(undefined);setBusinessDeliveryDraft(current=>({...draft,sequence:(current?.sequence??0)+1}));setPage("opc");}} businessTarget={businessDelegationTarget} target={goalTarget} active={page === "goals"} onTaskCreated={() => { void refreshCoding(); void refreshCore(); }} key={workspace.id} pluginIds={workspace.activePluginIds} repositories={repositories} repositoryId={repositoryId} onRepository={setCaptureRepositoryId} onRegisterRepository={() => setRepositoryDialogOpen(true)} onSettings={() => setPage("settings")} newTaskRequest={newTaskRequest} api={api} workspaceId={workspace.id} onOpenThread={thread => {
           if (thread.pluginId === "coding") { setSelectedCodingTaskId(thread.resourceRef?.resourceId); setPage("coding"); }
           else { setSelectedOpportunityId(thread.resourceRef?.resourceId); setPage("opc-validation"); }
         }} /></div>
         {page === "inbox" && <InboxPage workspaceId={workspace.id} summary={home} api={api} onChanged={refreshCore} onOpen={openInboxItem} />}
         {page === "deliverables" && <DeliverablesPage items={deliverables} goals={goals} onGoal={openGoal} onOpen={(item) => openNavigation(item.navigation)} />}
         {page === "activity" && <ActivityPage items={activity} professional={professional} />}
-        {page === "agents" && <AgentsPage catalog={agentCatalog} />}
+        {page === "agents" && <div className="page-stack"><TeamSkillsPanel key={workspace.id} api={api} workspaceId={workspace.id} onTrial={version => { setBusinessDelegationTarget(undefined); setSkillTrial(current => ({ version, sequence: (current?.sequence ?? 0) + 1 })); setGoalTarget(undefined); setNewTaskRequest(value => value + 1); setPage("goals"); }} /><FollowupsPanel api={api} workspaceId={workspace.id} onGoal={openGoal} /><AgentsPage catalog={agentCatalog} /></div>}
         {page === "integrations" && <IntegrationsPage onOpenSettings={() => setPage("settings")} />}
         {page === "settings" && <div className="page-stack"><SettingsPage workspace={workspace} memories={memories} api={api} onModeChanged={updateWorkspace} onMemoriesChanged={() => void refreshCore()} /><PluginManager api={api} workspace={workspace} onChanged={updateWorkspace} /></div>}
         {surfaces.flatMap((surface) => (surface.ui?.pages ?? []).filter((entry) => page === `plugin:${surface.pluginId}:${entry.routeId}`).map((entry) => <PluginBoundary key={`${surface.pluginId}:${surface.version}:${entry.routeId}`} pluginName={surface.pluginId}><div className="page-stack"><h1>{entry.title}</h1>{entry.cards.map((card, index) => <PluginCard key={index} card={card} pluginId={surface.pluginId} workspaceId={workspace.id} api={api} />)}</div></PluginBoundary>))}

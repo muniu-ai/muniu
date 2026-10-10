@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 import { recordTeamExternalGoalUsage } from './team-goals.js';
-import { isBusinessContextRef, assertBusinessContextRef, validateHistoricalBusinessContextSource } from "./business-context.js";
+import { isBusinessContextRef, assertBusinessContextRef } from "./business-context.js";
 import { assertAssetReader } from "./asset-context.js";
 import { scheduleGoal } from "./goal-scheduling.js";
-import { isCoordinatedGoalDetail, type AgentSchedulingRequestV2, type TeamTemplateIdV1 } from "@mn/contracts";
+import { isCoordinatedGoalDetail, parseTeamSkillRefV2, type AgentSchedulingRequestV2, type TeamTemplateIdV1 } from "@mn/contracts";
 import type { GoalBudgetV2, GoalDeliverableSpecV2, GoalDeliveryItemDecisionV2, GoalResourceRefV2 } from "@mn/contracts";
 import { KernelError } from "@mn/kernel";
 import { acceptGoalDelivery, recordExternalGoalUsage, cancelGoal, createGoal, getGoal, getGoalForCoordination, listGoals, replayGoalPlan, proposeGoalPlan, startGoal } from "./goals.js";
@@ -13,6 +13,7 @@ import { proposeHostTeamPlan } from "./team-planning.js";
 import { acceptTeamGoalDelivery, commandTeamGoal, getTeamGoal, proposeTeamGoalPlan, replayTeamGoalPlan, startTeamGoal } from "./team-goals.js";
 import { createGoalDeliveryService } from "./goal-delivery-runtime.js";
 import { getGoalDeliveryReview, decideGoalDelivery, previewGoalRework, confirmGoalRework } from "./goal-delivery-service.js";
+import { validateHistoricalHostContextSource } from "./context-source-validation.js";
 import { readBoundedJsonBody } from "./http-body.js";
 
 export interface GoalRequestOptions extends HostGoalRuntimeOptions { readonly request: Request; readonly tenantId: string; readonly principalId: string; readonly mutationKey?: string; readonly teamSandboxAvailable?: (workspaceId: string) => Promise<boolean> }
@@ -36,7 +37,7 @@ export async function dispatchGoalRequest(options: GoalRequestOptions): Promise<
     if ((collection || templates) ? url.searchParams.size : url.searchParams.size !== 1 || url.searchParams.getAll("workspaceId").length !== 1) invalid();
     const workspaceId = (collection || templates) ? text(decodeURIComponent((collection || templates)![1]!)) : text(url.searchParams.get("workspaceId"));
     const scope = { tenantId: options.tenantId, principalId: options.principalId, workspaceId };
-    const readOptions = { ...options, validateContextSource: ((tx, sourceScope, ref) => validateHistoricalBusinessContextSource(tx, sourceScope, ref) || options.validateContextSource?.(tx, sourceScope, ref) === true) as NonNullable<HostGoalRuntimeOptions["validateContextSource"]> };
+    const readOptions = { ...options, validateContextSource: validateHistoricalHostContextSource };
     const teamOptions = { ...readOptions, sandboxAvailable: await options.teamSandboxAvailable?.(workspaceId) ?? false };
     const teamRuntime = createHostTeamRuntime(teamOptions);
     if (templates) return { status: 200, data: await teamRuntime.templates(scope) };
@@ -108,14 +109,14 @@ export async function dispatchGoalRequest(options: GoalRequestOptions): Promise<
   }
   if (item![2] === "plan-revisions") {
     if (body.kind !== undefined) {
-      object(body, ["workspaceId", "expectedStreamVersion", "kind", "templateId", "templateVersion", "modelBindingId"]);
+      object(body, ["workspaceId", "expectedStreamVersion", "kind", "templateId", "templateVersion", "modelBindingId", "skillRef"]);
       if (body.kind !== "team-v1" || body.templateVersion !== "1" || !["research-summary", "business-proposal", "code-delivery"].includes(String(body.templateId))) invalid();
-      const planRequest = { kind: "team-v1" as const, templateId: body.templateId as TeamTemplateIdV1, templateVersion: "1" as const, modelBindingId: text(body.modelBindingId) };
+      const planRequest = { kind: "team-v1" as const, templateId: body.templateId as TeamTemplateIdV1, templateVersion: "1" as const, modelBindingId: text(body.modelBindingId), ...(body.skillRef === undefined ? {} : { skillRef: parseTeamSkillRefV2(body.skillRef) }) };
       const teamService = await teamRuntime.service(scope), teamBase = { ...base, ...teamService };
       const replay = await replayTeamGoalPlan(teamBase, planRequest);
       if (replay) return { status: 200, data: replay };
       const detail = await getGoalForCoordination(base);
-      const proposal = await options.store.transact(scope.tenantId, tx => proposeHostTeamPlan(teamOptions, tx, detail.goal, planRequest.templateId, planRequest.modelBindingId));
+      const proposal = await options.store.transact(scope.tenantId, tx => proposeHostTeamPlan(teamOptions, tx, detail.goal, planRequest.templateId, planRequest.modelBindingId, planRequest.skillRef));
       return { status: 200, data: await proposeTeamGoalPlan({ ...teamBase, proposal, planRequest }) };
     }
     object(body, ["workspaceId", "expectedStreamVersion", "modelBindingId", "scheduling"]);

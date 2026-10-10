@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createNodePublicWebReader } from "@mn/plugin-opc";
-import { createEnterpriseFilePluginRepository, createSignedWorkerResolver, createOpcModelContextReader, assertGoalExecutionResources, validateBusinessContextSource } from "@mn/host";
+import { createEnterpriseFilePluginRepository, createSignedWorkerResolver, createOpcModelContextReader, assertGoalExecutionResources, validateHostContextSource, createHostMemoryReader } from "@mn/host";
 import {
   createCodingReconciliationVerificationWorkerHandler,
   createCodingSandboxCleanupWorkerHandler,
-  createEncryptedMemoryReader,
   createKernelAgentTurnHandler,
   createInClusterKubernetesApi,
   KubernetesCodingExecutor,
@@ -77,7 +76,7 @@ export async function createHandlers(context) {
   }
   const secretStore = context.secretStore ?? productionSecretStore();
   const acceptsSecretReference = (reference) => /^vault:\/\/muniu\/v2\/models\/[a-zA-Z0-9._-]+$/u.test(reference);
-  const runtimeProtection = { cas: context.cas, keyProvider: context.protectedPayloadKeyProvider, validateContextSource: validateBusinessContextSource };
+  const runtimeProtection = { cas: context.cas, keyProvider: context.protectedPayloadKeyProvider, validateContextSource: validateHostContextSource };
   const sandboxRoot = context.sandboxRoot ?? process.env.MN_KUBERNETES_SHARED_ROOT;
   if (!sandboxRoot) throw new Error("企业 Worker 缺少共享候选卷");
   const executor = context.commandExecutor ?? new KubernetesCodingExecutor({
@@ -113,7 +112,7 @@ export async function createHandlers(context) {
     scopeContext: composition.context,
     codingSandboxRoot: `${sandboxRoot}/candidates`,
     codingCommandExecutor: executor,
-    memoryReader: createEncryptedMemoryReader({
+    memoryReader: createHostMemoryReader({
       store: context.store,
       cas: context.cas,
       keyProvider: context.protectedPayloadKeyProvider,

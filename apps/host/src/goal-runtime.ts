@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-import { isBusinessContextRef, readBusinessContext, validateBusinessContextSource } from "./business-context.js";
+import { isBusinessContextRef, readBusinessContext } from "./business-context.js";
 import { CODING_RUNNER_CONFIGURATION_NAMESPACE, type CodingRunnerConfigurationV1, type CodingRunnerId, type ExternalCodingRunnerId } from "@mn/contracts";
 import { readAssetExtraction } from "./asset-context.js";
 import { selectMaterialBlocks } from "./material-context.js";
@@ -17,7 +17,12 @@ import { executionMetering } from "./execution-metering.js";
 import { externalGoalRunnerBindingValid } from "./goal-external-rework.js";
 import { freezeProducedGoalItems, goalOutputInstructions } from "./goal-produced-output.js";
 
+import { validateHostContextSource } from "./context-source-validation.js";
+import { assertTeamSkillPlan } from "./team-skill-context.js";
+import { assertFollowupExecutionAuthorization, assertFollowupGoalStart } from "./followup-authority.js";
+
 export interface HostGoalRuntimeOptions {
+  readonly followupRunId?: string;
   readonly validateContextSource?: ContextSourceValidator;
   readonly store: KernelStore; readonly kernel: AgentOsKernel; readonly cas: ContentAddressedStorage; readonly keyProvider: KeyProvider;
   readonly protectedJournal: boolean; readonly now: () => string; readonly id: (kind: string) => string;
@@ -85,7 +90,8 @@ function executionPlan(tx: KernelTransaction, execution: Execution): { goal: Goa
     || goal.executionRef?.generation !== execution.generation || goal.executionRef.planRevisionId !== plan.id) fail("GOAL_EXECUTION_STALE", "目标执行与固定计划不一致");
   return { goal, plan };
 }
-export function assertGoalExecutionResources(tx: KernelTransaction, execution: Execution, validateSource: ContextSourceValidator = validateBusinessContextSource): void {
+export function assertGoalExecutionResources(tx: KernelTransaction, execution: Execution, validateSource: ContextSourceValidator = validateHostContextSource): void {
+  assertFollowupExecutionAuthorization(tx, execution);
   assertExecutionContextSources(tx, execution, validateSource);
   const teamJob = tx.listProjections<Job>("job").find(job => job.payload.executionId === execution.id && (job.payload.coordination as unknown as CoordinationBindingV2 | undefined)?.runId);
   const binding = teamJob?.payload.coordination as unknown as CoordinationBindingV2 | undefined;
@@ -109,6 +115,7 @@ export function assertGoalExecutionResources(tx: KernelTransaction, execution: E
       || !thread || goalDomainInputDigest(tx, thread, deliveryAttempt?.executionId) !== plan.domainInputDigest) fail("GOAL_AUTHORIZATION_STALE", "团队授权、来源或执行配置已变化");
     const { digest, ...body } = plan;
     if (sha256(body) !== digest) fail("GOAL_PLAN_CHANGED", "团队计划摘要无效");
+    assertTeamSkillPlan(tx, scopeOf(goal), plan);
     assertCurrentCoordinationAuthorization(tx, execution);
     for (const ref of goal.resourceRefs) assertGoalResource(tx, scopeOf(goal), ref, validateSource);
     return;
@@ -131,7 +138,7 @@ export function assertGoalExecutionResources(tx: KernelTransaction, execution: E
   for (const ref of goal.resourceRefs) assertGoalResource(tx, scopeOf(goal), ref, validateSource);
 }
 export function createHostGoalRuntime(options: HostGoalRuntimeOptions) {
-  options = { ...options, validateContextSource: options.validateContextSource ?? validateBusinessContextSource };
+  options = { ...options, validateContextSource: options.validateContextSource ?? validateHostContextSource };
   function proposal(tx: KernelTransaction, goal: GoalV2, modelBindingId: string, runnerId: CodingRunnerId = "builtin"): GoalPlanProposalV2 {
     const scope = scopeOf(goal), thread = tx.getProjection<Thread>("thread", goal.threadId);
     if (!thread || thread.workspaceId !== goal.workspaceId || thread.tenantId !== goal.tenantId || !["opc", "coding"].includes(thread.pluginId)) fail("GOAL_THREAD_INVALID", "目标会话不可用");
@@ -256,6 +263,7 @@ export function createHostGoalRuntime(options: HostGoalRuntimeOptions) {
           && sha256(expected[key] ?? null) !== sha256(current.plan[key] ?? null)) fail("GOAL_PLAN_CHANGED", "执行配置已变化，请重新规划并授权");
       },
       start(tx, current) {
+        assertFollowupGoalStart(tx, current.goal, options.followupRunId, options.now());
         if (!preparedMessage || !message || goal?.id !== current.goal.id || plan?.id !== current.plan.id) fail("GOAL_PLAN_CHANGED", "目标上下文尚未准备或计划已变化");
         const execution = options.kernel.submitTurnInTransaction(tx, scope.tenantId, scope.principalId, `goal-start:${current.goal.id}:${current.plan.id}`, {
           coordination: { aggregateType: "goal", aggregateId: current.goal.id, revisionId: current.plan.id },

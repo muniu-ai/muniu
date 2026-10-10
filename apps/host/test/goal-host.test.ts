@@ -433,7 +433,7 @@ test('后续普通会话继承来源，撤权后禁止第三轮外发和历史�
   assert.equal(calls, 0);
   assert.ok((await f.send(turnsPath)).status >= 400);
   const runtime = (await import('@mn/worker')).createProtectedRuntimeStore({ store: f.store, cas: f.cas, keyProvider: f.keyProvider, tenantId: 'local', workspaceId: f.workspace.id });
-  await assert.rejects(runtime.readExecution(second.id), /资料来源|资料已删除/u);
+  await assert.rejects(runtime.readExecution(second.id), { code: 'CONTEXT_SOURCE_REVOKED' });
 });
 
 test('资料解密期间撤权阻止提取返回，启动后撤权阻止模型预算预检', async t => {

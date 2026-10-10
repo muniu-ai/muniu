@@ -1,4 +1,5 @@
-import { validateBusinessContextSource } from "./business-context.js";
+import { validateHostContextSource } from "./context-source-validation.js";
+import { createHostMemoryReader } from "./memory-sources.js";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { lstat } from "node:fs/promises";
@@ -8,7 +9,6 @@ import {
   AgentOsWorker,
   createCodingReconciliationVerificationWorkerHandler,
   createCodingSandboxCleanupWorkerHandler,
-  createEncryptedMemoryReader,
   createKernelAgentTurnHandler,
   createBusinessActionWorkerHandler,
   createBusinessCandidateWorkerHandler,
@@ -159,8 +159,8 @@ export async function startLocalAgentOsHost(options: StartLocalHostOptions = {})
       store,
       secretStore,
       approvalKernel: host.kernel,
-      runtimeProtection: { cas, keyProvider: protectedPayloadKeyProvider, validateContextSource: validateBusinessContextSource },
-      memoryReader: createEncryptedMemoryReader({
+      runtimeProtection: { cas, keyProvider: protectedPayloadKeyProvider, validateContextSource: validateHostContextSource },
+      memoryReader: createHostMemoryReader({
         store,
         cas,
         keyProvider: protectedPayloadKeyProvider,
@@ -178,7 +178,7 @@ export async function startLocalAgentOsHost(options: StartLocalHostOptions = {})
       ...(options.now ? { now: options.now } : {}),
     });
     const reconciliationVerificationHandler = createCodingReconciliationVerificationWorkerHandler({
-      runtimeProtection: { cas, keyProvider: protectedPayloadKeyProvider, validateContextSource: validateBusinessContextSource },
+      runtimeProtection: { cas, keyProvider: protectedPayloadKeyProvider, validateContextSource: validateHostContextSource },
       store,
       sandboxRoot: join(paths.root, "sandboxes", "coding"),
       ...(options.now ? { now: options.now } : {}),
@@ -200,7 +200,7 @@ export async function startLocalAgentOsHost(options: StartLocalHostOptions = {})
           store, kernel: host.kernel, ports: business.businessProvider, ...(options.now ? { now: options.now } : {}),
         }) } : {}),
         ...(business?.businessProvider.inquiries ? { "business.candidate.extract": createBusinessCandidateWorkerHandler({
-          store, secretStore, sourcePort: business.businessProvider.inquiries, runtimeProtection: { cas, keyProvider: protectedPayloadKeyProvider, validateContextSource: validateBusinessContextSource },
+          store, secretStore, sourcePort: business.businessProvider.inquiries, runtimeProtection: { cas, keyProvider: protectedPayloadKeyProvider, validateContextSource: validateHostContextSource },
           acceptsSecretReference: reference => reference.startsWith("keychain://muniu.v2/"),
           ...(options.modelInvoker ? { modelInvoker: options.modelInvoker } : {}),
           ...(options.modelQuoter ? { modelQuoter: options.modelQuoter } : {}),

@@ -42,6 +42,16 @@ curl --fail-with-body --silent --show-error http://127.0.0.1:7318/v2/workspaces
 
 | 方法 | 路径 | operationId | 幂等键 | stream version |
 | --- | --- | --- | --- | --- |
+| `GET` | `/v2/workspaces/{workspaceId}/team-skills` | `listTeamSkills` | — | — |
+| `POST` | `/v2/workspaces/{workspaceId}/team-skills` | `createTeamSkillVersion` | 必需 | 必需 |
+| `GET` | `/v2/workspaces/{workspaceId}/team-skills/{skillId}` | `getTeamSkill` | — | — |
+| `POST` | `/v2/workspaces/{workspaceId}/team-skills/{skillId}/evaluations` | `registerTeamSkillEvaluation` | 必需 | 必需 |
+| `POST` | `/v2/workspaces/{workspaceId}/team-skills/{skillId}/evaluations/{evaluationId}/results` | `submitTeamSkillEvaluation` | 必需 | 必需 |
+| `POST` | `/v2/workspaces/{workspaceId}/team-skills/{skillId}/commands` | `commandTeamSkill` | 必需 | 必需 |
+| `GET` | `/v2/workspaces/{workspaceId}/followups` | `listFollowups` | — | — |
+| `POST` | `/v2/workspaces/{workspaceId}/followups` | `createFollowup` | 必需 | 必需 |
+| `GET` | `/v2/workspaces/{workspaceId}/followups/{policyId}` | `getFollowup` | — | — |
+| `POST` | `/v2/workspaces/{workspaceId}/followups/{policyId}/commands` | `commandFollowup` | 必需 | 必需 |
 | `GET` | `/v2/workspaces/{workspaceId}/business-context/{kind}/{resourceId}` | `getBusinessContext` | — | — |
 | `GET` | `/v2/workspaces/{workspaceId}/agent-readiness` | `getWorkspaceAgentReadiness` | — | — |
 | `POST` | `/v2/model-connections/{connectionId}/model` | `selectModelConnectionModel` | 必需 | 必需 |

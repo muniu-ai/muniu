@@ -150,7 +150,7 @@ for (const revoked of ['membership', 'asset'] as const) test(`团队模型在途
   }
   if (revoked === 'asset') {
     const reader = createProtectedRuntimeStore({ store: f.store, cas: f.cas, keyProvider: f.keyProvider, tenantId: 'local', workspaceId: f.workspace.id });
-    await assert.rejects(reader.readExecution(attempts[0]!.executionId), /撤权|来源/u);
+    await assert.rejects(reader.readExecution(attempts[0]!.executionId), { code: 'CONTEXT_SOURCE_REVOKED' });
   }
 });
 

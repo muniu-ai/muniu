@@ -1,3 +1,5 @@
+import { followupMutationSchema } from './followup-api-schema.js';
+import { teamSkillVersionCreateSchema, teamSkillEvaluationRegisterSchema, teamSkillEvaluationSubmitSchema, teamSkillCommandSchema } from './team-skill-api-schema.js';
 import { CORE_API_ROUTES } from "./api.js";
 import type { JsonObject } from "./json.js";
 import { API_OUTPUT_COMPONENTS_V2, API_OUTPUT_SCHEMAS_V2 } from "./generated-responses.js";
@@ -17,6 +19,16 @@ export interface ApiOperationV2 {
 }
 
 export const API_OPERATIONS_V2 = [
+  { method: "get", path: "/v2/workspaces/{workspaceId}/team-skills", operationId: "listTeamSkills", mutation: false, versioned: false },
+  { method: "post", path: "/v2/workspaces/{workspaceId}/team-skills", operationId: "createTeamSkillVersion", mutation: true, versioned: true },
+  { method: "get", path: "/v2/workspaces/{workspaceId}/team-skills/{skillId}", operationId: "getTeamSkill", mutation: false, versioned: false },
+  { method: "post", path: "/v2/workspaces/{workspaceId}/team-skills/{skillId}/evaluations", operationId: "registerTeamSkillEvaluation", mutation: true, versioned: true },
+  { method: "post", path: "/v2/workspaces/{workspaceId}/team-skills/{skillId}/evaluations/{evaluationId}/results", operationId: "submitTeamSkillEvaluation", mutation: true, versioned: true },
+  { method: "post", path: "/v2/workspaces/{workspaceId}/team-skills/{skillId}/commands", operationId: "commandTeamSkill", mutation: true, versioned: true },
+  { method: "get", path: "/v2/workspaces/{workspaceId}/followups", operationId: "listFollowups", mutation: false, versioned: false },
+  { method: "post", path: "/v2/workspaces/{workspaceId}/followups", operationId: "createFollowup", mutation: true, versioned: true },
+  { method: "get", path: "/v2/workspaces/{workspaceId}/followups/{policyId}", operationId: "getFollowup", mutation: false, versioned: false },
+  { method: "post", path: "/v2/workspaces/{workspaceId}/followups/{policyId}/commands", operationId: "commandFollowup", mutation: true, versioned: true },
   { method: "get", path: "/v2/workspaces/{workspaceId}/business-context/{kind}/{resourceId}", operationId: "getBusinessContext", mutation: false, versioned: false },
   { method: "get", path: "/v2/workspaces/{workspaceId}/agent-readiness", operationId: "getWorkspaceAgentReadiness", mutation: false, versioned: false },
   { method: "post", path: "/v2/model-connections/{connectionId}/model", operationId: "selectModelConnectionModel", mutation: true, versioned: true },
@@ -184,6 +196,8 @@ export function createOpenApiDocument(): JsonObject {
       { in: "query", name: "version", required: false, schema: { type: "integer", minimum: 1 } },
       { in: "query", name: "digest", required: false, schema: { type: "string", pattern: "^[a-f0-9]{64}$" } },
     );
+    if (operation.operationId === "listTeamSkills") parameters.push({ in: "query", name: "goalId", required: false, schema: { type: "string", minLength: 1, maxLength: 200 } });
+    if (operation.operationId === "getTeamSkill") parameters.push({ in: "query", name: "version", required: false, schema: { type: "string", pattern: "^[1-9][0-9]{0,5}$" } });
     if (operation.operationId === "listMemories") parameters.push({ in: "query", name: "namespace", required: false, schema: { type: "string" } });
     if ([
       "getOpcBusiness",
@@ -575,6 +589,11 @@ export function createOpenApiDocument(): JsonObject {
 }
 
 function mutationSchema(operationId: string, versioned: boolean): JsonObject {
+  const followup = followupMutationSchema(operationId); if (followup) return followup;
+  if (operationId === "createTeamSkillVersion") return teamSkillVersionCreateSchema();
+  if (operationId === "registerTeamSkillEvaluation") return teamSkillEvaluationRegisterSchema();
+  if (operationId === "submitTeamSkillEvaluation") return teamSkillEvaluationSubmitSchema();
+  if (operationId === "commandTeamSkill") return teamSkillCommandSchema();
   if (operationId === "createOpcBusinessCandidate") return opcBusinessCandidateCreateSchema();
   if (operationId === "decideOpcBusinessCandidate") return opcBusinessCandidateDecisionSchema();
   if (operationId === "commandOpcBusiness") return businessMutationSchema();
@@ -611,6 +630,7 @@ function mutationSchema(operationId: string, versioned: boolean): JsonObject {
       workspaceId: string, namespace: string, resourceId: string, sourceEventId: string,
       scopeType: { enum: ["workspace", "thread", "resource", "principal"] }, confidence: { type: "number", minimum: 0, maximum: 1 },
       value: { type: "object", additionalProperties: true }, expiresAt: string, derivedFromMemoryId: string, derivedViaShareGrantId: string,
+      provenance: object(["version", "kind", "origin", "sourceRefs"], { version: { const: 1 }, kind: { enum: ["fact", "preference"] }, origin: { enum: ["user", "model"] }, sourceRefs: { type: "array", maxItems: 100, items: object(["namespace", "resourceId", "streamVersion"], { namespace: string, resourceId: string, streamVersion: { type: "integer", minimum: 1 }, digest: string }) }, sourceExecution: object(["executionId", "generation"], { executionId: string, generation: { type: "integer", minimum: 1 } }) }),
     }),
     reviseMemoryProposal: object(["expectedStreamVersion", "confidence", "value"], {
       expectedStreamVersion: version, confidence: { type: "number", minimum: 0, maximum: 1 }, value: { type: "object", additionalProperties: true },

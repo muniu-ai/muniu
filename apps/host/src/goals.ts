@@ -155,12 +155,16 @@ function executionAt(tx: KernelTransaction, goal: GoalV2, plan: GoalPlanRevision
 export async function createGoal(options: GoalServiceOptions & { readonly threadId: string; readonly objective: string;
   readonly resourceRefs: readonly GoalResourceRefV2[]; readonly budget: GoalBudgetV2;
   readonly deliverables: readonly GoalDeliverableSpecV2[]; readonly idempotencyKey: string }): Promise<GoalDetailV2> {
+  return options.store.transact(options.tenantId, tx => createGoalInTransaction(tx, options));
+}
+export function createGoalInTransaction(tx: KernelTransaction, options: GoalServiceOptions & { readonly threadId: string; readonly objective: string;
+  readonly resourceRefs: readonly GoalResourceRefV2[]; readonly budget: GoalBudgetV2;
+  readonly deliverables: readonly GoalDeliverableSpecV2[]; readonly idempotencyKey: string }): GoalDetailV2 {
   protect(options); mutationKey(options.idempotencyKey);
   const input = copy({ threadId: options.threadId, objective: options.objective, resourceRefs: options.resourceRefs, budget: options.budget, deliverables: options.deliverables });
   if (!input.objective?.trim() || input.objective.length > 16000 || !input.threadId?.trim()) fail("GOAL_INPUT_INVALID", "请填写目标并选择会话");
   rules(() => { validateGoalBudget(input.budget); validateDeliverableSpecs(input.deliverables); });
   const scope = `goal.create:${options.workspaceId}:${options.principalId}`, digest = sha256(input);
-  return options.store.transact(options.tenantId, tx => {
     authorized(tx, options);
     const replay = prior(tx, scope, options.idempotencyKey, digest); if (replay) return readable(tx, options, replay);
     const thread = tx.getProjection<Thread>("thread", input.threadId);
@@ -169,7 +173,6 @@ export async function createGoal(options: GoalServiceOptions & { readonly thread
     const goal: GoalV2 = { ...input, id: options.id("goal"), tenantId: options.tenantId, workspaceId: options.workspaceId,
       principalId: options.principalId, inputVersion: 1, criteriaVersion: sha256(input.deliverables), status: "draft", streamVersion: 0, createdAt: options.now(), updatedAt: options.now() };
     const created = result(tx, write(tx, options, undefined, goal, "created")); receipt(tx, options, scope, digest, created); return created;
-  });
 }
 export async function getGoal(options: GoalServiceOptions & { readonly goalId: string }): Promise<GoalDetailV2> {
   protect(options); return options.store.transact(options.tenantId, tx => readable(tx, options, current(tx, options)));

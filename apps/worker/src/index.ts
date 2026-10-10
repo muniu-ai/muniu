@@ -60,7 +60,8 @@ import {
   createCodingExecutionWorkerHandler,
   fencedCodingStore,
 } from "./coding.js";
-import { buildAgentMemoryPrompt, type AgentMemoryReader } from "./memory.js";
+import { prepareMemoryModelRequest } from "./memory-selection.js";
+import { type AgentMemoryReader } from "./memory.js";
 import { readThreadHistory } from "./thread-context.js";
 import { createProtectedRuntimeStore, readExecutionInput, type RuntimeProtection } from "./runtime-store.js";
 import { recordRuntimeAttention } from "./runtime-attention.js";
@@ -726,7 +727,6 @@ export function createKernelAgentTurnHandler(
         .createChild("thread", state.thread.id)
         .createChild("execution", state.execution.id);
       const promptId = `${state.execution.pluginId}.outcome`;
-      const memoryPromptId = `${state.execution.pluginId}.memory`;
       const llmId = `byok:${state.model.id}`;
       const hasPublicWebTool = !external && state.execution.pluginId === "opc"
         && state.authority.toolIds.includes("opc.public-web.read")
@@ -740,23 +740,6 @@ export function createKernelAgentTurnHandler(
           state.execution.agentDefinitionId,
         ),
       });
-      if (options.memoryReader) {
-        executionScope.register("prompt", {
-          id: memoryPromptId,
-          refreshAtBoundary: true,
-          render: () => buildAgentMemoryPrompt({
-            tenantId: job.tenantId,
-            workspaceId: state.execution.workspaceId,
-            thread: state.thread,
-            authority: state.authority,
-            requestingNamespace: state.execution.pluginId,
-            executionPrincipalId: state.execution.executionPrincipalId,
-            store: options.store,
-            reader: options.memoryReader!,
-            ...(options.now ? { now: options.now } : {}),
-          }),
-        });
-      }
       const assertModelInvocation = (transaction: KernelTransaction): void => {
         const current = transaction.getProjection<Execution>("execution", executionId);
         if (!current || current.generation !== state.execution.generation) throw new StaleFencingTokenError(job.id);
@@ -885,7 +868,16 @@ export function createKernelAgentTurnHandler(
         scope: executionScope,
         disposeScope: () => tenantScope.dispose(),
         store: agentStore,
-        prepareModelRequest: request => prepareBoundedModelRequest(request, agentStore),
+        prepareModelRequest: async request => {
+          const bounded = await prepareBoundedModelRequest(request, agentStore);
+          return options.memoryReader ? prepareMemoryModelRequest(bounded, {
+            tenantId: job.tenantId, workspaceId: state.execution.workspaceId, thread: state.thread,
+            execution: state.execution, authority: state.authority, requestingNamespace: state.execution.pluginId,
+            executionPrincipalId: state.execution.executionPrincipalId, store: runtimeStore, reader: options.memoryReader,
+            ...(options.runtimeProtection?.validateContextSource ? { validateContextSource: options.runtimeProtection.validateContextSource } : {}),
+            ...(options.now ? { now: options.now } : {}),
+          }) : bounded;
+        },
         surface: { project: (snapshot) => [
           ...(threadContext ? [{ role: "user" as const, content: threadContext }] : []),
           ...(snapshot.compactions.length ? [] : history), ...surface.project(snapshot),
@@ -893,7 +885,7 @@ export function createKernelAgentTurnHandler(
         definition: {
           id: state.execution.agentDefinitionId,
           llmId,
-          promptIds: options.memoryReader ? [promptId, memoryPromptId] : [promptId],
+          promptIds: [promptId],
           toolIds,
         },
         authority: {
@@ -1174,5 +1166,7 @@ async function abortableDelay(milliseconds: number, signal: AbortSignal): Promis
   });
 }
 
-export { assertContextSource, assertExecutionContextSources, saveExecutionContext, EXECUTION_CONTEXT_NAMESPACE, type ContextSourceValidator } from './execution-context.js';
+export { assertContextSource, assertExecutionContextSources, assertMemoryOriginExecution, saveExecutionContext, EXECUTION_CONTEXT_NAMESPACE, type ContextSourceValidator } from './execution-context.js';
 export { assertModelContextLimit, MAX_MODEL_CONTEXT_BYTES } from './model-context.js';
+
+export * from "./memory-selection.js";

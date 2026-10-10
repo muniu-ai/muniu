@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { apiPath, matchApiOperation, parseApiResponse, type ApiPath, type JsonApiOperationIdV2, type ApiOutputsV2 } from "@mn/contracts/client";
+import type { CreateTeamSkillVersionV2, RegisterTeamSkillEvaluationV2, SubmitTeamSkillEvaluationV2, CommandTeamSkillV2, CreateFollowupV2, CommandFollowupV2, TeamSkillRefV2 } from "@mn/contracts";
 import type { AgentSchedulingRequestV2, GoalDeliveryItemDecisionV2, GoalReworkPreviewV2, OpcBusinessCandidateDetailV2, OpcBusinessCandidateOriginV2, GoalUsageV2, BusinessCommandV1, BusinessPeriodV1, BusinessContextTargetV2, CodingRunnerId, ExternalCodingRunnerId, ConfirmCodingRunnerMutationBodyV2, GoalBudgetV2, GoalDeliverableSpecV2, GoalDetailV2, GoalResourceRefV2, GoalResponseV2, ProposeTeamGoalPlanV2 } from "@mn/contracts";
 import type {
   AgentThreadSummary,
@@ -68,7 +69,7 @@ export class AgentOsClient {
       workspaceId: detail.goal.workspaceId, expectedStreamVersion: detail.goal.streamVersion, ...(typeof selection === "string" ? { modelBindingId: selection } : { scheduling: selection }),
     }) });
   }
-  planTeamGoal(detail: GoalResponseV2, selection: Pick<ProposeTeamGoalPlanV2, "templateId" | "templateVersion" | "modelBindingId">, requestKey?: string) {
+  planTeamGoal(detail: GoalResponseV2, selection: Pick<ProposeTeamGoalPlanV2, "templateId" | "templateVersion" | "modelBindingId"> & { readonly skillRef?: TeamSkillRefV2 }, requestKey?: string) {
     return this.request(apiPath("proposeGoalPlan", { goalId: detail.goal.id }), { method: "POST", ...(requestKey ? { headers: { "Idempotency-Key": requestKey } } : {}), body: JSON.stringify({
       workspaceId: detail.goal.workspaceId, expectedStreamVersion: detail.goal.streamVersion, kind: "team-v1", ...selection,
     }) });
@@ -96,6 +97,16 @@ export class AgentOsClient {
     }) });
   }
   workspace(workspaceId: string) { return this.request(apiPath("getWorkspace", { workspaceId: workspaceId })); }
+  teamSkills(workspaceId: string, goalId?: string) { return this.request(apiPath("listTeamSkills", { workspaceId }, goalId ? { goalId } : {})); }
+  teamSkill(workspaceId: string, skillId: string, version?: string) { return this.request(apiPath("getTeamSkill", { workspaceId, skillId }, version ? { version } : {})); }
+  createTeamSkill(workspaceId: string, input: CreateTeamSkillVersionV2, key: string) { return this.request(apiPath("createTeamSkillVersion", { workspaceId }), { method: "POST", headers: { "Idempotency-Key": key }, body: JSON.stringify(input) }); }
+  registerSkillEvaluation(workspaceId: string, skillId: string, input: RegisterTeamSkillEvaluationV2, key: string) { return this.request(apiPath("registerTeamSkillEvaluation", { workspaceId, skillId }), { method: "POST", headers: { "Idempotency-Key": key }, body: JSON.stringify(input) }); }
+  submitSkillEvaluation(workspaceId: string, skillId: string, evaluationId: string, input: SubmitTeamSkillEvaluationV2, key: string) { return this.request(apiPath("submitTeamSkillEvaluation", { workspaceId, skillId, evaluationId }), { method: "POST", headers: { "Idempotency-Key": key }, body: JSON.stringify(input) }); }
+  commandTeamSkill(workspaceId: string, skillId: string, input: CommandTeamSkillV2, key: string) { return this.request(apiPath("commandTeamSkill", { workspaceId, skillId }), { method: "POST", headers: { "Idempotency-Key": key }, body: JSON.stringify(input) }); }
+  followups(workspaceId: string) { return this.request(apiPath("listFollowups", { workspaceId })); }
+  followup(workspaceId: string, policyId: string) { return this.request(apiPath("getFollowup", { workspaceId, policyId })); }
+  createFollowup(workspaceId: string, input: CreateFollowupV2, key: string) { return this.request(apiPath("createFollowup", { workspaceId }), { method: "POST", headers: { "Idempotency-Key": key }, body: JSON.stringify(input) }); }
+  commandFollowup(workspaceId: string, policyId: string, input: CommandFollowupV2, key: string) { return this.request(apiPath("commandFollowup", { workspaceId, policyId }), { method: "POST", headers: { "Idempotency-Key": key }, body: JSON.stringify(input) }); }
   pluginSurfaces(workspaceId: string) { return this.request(apiPath("getPluginSurfaces", { workspaceId: workspaceId })); }
   pluginCatalog() { return this.request(apiPath("listPluginCatalog", { })); }
   pluginInstallations() { return this.request(apiPath("listPluginInstallations", { })); }
@@ -380,22 +391,22 @@ export class AgentOsClient {
     });
   }
 
-  decideMemory(memoryId: string, streamVersion: number, decision: "accept" | "reject") {
+  decideMemory(memoryId: string, streamVersion: number, decision: "accept" | "reject", requestKey?: string) {
     return this.request(apiPath("decideMemory", { memoryId: memoryId }), {
-      method: "POST", body: JSON.stringify({ expectedStreamVersion: streamVersion, decision }),
+      method: "POST", ...(requestKey ? { headers: { "Idempotency-Key": requestKey } } : {}), body: JSON.stringify({ expectedStreamVersion: streamVersion, decision }),
     });
   }
 
-  reviseMemory(memoryId: string, streamVersion: number, summary: string, confidence: number) {
+  reviseMemory(memoryId: string, streamVersion: number, summary: string, confidence: number, requestKey?: string) {
     return this.request(apiPath("reviseMemoryProposal", { memoryId: memoryId }), {
-      method: "PATCH",
+      method: "PATCH", ...(requestKey ? { headers: { "Idempotency-Key": requestKey } } : {}),
       body: JSON.stringify({ expectedStreamVersion: streamVersion, confidence, value: { summary } }),
     });
   }
 
-  deleteMemory(memoryId: string, streamVersion: number, reason: string) {
+  deleteMemory(memoryId: string, streamVersion: number, reason: string, requestKey?: string) {
     return this.request(apiPath("deleteMemory", { memoryId: memoryId }), {
-      method: "DELETE",
+      method: "DELETE", ...(requestKey ? { headers: { "Idempotency-Key": requestKey } } : {}),
       body: JSON.stringify({ expectedStreamVersion: streamVersion, reason }),
     });
   }

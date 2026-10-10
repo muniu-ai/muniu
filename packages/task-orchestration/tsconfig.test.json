@@ -1,5 +1,13 @@
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": { "rootDir": ".", "outDir": "dist-test" },
-  "include": ["src/**/*.ts", "test/**/*.ts"]
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "dist-test",
+    "allowJs": true
+  },
+  "include": [
+    "src/**/*.ts",
+    "test/**/*.ts",
+    "src/**/*.mjs"
+  ]
 }

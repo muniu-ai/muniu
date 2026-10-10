@@ -32,6 +32,9 @@ const HELP = `木牛 Agent OS 0.2
   plugin            查看、安装、更新、启用、停用或运行插件命令
   opc               管理经营台账与机会验证
   code              管理 Coding 任务
+  skill             管理团队技能版本、评测、启用和回滚
+  memory            审阅记忆提案与来源
+  followup          显式启用、暂停和停止业务跟进
   goal              管理目标、计划和成果验收
   asset             上传受保护资料、查看提取内容与来源位置
   business          读取客户、订单、交付和复盘的版本资料
@@ -70,6 +73,22 @@ const HELP = `木牛 Agent OS 0.2
   mn business candidate list|show [候选 ID] --workspace <工作区 ID>
   mn business candidate create --workspace <工作区 ID> --goal <目标 ID> --plan <计划 ID> --delivery-set <成果集 ID> --output <成果 key> --output-digest <摘要> --proposal <候选 key> [--key <幂等键>]
   mn business candidate decide <候选 ID> --workspace <工作区 ID> --version <候选版本> --business-version <台账版本> --candidate-digest <摘要> --preview-digest <摘要> --decision apply|reject [--key <幂等键>]
+技能、记忆与跟进：
+  mn skill list --workspace <工作区 ID> [--goal <新目标 ID>]
+  mn skill show <技能 ID> --workspace <工作区 ID> [--skill-version <技能版本>]
+  mn skill create <技能 ID> --workspace <工作区 ID> --version <技能流版本，首次为 0> --file <技能 JSON> [--key <幂等键>]
+  mn skill evaluate <技能 ID> --workspace <工作区 ID> --skill-version <技能版本> --digest <摘要> --file <评测配置 JSON> [--key <幂等键>]
+  mn skill report <技能 ID> --workspace <工作区 ID> --evaluation <评测 ID> --version <评测版本> --file <报告与证据引用 JSON> [--key <幂等键>]
+  mn skill enable|rollback <技能 ID> --workspace <工作区 ID> --version <启用记录版本> --skill-version <技能版本> --digest <摘要> --evaluation <评测 ID> [--recommend] [--key <幂等键>]
+  mn skill disable <技能 ID> --workspace <工作区 ID> --version <启用记录版本> [--key <幂等键>]
+  mn goal plan <新目标 ID> --workspace <工作区 ID> --version <目标版本> --team <模板> --model <模型连接> --skill <技能 ID> --skill-version <版本> --skill-digest <摘要> [--key <幂等键>]
+  mn memory list --workspace <工作区 ID> [--namespace <命名空间>]
+  mn memory propose --workspace <工作区 ID> --file <记忆提案 JSON> [--key <幂等键>]
+  mn memory accept|reject|delete <记忆 ID> --version <记忆版本> [--reason <删除原因>] [--key <幂等键>]
+  mn followup list|show [跟进 ID] --workspace <工作区 ID>
+  mn followup create --workspace <工作区 ID> --file <显式 enabled:true 的跟进 JSON> [--key <幂等键>]
+  mn followup pause|resume|stop <跟进 ID> --workspace <工作区 ID> --version <版本> [--key <幂等键>]
+
   mn goal usage <目标 ID> --workspace <工作区 ID> --version <目标版本> --file <用量 JSON 文件>
   mn goal accept <目标 ID> --workspace <工作区 ID> --version <目标版本> --file <验收 JSON 文件>
 
@@ -402,13 +421,15 @@ async function goal(parsed: ParsedArguments, api: ApiClient): Promise<CliResult>
   const workspaceId = flag(parsed, "workspace", true)!;
   const base = { workspaceId, expectedStreamVersion };
   if (action === "plan") {
-    assertAllowedFlags(parsed, ["workspace", "version", "model", "runner", "strategy", "value", "time-cost", "team", "key"]);
+    assertAllowedFlags(parsed, ["workspace", "version", "model", "runner", "strategy", "value", "time-cost", "team", "key", "skill", "skill-version", "skill-digest"]);
     const templateId = flag(parsed, "team");
+    const skillId = flag(parsed, "skill");
+    if (["skill", "skill-version", "skill-digest"].some(name => parsed.flags.has(name)) && (!templateId || !skillId || !flag(parsed, "skill-version") || !flag(parsed, "skill-digest"))) throw new CliUsageError("技能试用必须同时指定团队模板、技能 ID、版本和摘要，并用于新目标");
     if (templateId) {
       if (!["research-summary", "business-proposal", "code-delivery"].includes(templateId)) throw new CliUsageError("--team 只能是 research-summary、business-proposal 或 code-delivery");
       if (["runner", "strategy", "value", "time-cost"].some(name => flag(parsed, name) !== undefined)) throw new CliUsageError("团队使用固定流程和内置模型，不能同时指定单 Agent 调度参数");
       const data = await api.mutate(apiPath("proposeGoalPlan", { goalId }), { ...base, kind: "team-v1", templateId,
-        templateVersion: "1", modelBindingId: flag(parsed, "model", true)! }, "POST", flag(parsed, "key"));
+        templateVersion: "1", modelBindingId: flag(parsed, "model", true)!, ...(skillId ? { skillRef: { id: skillId, version: flag(parsed, "skill-version", true)!, digest: flag(parsed, "skill-digest", true)! } } : {}) }, "POST", flag(parsed, "key"));
       return { command, data, human: JSON.stringify(data, null, 2) };
     }
     const runnerId = flag(parsed, "runner") ?? (flag(parsed, "model") ? "builtin" : "auto");
@@ -452,6 +473,42 @@ async function goal(parsed: ParsedArguments, api: ApiClient): Promise<CliResult>
     ...(action === "decide" ? { nodeId: flag(parsed, "node", true)!, decision } : {}),
   }, "POST", flag(parsed, "key"));
   return { command, data, human: `目标状态：${data.goal.status}` };
+}
+
+async function reuseCommand(group: "skill" | "memory" | "followup", parsed: ParsedArguments, api: ApiClient): Promise<CliResult> {
+  const action = parsed.positional[0] ?? "list", command = `${group} ${action}`;
+  const finish = (data: unknown): CliResult => ({ command, data, human: JSON.stringify(data, null, 2) });
+  const id = parsed.positional[1], key = flag(parsed, "key");
+  if (group === "memory") {
+    if (action === "list") { assertAllowedFlags(parsed, ["workspace", "namespace"]); return finish(await api.get(apiPath("listMemories", {}, { workspaceId: flag(parsed, "workspace", true)!, ...(flag(parsed, "namespace") ? { namespace: flag(parsed, "namespace")! } : {}) }))); }
+    if (action === "propose") { assertAllowedFlags(parsed, ["workspace", "file", "key"]); return finish(await api.mutate(apiPath("proposeMemory", {}), { ...await goalFile(parsed), workspaceId: flag(parsed, "workspace", true)! }, "POST", key)); }
+    if (!id || !["accept", "reject", "delete"].includes(action)) throw new CliUsageError("memory 支持 list、propose、accept、reject、delete；修改来源需创建新提案");
+    assertAllowedFlags(parsed, action === "delete" ? ["version", "reason", "key"] : ["version", "key"]); flag(parsed, "version", true);
+    const expectedStreamVersion = integerFlag(parsed, "version", 1);
+    return finish(action === "delete" ? await api.mutate(apiPath("deleteMemory", { memoryId: id }), { expectedStreamVersion, reason: flag(parsed, "reason", true)! }, "DELETE", key)
+      : await api.mutate(apiPath("decideMemory", { memoryId: id }), { expectedStreamVersion, decision: action }, "POST", key));
+  }
+  const workspaceId = flag(parsed, "workspace", true)!;
+  if (group === "followup") {
+    if (action === "list") { assertAllowedFlags(parsed, ["workspace"]); return finish(await api.get(apiPath("listFollowups", { workspaceId }))); }
+    if (action === "create") { assertAllowedFlags(parsed, ["workspace", "file", "key"]); const input = await goalFile(parsed); if (input.enabled !== true) throw new CliUsageError("跟进必须在文件中明确 enabled:true，并给出独立周期额度和有效期"); return finish(await api.mutate(apiPath("createFollowup", { workspaceId }), { ...input, expectedStreamVersion: 0 }, "POST", key)); }
+    if (!id) throw new CliUsageError("缺少跟进 ID");
+    if (action === "show") { assertAllowedFlags(parsed, ["workspace"]); return finish(await api.get(apiPath("getFollowup", { workspaceId, policyId: id }))); }
+    if (!["pause", "resume", "stop"].includes(action)) throw new CliUsageError("followup 支持 list、show、create、pause、resume、stop");
+    assertAllowedFlags(parsed, ["workspace", "version", "key"]); flag(parsed, "version", true);
+    return finish(await api.mutate(apiPath("commandFollowup", { workspaceId, policyId: id }), { expectedStreamVersion: integerFlag(parsed, "version", 1), command: action }, "POST", key));
+  }
+  if (action === "list") { assertAllowedFlags(parsed, ["workspace", "goal"]); return finish(await api.get(apiPath("listTeamSkills", { workspaceId }, flag(parsed, "goal") ? { goalId: flag(parsed, "goal")! } : {}))); }
+  if (!id) throw new CliUsageError("缺少技能 ID");
+  if (action === "show") { assertAllowedFlags(parsed, ["workspace", "skill-version"]); return finish(await api.get(apiPath("getTeamSkill", { workspaceId, skillId: id }, flag(parsed, "skill-version") ? { version: flag(parsed, "skill-version")! } : {}))); }
+  if (action === "create") { assertAllowedFlags(parsed, ["workspace", "version", "file", "key"]); flag(parsed, "version", true); return finish(await api.mutate(apiPath("createTeamSkillVersion", { workspaceId }), { ...await goalFile(parsed), skillId: id, expectedStreamVersion: integerFlag(parsed, "version", 0) }, "POST", key)); }
+  if (action === "report") { assertAllowedFlags(parsed, ["workspace", "version", "file", "evaluation", "key"]); flag(parsed, "version", true); return finish(await api.mutate(apiPath("submitTeamSkillEvaluation", { workspaceId, skillId: id, evaluationId: flag(parsed, "evaluation", true)! }), { ...await goalFile(parsed), expectedStreamVersion: integerFlag(parsed, "version", 1) }, "POST", key)); }
+  if (action === "evaluate") { assertAllowedFlags(parsed, ["workspace", "skill-version", "digest", "file", "key"]); return finish(await api.mutate(apiPath("registerTeamSkillEvaluation", { workspaceId, skillId: id }), { ...await goalFile(parsed), expectedStreamVersion: 0, skillRef: { id, version: flag(parsed, "skill-version", true)!, digest: flag(parsed, "digest", true)! } }, "POST", key)); }
+  if (!["enable", "rollback", "disable"].includes(action)) throw new CliUsageError("skill 支持 list、show、create、evaluate、report、enable、rollback、disable");
+  assertAllowedFlags(parsed, action === "disable" ? ["workspace", "version", "key"] : ["workspace", "version", "skill-version", "digest", "evaluation", "recommend", "key"]); flag(parsed, "version", true);
+  if (parsed.flags.has("recommend") && parsed.flags.get("recommend") !== true) throw new CliUsageError("--recommend 是明确启用自动推荐的开关，不接受参数；不启用时省略该开关");
+  return finish(await api.mutate(apiPath("commandTeamSkill", { workspaceId, skillId: id }), { expectedStreamVersion: integerFlag(parsed, "version", 0), command: action,
+    ...(action === "disable" ? {} : { skillRef: { id, version: flag(parsed, "skill-version", true)!, digest: flag(parsed, "digest", true)! }, evaluationId: flag(parsed, "evaluation", true)!, recommendationEnabled: parsed.flags.has("recommend") }) }, "POST", key));
 }
 
 async function goalFile(parsed: ParsedArguments): Promise<Record<string, unknown>> {
@@ -1204,6 +1261,7 @@ export async function runCli(arguments_: readonly string[], dependencies: CliDep
       case "plugin": result = await plugin(parsed, api); break;
       case "opc": result = await opc(parsed, api); break;
       case "code": result = await code(parsed, api); break;
+      case "skill": case "memory": case "followup": result = await reuseCommand(command as "skill" | "memory" | "followup", parsed, api); break;
       case "goal": result = await goal(parsed, api); break;
       case "asset": result = await assetCommand(parsed, api); break;
       case "business": result = await businessContext(parsed, api); break;

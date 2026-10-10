@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
+import { readFollowupNotices } from "./followup-notices.js";
 import { appendKernelEvent } from "@mn/kernel";
 
 import type { Approval, Asset, Deliverable, DeliverableSummaryV2, Execution, ExecutionAuthority, JsonObject, ProductNavigationV2, Thread, Workspace, CodingTaskSummaryV2 } from "@mn/contracts";
 import { KernelProjectionRuntimeStore, type RuntimeStore } from "@mn/agent-runtime";
 import { assertExecutionContextSources, createProtectedRuntimeStore, type RuntimeProtection } from "@mn/worker";
-import { validateBusinessContextSource } from "./business-context.js";
+import { validateHostContextSource } from "./context-source-validation.js";
 import { executionMetering, meteringCostSummary } from "./execution-metering.js";
 import {
   KernelError,
@@ -619,7 +620,7 @@ function canReadExecutionMaterial(transaction: KernelTransaction, tenantId: stri
   const execution = transaction.getProjection<Execution>("execution", executionId);
   if (!execution || execution.tenantId !== tenantId || execution.workspaceId !== workspaceId) return false;
   try {
-    assertExecutionContextSources(transaction, execution, validateBusinessContextSource);
+    assertExecutionContextSources(transaction, execution, validateHostContextSource);
     return true;
   } catch (error) {
     if (error instanceof KernelError && ["CONTEXT_SOURCE_CHANGED", "CONTEXT_SOURCE_REVOKED", "CONTEXT_INVALID",
@@ -721,7 +722,7 @@ function resourceNavigation(transaction: KernelTransaction, tenantId: string, wo
   return { pluginId, resourceRef };
 }
 
-export async function workspaceHome(store: KernelStore, tenantId: string, workspaceId: string) {
+export async function workspaceHome(store: KernelStore, tenantId: string, workspaceId: string, principalId?: string) {
   const [opportunities, codingTasks] = await Promise.all([
     listOpportunitySummaries(store, tenantId, workspaceId),
     listCodingTaskSummaries(store, tenantId, workspaceId),
@@ -748,9 +749,9 @@ export async function workspaceHome(store: KernelStore, tenantId: string, worksp
           navigation: resourceNavigation(transaction, tenantId, workspaceId, "coding", { namespace: CODING_TASK_PROJECTION, resourceId: item.id }),
         })),
       ],
-      blockers: inbox.filter((item) => item.kind !== "approval").map((item) => ({
+      blockers: [...inbox.filter((item) => item.kind !== "approval").map((item) => ({
         id: item.id, title: item.title, detail: item.summary,
-      })),
+      })), ...(principalId ? readFollowupNotices(transaction, tenantId, principalId, workspaceId).map(item => ({ id: item.id, title: item.title, detail: item.summary, ...(item.navigation ? { navigation: item.navigation } : {}) })) : [])],
       approvals: inbox.filter((item) => item.kind === "approval").flatMap((item) => {
         const approval = approvalsById.get(item.id.replace(/^approval:/u, ""));
         return approval ? [{

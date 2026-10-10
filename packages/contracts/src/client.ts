@@ -33,3 +33,5 @@ export function apiRequest<K extends ApiOperationIdV2>(operationId: K, input: Ap
 export function operationInputFields(operationId: ApiOperationIdV2): readonly { readonly name: string; readonly location: string; readonly required: boolean; readonly type?: string }[] {
   return API_INPUT_FIELDS_V2[operationId];
 }
+
+export { parseRegisterTeamSkillEvaluationV2, parseSubmitTeamSkillEvaluationV2 } from './team-skills.js';

@@ -3,6 +3,885 @@ info:
   title: Muniu Agent OS API
   version: 0.2.0
 paths:
+  /v2/workspaces/{workspaceId}/team-skills:
+    get:
+      operationId: listTeamSkills
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: goalId
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 200
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/OutputTeamSkillListV2"
+                  traceId:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+      x-muniu-versioned: false
+    post:
+      operationId: createTeamSkillVersion
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - skillId
+                - expectedStreamVersion
+                - source
+                - title
+                - description
+                - roles
+              properties:
+                skillId: &a1
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+                  pattern: \S
+                expectedStreamVersion: &a4
+                  type: integer
+                  minimum: 0
+                source:
+                  type: object
+                  additionalProperties: false
+                  required:
+                    - goalId
+                    - planRevisionId
+                    - deliverySetId
+                    - deliveryDigest
+                  properties:
+                    goalId: *a1
+                    planRevisionId: *a1
+                    deliverySetId: *a1
+                    deliveryDigest: &a2
+                      type: string
+                      pattern: ^[a-f0-9]{64}$
+                title: *a1
+                description:
+                  type: string
+                  minLength: 1
+                  maxLength: 2000
+                  pattern: \S
+                roles:
+                  type: array
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required:
+                      - nodeId
+                      - instructions
+                      - sourceRefs
+                    properties:
+                      nodeId: *a1
+                      instructions:
+                        type: string
+                        minLength: 1
+                        maxLength: 4000
+                        pattern: \S
+                      sourceRefs:
+                        type: array
+                        items:
+                          type: object
+                          additionalProperties: false
+                          required:
+                            - namespace
+                            - resourceId
+                            - streamVersion
+                            - digest
+                          properties:
+                            namespace: *a1
+                            resourceId: *a1
+                            streamVersion:
+                              type: integer
+                              minimum: 1
+                            digest: *a2
+                        minItems: 0
+                        maxItems: 20
+                  minItems: 0
+                  maxItems: 12
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/OutputTeamSkillDetailV2"
+                  traceId:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+      x-muniu-versioned: true
+  /v2/workspaces/{workspaceId}/team-skills/{skillId}:
+    get:
+      operationId: getTeamSkill
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: skillId
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: version
+          required: false
+          schema:
+            type: string
+            pattern: ^[1-9][0-9]{0,5}$
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/OutputTeamSkillDetailV2"
+                  traceId:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+      x-muniu-versioned: false
+  /v2/workspaces/{workspaceId}/team-skills/{skillId}/evaluations:
+    post:
+      operationId: registerTeamSkillEvaluation
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: skillId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - expectedStreamVersion
+                - skillRef
+                - executionMode
+                - baselineRevision
+                - candidateRevision
+                - configuration
+              properties:
+                expectedStreamVersion:
+                  const: 0
+                skillRef:
+                  type: object
+                  additionalProperties: false
+                  required:
+                    - id
+                    - version
+                    - digest
+                  properties:
+                    id: *a1
+                    version:
+                      type: string
+                      pattern: ^[1-9][0-9]{0,5}$
+                    digest: *a2
+                executionMode:
+                  enum:
+                    - measured
+                    - test_fixture
+                baselineRevision: &a3
+                  type: string
+                  pattern: ^[a-f0-9]{40}$
+                candidateRevision: *a3
+                configuration:
+                  type: object
+                  additionalProperties: false
+                  required:
+                    - model
+                    - promptSha256
+                    - policySha256
+                    - materialsSha256
+                    - budget
+                  properties:
+                    model:
+                      type: object
+                      additionalProperties: false
+                      required:
+                        - provider
+                        - name
+                        - revision
+                        - parameters
+                      properties:
+                        provider: *a1
+                        name: *a1
+                        revision: *a1
+                        parameters:
+                          type: object
+                          additionalProperties: false
+                          required:
+                            - temperature
+                          properties:
+                            temperature:
+                              type: number
+                              minimum: 0
+                              maximum: 2
+                    promptSha256: *a2
+                    policySha256: *a2
+                    materialsSha256: *a2
+                    budget:
+                      type: object
+                      additionalProperties: false
+                      required:
+                        - revision
+                        - maxTokens
+                        - maxCostMinorUnits
+                        - currency
+                      properties:
+                        revision:
+                          const: budget-v1
+                        maxTokens:
+                          type: integer
+                          minimum: 1
+                        maxCostMinorUnits:
+                          type: string
+                          pattern: ^(0|[1-9][0-9]{0,29})$
+                        currency:
+                          type: string
+                          pattern: ^[A-Z]{3}$
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/OutputTeamSkillEvaluationV2"
+                  traceId:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+      x-muniu-versioned: true
+  /v2/workspaces/{workspaceId}/team-skills/{skillId}/evaluations/{evaluationId}/results:
+    post:
+      operationId: submitTeamSkillEvaluation
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: skillId
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: evaluationId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - expectedStreamVersion
+                - reportRef
+                - evidence
+              properties:
+                expectedStreamVersion:
+                  type: integer
+                  minimum: 1
+                reportRef:
+                  type: object
+                  additionalProperties: false
+                  required:
+                    - namespace
+                    - resourceId
+                    - streamVersion
+                    - digest
+                  properties:
+                    namespace: *a1
+                    resourceId: *a1
+                    streamVersion:
+                      type: integer
+                      minimum: 1
+                    digest: *a2
+                evidence:
+                  type: array
+                  items:
+                    oneOf:
+                      - type: object
+                        additionalProperties: false
+                        required:
+                          - artifactRef
+                          - artifactSha256
+                          - method
+                          - reviewer
+                        properties:
+                          artifactRef:
+                            type: object
+                            additionalProperties: false
+                            required:
+                              - namespace
+                              - resourceId
+                              - streamVersion
+                              - digest
+                            properties:
+                              namespace: *a1
+                              resourceId: *a1
+                              streamVersion:
+                                type: integer
+                                minimum: 1
+                              digest: *a2
+                          artifactSha256: *a2
+                          method:
+                            const: human
+                          reviewer: *a1
+                      - type: object
+                        additionalProperties: false
+                        required:
+                          - artifactRef
+                          - artifactSha256
+                          - method
+                          - check
+                        properties:
+                          artifactRef:
+                            type: object
+                            additionalProperties: false
+                            required:
+                              - namespace
+                              - resourceId
+                              - streamVersion
+                              - digest
+                            properties:
+                              namespace: *a1
+                              resourceId: *a1
+                              streamVersion:
+                                type: integer
+                                minimum: 1
+                              digest: *a2
+                          artifactSha256: *a2
+                          method:
+                            const: deterministic
+                          check: *a1
+                  minItems: 1
+                  maxItems: 2000
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/OutputTeamSkillEvaluationV2"
+                  traceId:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+      x-muniu-versioned: true
+  /v2/workspaces/{workspaceId}/team-skills/{skillId}/commands:
+    post:
+      operationId: commandTeamSkill
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: skillId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - type: object
+                  additionalProperties: false
+                  required:
+                    - expectedStreamVersion
+                    - command
+                  properties:
+                    expectedStreamVersion: *a4
+                    command:
+                      const: disable
+                - type: object
+                  additionalProperties: false
+                  required:
+                    - expectedStreamVersion
+                    - command
+                    - skillRef
+                    - evaluationId
+                    - recommendationEnabled
+                  properties:
+                    expectedStreamVersion: *a4
+                    command:
+                      enum:
+                        - enable
+                        - rollback
+                    skillRef:
+                      type: object
+                      additionalProperties: false
+                      required:
+                        - id
+                        - version
+                        - digest
+                      properties:
+                        id: *a1
+                        version:
+                          type: string
+                          pattern: ^[1-9][0-9]{0,5}$
+                        digest: *a2
+                    evaluationId: *a1
+                    recommendationEnabled:
+                      type: boolean
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/OutputTeamSkillActivationV2"
+                  traceId:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+      x-muniu-versioned: true
+  /v2/workspaces/{workspaceId}/followups:
+    get:
+      operationId: listFollowups
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/OutputFollowupDetailV2"
+                  traceId:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+      x-muniu-versioned: false
+    post:
+      operationId: createFollowup
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - expectedStreamVersion
+                - parentGoalId
+                - expectedGoalStreamVersion
+                - parentPlanDigest
+                - title
+                - instruction
+                - enabled
+                - trigger
+                - resourceRefs
+                - modelBindingId
+                - perRunBudget
+                - periodBudget
+                - maxRuns
+                - expiresAt
+              properties:
+                expectedStreamVersion:
+                  const: 0
+                parentGoalId: &a5
+                  type: string
+                  minLength: 1
+                  maxLength: 200
+                expectedGoalStreamVersion: &a6
+                  type: integer
+                  minimum: 1
+                parentPlanDigest: *a5
+                title: *a5
+                instruction:
+                  type: string
+                  minLength: 1
+                  maxLength: 4000
+                enabled:
+                  const: true
+                trigger:
+                  type: object
+                  additionalProperties: false
+                  required:
+                    - kind
+                    - sourceRef
+                  properties:
+                    kind:
+                      const: business_changed
+                    sourceRef: &a7
+                      type: object
+                      additionalProperties: false
+                      required:
+                        - namespace
+                        - resourceId
+                        - streamVersion
+                        - digest
+                      properties:
+                        namespace: *a5
+                        resourceId: *a5
+                        streamVersion: *a6
+                        digest:
+                          type: string
+                          pattern: ^[a-f0-9]{64}$
+                resourceRefs:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  items: *a7
+                modelBindingId: *a5
+                perRunBudget:
+                  type: object
+                  additionalProperties: false
+                  required:
+                    - maxTokens
+                    - maxCostMinorUnits
+                    - currency
+                    - maxDurationMs
+                  properties:
+                    maxTokens: *a6
+                    maxCostMinorUnits: &a8
+                      type: string
+                      pattern: ^(0|[1-9][0-9]{0,15})$
+                    currency: &a9
+                      type: string
+                      pattern: ^[A-Z]{3}$
+                    maxDurationMs: *a6
+                periodBudget:
+                  type: object
+                  additionalProperties: false
+                  required:
+                    - periodMs
+                    - maxRuns
+                    - maxTokens
+                    - maxCostMinorUnits
+                    - currency
+                  properties:
+                    periodMs:
+                      enum:
+                        - 86400000
+                        - 604800000
+                    maxRuns:
+                      type: integer
+                      minimum: 1
+                      maximum: 1000
+                    maxTokens: *a6
+                    maxCostMinorUnits: *a8
+                    currency: *a9
+                maxRuns:
+                  type: integer
+                  minimum: 1
+                  maximum: 1000
+                expiresAt: *a5
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/OutputFollowupDetailV2"
+                  traceId:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+      x-muniu-versioned: true
+  /v2/workspaces/{workspaceId}/followups/{policyId}:
+    get:
+      operationId: getFollowup
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: policyId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/OutputFollowupDetailV2"
+                  traceId:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+      x-muniu-versioned: false
+  /v2/workspaces/{workspaceId}/followups/{policyId}/commands:
+    post:
+      operationId: commandFollowup
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: policyId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - expectedStreamVersion
+                - command
+              properties:
+                expectedStreamVersion:
+                  type: integer
+                  minimum: 1
+                command:
+                  enum:
+                    - pause
+                    - resume
+                    - stop
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/OutputFollowupDetailV2"
+                  traceId:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/CursorExpired"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+      x-muniu-versioned: true
   /v2/workspaces/{workspaceId}/business-context/{kind}/{resourceId}:
     get:
       operationId: getBusinessContext
@@ -224,7 +1103,7 @@ paths:
                 - expectedStreamVersion
                 - command
               properties:
-                workspaceId: &a2
+                workspaceId: &a11
                   type: string
                   minLength: 1
                   maxLength: 4000
@@ -249,31 +1128,31 @@ paths:
                       properties:
                         type:
                           const: plan.record
-                        planId: &a3
+                        planId: &a12
                           type: string
                           pattern: ^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$
-                        title: &a4
+                        title: &a13
                           type: string
                           minLength: 1
                           maxLength: 200
                           pattern: \S
-                        period: &a11
+                        period: &a20
                           type: object
                           additionalProperties: false
                           required:
                             - start
                             - end
                           properties:
-                            start: &a1
+                            start: &a10
                               type: string
                               format: date
                               pattern: ^(?!0000)[0-9]{4}-[0-9]{2}-[0-9]{2}$
-                            end: *a1
-                        targetCustomer: *a2
-                        valueProposition: *a2
-                        focus: &a6
+                            end: *a10
+                        targetCustomer: *a11
+                        valueProposition: *a11
+                        focus: &a15
                           type: array
-                          items: &a5
+                          items: &a14
                             type: string
                             minLength: 1
                             maxLength: 2000
@@ -281,8 +1160,8 @@ paths:
                           minItems: 1
                           maxItems: 50
                           uniqueItems: true
-                        resources: *a2
-                        reviewOn: *a1
+                        resources: *a11
+                        reviewOn: *a10
                     - type: object
                       additionalProperties: false
                       required:
@@ -294,16 +1173,16 @@ paths:
                       properties:
                         type:
                           const: customer.record
-                        customerId: *a3
-                        name: *a4
-                        source: *a5
-                        need: *a2
+                        customerId: *a12
+                        name: *a13
+                        source: *a14
+                        need: *a11
                         contact:
                           type: string
                           minLength: 1
                           maxLength: 500
                           pattern: \S
-                        followUpOn: *a1
+                        followUpOn: *a10
                     - type: object
                       additionalProperties: false
                       required:
@@ -318,21 +1197,21 @@ paths:
                       properties:
                         type:
                           const: service.record
-                        serviceId: *a3
-                        title: *a4
+                        serviceId: *a12
+                        title: *a13
                         currency:
                           const: CNY
-                        priceMinor: &a7
+                        priceMinor: &a16
                           type: string
                           pattern: ^(0|[1-9][0-9]{0,23})$
-                        inScope: *a6
+                        inScope: *a15
                         outOfScope:
                           type: array
-                          items: *a5
+                          items: *a14
                           minItems: 0
                           maxItems: 50
                           uniqueItems: true
-                        acceptanceCriteria: *a6
+                        acceptanceCriteria: *a15
                     - type: object
                       additionalProperties: false
                       required:
@@ -348,21 +1227,21 @@ paths:
                       properties:
                         type:
                           const: quote.create
-                        quoteId: *a3
-                        customerId: *a3
-                        serviceId: *a3
-                        serviceVersion: &a8
+                        quoteId: *a12
+                        customerId: *a12
+                        serviceId: *a12
+                        serviceVersion: &a17
                           type: integer
                           minimum: 1
                           maximum: 1000000
-                        quantity: &a9
+                        quantity: &a18
                           type: integer
                           minimum: 1
                           maximum: 10000
-                        discountMinor: *a7
-                        validUntil: *a1
-                        dueOn: *a1
-                        notes: *a2
+                        discountMinor: *a16
+                        validUntil: *a10
+                        dueOn: *a10
+                        notes: *a11
                     - type: object
                       additionalProperties: false
                       required:
@@ -374,10 +1253,10 @@ paths:
                       properties:
                         type:
                           const: quote.confirm
-                        quoteId: *a3
-                        confirmationId: *a3
-                        confirmedOn: *a1
-                        sourceRef: *a5
+                        quoteId: *a12
+                        confirmationId: *a12
+                        confirmedOn: *a10
+                        sourceRef: *a14
                     - type: object
                       additionalProperties: false
                       required:
@@ -389,10 +1268,10 @@ paths:
                       properties:
                         type:
                           const: order.activate
-                        orderId: *a3
-                        quoteConfirmationId: *a3
-                        contractedOn: *a1
-                        sourceRef: *a5
+                        orderId: *a12
+                        quoteConfirmationId: *a12
+                        contractedOn: *a10
+                        sourceRef: *a14
                     - type: object
                       additionalProperties: false
                       required:
@@ -410,15 +1289,15 @@ paths:
                       properties:
                         type:
                           const: order.record
-                        orderId: *a3
-                        customerId: *a3
-                        serviceId: *a3
-                        serviceVersion: *a8
-                        quantity: *a9
-                        agreedAmountMinor: *a7
-                        contractedOn: *a1
-                        dueOn: *a1
-                        sourceRef: *a5
+                        orderId: *a12
+                        customerId: *a12
+                        serviceId: *a12
+                        serviceVersion: *a17
+                        quantity: *a18
+                        agreedAmountMinor: *a16
+                        contractedOn: *a10
+                        dueOn: *a10
+                        sourceRef: *a14
                         opening:
                           type: object
                           additionalProperties: false
@@ -429,15 +1308,15 @@ paths:
                             - accepted
                             - sourceRef
                           properties:
-                            asOf: *a1
-                            receivedMinor: *a7
+                            asOf: *a10
+                            receivedMinor: *a16
                             deliveredPercent:
                               type: integer
                               minimum: 0
                               maximum: 100
                             accepted:
                               type: boolean
-                            sourceRef: *a5
+                            sourceRef: *a14
                     - type: object
                       additionalProperties: false
                       required:
@@ -451,15 +1330,15 @@ paths:
                       properties:
                         type:
                           const: order.adjust
-                        adjustmentId: *a3
-                        orderId: *a3
+                        adjustmentId: *a12
+                        orderId: *a12
                         amountDeltaMinor:
                           type: string
                           pattern: ^(0|-?[1-9][0-9]{0,23})$
-                        effectiveOn: *a1
-                        dueOn: *a1
-                        reason: *a2
-                        sourceRef: *a5
+                        effectiveOn: *a10
+                        dueOn: *a10
+                        reason: *a11
+                        sourceRef: *a14
                     - type: object
                       additionalProperties: false
                       required:
@@ -473,16 +1352,16 @@ paths:
                       properties:
                         type:
                           const: delivery.record
-                        deliveryId: *a3
-                        orderId: *a3
-                        title: *a4
-                        deliveredOn: *a1
-                        artifactRef: *a5
+                        deliveryId: *a12
+                        orderId: *a12
+                        title: *a13
+                        deliveredOn: *a10
+                        artifactRef: *a14
                         progressPercent:
                           type: integer
                           minimum: 1
                           maximum: 100
-                        notes: *a2
+                        notes: *a11
                     - type: object
                       additionalProperties: false
                       required:
@@ -496,16 +1375,16 @@ paths:
                       properties:
                         type:
                           const: acceptance.record
-                        acceptanceId: *a3
-                        orderId: *a3
+                        acceptanceId: *a12
+                        orderId: *a12
                         deliveryIds:
                           type: array
-                          items: *a3
+                          items: *a12
                           minItems: 0
                           maxItems: 100
                           uniqueItems: true
-                        acceptedOn: *a1
-                        customerConfirmationRef: *a5
+                        acceptedOn: *a10
+                        customerConfirmationRef: *a14
                         complete:
                           type: boolean
                     - type: object
@@ -520,13 +1399,13 @@ paths:
                       properties:
                         type:
                           const: payment.record
-                        paymentId: *a3
-                        orderId: *a3
-                        amountMinor: &a10
+                        paymentId: *a12
+                        orderId: *a12
+                        amountMinor: &a19
                           type: string
                           pattern: ^[1-9][0-9]{0,23}$
-                        receivedOn: *a1
-                        sourceRef: *a5
+                        receivedOn: *a10
+                        sourceRef: *a14
                     - type: object
                       additionalProperties: false
                       required:
@@ -539,11 +1418,11 @@ paths:
                       properties:
                         type:
                           const: payment.reverse
-                        reversalId: *a3
-                        paymentId: *a3
-                        reversedOn: *a1
-                        reason: *a2
-                        sourceRef: *a5
+                        reversalId: *a12
+                        paymentId: *a12
+                        reversedOn: *a10
+                        reason: *a11
+                        sourceRef: *a14
                     - type: object
                       additionalProperties: false
                       required:
@@ -556,13 +1435,13 @@ paths:
                       properties:
                         type:
                           const: refund.record
-                        refundId: *a3
-                        paymentId: *a3
-                        openingOrderId: *a3
-                        amountMinor: *a10
-                        refundedOn: *a1
-                        reason: *a2
-                        sourceRef: *a5
+                        refundId: *a12
+                        paymentId: *a12
+                        openingOrderId: *a12
+                        amountMinor: *a19
+                        refundedOn: *a10
+                        reason: *a11
+                        sourceRef: *a14
                     - type: object
                       additionalProperties: false
                       required:
@@ -576,13 +1455,13 @@ paths:
                       properties:
                         type:
                           const: expense.record
-                        expenseId: *a3
-                        orderId: *a3
-                        category: *a4
-                        description: *a2
-                        amountMinor: *a10
-                        paidOn: *a1
-                        sourceRef: *a5
+                        expenseId: *a12
+                        orderId: *a12
+                        category: *a13
+                        description: *a11
+                        amountMinor: *a19
+                        paidOn: *a10
+                        sourceRef: *a14
                     - type: object
                       additionalProperties: false
                       required:
@@ -594,10 +1473,10 @@ paths:
                       properties:
                         type:
                           const: review.record
-                        reviewId: *a3
-                        period: *a11
-                        explanation: *a2
-                        nextDecisions: *a6
+                        reviewId: *a12
+                        period: *a20
+                        explanation: *a11
+                        nextDecisions: *a15
       responses:
         "200":
           description: 成功
@@ -690,7 +1569,7 @@ paths:
                 - budget
                 - deliverables
               properties:
-                threadId: &a12
+                threadId: &a21
                   type: string
                   minLength: 1
                   maxLength: 200
@@ -708,12 +1587,12 @@ paths:
                       - resourceId
                       - streamVersion
                     properties:
-                      namespace: *a12
-                      resourceId: *a12
+                      namespace: *a21
+                      resourceId: *a21
                       streamVersion:
                         type: integer
                         minimum: 0
-                      digest: *a12
+                      digest: *a21
                   minItems: 0
                   maxItems: 100
                 budget:
@@ -748,8 +1627,8 @@ paths:
                       - required
                       - criteria
                     properties:
-                      key: *a12
-                      title: *a12
+                      key: *a21
+                      title: *a21
                       required:
                         type: boolean
                       criteria:
@@ -761,7 +1640,7 @@ paths:
                             - id
                             - description
                           properties:
-                            id: *a12
+                            id: *a21
                             description:
                               type: string
                               minLength: 1
@@ -944,14 +1823,14 @@ paths:
                     - expectedStreamVersion
                     - modelBindingId
                   properties:
-                    workspaceId: &a13
+                    workspaceId: &a22
                       type: string
                       minLength: 1
                       maxLength: 200
-                    expectedStreamVersion: &a14
+                    expectedStreamVersion: &a23
                       type: integer
                       minimum: 0
-                    modelBindingId: *a13
+                    modelBindingId: *a22
                 - type: object
                   additionalProperties: false
                   required:
@@ -959,8 +1838,8 @@ paths:
                     - expectedStreamVersion
                     - scheduling
                   properties:
-                    workspaceId: *a13
-                    expectedStreamVersion: *a14
+                    workspaceId: *a22
+                    expectedStreamVersion: *a23
                     scheduling:
                       type: object
                       additionalProperties: false
@@ -979,11 +1858,11 @@ paths:
                             - quality
                             - balanced
                             - cost
-                        modelBindingId: *a13
-                        expectedValueMinorUnits: &a15
+                        modelBindingId: *a22
+                        expectedValueMinorUnits: &a24
                           type: string
                           pattern: ^(0|[1-9][0-9]{0,17})$
-                        timeCostMinorUnitsPerHour: *a15
+                        timeCostMinorUnitsPerHour: *a24
                 - type: object
                   additionalProperties: false
                   required:
@@ -994,8 +1873,8 @@ paths:
                     - templateVersion
                     - modelBindingId
                   properties:
-                    workspaceId: *a13
-                    expectedStreamVersion: *a14
+                    workspaceId: *a22
+                    expectedStreamVersion: *a23
                     kind:
                       const: team-v1
                     templateId:
@@ -1005,7 +1884,20 @@ paths:
                         - code-delivery
                     templateVersion:
                       const: "1"
-                    modelBindingId: *a13
+                    modelBindingId: *a22
+                    skillRef:
+                      type: object
+                      additionalProperties: false
+                      required:
+                        - id
+                        - version
+                        - digest
+                      properties:
+                        id: *a1
+                        version:
+                          type: string
+                          pattern: ^[1-9][0-9]{0,5}$
+                        digest: *a2
       responses:
         "200":
           description: 成功
@@ -1062,11 +1954,11 @@ paths:
                     - usage
                     - source
                   properties:
-                    workspaceId: &a17
+                    workspaceId: &a26
                       type: string
                       minLength: 1
                       maxLength: 200
-                    expectedStreamVersion: &a16
+                    expectedStreamVersion: &a25
                       type: integer
                       minimum: 0
                     command:
@@ -1083,7 +1975,7 @@ paths:
                         - costMinorUnits
                         - currency
                       properties:
-                        tokens: *a16
+                        tokens: *a25
                         costMinorUnits:
                           type: string
                           pattern: ^(0|[1-9][0-9]{0,17})$
@@ -1099,12 +1991,12 @@ paths:
                     - planRevisionId
                     - planDigest
                   properties:
-                    workspaceId: *a17
-                    expectedStreamVersion: *a16
+                    workspaceId: *a26
+                    expectedStreamVersion: *a25
                     command:
                       const: start
-                    planRevisionId: *a17
-                    planDigest: *a17
+                    planRevisionId: *a26
+                    planDigest: *a26
                 - type: object
                   additionalProperties: false
                   required:
@@ -1112,8 +2004,8 @@ paths:
                     - expectedStreamVersion
                     - command
                   properties:
-                    workspaceId: *a17
-                    expectedStreamVersion: *a16
+                    workspaceId: *a26
+                    expectedStreamVersion: *a25
                     command:
                       enum:
                         - refresh
@@ -1129,11 +2021,11 @@ paths:
                     - nodeId
                     - decision
                   properties:
-                    workspaceId: *a17
-                    expectedStreamVersion: *a16
+                    workspaceId: *a26
+                    expectedStreamVersion: *a25
                     command:
                       const: decide
-                    nodeId: *a17
+                    nodeId: *a26
                     decision:
                       enum:
                         - continue
@@ -1193,15 +2085,15 @@ paths:
                 - criteriaVersion
                 - items
               properties:
-                workspaceId: &a18
+                workspaceId: &a27
                   type: string
                   minLength: 1
                   maxLength: 200
                 expectedStreamVersion:
                   type: integer
                   minimum: 0
-                deliverySetId: *a18
-                criteriaVersion: *a18
+                deliverySetId: *a27
+                criteriaVersion: *a27
                 items:
                   type: array
                   items:
@@ -1212,11 +2104,11 @@ paths:
                       - digest
                       - reviewedCriterionIds
                     properties:
-                      key: *a18
-                      digest: *a18
+                      key: *a27
+                      digest: *a27
                       reviewedCriterionIds:
                         type: array
-                        items: *a18
+                        items: *a27
                         minItems: 1
                         maxItems: 20
                   minItems: 1
@@ -1276,15 +2168,15 @@ paths:
                 - criteriaVersion
                 - items
               properties:
-                workspaceId: &a19
+                workspaceId: &a28
                   type: string
                   minLength: 1
                   maxLength: 200
                 expectedStreamVersion:
                   type: integer
                   minimum: 0
-                deliverySetId: *a19
-                criteriaVersion: *a19
+                deliverySetId: *a28
+                criteriaVersion: *a28
                 items:
                   type: array
                   items:
@@ -1297,13 +2189,13 @@ paths:
                           - decision
                           - reviewedCriterionIds
                         properties:
-                          key: *a19
-                          digest: *a19
+                          key: *a28
+                          digest: *a28
                           decision:
                             const: accept
                           reviewedCriterionIds:
                             type: array
-                            items: *a19
+                            items: *a28
                             minItems: 1
                             maxItems: 20
                       - type: object
@@ -1315,13 +2207,13 @@ paths:
                           - failedCriterionIds
                           - instruction
                         properties:
-                          key: *a19
-                          digest: *a19
+                          key: *a28
+                          digest: *a28
                           decision:
                             const: request_changes
                           failedCriterionIds:
                             type: array
-                            items: *a19
+                            items: *a28
                             minItems: 1
                             maxItems: 20
                           instruction:
@@ -1335,8 +2227,8 @@ paths:
                           - digest
                           - decision
                         properties:
-                          key: *a19
-                          digest: *a19
+                          key: *a28
+                          digest: *a28
                           decision:
                             const: defer
                           reason:
@@ -1398,14 +2290,14 @@ paths:
                 - expectedStreamVersion
                 - decisionId
               properties:
-                workspaceId: &a20
+                workspaceId: &a29
                   type: string
                   minLength: 1
                   maxLength: 200
                 expectedStreamVersion:
                   type: integer
                   minimum: 0
-                decisionId: *a20
+                decisionId: *a29
       responses:
         "200":
           description: 成功
@@ -1460,15 +2352,15 @@ paths:
                 - previewId
                 - previewDigest
               properties:
-                workspaceId: &a21
+                workspaceId: &a30
                   type: string
                   minLength: 1
                   maxLength: 200
                 expectedStreamVersion:
                   type: integer
                   minimum: 0
-                previewId: *a21
-                previewDigest: *a21
+                previewId: *a30
+                previewDigest: *a30
       responses:
         "200":
           description: 成功
@@ -1558,7 +2450,7 @@ paths:
                 - proposalKey
                 - origin
               properties:
-                workspaceId: &a22
+                workspaceId: &a31
                   type: string
                   minLength: 1
                   maxLength: 200
@@ -1580,11 +2472,11 @@ paths:
                     - outputKey
                     - outputDigest
                   properties:
-                    goalId: *a22
-                    planRevisionId: *a22
-                    deliverySetId: *a22
-                    outputKey: *a22
-                    outputDigest: &a23
+                    goalId: *a31
+                    planRevisionId: *a31
+                    deliverySetId: *a31
+                    outputKey: *a31
+                    outputDigest: &a32
                       type: string
                       pattern: ^[a-f0-9]{64}$
       responses:
@@ -1684,15 +2576,15 @@ paths:
                 - previewDigest
                 - decision
               properties:
-                workspaceId: *a22
+                workspaceId: *a31
                 expectedStreamVersion:
                   type: integer
                   minimum: 1
                 expectedBusinessStreamVersion:
                   type: integer
                   minimum: 0
-                candidateDigest: *a23
-                previewDigest: *a23
+                candidateDigest: *a32
+                previewDigest: *a32
                 decision:
                   enum:
                     - apply
@@ -2300,7 +3192,7 @@ paths:
                   - data
                   - traceId
                 properties:
-                  data: &a24
+                  data: &a33
                     $ref: "#/components/schemas/OutputReadinessV2"
                   traceId:
                     type: string
@@ -2325,7 +3217,7 @@ paths:
                   - data
                   - traceId
                 properties:
-                  data: *a24
+                  data: *a33
                   traceId:
                     type: string
       x-muniu-versioned: false
@@ -2435,7 +3327,7 @@ paths:
                 - viewMode
                 - pluginIds
               properties:
-                name: &a25
+                name: &a34
                   type: string
                   minLength: 1
                 viewMode:
@@ -2444,7 +3336,7 @@ paths:
                     - professional
                 pluginIds:
                   type: array
-                  items: *a25
+                  items: *a34
               additionalProperties: false
       responses:
         "201":
@@ -2864,18 +3756,18 @@ paths:
                 - subject
                 - pluginId
               properties:
-                subject: &a26
+                subject: &a35
                   type: string
                   minLength: 1
-                pluginId: *a26
+                pluginId: *a35
                 resourceRef:
                   type: object
                   required:
                     - namespace
                     - resourceId
                   properties:
-                    namespace: *a26
-                    resourceId: *a26
+                    namespace: *a35
+                    resourceId: *a35
                   additionalProperties: false
               additionalProperties: false
       responses:
@@ -3085,7 +3977,7 @@ paths:
                   - data
                   - traceId
                 properties:
-                  data: &a27
+                  data: &a36
                     $ref: "#/components/schemas/OutputExecution"
                   traceId:
                     type: string
@@ -3100,7 +3992,7 @@ paths:
                   - data
                   - traceId
                 properties:
-                  data: *a27
+                  data: *a36
                   traceId:
                     type: string
         "400":
@@ -3622,12 +4514,12 @@ paths:
                 - sourceEventId
                 - value
               properties:
-                workspaceId: &a28
+                workspaceId: &a37
                   type: string
                   minLength: 1
-                namespace: *a28
-                resourceId: *a28
-                sourceEventId: *a28
+                namespace: *a37
+                resourceId: *a37
+                sourceEventId: *a37
                 scopeType:
                   enum:
                     - workspace
@@ -3641,9 +4533,56 @@ paths:
                 value:
                   type: object
                   additionalProperties: true
-                expiresAt: *a28
-                derivedFromMemoryId: *a28
-                derivedViaShareGrantId: *a28
+                expiresAt: *a37
+                derivedFromMemoryId: *a37
+                derivedViaShareGrantId: *a37
+                provenance:
+                  type: object
+                  required:
+                    - version
+                    - kind
+                    - origin
+                    - sourceRefs
+                  properties:
+                    version:
+                      const: 1
+                    kind:
+                      enum:
+                        - fact
+                        - preference
+                    origin:
+                      enum:
+                        - user
+                        - model
+                    sourceRefs:
+                      type: array
+                      maxItems: 100
+                      items:
+                        type: object
+                        required:
+                          - namespace
+                          - resourceId
+                          - streamVersion
+                        properties:
+                          namespace: *a37
+                          resourceId: *a37
+                          streamVersion:
+                            type: integer
+                            minimum: 1
+                          digest: *a37
+                        additionalProperties: false
+                    sourceExecution:
+                      type: object
+                      required:
+                        - executionId
+                        - generation
+                      properties:
+                        executionId: *a37
+                        generation:
+                          type: integer
+                          minimum: 1
+                      additionalProperties: false
+                  additionalProperties: false
               additionalProperties: false
       responses:
         "201":
@@ -3903,10 +4842,10 @@ paths:
                 - toNamespace
                 - expectedStreamVersion
               properties:
-                memoryId: &a29
+                memoryId: &a38
                   type: string
                   minLength: 1
-                toNamespace: *a29
+                toNamespace: *a38
                 expectedStreamVersion:
                   type: integer
                   minimum: 0
@@ -4083,10 +5022,10 @@ paths:
                     - anthropic
                     - moonshot
                     - qwen
-                apiKey: &a30
+                apiKey: &a39
                   type: string
                   minLength: 1
-                displayName: *a30
+                displayName: *a39
               additionalProperties: false
       responses:
         "201":
@@ -4190,10 +5129,10 @@ paths:
                 - pluginId
                 - version
               properties:
-                pluginId: &a31
+                pluginId: &a40
                   type: string
                   minLength: 1
-                version: *a31
+                version: *a40
               additionalProperties: false
       responses:
         "201":
@@ -5227,7 +6166,7 @@ paths:
                   - data
                   - traceId
                 properties:
-                  data: &a32
+                  data: &a41
                     $ref: "#/components/schemas/OutputCodingReconciliationResultV2"
                   traceId:
                     type: string
@@ -5242,7 +6181,7 @@ paths:
                   - data
                   - traceId
                 properties:
-                  data: *a32
+                  data: *a41
                   traceId:
                     type: string
         "400":
@@ -5274,6 +6213,84 @@ components:
       type: object
       additionalProperties:
         $ref: "#/components/schemas/OutputJsonValue"
+    OutputTeamSkillSummaryV2:
+      type: object
+      additionalProperties: false
+      required:
+        - title
+        - description
+        - pluginId
+        - validation
+        - recommended
+        - available
+        - id
+        - version
+        - digest
+      properties:
+        stopControl:
+          type: object
+          additionalProperties: false
+          required:
+            - expectedStreamVersion
+          properties:
+            expectedStreamVersion:
+              type: number
+        title:
+          type: string
+        description:
+          type: string
+        pluginId:
+          anyOf:
+            - type: string
+              const: opc
+            - type: string
+              const: coding
+        validation:
+          anyOf:
+            - type: string
+              const: failed
+            - type: string
+              const: passed
+            - type: string
+              const: unmeasured
+        recommended:
+          anyOf:
+            - type: boolean
+              const: false
+            - type: boolean
+              const: true
+        available:
+          anyOf:
+            - type: boolean
+              const: false
+            - type: boolean
+              const: true
+        unavailableReason:
+          type: string
+        id:
+          type: string
+        version:
+          type: string
+        digest:
+          type: string
+    OutputTeamSkillListV2:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutputTeamSkillSummaryV2"
+    OutputTeamTemplateIdV1:
+      anyOf:
+        - type: string
+          const: research-summary
+        - type: string
+          const: business-proposal
+        - type: string
+          const: code-delivery
     OutputGoalResourceRefV2:
       type: object
       additionalProperties: false
@@ -5290,6 +6307,1010 @@ components:
           type: string
         digest:
           type: string
+    OutputTeamSkillRoleV2:
+      type: object
+      additionalProperties: false
+      required:
+        - nodeId
+        - instructions
+        - sourceRefs
+      properties:
+        nodeId:
+          type: string
+        instructions:
+          type: string
+        sourceRefs:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutputGoalResourceRefV2"
+    OutputTeamOutputKindV1:
+      anyOf:
+        - type: string
+          const: analysis
+        - type: string
+          const: artifact
+        - type: string
+          const: evidence
+        - type: string
+          const: self_assessment
+        - type: string
+          const: review
+        - type: string
+          const: decision
+    OutputTeamSkillNodeV2:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - kind
+        - title
+        - dependsOn
+        - inputs
+        - outputs
+      properties:
+        id:
+          type: string
+        kind:
+          anyOf:
+            - type: string
+              const: agent
+            - type: string
+              const: human_decision
+            - type: string
+              const: join
+        title:
+          type: string
+        dependsOn:
+          type: array
+          items:
+            type: string
+        roleId:
+          type: string
+        pluginId:
+          anyOf:
+            - type: string
+              const: opc
+            - type: string
+              const: coding
+        agentDefinitionId:
+          type: string
+        inputs:
+          type: array
+          items:
+            anyOf:
+              - type: object
+                additionalProperties: false
+                required:
+                  - key
+                  - kind
+                properties:
+                  key:
+                    type: string
+                  kind:
+                    anyOf:
+                      - type: string
+                        const: goal
+                      - type: string
+                        const: source_slot
+              - type: object
+                additionalProperties: false
+                required:
+                  - key
+                  - kind
+                  - nodeId
+                  - outputKey
+                properties:
+                  key:
+                    type: string
+                  kind:
+                    type: string
+                    const: node_output
+                  nodeId:
+                    type: string
+                  outputKey:
+                    type: string
+        outputs:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required:
+              - key
+              - kind
+            properties:
+              key:
+                type: string
+              kind:
+                $ref: "#/components/schemas/OutputTeamOutputKindV1"
+        review:
+          type: object
+          additionalProperties: false
+          required:
+            - independent
+            - producerNodeIds
+          properties:
+            independent:
+              type: boolean
+              const: true
+            producerNodeIds:
+              type: array
+              items:
+                type: string
+        choices:
+          type: array
+          items:
+            anyOf:
+              - type: string
+                const: continue
+              - type: string
+                const: stop
+        mappings:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required:
+              - outputKey
+              - fromNodeId
+              - fromOutputKey
+            properties:
+              outputKey:
+                type: string
+              fromNodeId:
+                type: string
+              fromOutputKey:
+                type: string
+    OutputGoalDeliverableSpecV2:
+      type: object
+      additionalProperties: false
+      required:
+        - key
+        - title
+        - required
+        - criteria
+      properties:
+        key:
+          type: string
+        title:
+          type: string
+        required:
+          anyOf:
+            - type: boolean
+              const: false
+            - type: boolean
+              const: true
+        criteria:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required:
+              - id
+              - description
+            properties:
+              id:
+                type: string
+              description:
+                type: string
+    OutputTeamDeliverableBindingV1:
+      type: object
+      additionalProperties: false
+      required:
+        - deliverableKey
+        - nodeId
+        - outputKey
+      properties:
+        deliverableKey:
+          type: string
+        nodeId:
+          type: string
+        outputKey:
+          type: string
+    OutputToolEffectClass:
+      anyOf:
+        - type: string
+          const: local_read
+        - type: string
+          const: external_read
+        - type: string
+          const: local_reversible_write
+        - type: string
+          const: local_irreversible_write
+        - type: string
+          const: external_side_effect
+        - type: string
+          const: financial
+        - type: string
+          const: privileged
+        - type: string
+          const: unknown
+    OutputTeamSkillPermissionRequirementV2:
+      type: object
+      additionalProperties: false
+      required:
+        - nodeId
+        - pluginId
+        - agentDefinitionId
+        - toolIds
+        - effectClasses
+        - isolation
+      properties:
+        nodeId:
+          type: string
+        pluginId:
+          anyOf:
+            - type: string
+              const: opc
+            - type: string
+              const: coding
+        agentDefinitionId:
+          type: string
+        toolIds:
+          type: array
+          items:
+            type: string
+        effectClasses:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutputToolEffectClass"
+        isolation:
+          anyOf:
+            - type: string
+              const: none
+            - type: string
+              const: required_sandbox
+    OutputTeamPlanLimitsV1:
+      type: object
+      additionalProperties: false
+      required:
+        - maxParallelNodes
+        - maxDelegationDepth
+        - maxNodes
+        - maxAttempts
+        - maxReworkRounds
+      properties:
+        maxParallelNodes:
+          type: number
+        maxDelegationDepth:
+          type: number
+        maxNodes:
+          type: number
+        maxAttempts:
+          type: number
+        maxReworkRounds:
+          type: number
+    OutputTeamSkillVersionV2:
+      type: object
+      additionalProperties: false
+      required:
+        - schemaVersion
+        - id
+        - tenantId
+        - workspaceId
+        - skillId
+        - version
+        - streamVersion
+        - digest
+        - title
+        - description
+        - pluginId
+        - template
+        - source
+        - roles
+        - nodes
+        - inputSlots
+        - outputSpecs
+        - deliverableBindings
+        - permissionRequirements
+        - checkRules
+        - limits
+        - evaluationVersion
+        - sourceRefs
+        - createdAt
+        - createdBy
+      properties:
+        schemaVersion:
+          type: string
+          const: "1"
+        id:
+          type: string
+        tenantId:
+          type: string
+        workspaceId:
+          type: string
+        skillId:
+          type: string
+        version:
+          type: string
+        streamVersion:
+          type: number
+          const: 1
+        digest:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        pluginId:
+          anyOf:
+            - type: string
+              const: opc
+            - type: string
+              const: coding
+        template:
+          type: object
+          additionalProperties: false
+          required:
+            - id
+            - version
+            - digest
+          properties:
+            id:
+              $ref: "#/components/schemas/OutputTeamTemplateIdV1"
+            version:
+              type: string
+              const: "1"
+            digest:
+              type: string
+        source:
+          type: object
+          additionalProperties: false
+          required:
+            - goalId
+            - planRevisionId
+            - deliverySetId
+            - deliveryDigest
+            - acceptanceId
+          properties:
+            goalId:
+              type: string
+            planRevisionId:
+              type: string
+            deliverySetId:
+              type: string
+            deliveryDigest:
+              type: string
+            acceptanceId:
+              type: string
+        roles:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutputTeamSkillRoleV2"
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutputTeamSkillNodeV2"
+        inputSlots:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required:
+              - key
+              - namespace
+            properties:
+              key:
+                type: string
+              namespace:
+                type: string
+        outputSpecs:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutputGoalDeliverableSpecV2"
+        deliverableBindings:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutputTeamDeliverableBindingV1"
+        permissionRequirements:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutputTeamSkillPermissionRequirementV2"
+        checkRules:
+          type: array
+          items:
+            anyOf:
+              - type: string
+                const: required_deliverables
+              - type: string
+                const: authorized_sources
+              - type: string
+                const: independent_review
+              - type: string
+                const: coding_gate
+        limits:
+          $ref: "#/components/schemas/OutputTeamPlanLimitsV1"
+        evaluationVersion:
+          type: string
+          const: agent-os-delivery-1.0.0
+        sourceRefs:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutputGoalResourceRefV2"
+        createdAt:
+          type: string
+        createdBy:
+          type: string
+    OutputTeamSkillRefV2:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - version
+        - digest
+      properties:
+        id:
+          type: string
+        version:
+          type: string
+        digest:
+          type: string
+    OutputTeamSkillEvaluationConfigurationV2:
+      type: object
+      additionalProperties: false
+      required:
+        - model
+        - promptSha256
+        - policySha256
+        - materialsSha256
+        - budget
+      properties:
+        model:
+          type: object
+          additionalProperties: false
+          required:
+            - provider
+            - name
+            - revision
+            - parameters
+          properties:
+            provider:
+              type: string
+            name:
+              type: string
+            revision:
+              type: string
+            parameters:
+              type: object
+              additionalProperties: false
+              required:
+                - temperature
+              properties:
+                temperature:
+                  type: number
+        promptSha256:
+          type: string
+        policySha256:
+          type: string
+        materialsSha256:
+          type: string
+        budget:
+          type: object
+          additionalProperties: false
+          required:
+            - revision
+            - maxTokens
+            - maxCostMinorUnits
+            - currency
+          properties:
+            revision:
+              type: string
+              const: budget-v1
+            maxTokens:
+              type: number
+            maxCostMinorUnits:
+              type: string
+            currency:
+              type: string
+    OutputTeamSkillEvidenceV2:
+      type: object
+      additionalProperties: false
+      required:
+        - artifactRef
+        - artifactSha256
+        - method
+      properties:
+        artifactRef:
+          $ref: "#/components/schemas/OutputGoalResourceRefV2"
+        artifactSha256:
+          type: string
+        method:
+          anyOf:
+            - type: string
+              const: human
+            - type: string
+              const: deterministic
+        reviewer:
+          type: string
+        check:
+          type: string
+    OutputTeamSkillEvaluationV2:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - tenantId
+        - workspaceId
+        - streamVersion
+        - digest
+        - skillRef
+        - datasetVersion
+        - datasetDigest
+        - executionMode
+        - configuration
+        - configurationDigest
+        - baselineRevision
+        - candidateRevision
+        - frozenAt
+        - status
+        - releaseGate
+        - evidence
+      properties:
+        id:
+          type: string
+        tenantId:
+          type: string
+        workspaceId:
+          type: string
+        streamVersion:
+          type: number
+        digest:
+          type: string
+        skillRef:
+          $ref: "#/components/schemas/OutputTeamSkillRefV2"
+        datasetVersion:
+          type: string
+          const: 1.0.0
+        datasetDigest:
+          type: string
+        executionMode:
+          anyOf:
+            - type: string
+              const: measured
+            - type: string
+              const: test_fixture
+        configuration:
+          $ref: "#/components/schemas/OutputTeamSkillEvaluationConfigurationV2"
+        configurationDigest:
+          type: string
+        baselineRevision:
+          type: string
+        candidateRevision:
+          type: string
+        frozenAt:
+          type: string
+        status:
+          anyOf:
+            - type: string
+              const: awaiting_report
+            - type: string
+              const: evaluated
+        releaseGate:
+          anyOf:
+            - type: string
+              const: not_evaluated
+            - type: string
+              const: blocked
+            - type: string
+              const: passed
+        reportRef:
+          $ref: "#/components/schemas/OutputGoalResourceRefV2"
+        evidence:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutputTeamSkillEvidenceV2"
+        comparison:
+          $ref: "#/components/schemas/OutputJsonObject"
+        submittedBy:
+          type: string
+        submittedAt:
+          type: string
+    OutputTeamSkillActivationV2:
+      type: object
+      additionalProperties: false
+      required:
+        - workspaceId
+        - skillId
+        - streamVersion
+        - activeRef
+        - recommendationEnabled
+      properties:
+        workspaceId:
+          type: string
+        skillId:
+          type: string
+        streamVersion:
+          type: number
+        activeRef:
+          anyOf:
+            - type: "null"
+            - $ref: "#/components/schemas/OutputTeamSkillRefV2"
+        evaluationId:
+          type: string
+        recommendationEnabled:
+          anyOf:
+            - type: boolean
+              const: false
+            - type: boolean
+              const: true
+        updatedAt:
+          type: string
+    OutputTeamSkillDetailV2:
+      type: object
+      additionalProperties: false
+      required:
+        - streamVersion
+        - version
+        - versions
+        - validation
+        - evaluations
+        - activation
+        - allowedActions
+        - staleReasons
+      properties:
+        streamVersion:
+          type: number
+        version:
+          $ref: "#/components/schemas/OutputTeamSkillVersionV2"
+        versions:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutputTeamSkillSummaryV2"
+        validation:
+          anyOf:
+            - type: string
+              const: failed
+            - type: string
+              const: passed
+            - type: string
+              const: unmeasured
+        evaluations:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutputTeamSkillEvaluationV2"
+        activation:
+          $ref: "#/components/schemas/OutputTeamSkillActivationV2"
+        allowedActions:
+          type: object
+          additionalProperties: false
+          required:
+            - trial
+            - createVersion
+            - enable
+            - rollback
+            - disable
+          properties:
+            trial:
+              anyOf:
+                - type: boolean
+                  const: false
+                - type: boolean
+                  const: true
+            createVersion:
+              anyOf:
+                - type: boolean
+                  const: false
+                - type: boolean
+                  const: true
+            enable:
+              anyOf:
+                - type: boolean
+                  const: false
+                - type: boolean
+                  const: true
+            rollback:
+              anyOf:
+                - type: boolean
+                  const: false
+                - type: boolean
+                  const: true
+            disable:
+              anyOf:
+                - type: boolean
+                  const: false
+                - type: boolean
+                  const: true
+        staleReasons:
+          type: array
+          items:
+            type: string
+    OutputFollowupStatusV2:
+      anyOf:
+        - type: string
+          const: paused
+        - type: string
+          const: expired
+        - type: string
+          const: invalidated
+        - type: string
+          const: active
+        - type: string
+          const: stopped
+        - type: string
+          const: exhausted
+    OutputGoalBudgetV2:
+      type: object
+      additionalProperties: false
+      required:
+        - maxTokens
+        - maxCostMinorUnits
+        - currency
+        - maxDurationMs
+      properties:
+        maxTokens:
+          type: number
+        maxCostMinorUnits:
+          type: string
+        currency:
+          type: string
+        maxDurationMs:
+          type: number
+    OutputFollowupPeriodBudgetV2:
+      type: object
+      additionalProperties: false
+      required:
+        - periodMs
+        - maxRuns
+        - maxTokens
+        - maxCostMinorUnits
+        - currency
+      properties:
+        periodMs:
+          anyOf:
+            - type: number
+              const: 86400000
+            - type: number
+              const: 604800000
+        maxRuns:
+          type: number
+        maxTokens:
+          type: number
+        maxCostMinorUnits:
+          type: string
+        currency:
+          type: string
+    OutputCreateFollowupV2:
+      type: object
+      additionalProperties: false
+      required:
+        - expectedStreamVersion
+        - parentGoalId
+        - expectedGoalStreamVersion
+        - parentPlanDigest
+        - title
+        - instruction
+        - enabled
+        - trigger
+        - resourceRefs
+        - modelBindingId
+        - perRunBudget
+        - periodBudget
+        - maxRuns
+        - expiresAt
+      properties:
+        expectedStreamVersion:
+          type: number
+          const: 0
+        parentGoalId:
+          type: string
+        expectedGoalStreamVersion:
+          type: number
+        parentPlanDigest:
+          type: string
+        title:
+          type: string
+        instruction:
+          type: string
+        enabled:
+          type: boolean
+          const: true
+        trigger:
+          type: object
+          additionalProperties: false
+          required:
+            - kind
+            - sourceRef
+          properties:
+            kind:
+              type: string
+              const: business_changed
+            sourceRef:
+              $ref: "#/components/schemas/OutputGoalResourceRefV2"
+        resourceRefs:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutputGoalResourceRefV2"
+        modelBindingId:
+          type: string
+        perRunBudget:
+          $ref: "#/components/schemas/OutputGoalBudgetV2"
+        periodBudget:
+          $ref: "#/components/schemas/OutputFollowupPeriodBudgetV2"
+        maxRuns:
+          type: number
+        expiresAt:
+          type: string
+    OutputFollowupPolicyV2:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - workspaceId
+        - principalId
+        - streamVersion
+        - status
+        - definition
+        - authorizationDigest
+        - createdAt
+        - updatedAt
+        - stopConditions
+      properties:
+        id:
+          type: string
+        workspaceId:
+          type: string
+        principalId:
+          type: string
+        streamVersion:
+          type: number
+        status:
+          $ref: "#/components/schemas/OutputFollowupStatusV2"
+        definition:
+          $ref: "#/components/schemas/OutputCreateFollowupV2"
+        authorizationDigest:
+          type: string
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+        stopConditions:
+          type: array
+          items:
+            anyOf:
+              - type: string
+                const: expired
+              - type: string
+                const: goal_closed
+              - type: string
+                const: permission_revoked
+              - type: string
+                const: max_runs
+        reasonCode:
+          type: string
+    OutputGoalUsageV2:
+      type: object
+      additionalProperties: false
+      required:
+        - tokens
+        - costMinorUnits
+        - currency
+      properties:
+        tokens:
+          type: number
+        costMinorUnits:
+          type: string
+        currency:
+          type: string
+    OutputFollowupRunV2:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - policyId
+        - workspaceId
+        - streamVersion
+        - status
+        - sourceRef
+        - periodStartedAt
+        - reserved
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+        policyId:
+          type: string
+        workspaceId:
+          type: string
+        streamVersion:
+          type: number
+        status:
+          anyOf:
+            - type: string
+              const: running
+            - type: string
+              const: needs_reconciliation
+            - type: string
+              const: failed
+            - type: string
+              const: cancelled
+            - type: string
+              const: pending
+            - type: string
+              const: accepted
+            - type: string
+              const: awaiting_acceptance
+        sourceRef:
+          $ref: "#/components/schemas/OutputGoalResourceRefV2"
+        periodStartedAt:
+          type: string
+        reserved:
+          $ref: "#/components/schemas/OutputGoalUsageV2"
+        goalId:
+          type: string
+        executionId:
+          type: string
+        actual:
+          $ref: "#/components/schemas/OutputGoalUsageV2"
+        reasonCode:
+          type: string
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+    OutputFollowupDetailV2:
+      type: object
+      additionalProperties: false
+      required:
+        - policy
+        - runs
+        - currentPeriod
+        - allowedActions
+      properties:
+        policy:
+          $ref: "#/components/schemas/OutputFollowupPolicyV2"
+        runs:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutputFollowupRunV2"
+        currentPeriod:
+          type: object
+          additionalProperties: false
+          required:
+            - startedAt
+            - endsAt
+            - runCount
+            - settled
+            - reserved
+            - unknown
+          properties:
+            startedAt:
+              type: string
+            endsAt:
+              type: string
+            runCount:
+              type: number
+            settled:
+              $ref: "#/components/schemas/OutputGoalUsageV2"
+            reserved:
+              $ref: "#/components/schemas/OutputGoalUsageV2"
+            unknown:
+              $ref: "#/components/schemas/OutputGoalUsageV2"
+        allowedActions:
+          type: object
+          additionalProperties: false
+          required:
+            - pause
+            - resume
+            - stop
+          properties:
+            pause:
+              anyOf:
+                - type: boolean
+                  const: false
+                - type: boolean
+                  const: true
+            resume:
+              anyOf:
+                - type: boolean
+                  const: false
+                - type: boolean
+                  const: true
+            stop:
+              anyOf:
+                - type: boolean
+                  const: false
+                - type: boolean
+                  const: true
     OutputBusinessObjectContextV2:
       type: object
       additionalProperties: false
@@ -6013,55 +8034,6 @@ components:
           $ref: "#/components/schemas/OutputBusinessStateV1"
         summary:
           $ref: "#/components/schemas/OutputBusinessSummaryV1"
-    OutputGoalDeliverableSpecV2:
-      type: object
-      additionalProperties: false
-      required:
-        - key
-        - title
-        - required
-        - criteria
-      properties:
-        key:
-          type: string
-        title:
-          type: string
-        required:
-          anyOf:
-            - type: boolean
-              const: false
-            - type: boolean
-              const: true
-        criteria:
-          type: array
-          items:
-            type: object
-            additionalProperties: false
-            required:
-              - id
-              - description
-            properties:
-              id:
-                type: string
-              description:
-                type: string
-    OutputGoalBudgetV2:
-      type: object
-      additionalProperties: false
-      required:
-        - maxTokens
-        - maxCostMinorUnits
-        - currency
-        - maxDurationMs
-      properties:
-        maxTokens:
-          type: number
-        maxCostMinorUnits:
-          type: string
-        currency:
-          type: string
-        maxDurationMs:
-          type: number
     OutputGoalStatusV2:
       anyOf:
         - type: string
@@ -6103,20 +8075,6 @@ components:
           type: string
         generation:
           type: number
-    OutputGoalUsageV2:
-      type: object
-      additionalProperties: false
-      required:
-        - tokens
-        - costMinorUnits
-        - currency
-      properties:
-        tokens:
-          type: number
-        costMinorUnits:
-          type: string
-        currency:
-          type: string
     OutputGoalV2:
       type: object
       additionalProperties: false
@@ -6374,24 +8332,6 @@ components:
           type: string
         digest:
           type: string
-    OutputToolEffectClass:
-      anyOf:
-        - type: string
-          const: local_read
-        - type: string
-          const: external_read
-        - type: string
-          const: local_reversible_write
-        - type: string
-          const: local_irreversible_write
-        - type: string
-          const: external_side_effect
-        - type: string
-          const: financial
-        - type: string
-          const: privileged
-        - type: string
-          const: unknown
     OutputGoalPlanRevisionV2:
       type: object
       additionalProperties: false
@@ -6620,14 +8560,6 @@ components:
           anyOf:
             - type: "null"
             - $ref: "#/components/schemas/OutputGoalDeliverySetV2"
-    OutputTeamTemplateIdV1:
-      anyOf:
-        - type: string
-          const: research-summary
-        - type: string
-          const: business-proposal
-        - type: string
-          const: code-delivery
     OutputGoalPlanProposalV2:
       type: object
       additionalProperties: false
@@ -6761,20 +8693,6 @@ components:
               type: string
             outputKey:
               type: string
-    OutputTeamOutputKindV1:
-      anyOf:
-        - type: string
-          const: analysis
-        - type: string
-          const: artifact
-        - type: string
-          const: evidence
-        - type: string
-          const: self_assessment
-        - type: string
-          const: review
-        - type: string
-          const: decision
     OutputTeamNodeOutputSpecV1:
       type: object
       additionalProperties: false
@@ -6939,40 +8857,6 @@ components:
         - $ref: "#/components/schemas/OutputTeamAgentNodeV1"
         - $ref: "#/components/schemas/OutputTeamHumanDecisionNodeV1"
         - $ref: "#/components/schemas/OutputTeamJoinNodeV1"
-    OutputTeamDeliverableBindingV1:
-      type: object
-      additionalProperties: false
-      required:
-        - deliverableKey
-        - nodeId
-        - outputKey
-      properties:
-        deliverableKey:
-          type: string
-        nodeId:
-          type: string
-        outputKey:
-          type: string
-    OutputTeamPlanLimitsV1:
-      type: object
-      additionalProperties: false
-      required:
-        - maxParallelNodes
-        - maxDelegationDepth
-        - maxNodes
-        - maxAttempts
-        - maxReworkRounds
-      properties:
-        maxParallelNodes:
-          type: number
-        maxDelegationDepth:
-          type: number
-        maxNodes:
-          type: number
-        maxAttempts:
-          type: number
-        maxReworkRounds:
-          type: number
     OutputGoalTeamPlanRevisionV2:
       type: object
       additionalProperties: false
@@ -7023,6 +8907,8 @@ components:
           type: string
         createdAt:
           type: string
+        skillRef:
+          $ref: "#/components/schemas/OutputTeamSkillRefV2"
         outputFormat:
           type: string
           const: items-v1
@@ -7116,6 +9002,8 @@ components:
         kind:
           type: string
           const: single-v2
+        skillRef:
+          $ref: "#/components/schemas/OutputTeamSkillRefV2"
         outputFormat:
           type: string
           const: items-v1
@@ -7707,9 +9595,9 @@ components:
         decision:
           anyOf:
             - type: string
-              const: apply
-            - type: string
               const: reject
+            - type: string
+              const: apply
         decidedBy:
           type: string
         decidedAt:
@@ -8482,9 +10370,9 @@ components:
             mode:
               anyOf:
                 - type: string
-                  const: live
-                - type: string
                   const: test_fixture
+                - type: string
+                  const: live
         requirements:
           type: array
           items:
@@ -8694,8 +10582,8 @@ components:
       type: object
       additionalProperties: false
       required:
-        - description
         - version
+        - description
         - displayName
         - license
         - permissions
@@ -8704,9 +10592,9 @@ components:
         - pluginId
         - trustBoundary
       properties:
-        description:
-          type: string
         version:
+          type: string
+        description:
           type: string
         displayName:
           type: string
@@ -9353,6 +11241,8 @@ components:
               const: failure
             - type: string
               const: reconciliation
+            - type: string
+              const: notice
         title:
           type: string
         summary:
@@ -9556,6 +11446,57 @@ components:
           type: string
         updatedAt:
           type: string
+    OutputMemoryProvenanceV2:
+      type: object
+      additionalProperties: false
+      required:
+        - version
+        - kind
+        - origin
+        - sourceRefs
+      properties:
+        version:
+          type: number
+          const: 1
+        kind:
+          anyOf:
+            - type: string
+              const: fact
+            - type: string
+              const: preference
+        origin:
+          anyOf:
+            - type: string
+              const: user
+            - type: string
+              const: model
+        sourceRefs:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutputGoalResourceRefV2"
+        sourceExecution:
+          type: object
+          additionalProperties: false
+          required:
+            - executionId
+            - generation
+          properties:
+            executionId:
+              type: string
+            generation:
+              type: number
+    OutputMemoryActionV2:
+      anyOf:
+        - type: string
+          const: accept
+        - type: string
+          const: reject
+        - type: string
+          const: revise
+        - type: string
+          const: delete
+        - type: string
+          const: share
     OutputMemorySummaryV2:
       type: object
       additionalProperties: false
@@ -9569,6 +11510,22 @@ components:
         - status
         - streamVersion
       properties:
+        provenance:
+          $ref: "#/components/schemas/OutputMemoryProvenanceV2"
+        access:
+          anyOf:
+            - type: string
+              const: revoked
+            - type: string
+              const: readable
+            - type: string
+              const: stale
+            - type: string
+              const: unavailable
+        allowedActions:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutputMemoryActionV2"
         id:
           type: string
         namespace:
@@ -9601,12 +11558,12 @@ components:
       type: object
       additionalProperties: false
       required:
-        - workspaceId
-        - id
-        - tenantId
-        - streamVersion
         - namespace
         - resourceId
+        - streamVersion
+        - id
+        - workspaceId
+        - tenantId
         - status
         - createdAt
         - updatedAt
@@ -9616,17 +11573,17 @@ components:
         - shareGrantIds
         - value
       properties:
-        workspaceId:
-          type: string
-        id:
-          type: string
-        tenantId:
-          type: string
-        streamVersion:
-          type: number
         namespace:
           type: string
         resourceId:
+          type: string
+        streamVersion:
+          type: number
+        id:
+          type: string
+        workspaceId:
+          type: string
+        tenantId:
           type: string
         expiresAt:
           type: string
@@ -9648,6 +11605,8 @@ components:
           type: string
         updatedAt:
           type: string
+        provenance:
+          $ref: "#/components/schemas/OutputMemoryProvenanceV2"
         scopeType:
           anyOf:
             - type: string
@@ -9674,6 +11633,20 @@ components:
           type: string
         value:
           $ref: "#/components/schemas/OutputJsonObject"
+        access:
+          anyOf:
+            - type: string
+              const: revoked
+            - type: string
+              const: readable
+            - type: string
+              const: stale
+            - type: string
+              const: unavailable
+        allowedActions:
+          type: array
+          items:
+            $ref: "#/components/schemas/OutputMemoryActionV2"
     OutputMemoryTombstone:
       type: object
       additionalProperties: false
@@ -9871,9 +11844,9 @@ components:
             - type: string
               const: unknown
             - type: string
-              const: passed
-            - type: string
               const: blocked
+            - type: string
+              const: passed
             - type: string
               const: required
         message:
@@ -10514,9 +12487,9 @@ components:
         - type: string
           const: stop
         - type: string
-          const: pursue
-        - type: string
           const: revise
+        - type: string
+          const: pursue
     OutputDecision:
       type: object
       additionalProperties: false
@@ -10625,10 +12598,10 @@ components:
       type: object
       additionalProperties: false
       required:
+        - streamVersion
+        - id
         - title
         - workspaceId
-        - id
-        - streamVersion
         - createdAt
         - updatedAt
         - hypotheses
@@ -10642,14 +12615,14 @@ components:
       properties:
         decision:
           $ref: "#/components/schemas/OutputDecision"
+        streamVersion:
+          type: number
+        id:
+          type: string
         title:
           type: string
         workspaceId:
           type: string
-        id:
-          type: string
-        streamVersion:
-          type: number
         createdAt:
           type: string
         updatedAt:

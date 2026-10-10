@@ -21,6 +21,9 @@
   plugin            查看、安装、更新、启用、停用或运行插件命令
   opc               管理经营台账与机会验证
   code              管理 Coding 任务
+  skill             管理团队技能版本、评测、启用和回滚
+  memory            审阅记忆提案与来源
+  followup          显式启用、暂停和停止业务跟进
   goal              管理目标、计划和成果验收
   asset             上传受保护资料、查看提取内容与来源位置
   business          读取客户、订单、交付和复盘的版本资料
@@ -59,6 +62,22 @@
   mn business candidate list|show [候选 ID] --workspace <工作区 ID>
   mn business candidate create --workspace <工作区 ID> --goal <目标 ID> --plan <计划 ID> --delivery-set <成果集 ID> --output <成果 key> --output-digest <摘要> --proposal <候选 key> [--key <幂等键>]
   mn business candidate decide <候选 ID> --workspace <工作区 ID> --version <候选版本> --business-version <台账版本> --candidate-digest <摘要> --preview-digest <摘要> --decision apply|reject [--key <幂等键>]
+技能、记忆与跟进：
+  mn skill list --workspace <工作区 ID> [--goal <新目标 ID>]
+  mn skill show <技能 ID> --workspace <工作区 ID> [--skill-version <技能版本>]
+  mn skill create <技能 ID> --workspace <工作区 ID> --version <技能流版本，首次为 0> --file <技能 JSON> [--key <幂等键>]
+  mn skill evaluate <技能 ID> --workspace <工作区 ID> --skill-version <技能版本> --digest <摘要> --file <评测配置 JSON> [--key <幂等键>]
+  mn skill report <技能 ID> --workspace <工作区 ID> --evaluation <评测 ID> --version <评测版本> --file <报告与证据引用 JSON> [--key <幂等键>]
+  mn skill enable|rollback <技能 ID> --workspace <工作区 ID> --version <启用记录版本> --skill-version <技能版本> --digest <摘要> --evaluation <评测 ID> [--recommend] [--key <幂等键>]
+  mn skill disable <技能 ID> --workspace <工作区 ID> --version <启用记录版本> [--key <幂等键>]
+  mn goal plan <新目标 ID> --workspace <工作区 ID> --version <目标版本> --team <模板> --model <模型连接> --skill <技能 ID> --skill-version <版本> --skill-digest <摘要> [--key <幂等键>]
+  mn memory list --workspace <工作区 ID> [--namespace <命名空间>]
+  mn memory propose --workspace <工作区 ID> --file <记忆提案 JSON> [--key <幂等键>]
+  mn memory accept|reject|delete <记忆 ID> --version <记忆版本> [--reason <删除原因>] [--key <幂等键>]
+  mn followup list|show [跟进 ID] --workspace <工作区 ID>
+  mn followup create --workspace <工作区 ID> --file <显式 enabled:true 的跟进 JSON> [--key <幂等键>]
+  mn followup pause|resume|stop <跟进 ID> --workspace <工作区 ID> --version <版本> [--key <幂等键>]
+
   mn goal usage <目标 ID> --workspace <工作区 ID> --version <目标版本> --file <用量 JSON 文件>
   mn goal accept <目标 ID> --workspace <工作区 ID> --version <目标版本> --file <验收 JSON 文件>
 
@@ -255,3 +274,7 @@ mn backup restore muniu-v2-backup.mnbackup --destination restored-v2
 - `0`：命令完成；`doctor` 的就绪结果仍须检查 `data.readiness.ready`，不能只判断退出码；
 - `1`：可重试的 Host 或网络失败，或未预期错误；
 - `2`：参数错误或不可重试的 API 错误。
+
+## 团队技能、记忆与跟进
+
+技能版本、评测登记、受保护报告、明确试用与启停参数见上方帮助。完整流程与 JSON 字段说明见 [CLI 的复用能力说明](https://github.com/muniu-ai/muniu/blob/main/apps/cli/README.md#技能记忆与受控跟进)。所有启用、回滚、记忆确认和跟进操作仍由 Host 校验权限、版本、费用和允许操作，CLI 不代替这些判断。

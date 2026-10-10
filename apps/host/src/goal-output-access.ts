@@ -2,7 +2,7 @@
 import type { GoalDeliveryAcceptanceV2, GoalDeliveryDecisionV2, GoalDeliverySetV2, GoalOutputRefV2, GoalPlanV2, GoalReworkV2, GoalV2, WorkspaceMembership } from '@mn/contracts';
 import { KernelError, sha256, type KernelTransaction } from '@mn/kernel';
 import { assertBusinessAccess } from './business-management.js';
-import { validateBusinessContextSource, validateHistoricalBusinessContextSource } from './business-context.js';
+import { validateHostContextSource, validateHistoricalHostContextSource } from './context-source-validation.js';
 import { assertGoalResource } from './goal-runtime.js';
 import { freezeProducedGoalItems, GOAL_PRODUCED_OUTPUT_NAMESPACE, parseProducedGoalItems, type FrozenProducedGoalItem } from './goal-produced-output.js';
 import type { OpcBusinessCandidateOptions } from './opc-business-candidates.js';
@@ -63,7 +63,7 @@ export function createGoalOutputAccess(options: GoalOutputAccessOptions): OpcBus
       goal = history.goal;
     }
     const context = { goal, plan, deliverySet };
-    const validator = purpose === 'read' ? validateHistoricalBusinessContextSource : validateBusinessContextSource;
+    const validator = purpose === 'read' ? validateHistoricalHostContextSource : validateHostContextSource;
     for (const ref of [...plan.resourceRefs, output.resourceRef, ...output.sourceRefs]) assertGoalResource(tx, scope, ref, validator);
     options.assertDelivery(tx, context, purpose);
     let proposals;

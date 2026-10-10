@@ -22,7 +22,7 @@ import type {
 } from "@mn/contracts";
 import { KernelCoordination, settleCoordinatedTurnInTransaction, settleCoordinationUsageInTransaction, reconcileCoordinationAttemptInTransaction,
   type CreateCoordinationRunInput, type AdmitCoordinatedTurnInput, type CompleteCoordinationControlInput } from './coordination.js';
-import { acceptMemory, rejectMemory } from "./memory.js";
+import { acceptMemory, rejectMemory, assertMemoryProvenance, type MemorySourceValidationPort } from "./memory.js";
 import { assertCurrentApprovalAuthorization, assertCurrentExecutionAuthorization, authorityAllowsIntent, computeExecutionAuthorityCommitment, hasUnsettledToolCalls } from "./authority.js";
 import { sha256 } from "./canonical.js";
 import { KernelError, StreamVersionConflictError } from "./errors.js";
@@ -33,6 +33,7 @@ import { appendKernelEvent } from "./projections.js";
 import { expireExecutionApprovals } from "./approvals.js";
 
 export interface KernelOptions {
+  readonly memorySources?: MemorySourceValidationPort;
   readonly now?: () => string;
   readonly id?: (kind: string) => string;
   /** 由组合根限定当前部署可接受的密钥引用；内核从不读取密钥正文。 */
@@ -72,10 +73,12 @@ export interface SubmitTurnInput {
 
 export class AgentOsKernel {
   private readonly now: () => string;
+  private readonly memorySources?: MemorySourceValidationPort;
   private readonly nextId: (kind: string) => string;
   private readonly acceptsModelSecretReference: (reference: string) => boolean;
 
   constructor(private readonly store: KernelStore, options: KernelOptions = {}) {
+    this.memorySources = options.memorySources;
     this.now = options.now ?? (() => new Date().toISOString());
     this.acceptsModelSecretReference = options.acceptsModelSecretReference
       ?? ((reference) => reference.startsWith("keychain://muniu.v2/"));
@@ -1020,6 +1023,31 @@ export class AgentOsKernel {
     });
   }
 
+  private assertMemorySources(transaction: KernelTransaction, tenantId: string, principalId: string,
+    memory: Pick<MemoryRecord, 'workspaceId' | 'namespace' | 'provenance' | 'expiresAt'>, purpose: Parameters<MemorySourceValidationPort['assert']>[3]): void {
+    if (!memory.provenance) return;
+    assertMemoryProvenance(memory.provenance);
+    if (memory.expiresAt && (!Number.isFinite(Date.parse(memory.expiresAt)) || Date.parse(memory.expiresAt) <= Date.parse(this.now())))
+      throw new KernelError('MEMORY_EXPIRED', '记忆已到期', '重新核对事实并创建提案');
+    for (const ref of memory.provenance.sourceRefs.filter(ref => ref.namespace === 'memory')) {
+      const source = transaction.getProjection<MemoryRecord>('memory', ref.resourceId);
+      if (!source || source.tenantId !== tenantId || source.workspaceId !== memory.workspaceId || source.status !== 'accepted')
+        throw new KernelError('MEMORY_SOURCE_INVALID', '记忆来源不可用', '重新选择有效来源');
+      if (source.namespace !== memory.namespace) {
+        const granted = memory.provenance.sourceRefs.some(proof => {
+          if (proof.namespace !== 'shareGrant') return false;
+          const grant = transaction.getProjection<ShareGrant>('shareGrant', proof.resourceId);
+          return grant && grant.tenantId === tenantId && grant.workspaceId === memory.workspaceId && !grant.revokedAt
+            && grant.memoryId === source.id && grant.fromNamespace === source.namespace && grant.toNamespace === memory.namespace
+            && grant.streamVersion === proof.streamVersion && sha256(grant) === proof.digest;
+        });
+        if (!granted) throw new KernelError('MEMORY_SHARE_REQUIRED', '跨 namespace 的记忆来源需要固定共享授权', '取得共享授权并保留来源记录');
+      }
+    }
+    if (!this.memorySources) throw new KernelError('MEMORY_SOURCE_VALIDATOR_REQUIRED', '记忆来源校验尚未配置', '检查 Host 组合配置');
+    this.memorySources.assert(transaction, { tenantId, workspaceId: memory.workspaceId, principalId }, memory.provenance, purpose);
+  }
+
   async proposeMemory(
     tenantId: string,
     actorId: string,
@@ -1038,6 +1066,7 @@ export class AgentOsKernel {
       resourceId: input.resourceId,
       sourceEventId: input.sourceEventId,
       confidence: input.confidence,
+      ...(input.provenance ? { provenance: input.provenance } : {}),
       ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
       ...(input.derivedFromMemoryId ? { derivedFromMemoryId: input.derivedFromMemoryId } : {}),
       ...(input.derivedViaShareGrantId
@@ -1048,6 +1077,7 @@ export class AgentOsKernel {
       ...metadata,
       payloadDigest: preparedPayload?.plaintextDigest,
     }, (transaction) => {
+      if (input.provenance) this.assertMemorySources(transaction, tenantId, actorId, input, 'propose');
       if (Boolean(input.derivedFromMemoryId) !== Boolean(input.derivedViaShareGrantId)) {
         throw new KernelError(
           "MEMORY_DERIVATION_INVALID",
@@ -1066,6 +1096,13 @@ export class AgentOsKernel {
             "派生记忆缺少有效的跨 namespace 授权",
             "重新授权后再生成记忆提案",
           );
+        }
+        if (source.provenance) {
+          if (!input.provenance || source.provenance.sourceRefs.some(ref => !input.provenance!.sourceRefs.some(candidate => sha256(candidate) === sha256(ref)))
+            || (source.provenance.sourceExecution && sha256(source.provenance.sourceExecution) !== sha256(input.provenance.sourceExecution ?? null))) {
+            throw new KernelError('MEMORY_PROVENANCE_DOWNGRADE', '派生记忆不能减少来源保护', '保留完整来源后重新创建提案');
+          }
+          this.assertMemorySources(transaction, tenantId, actorId, source, 'derive');
         }
       }
       if (!Number.isFinite(input.confidence) || input.confidence < 0 || input.confidence > 1) {
@@ -1133,6 +1170,7 @@ export class AgentOsKernel {
       if (memory.streamVersion !== expectedStreamVersion) {
         throw new KernelError("STREAM_VERSION_CONFLICT", "记忆版本已变化", "刷新记忆后重试", true);
       }
+      if (decision === 'accept') this.assertMemorySources(transaction, tenantId, actorId, memory, 'accept');
       const next = decision === "accept" ? acceptMemory(memory, this.now()) : rejectMemory(memory, this.now());
       transaction.putProjection("memory", memoryId, next);
       this.append(transaction, {
@@ -1184,6 +1222,7 @@ export class AgentOsKernel {
             "重新提交记忆内容",
           );
         }
+        this.assertMemorySources(transaction, tenantId, actorId, memory, 'propose');
         const next: MemoryRecord = {
           ...memory,
           confidence: revision.confidence,
@@ -1241,6 +1280,7 @@ export class AgentOsKernel {
       if (!memory || memory.status !== "accepted") {
         throw new KernelError("MEMORY_NOT_SHAREABLE", "只有已确认记忆可以共享", "先确认记忆");
       }
+      this.assertMemorySources(transaction, tenantId, actorId, memory, 'share');
       if (memory.streamVersion !== expectedStreamVersion) {
         throw new KernelError("STREAM_VERSION_CONFLICT", "记忆版本已变化", "刷新记忆后重试", true);
       }

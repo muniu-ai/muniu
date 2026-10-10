@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 import type { GoalPlanProposalV2, GoalTeamPlanProposalV2, GoalCoordinatedPlanProposalV2, GoalCoordinatedPlanV2, GoalV2, ResourceRef,
-  TeamAgentCapabilityV1, TeamAgentNodeV1, TeamNodeInputV1, TeamPlanNodeV1, TeamTemplateIdV1, TeamTemplateSummaryV1, ToolEffectClass, Workspace } from "@mn/contracts";
+  TeamSkillRefV2, TeamAgentCapabilityV1, TeamAgentNodeV1, TeamNodeInputV1, TeamPlanNodeV1, TeamTemplateIdV1, TeamTemplateSummaryV1, ToolEffectClass, Workspace } from "@mn/contracts";
 import { findModelPrice, KernelError, PROVIDER_PRESETS, sha256, type KernelTransaction, type ModelConnection } from "@mn/kernel";
 import { assertSinglePlan, assertTeamPlan, getTeamTemplate, listTeamTemplates, TEAM_DEFAULT_LIMITS, TeamPlanValidationError } from "@mn/task-orchestration";
 import { createHostGoalRuntime, type HostGoalRuntimeOptions } from "./goal-runtime.js";
 import { externalGoalRunnerBindingValid } from "./goal-external-rework.js";
 import { runnerPluginId, runnerToolId } from "./coding-runners.js";
+
+import { assertTeamSkillPlan, bindTeamSkillPlan } from "./team-skill-context.js";
 
 export interface HostTeamRuntimeOptions extends HostGoalRuntimeOptions { readonly sandboxAvailable?: boolean }
 
@@ -53,7 +55,7 @@ export function currentTeamCapabilities(options: HostTeamRuntimeOptions, tx: Ker
 }
 
 export function proposeHostTeamPlan(options: HostTeamRuntimeOptions, tx: KernelTransaction, goal: GoalV2,
-  templateId: TeamTemplateIdV1, modelBindingId: string): GoalTeamPlanProposalV2 {
+  templateId: TeamTemplateIdV1, modelBindingId: string, skillRef?: TeamSkillRefV2): GoalTeamPlanProposalV2 {
   const template = getTeamTemplate(templateId);
   if (template.pluginId === "coding" && goal.deliverables.length !== 1) fail("GOAL_DELIVERABLE_INVALID", "代码候选作为一项完整交付物验收；文档可另设交付任务");
   const base = createHostGoalRuntime(options).proposal(tx, goal, modelBindingId);
@@ -102,13 +104,15 @@ export function proposeHostTeamPlan(options: HostTeamRuntimeOptions, tx: KernelT
     limits: { ...TEAM_DEFAULT_LIMITS, maxParallelNodes: Math.min(TEAM_DEFAULT_LIMITS.maxParallelNodes, policy?.maxParallel ?? Infinity),
       maxNodes: Math.min(TEAM_DEFAULT_LIMITS.maxNodes, policy?.maxNodes ?? Infinity), maxAttempts: Math.min(TEAM_DEFAULT_LIMITS.maxAttempts, policy?.maxAttempts ?? Infinity),
       maxDelegationDepth: Math.min(TEAM_DEFAULT_LIMITS.maxDelegationDepth, policy?.maxDepth ?? Infinity) } };
-  assertHostTeamPlan(options, tx, goal, plan);
-  return plan;
+  const bound = skillRef ? bindTeamSkillPlan(tx, { tenantId: goal.tenantId, workspaceId: goal.workspaceId, principalId: goal.principalId }, goal, plan, skillRef) : plan;
+  assertHostTeamPlan(options, tx, goal, bound);
+  return bound;
 }
 
 export function assertHostTeamPlan(options: HostTeamRuntimeOptions, tx: KernelTransaction, goal: GoalV2,
   plan: GoalCoordinatedPlanProposalV2 | GoalCoordinatedPlanV2, reusedNodeIds?: readonly string[]): void {
   try {
+    assertTeamSkillPlan(tx, { tenantId: goal.tenantId, workspaceId: goal.workspaceId, principalId: goal.principalId }, plan);
     const context = { reusedNodeIds, resourceRefs: goal.resourceRefs, deliverables: goal.deliverables, budget: goal.budget,
       capabilities: currentTeamCapabilities(options, tx, goal, plan), authority: teamPlanAuthority(plan), sandboxAvailable: options.sandboxAvailable };
     if (plan.kind === "single-v2") assertSinglePlan(plan, context); else assertTeamPlan(plan, context);

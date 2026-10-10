@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
+import { assertMemoryWorkspace, hostMemorySourceValidationPort } from "./memory-sources.js";
 import type { JsonObject, MemoryRecord } from "@mn/contracts";
 import {
-  KernelError,
+  KernelError, sha256,
   PROTECTED_PAYLOAD_KEY_NAMESPACE,
   type KernelStore,
   type PreparedMemoryPayload,
@@ -72,9 +73,23 @@ export async function readMemoryValue(
   options: MemoryProtectionOptions & {
     readonly tenantId: string;
     readonly memory: MemoryRecord;
+    readonly principalId?: string;
   },
 ): Promise<JsonObject> {
   const protection = requireProtection(options);
+  const assert = () => options.store.transact(options.tenantId, tx => {
+    const current = tx.getProjection<MemoryRecord>('memory', options.memory.id);
+    if (!current || sha256(current) !== sha256(options.memory)) throw new KernelError('MEMORY_CHANGED', '记忆已变化', '重新读取记忆');
+    if (!current.protectedPayloadRef || !tx.getProjection(PROTECTED_PAYLOAD_KEY_NAMESPACE, current.protectedPayloadRef)) throw new KernelError('PROTECTED_PAYLOAD_DESTROYED', '记忆的数据密钥已不存在', '查看删除审计记录');
+    if (options.principalId) assertMemoryWorkspace(tx, { tenantId: options.tenantId, workspaceId: current.workspaceId, principalId: options.principalId });
+    if (current.provenance) {
+      if (current.expiresAt && (!Number.isFinite(Date.parse(current.expiresAt)) || Date.parse(current.expiresAt) <= Date.now())) throw new KernelError('MEMORY_EXPIRED', '记忆已到期', '重新核对事实并创建提案');
+      if (!options.principalId) throw new KernelError('WORKSPACE_ACCESS_DENIED', '读取记忆需要当前用户身份', '重新登录');
+      hostMemorySourceValidationPort.assert(tx, { tenantId: options.tenantId, workspaceId: current.workspaceId, principalId: options.principalId }, current.provenance, 'read');
+    }
+    if (current.status === 'invalidated' || current.status === 'deletion_pending') throw new KernelError('MEMORY_SOURCE_REVOKED', '记忆来源已撤回', '返回原资料核对');
+  });
+  await assert();
   if (!options.memory.protectedPayloadRef) {
     throw new KernelError(
       "PROTECTED_PAYLOAD_DESTROYED",
@@ -95,7 +110,7 @@ export async function readMemoryValue(
     );
   }
   try {
-    return await readProtectedJson({
+    const value = await readProtectedJson({
       tenantId: options.tenantId,
       workspaceId: options.memory.workspaceId,
       ownerType: "memory",
@@ -105,6 +120,8 @@ export async function readMemoryValue(
       cas: protection.cas,
       keyProvider: protection.keyProvider,
     });
+    await assert();
+    return value;
   } catch (error) {
     if (error instanceof KernelError) throw error;
     throw new KernelError(

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { assertExecutionContextSources, type ContextSourceValidator } from "./execution-context.js";
+import { commitMemoryContext, memoryContextForRequest } from "./memory-selection.js";
+import type { ModelRequest } from "@mn/agent-runtime";
 import { assertModelContextLimit } from "./model-context.js";
 import { randomUUID } from "node:crypto";
 import { assertRuntimeBatch, type RuntimeRecord, type RuntimeRecordInput, type RuntimeStore } from "@mn/agent-runtime";
@@ -117,11 +119,13 @@ export function createProtectedRuntimeStore(options: ProtectedRuntimeOptions): R
         const execution = tx.getProjection<Execution>("execution", executionId);
         return execution && contextSensitive ? assertExecutionContextSources(tx, execution, options.validateContextSource) : undefined;
       });
-      const inputs = structuredClone(batch).map(input => {
+      const inputs = await options.store.transact(options.tenantId, tx => structuredClone(batch).map(input => {
         if (input.type !== 'model/request') return input;
         assertModelContextLimit(input.payload);
-        return { ...input, payload: { ...input.payload, ...(context ? { contextManifest: context as unknown as JsonObject } : {}) } };
-      });
+        const execution = tx.getProjection<Execution>('execution', executionId);
+        const manifest = execution ? memoryContextForRequest(tx, execution, input.payload as unknown as ModelRequest, options.validateContextSource) : context;
+        return { ...input, payload: { ...input.payload, ...(manifest ? { contextManifest: manifest as unknown as JsonObject } : {}) } };
+      }));
       const snapshot = await restore(executionId);
       const timestamp = now();
       const prepared = await Promise.all(inputs.map(async input => {
@@ -138,6 +142,12 @@ export function createProtectedRuntimeStore(options: ProtectedRuntimeOptions): R
         if (execution && contextSensitive) {
           const currentContext = assertExecutionContextSources(tx, execution, options.validateContextSource);
           if (currentContext?.digest !== context?.digest) throw new Error("执行上下文已变化，请重试");
+        }
+        if (execution) for (const input of inputs) if (input.type === 'model/request') {
+          commitMemoryContext(tx, execution, input.payload as unknown as ModelRequest, options.validateContextSource);
+          const actual = assertExecutionContextSources(tx, execution, options.validateContextSource);
+          const saved = input.payload.contextManifest as unknown as { digest?: string } | undefined;
+          if (actual?.digest !== saved?.digest) throw new Error('记忆来源提交与实际请求清单不一致');
         }
         const values = inputs.map((input, index): StoredRecord => ({
           id: `runtime-${randomUUID()}`, executionId,

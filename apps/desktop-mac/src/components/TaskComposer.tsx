@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { ArrowUpRight, BriefcaseBusiness, Code2, FileText, Paperclip, Plus, X } from "lucide-react";
-import type { AgentSchedulingRequestV2, Asset, BusinessContextTargetV2, BusinessObjectContextV2, GoalDetailV2, GoalDeliverableSpecV2, GoalResourceRefV2, GoalResponseV2, ModelConnectionV2, ProposeTeamGoalPlanV2, TeamTemplateIdV1, TeamTemplateSummaryV1 } from "@mn/contracts";
+import type { AgentSchedulingRequestV2, Asset, BusinessContextTargetV2, BusinessObjectContextV2, GoalDetailV2, GoalDeliverableSpecV2, GoalResourceRefV2, GoalResponseV2, ModelConnectionV2, ProposeTeamGoalPlanV2, TeamTemplateIdV1, TeamTemplateSummaryV1, TeamSkillVersionV2, TeamSkillRefV2 } from "@mn/contracts";
 import { AgentOsApiError, type AgentOsClient } from "../api";
 import type { CodingRepositorySummary } from "../types";
 
@@ -19,13 +19,15 @@ const templates = [
   { label: "排查问题", kind: "coding", objective: "排查并修复以下问题：\n\n复现步骤：\n实际表现：\n预期表现：", criteria: "说明原因和影响范围\n用回归检查证明修复有效\n不修改无关功能" },
 ] as const;
 
-export function TaskComposer({ api, workspaceId, pluginIds, repositories, repositoryId, onRepository, onRegisterRepository, onCreated, onSettings, visible, businessTarget }: {
+export function TaskComposer({ api, workspaceId, pluginIds, repositories, repositoryId, onRepository, onRegisterRepository, onCreated, onSettings, visible, businessTarget, skillTrial }: {
+  readonly skillTrial?: { readonly version: TeamSkillVersionV2; readonly sequence: number };
   readonly businessTarget?: BusinessContextTargetV2 & { readonly sequence: number };
   readonly visible: boolean; readonly api: AgentOsClient; readonly workspaceId: string; readonly pluginIds: readonly string[];
   readonly repositories: readonly CodingRepositorySummary[]; readonly repositoryId?: string;
   readonly onRepository: (id: string) => void; readonly onRegisterRepository: () => void;
   readonly onCreated: (detail: GoalResponseV2) => void; readonly onSettings: () => void;
 }) {
+  const [trial, setTrial] = useState<TeamSkillVersionV2>();
   const [kind, setKind] = useState(pluginIds.includes("opc") ? "opc" : "coding");
   const [objective, setObjective] = useState("");
   const [criteria, setCriteria] = useState("");
@@ -53,13 +55,13 @@ export function TaskComposer({ api, workspaceId, pluginIds, repositories, reposi
   const [step, setStep] = useState("");
   const [locked, setLocked] = useState(false);
   const mounted = useRef(true);
-  const transaction = useRef<{ key: string; kind: string; objective: string; brief: string; resourceRefs: readonly GoalResourceRefV2[]; criteria: string[]; deliverables: readonly GoalDeliverableSpecV2[]; repositoryId?: string; scheduling: AgentSchedulingRequestV2; teamPlan?: Pick<ProposeTeamGoalPlanV2, "templateId" | "templateVersion" | "modelBindingId">; currency: string; cost: string; duration: number; threadId?: string; taskId?: string; goal?: GoalDetailV2 } | undefined>(undefined);
+  const transaction = useRef<{ key: string; kind: string; objective: string; brief: string; resourceRefs: readonly GoalResourceRefV2[]; criteria: string[]; deliverables: readonly GoalDeliverableSpecV2[]; repositoryId?: string; scheduling: AgentSchedulingRequestV2; teamPlan?: Pick<ProposeTeamGoalPlanV2, "templateId" | "templateVersion" | "modelBindingId"> & { skillRef?: TeamSkillRefV2 }; currency: string; cost: string; duration: number; threadId?: string; taskId?: string; goal?: GoalDetailV2 } | undefined>(undefined);
   const submitting = useRef(false);
   const readLock = useRef(false);
   const external = scheduling.runnerId === "codex-cli" || scheduling.runnerId === "claude-cli";
   const selectedRepository = repositories.find(item => item.id === repositoryId) ?? (repositories.length === 1 ? repositories[0] : undefined);
   const descriptions = criteria.split("\n").map(item => item.trim()).filter(Boolean);
-  const deliverables: readonly GoalDeliverableSpecV2[] = [{ key: "result", title: kind === "coding" ? "研发成果" : "经营成果", required: true, criteria: descriptions.map((description,index)=>({id:`criterion-${index+1}`,description})) }, ...(kind === "coding" ? [] : extraDeliverables).map(item=>({key:item.key,title:item.title.trim(),required:true,criteria:item.criteria.split("\n").map(value=>value.trim()).filter(Boolean).map((description,index)=>({id:`criterion-${index+1}`,description}))}))];
+  const deliverables: readonly GoalDeliverableSpecV2[] = trial?.outputSpecs ?? [{ key: "result", title: kind === "coding" ? "研发成果" : "经营成果", required: true, criteria: descriptions.map((description,index)=>({id:`criterion-${index+1}`,description})) }, ...(kind === "coding" ? [] : extraDeliverables).map(item=>({key:item.key,title:item.title.trim(),required:true,criteria:item.criteria.split("\n").map(value=>value.trim()).filter(Boolean).map((description,index)=>({id:`criterion-${index+1}`,description}))}))];
   const deliverablesValid = deliverables.every(item=>item.title.length>0&&item.criteria.length>0&&item.criteria.length<=20&&item.criteria.every(criterion=>criterion.description.length<=2000));
   const brief = [objective.trim(), constraints.trim() && `约束与边界：\n${constraints.trim()}`].filter(Boolean).join("\n\n");
   const lengthValid = brief.length <= 16000;
@@ -84,8 +86,16 @@ export function TaskComposer({ api, workspaceId, pluginIds, repositories, reposi
   useEffect(() => {
     if (!businessTarget) return;
     if (locked) { setError("当前任务正在保存，请先继续准备，再添加业务资料。"); return; }
-    setKind("opc"); if (teamTemplateId === "code-delivery") setTeamTemplateId(null); void loadBusinessMaterial(businessTarget);
+    setTrial(undefined); setKind("opc"); if (teamTemplateId === "code-delivery" || trial) setTeamTemplateId(null); void loadBusinessMaterial(businessTarget);
   }, [businessTarget?.sequence]);
+  useEffect(() => {
+    if (!skillTrial) return;
+    if (locked || reading) { setError("当前任务仍在保存或读取资料，请处理完成后重新选择试用。"); return; }
+    const version = skillTrial.version;
+    setTrial(version); setKind(version.pluginId); setTeamTemplateId(version.template.id);
+    setObjective(version.title); setCriteria(version.outputSpecs[0]?.criteria.map(item => item.description).join("\n") ?? "");
+    businessSequence.current += 1; setBusinessLoading(false); setMaterials([]); setBusinessMaterials([]); setExtraDeliverables([]); setConstraints(""); setPreview(undefined); transaction.current = undefined;
+  }, [skillTrial?.sequence]);
   async function loadBusinessMaterial(target: BusinessContextTargetV2) {
     const request = ++businessSequence.current;
     saveBusinessMaterial({ target }); setBusinessLoading(true);
@@ -171,7 +181,7 @@ export function TaskComposer({ api, workspaceId, pluginIds, repositories, reposi
     const run = transaction.current = locked && previous ? previous : { key: crypto.randomUUID(), kind, objective: objective.trim(), brief, criteria: descriptions, deliverables,
       resourceRefs: [...materials.map(item => ({ namespace: "asset", resourceId: item.asset!.id, streamVersion: item.asset!.streamVersion, digest: item.asset!.digest })), ...businessMaterials.flatMap(material=>material.context?[material.context.sourceRef]:[])],
       ...(selectedRepository ? { repositoryId: selectedRepository.id } : {}), scheduling, currency, cost: String(minorUnits), duration: Number(minutes) * 60_000,
-      ...(teamTemplateId && teamModel ? { teamPlan: { templateId: teamTemplateId, templateVersion: "1" as const, modelBindingId: teamModel.id } } : {}),
+      ...(teamTemplateId && teamModel ? { teamPlan: { templateId: teamTemplateId, templateVersion: "1" as const, modelBindingId: teamModel.id, ...(trial ? { skillRef: { id: trial.skillId, version: trial.version, digest: trial.digest } } : {}) } } : {}),
       ...(previous?.kind === kind && previous.objective === objective.trim() && previous.repositoryId === selectedRepository?.id ? { threadId: previous.threadId, taskId: previous.taskId } : {}) };
     try {
       setStep("正在保存任务说明…");
@@ -190,7 +200,7 @@ export function TaskComposer({ api, workspaceId, pluginIds, repositories, reposi
       setStep("正在准备待审阅的计划…");
       const detail = run.teamPlan ? await api.planTeamGoal(run.goal, run.teamPlan, `${run.key}:plan`) : await api.planGoal(run.goal, run.scheduling, `${run.key}:plan`);
       if (!mounted.current) return;
-      setObjective(""); setCriteria(""); setExtraDeliverables([]); setConstraints(""); setMaterials([]); setBusinessMaterials([]); setPreview(undefined); setTeamTemplateId(null); transaction.current = undefined; setLocked(false);
+      setObjective(""); setCriteria(""); setExtraDeliverables([]); setConstraints(""); setMaterials([]); setBusinessMaterials([]); setPreview(undefined); setTeamTemplateId(null); setTrial(undefined); transaction.current = undefined; setLocked(false);
       onCreated(detail);
     } catch (caught) {
       if (mounted.current) {
@@ -202,8 +212,9 @@ export function TaskComposer({ api, workspaceId, pluginIds, repositories, reposi
   }
   return <form className="task-composer" aria-label="委派新任务" onSubmit={event => void submit(event)} onDragOver={event => { event.preventDefault(); }} onDrop={event => { event.preventDefault(); if (!locked) void addFiles(Array.from(event.dataTransfer.files)); }}>
     <div className="composer-intro"><span className="eyebrow">从目标到成果</span><h2>想交给木牛什么工作？</h2><p>说清结果，带上资料。审阅执行计划后，木牛再开始工作。</p></div>
-    <fieldset className="task-kind" disabled={locked}><legend>任务类型</legend>{[["opc", "经营", <BriefcaseBusiness size={17} />], ["coding", "研发", <Code2 size={17} />]].map(([id, label, icon]) => <label key={String(id)} className={kind === id ? "selected" : ""}><input type="radio" name="task-kind" value={String(id)} checked={kind === id} disabled={!pluginIds.includes(String(id))} onChange={() => { setKind(String(id)); setTeamTemplateId(null); }} />{icon}{label}</label>)}</fieldset>
-    <div className="task-templates" aria-label="任务模板">{templates.filter(item => item.kind === kind).map(item => <button type="button" key={item.label} disabled={locked || Boolean(objective.trim())} onClick={() => { setObjective(item.objective); setCriteria(item.criteria); }}>{item.label}<ArrowUpRight size={14} /></button>)}</div>
+    {trial && <section aria-label="技能试用"><p>试用「{trial.title}」版本 {trial.version}，将创建新任务。请重新选择本次获准资料。</p><ul>{trial.inputSlots.map(slot => <li key={slot.key}>{slot.key} · {slot.namespace}</li>)}</ul><h4>本次交付要求</h4><ul>{trial.outputSpecs.map(spec => <li key={spec.key}><strong>{spec.title}</strong><ul>{spec.criteria.map(criterion => <li key={criterion.id}>{criterion.description}</li>)}</ul></li>)}</ul><button type="button" disabled={locked} onClick={() => { setTrial(undefined); setTeamTemplateId(null); }}>取消技能试用</button></section>}
+    <fieldset className="task-kind" disabled={locked || Boolean(trial)}><legend>任务类型</legend>{[["opc", "经营", <BriefcaseBusiness size={17} />], ["coding", "研发", <Code2 size={17} />]].map(([id, label, icon]) => <label key={String(id)} className={kind === id ? "selected" : ""}><input type="radio" name="task-kind" value={String(id)} checked={kind === id} disabled={!pluginIds.includes(String(id))} onChange={() => { setKind(String(id)); setTeamTemplateId(null); }} />{icon}{label}</label>)}</fieldset>
+    <div className="task-templates" aria-label="任务模板">{templates.filter(item => item.kind === kind).map(item => <button type="button" key={item.label} disabled={locked || Boolean(trial) || Boolean(objective.trim())} onClick={() => { setObjective(item.objective); setCriteria(item.criteria); }}>{item.label}<ArrowUpRight size={14} /></button>)}</div>
     <div className="field task-objective"><label htmlFor="task-objective">任务目标</label><textarea id="task-objective" rows={5} maxLength={6000} disabled={locked} value={objective} onChange={event => setObjective(event.target.value)} placeholder={kind === "coding" ? "描述使用场景、预期行为或需要排查的问题…" : "例如：结合本月经营数据，制定下月客户跟进与交付计划…"} onKeyDown={event => { if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} /></div>
     {kind === "coding" && <div className="task-repository"><label>任务仓库<select aria-label="任务仓库" value={selectedRepository?.id ?? ""} disabled={locked} onChange={event => onRepository(event.target.value)}><option value="" disabled>选择仓库</option>{repositories.map(item => <option key={item.id} value={item.id}>{item.name} · {item.rootRealPath}</option>)}</select></label><button type="button" className="quiet-button" disabled={locked} onClick={onRegisterRepository}><Plus size={15} />{repositories.length ? "添加仓库" : "登记仓库"}</button></div>}
     <div className="task-material-actions"><label className={`secondary-button ${locked ? "disabled" : ""}`}><Paperclip size={15} />添加资料<input aria-label="添加文本资料" type="file" accept=".txt,.md,.csv,.json,.pdf,.docx,.xlsx" multiple disabled={locked || reading} onChange={event => { const files = Array.from(event.target.files ?? []); event.target.value = ""; void addFiles(files); }} /></label>{kind === "opc" && <button type="button" className="quiet-button" disabled={locked || reading} onClick={() => void addBusinessSnapshot()}>附加经营汇总</button>}<small>{reading ? "正在读取资料…" : "支持文本、PDF、Word 和表格，最多 6 份，每份 20 MB"}</small></div>
@@ -222,13 +233,13 @@ export function TaskComposer({ api, workspaceId, pluginIds, repositories, reposi
       {item.extraction?.issues.map((issue, index) => <p key={index}>{issue.message}</p>)}
     </div>)}</div>}
     {previewMaterial && <div>{previewMaterial.extraction ? <>{previewMaterial.extraction.blocks.slice(0, 20).map(block => <div key={block.id}><small>{sourceLocation(block.locator)}</small><pre className="material-preview">{block.text}</pre></div>)}{previewMaterial.extraction.blocks.length > 20 && <p>此处仅预览前 20 个片段，完整原文随资料保存。</p>}</> : <p>资料准备完成后显示提取内容与位置。</p>}</div>}
-    <div className="field"><label htmlFor="task-criteria">验收要求 <span>每行一项</span></label><textarea id="task-criteria" aria-label="验收要求" rows={3} required maxLength={6000} disabled={locked} value={criteria} onChange={event => setCriteria(event.target.value)} placeholder="成果要包含什么？怎样判断完成？" /></div>
+    <div className="field"><label htmlFor="task-criteria">验收要求 <span>每行一项</span></label><textarea id="task-criteria" aria-label="验收要求" rows={3} required maxLength={6000} disabled={locked || Boolean(trial)} value={criteria} onChange={event => setCriteria(event.target.value)} placeholder="成果要包含什么？怎样判断完成？" /></div>
     {kind !== "coding" && extraDeliverables.map((item,index)=><fieldset key={item.key} disabled={locked}><legend>交付项 {index+2}</legend><label className="field">名称<input aria-label={`交付项 ${index+2} 名称`} required maxLength={200} value={item.title} onChange={event=>setExtraDeliverables(values=>values.map(value=>value.key===item.key?{...value,title:event.target.value}:value))}/></label><label className="field">验收要求<textarea aria-label={`交付项 ${index+2} 验收要求`} required rows={3} maxLength={6000} value={item.criteria} onChange={event=>setExtraDeliverables(values=>values.map(value=>value.key===item.key?{...value,criteria:event.target.value}:value))}/></label><button type="button" className="quiet-button" onClick={()=>setExtraDeliverables(values=>values.filter(value=>value.key!==item.key))}>移除交付项</button></fieldset>)}
-    <button type="button" className="secondary-button" disabled={locked||kind==="coding"||extraDeliverables.length>=19} onClick={()=>setExtraDeliverables(values=>[...values,{key:`deliverable-${crypto.randomUUID()}`,title:"",criteria:""}])}>增加交付项</button>{kind==="coding"&&<p>代码交付使用一个完整候选，包含变更差异、检查结果和交付说明。</p>}
+    <button type="button" className="secondary-button" disabled={locked||Boolean(trial)||kind==="coding"||extraDeliverables.length>=19} onClick={()=>setExtraDeliverables(values=>[...values,{key:`deliverable-${crypto.randomUUID()}`,title:"",criteria:""}])}>增加交付项</button>{kind==="coding"&&<p>代码交付使用一个完整候选，包含变更差异、检查结果和交付说明。</p>}
     <details className="task-boundaries"><summary>补充约束与执行额度</summary><div className="field"><label htmlFor="task-constraints">约束与偏好</label><textarea id="task-constraints" rows={3} maxLength={3000} disabled={locked} value={constraints} onChange={event => setConstraints(event.target.value)} placeholder="期限、语气、目标人群、不在范围内的工作…" /></div><div className="task-budget"><label>币种<select aria-label="预算币种" disabled={locked} value={currency} onChange={event => setCurrency(event.target.value)}><option>CNY</option><option>USD</option></select></label><label>费用上限（{currency}）<input aria-label="费用上限" type="number" min="0.01" max="10000" step="0.01" required disabled={locked} value={cost} onChange={event => setCost(event.target.value)} /></label><label>时限（分钟）<input aria-label="时限（分钟）" type="number" min="1" max="1440" step="1" required disabled={locked} value={minutes} onChange={event => setMinutes(event.target.value)} /></label></div><small>模型用量上限 100,000 tokens；费用按参考价格预留，以厂商账单为准。</small></details>
     {error && <p className="inline-error" role="alert">{error}</p>}
     {!lengthValid && <p className="inline-error" role="alert">任务和约束合计超过 16000 字符，请精简内容。</p>}
-    <TeamSelector value={teamTemplateId} templates={teamTemplates} disabled={locked} onChange={next => { setTeamTemplateId(next); const template = teamTemplates.find(item => item.id === next); if (template) setKind(template.pluginId); }} />
+    <TeamSelector value={teamTemplateId} templates={teamTemplates} disabled={locked || Boolean(trial)} onChange={next => { setTeamTemplateId(next); const template = teamTemplates.find(item => item.id === next); if (template) setKind(template.pluginId); }} />
     {teamError && <p role="status">{teamError}</p>}
     {teamTemplateId ? <fieldset className="agent-scheduling" disabled={locked}><legend>团队执行模型</legend>
       <label>已计价模型<select aria-label="团队执行模型" value={teamModel?.id ?? ""} onChange={event => setTeamModelId(event.target.value)}>

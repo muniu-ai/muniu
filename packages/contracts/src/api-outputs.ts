@@ -1,6 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+import type { MemoryAccessV2, MemoryActionV2, MemoryProvenanceV2 } from "./memories.js";
 import type { AssetExtractionV2 } from "./context.js";
 import type { AgentReadinessReportV1 } from "./agent-readiness.js";
-// SPDX-License-Identifier: Apache-2.0
 import type { AgentCatalogV2, CodingReconciliationDecisionV2, CodingReconciliationViewV2 } from "./api.js";
 import type { JsonObject, JsonValue } from "./json.js";
 import type { GoalDetailV2, GoalResponseV2, GoalTeamProgressV2, GoalV2, TeamTemplateSummaryV1 } from "./goals.js";
@@ -39,7 +40,7 @@ export interface InboxItemV2 {
   };
   readonly revocationId?: string;
   readonly streamVersion?: number;
-  readonly kind: "approval" | "agent_question" | "credential" | "failure" | "reconciliation";
+  readonly kind: "approval" | "agent_question" | "credential" | "failure" | "reconciliation" | "notice";
   readonly title: string;
   readonly summary: string;
   readonly risk?: string;
@@ -88,6 +89,9 @@ export interface ActivityV2 {
   readonly occurredAt: string;
 }
 export interface MemorySummaryV2 {
+  readonly provenance?: MemoryProvenanceV2;
+  readonly access?: MemoryAccessV2;
+  readonly allowedActions?: readonly MemoryActionV2[];
   readonly id: string;
   readonly namespace: string;
   readonly resourceId: string;
@@ -97,7 +101,7 @@ export interface MemorySummaryV2 {
   readonly status: MemoryRecord["status"];
   readonly streamVersion: number;
 }
-export type MemoryViewV2 = Omit<MemoryRecord, "protectedPayloadRef"> & { readonly value: JsonObject };
+export type MemoryViewV2 = Omit<MemoryRecord, "protectedPayloadRef"> & { readonly value: JsonObject; readonly access?: MemoryAccessV2; readonly allowedActions?: readonly MemoryActionV2[] };
 export interface ModelConnectionV2 {
   readonly billingCurrency?: string;
   readonly modelOptions: readonly { readonly modelName: string; readonly selectable: boolean; readonly reason?: string }[];
@@ -267,6 +271,16 @@ export type CodingRunnerViewV2 =
 
 /** JSON extension points are explicit; every fixed Host operation has a concrete DTO. */
 export interface ApiOutputsV2 {
+  readonly listTeamSkills: import("./team-skills.js").TeamSkillListV2;
+  readonly createTeamSkillVersion: import("./team-skills.js").TeamSkillDetailV2;
+  readonly getTeamSkill: import("./team-skills.js").TeamSkillDetailV2;
+  readonly registerTeamSkillEvaluation: import("./team-skills.js").TeamSkillEvaluationV2;
+  readonly submitTeamSkillEvaluation: import("./team-skills.js").TeamSkillEvaluationV2;
+  readonly commandTeamSkill: import("./team-skills.js").TeamSkillActivationV2;
+  readonly listFollowups: readonly import("./followups.js").FollowupDetailV2[];
+  readonly createFollowup: import("./followups.js").FollowupDetailV2;
+  readonly getFollowup: import("./followups.js").FollowupDetailV2;
+  readonly commandFollowup: import("./followups.js").FollowupDetailV2;
   readonly getBusinessContext: BusinessObjectContextV2;
   readonly getOpcBusiness: BusinessManagementViewV1;
   readonly commandOpcBusiness: BusinessManagementViewV1;

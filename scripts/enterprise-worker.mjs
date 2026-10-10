@@ -19,7 +19,7 @@ import { createEnterpriseWorkerStore } from "./lib/enterprise-worker-store.mjs";
 import { parseWorkerSupportedKinds } from "./lib/worker-handler-capabilities.mjs";
 import { VaultTransitKeyProvider, VaultModelSecretStore } from "./lib/enterprise-secrets.mjs";
 import { BUSINESS_KINDS, createEnterpriseBusinessHandlers, loadEnterpriseBusinessConfiguration } from "./lib/enterprise-business.mjs";
-import { configureProductProjectionJournal, validateProjectionJournal, createAgentOsCompositionRoot } from "../apps/host/dist/index.js";
+import { configureProductProjectionJournal, validateProjectionJournal, createAgentOsCompositionRoot, hostMemorySourceValidationPort } from "../apps/host/dist/index.js";
 import { SigV4S3Client } from "./lib/s3-client.mjs";
 
 function required(name) {
@@ -113,7 +113,7 @@ const handlerModule = process.env.MN_WORKER_HANDLER_MODULE
   ?? new URL("./enterprise-worker-handlers.mjs", import.meta.url).pathname;
 if (!handlerModule.startsWith("/")) throw new Error("MN_WORKER_HANDLER_MODULE 必须是绝对路径");
 const loaded = await import(pathToFileURL(handlerModule).href);
-const composition = await createAgentOsCompositionRoot({ profile: "enterprise", store });
+const composition = await createAgentOsCompositionRoot({ profile: "enterprise", store, kernelOptions: { memorySources: hostMemorySourceValidationPort } });
 const loadedHandlers = typeof loaded.createHandlers === "function"
   ? await loaded.createHandlers(Object.freeze({
       pool,

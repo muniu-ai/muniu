@@ -32,7 +32,7 @@ export async function prepareBoundedModelRequest(input: ModelRequest, store: Run
     generation: request.generation, messages: request.messages as unknown as JsonObject['messages'], availableToolIds: request.availableToolIds,
   } });
   for (const change of changes) messages[change.index] = { ...messages[change.index]!, content: messages[change.index]!.content.replace('受保护运行记录的', `受保护运行记录 ${original.id}（execution ${request.executionId}, sequence ${original.sequence}）的`) };
-  const result: ModelRequest = { ...request, messages, contextSelection: { originalRecordId: original.id, originalSequence: original.sequence,
+  const result: ModelRequest = { ...request, messages, contextSelection: { ...request.contextSelection, originalRecordId: original.id, originalSequence: original.sequence,
     changes: changes as unknown as JsonObject['changes'], method: 'deterministic_excerpt_v1' } };
   assertModelContextLimit(result);
   return result;

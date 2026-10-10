@@ -101,7 +101,8 @@ import { createClaudeCliRunner } from "@mn/runner-claude-cli";
 import { createCodexCliRunner } from "@mn/runner-codex-cli";
 
 import { createKernelToolApprovalPort, type ToolApprovalKernel } from "./approval.js";
-import { buildAgentMemoryPrompt, type AgentMemoryReader } from "./memory.js";
+import { prepareMemoryModelRequest } from "./memory-selection.js";
+import { type AgentMemoryReader } from "./memory.js";
 import { createProtectedRuntimeStore, readExecutionInput, type RuntimeProtection } from "./runtime-store.js";
 import { recordRuntimeAttention } from "./runtime-attention.js";
 import { readThreadHistory } from "./thread-context.js";
@@ -693,10 +694,11 @@ function createCodingTurnHandler(options: CodingExecutionWorkerOptions) {
         return [...await readThreadHistory(store, runtime, state.execution, options.runtimeProtection?.validateContextSource),
           ...await session.modelView(new DefaultSessionSurface())];
       },
-      ...(options.memoryReader ? { memoryPrompt: () => buildAgentMemoryPrompt({
+      ...(options.memoryReader ? { prepareMemoryRequest: (request: ModelRequest) => prepareMemoryModelRequest(request, {
         tenantId: job.tenantId, workspaceId: state.execution.workspaceId, thread: state.thread,
         authority: state.authority, requestingNamespace: "coding",
-        executionPrincipalId: state.execution.executionPrincipalId, store,
+        executionPrincipalId: state.execution.executionPrincipalId, execution: state.execution, store,
+        ...(options.runtimeProtection?.validateContextSource ? { validateContextSource: options.runtimeProtection.validateContextSource } : {}),
         reader: options.memoryReader!, now,
       }) } : {}),
       execution: state.execution,
@@ -2284,11 +2286,8 @@ class BuiltinCodingRunner implements ManagedCodingRunner {
       ],
       availableToolIds: ["coding.sandbox.write"],
     };
-    const memoryPrompt = await this.#options.memoryPrompt?.();
-    const memoryRequest: ModelRequest = memoryPrompt
-      ? { ...request, messages: [{ role: "system", content: memoryPrompt }, ...request.messages] }
-      : request;
-    const effectiveRequest = await prepareBoundedModelRequest(memoryRequest, this.#options.runtime);
+    const boundedRequest = await prepareBoundedModelRequest(request, this.#options.runtime);
+    const effectiveRequest = await this.#options.prepareMemoryRequest?.(boundedRequest) ?? boundedRequest;
     await this.#options.runtime.append({
       executionId: this.#options.execution.id,
       type: "model/request",
@@ -2462,7 +2461,7 @@ class BuiltinCodingRunner implements ManagedCodingRunner {
 interface BuiltinRunnerOptions {
   readonly turn?: number;
   readonly sessionMessages: () => Promise<readonly ModelMessage[]>;
-  readonly memoryPrompt?: () => Promise<string>;
+  readonly prepareMemoryRequest?: (request: ModelRequest) => Promise<ModelRequest>;
   readonly execution: Execution;
   readonly authority: ExecutionAuthority;
   readonly task: CodingTask;

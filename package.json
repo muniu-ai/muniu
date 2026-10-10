@@ -84,7 +84,10 @@
     "verify:agent-os-p1-ui": "node --test apps/desktop-mac/scripts/test/goal-sources.test.mjs && node apps/desktop-mac/scripts/verify-materials-ui.mjs && node apps/desktop-mac/scripts/verify-material-formats-ui.mjs && node apps/desktop-mac/scripts/verify-business-context-ui.mjs && node apps/desktop-mac/scripts/verify-task-draft-recovery-ui.mjs",
     "test:team-views": "node --test apps/desktop-mac/scripts/test/team-api.test.mjs apps/desktop-mac/scripts/test/team-views.test.mjs apps/desktop-mac/scripts/test/team-plan.test.mjs",
     "verify:agent-os-p3-ui": "node --test apps/desktop-mac/scripts/test/delivery-api.test.mjs apps/desktop-mac/scripts/test/delivery-review.test.mjs apps/desktop-mac/scripts/test/delivery-flow.test.mjs",
-    "verify:agent-os-p2-ui": "npm run test:team-views && node apps/desktop-mac/scripts/verify-agent-os-ui.mjs teams"
+    "verify:agent-os-p2-ui": "npm run test:team-views && node apps/desktop-mac/scripts/verify-agent-os-ui.mjs teams",
+    "test:reuse-views": "node --test apps/desktop-mac/scripts/test/reuse-api.test.mjs apps/desktop-mac/scripts/test/reuse-views.test.mjs",
+    "test:reuse-cli": "tsc -p apps/cli/tsconfig.test.json && node --test apps/cli/dist-test/test/reuse-flow.test.js",
+    "verify:agent-os-p4-ui": "npm run test:reuse-views && node --test apps/desktop-mac/scripts/test/reuse-flow.test.mjs && node apps/desktop-mac/scripts/verify-reuse-ui.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",

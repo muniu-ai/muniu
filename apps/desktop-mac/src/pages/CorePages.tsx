@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Activity, AlertCircle, ArrowRight, Bot, Check, Clock3, FileCheck2, KeyRound, Lightbulb, MemoryStick, ShieldCheck, Sparkles, X } from "lucide-react";
+import { Activity, AlertCircle, ArrowRight, Bot, Check, Clock3, FileCheck2, KeyRound, Lightbulb, ShieldCheck, Sparkles, X } from "lucide-react";
 import type { BusinessManagementViewV1, GoalV2, ProductNavigationV2 } from "@mn/contracts";
 import type { AgentOsClient } from "../api";
 import { EmptyState } from "../components/Status";
 import { RunnerConfiguration } from "../components/RunnerConfiguration";
+import { MemoryPanel } from "../components/MemoryPanel";
 import { ModelConnections } from "../components/ModelConnections";
 import type { ActivitySummary, AgentCatalog, CodingReconciliationDecision, CodingReconciliationView, DeliverableSummary, HomeSummary, InboxItemSummary, MemorySummary, ViewMode, WorkspaceMemberSummary, WorkspaceSummary } from "../types";
 
@@ -142,7 +143,7 @@ export function InboxPage({ workspaceId, summary, api, onChanged, onOpen }: { re
       <header><span className="pill risk"><AlertCircle size={13} />需要处理</span></header>
       <h3>{item.title}</h3><p className="intent">{item.summary}</p>
       {(item.navigation || item.kind === "credential") && <button className="secondary-button" onClick={() => onOpen(item)}>
-        {item.kind === "credential" ? "检查模型连接" : "打开会话处理"}<ArrowRight size={15} />
+        {item.kind === "credential" ? "检查模型连接" : item.kind === "notice" ? "查看跟进任务" : "打开会话处理"}<ArrowRight size={15} />
       </button>}
       {item.revocationId && item.streamVersion !== undefined && <>
         <p>重新发起删除会永久销毁对应密钥，无法恢复。此操作仅限工作区所有者。</p>
@@ -222,61 +223,17 @@ function pluginLabel(pluginId: string): string {
   return pluginId;
 }
 
-export function SettingsPage({ workspace, memories, api, onModeChanged, onMemoriesChanged }: { readonly workspace: WorkspaceSummary; readonly memories: readonly MemorySummary[]; readonly api: AgentOsClient; readonly onModeChanged: (workspace: WorkspaceSummary) => void; readonly onMemoriesChanged: () => void }) {
+export function SettingsPage({ workspace, api, onModeChanged }: { readonly workspace: WorkspaceSummary; readonly memories: readonly MemorySummary[]; readonly api: AgentOsClient; readonly onModeChanged: (workspace: WorkspaceSummary) => void; readonly onMemoriesChanged: () => void }) {
   async function setMode(mode: ViewMode) { onModeChanged(await api.updateViewMode(workspace, mode)); }
-  async function decide(memory: MemorySummary, decision: "accept" | "reject") { await api.decideMemory(memory.id, memory.streamVersion, decision); onMemoriesChanged(); }
-  async function revise(memory: MemorySummary, summary: string) { await api.reviseMemory(memory.id, memory.streamVersion, summary, memory.confidence); onMemoriesChanged(); }
-  async function remove(memory: MemorySummary) { await api.deleteMemory(memory.id, memory.streamVersion, "用户在设置中确认删除"); onMemoriesChanged(); }
   return <div className="page-stack"><PageTitle eyebrow="工作方式" title="设置" detail="管理模型连接、外部 Agent 接入和工作区偏好。" />
     <ModelConnections api={api} professional={workspace.viewMode === "professional"} />
     <RunnerConfiguration api={api} workspace={workspace} onChanged={onModeChanged} />
     <section className="panel settings-section"><PanelHeading title="信息密度" /><div className="segmented" role="group" aria-label="信息密度"><button className={workspace.viewMode === "business" ? "active" : ""} onClick={() => void setMode("business")}>经营视图</button><button className={workspace.viewMode === "professional" ? "active" : ""} onClick={() => void setMode("professional")}>专业视图</button></div><p>经营视图先显示成果、证据和下一步；专业视图原位展开执行细节。</p></section>
-    <section className="panel settings-section"><PanelHeading title="记忆与偏好" /><div className="memory-list">{memories.map((memory) => <MemoryCard key={memory.id} memory={memory} professional={workspace.viewMode === "professional"} onDecide={decide} onRevise={revise} onDelete={remove} />)}</div>{memories.length === 0 && <EmptyState title="还没有记忆提案" detail="模型提炼的信息必须经你确认后才会成为记忆" />}</section>
+    <MemoryPanel api={api} workspaceId={workspace.id} professional={workspace.viewMode === "professional"} />
     <section className="panel settings-section"><PanelHeading title="数据治理" /><div className="governance-note"><ShieldCheck size={20} /><p>跨插件默认不可见。共享前会提示：授权撤销后停止后续读取，但已经发送给模型或外部服务的数据无法召回。</p></div></section>
   </div>;
 }
 
-function MemoryCard({ memory, professional, onDecide, onRevise, onDelete }: {
-  readonly memory: MemorySummary;
-  readonly professional: boolean;
-  readonly onDecide: (memory: MemorySummary, decision: "accept" | "reject") => Promise<void>;
-  readonly onRevise: (memory: MemorySummary, summary: string) => Promise<void>;
-  readonly onDelete: (memory: MemorySummary) => Promise<void>;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const [draft, setDraft] = useState(memory.summary);
-  const [busy, setBusy] = useState(false);
-
-  async function save() {
-    const summary = draft.trim();
-    if (!summary) return;
-    setBusy(true);
-    try { await onRevise(memory, summary); setEditing(false); }
-    finally { setBusy(false); }
-  }
-
-  async function remove() {
-    setBusy(true);
-    try { await onDelete(memory); }
-    finally { setBusy(false); }
-  }
-
-  return <article>
-    <span className="attention-icon"><MemoryStick size={16} /></span>
-    <div>
-      <header><strong>{memory.summary}</strong><span className={`pill ${memory.status}`}>{memory.status === "proposed" ? "待确认" : memory.status === "accepted" ? "已确认" : "不可用"}</span></header>
-      <p>来源：已记录活动 · 置信度 {Math.round(memory.confidence * 100)}%</p>
-      {professional && <small>{memory.source} · {memory.namespace} / {memory.resourceId}</small>}
-      {editing && <div className="memory-editor"><label>记忆内容<input aria-label="记忆内容" value={draft} onChange={(event) => setDraft(event.target.value)} /></label><div><button type="button" className="quiet-button" disabled={busy} onClick={() => { setDraft(memory.summary); setEditing(false); }}>取消</button><button type="button" className="secondary-button" disabled={busy || !draft.trim()} onClick={() => void save()}>保存记忆修改</button></div></div>}
-      {confirmingDelete && <div className="governance-note"><AlertCircle size={18} /><p>将删除当前数据库中的记忆与密钥记录，保留删除审计。历史备份需另行处理；已发送给模型的数据无法召回。</p><button type="button" className="quiet-button" disabled={busy} onClick={() => setConfirmingDelete(false)}>取消</button><button type="button" className="danger-button" disabled={busy} onClick={() => void remove()}>确认删除记忆</button></div>}
-    </div>
-    {!editing && !confirmingDelete && memory.status !== "invalidated" && <footer>
-      {memory.status === "proposed" && <><button type="button" className="quiet-button" onClick={() => void onDecide(memory, "reject")}>拒绝</button><button type="button" className="quiet-button" aria-label={`修改记忆：${memory.summary}`} onClick={() => setEditing(true)}>修改</button><button type="button" className="secondary-button" onClick={() => void onDecide(memory, "accept")}>接受</button></>}
-      <button type="button" className="danger-button" aria-label={`删除记忆：${memory.summary}`} onClick={() => setConfirmingDelete(true)}>删除</button>
-    </footer>}
-  </article>;
-}
 
 export function AgentsPage({ catalog }: { readonly catalog: AgentCatalog }) {
   return <div className="page-stack">

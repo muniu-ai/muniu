@@ -16,6 +16,9 @@ mn plugin ...
 mn opc ...
 mn code ...
 mn goal ...
+mn skill ...
+mn memory ...
+mn followup ...
 mn asset ...
 mn business context ...
 mn backup ...
@@ -69,6 +72,30 @@ mn business candidate decide CANDIDATE_ID --workspace WORKSPACE_ID --version 1 -
 ```
 
 采纳前核对字段变化及 `availability`。过期候选需要重新核验；`reject` 只拒绝建议。以上变更支持 `--key`，响应丢失时保持全部参数和键不变重试。
+
+## 技能、记忆与受控跟进
+
+```bash
+mn skill list --workspace WORKSPACE_ID --json
+mn skill show SKILL_ID --workspace WORKSPACE_ID --skill-version 1 --json
+mn memory list --workspace WORKSPACE_ID --json
+mn memory accept MEMORY_ID --version 1 --key MEMORY_DECISION --json
+mn followup list --workspace WORKSPACE_ID --json
+mn followup create --workspace WORKSPACE_ID --file followup.json --key FOLLOWUP_REQUEST --json
+mn followup pause POLICY_ID --workspace WORKSPACE_ID --version 1 --key PAUSE_REQUEST --json
+```
+
+`skill list --goal GOAL_ID` 查询 Host 对指定新目标给出的推荐，返回的 `recommended` 不会自动替换计划。技能版本来自已验收的团队成果。`skill create` 文件填写固定 `source`（目标、计划、成果集与摘要）、名称、说明及角色；新技能 `--version 0`，后续版本使用技能流的当前版本。`skill evaluate` 登记固定模型、资料、权限、预算和代码版本；`skill report` 提交受保护报告的 `reportRef` 与人工或确定性 `evidence`。可先通过 `asset upload` 获取报告来源引用。
+
+`skill enable|rollback` 的 `--version` 取详情中的 `activation.streamVersion`，并指定技能版本、摘要与通过评测的 ID。只有显式添加无值开关 `--recommend` 才申请自动推荐，Host 仍检查实测质量门。`skill disable` 清空启用指针并停止后续推荐，用户仍可明确试用可访问的固定版本；已运行任务继续固定旧版本。
+
+来源撤权后，技能详情可能无法读取。若 `skill list` 返回 `stopControl.expectedStreamVersion`，可将该版本用于 `skill disable --version`；目录不会为此返回旧资料或角色正文。
+
+试用先新建目标，再用 `goal plan --team TEMPLATE --model MODEL_ID --skill SKILL_ID --skill-version VERSION --skill-digest DIGEST`。新目标重新选择资料范围与额度，保留技能输出要求；省略团队及技能参数时仍为单 Agent。
+
+`memory propose` 的 JSON 可附 `provenance`：`version:1`、`kind:fact|preference`、`origin:user|model`、`sourceRefs`。模型提案还需真实 `sourceExecution`，Host 补足来源闭包；确认前不会成为跨任务记忆。资料失效时按返回的 `access` 与 `allowedActions` 处理，不把隐藏内容当作空事实。
+
+跟进文件必须明确 `enabled:true`，并绑定原目标版本、批准计划摘要、触发对象、资料范围、内置模型连接、`perRunBudget`、`periodBudget`（24 小时或 7 天）、`maxRuns` 与 `expiresAt`。周期额度是新的授权，原任务额度不重置。无变化不调用模型；暂停只停止新派发，未知费用保留待核对。各命令返回完整版本及允许操作，变更响应丢失时保持参数和 `--key` 不变重试。
 
 ## 本地开发
 

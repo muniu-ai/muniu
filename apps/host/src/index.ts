@@ -22,3 +22,9 @@ export * from "./projection-journal.js";
 export { assertGoalExecutionResources } from "./goal-runtime.js";
 
 export { validateBusinessContextSource } from "./business-context.js";
+
+export * from "./memory-sources.js";
+
+export * from "./memory-api.js";
+
+export { validateHostContextSource, validateHistoricalHostContextSource } from "./context-source-validation.js";

@@ -46,6 +46,7 @@ export default defineConfig({
           { text: "机会验证", link: "/guides/opc" },
           { text: "Coding 研发任务", link: "/guides/coding" },
           { text: "目标与验收", link: "/guides/goals" },
+          { text: "团队技能试用与评测", link: "/guides/team-skill-evaluation" },
           { text: "任务资料与业务来源", link: "/guides/materials" },
           { text: "模型与外部 Agent", link: "/guides/agents-and-models" },
           { text: "CLI 使用", link: "/guides/cli" },
@@ -70,6 +71,7 @@ export default defineConfig({
           { text: "P1 资料与上下文验证", link: "/verification/agent-os-p1-2026-10-10" },
           { text: "P2 持久团队验证", link: "/verification/agent-os-p2-2026-10-10" },
           { text: "P3 经营交付验证", link: "/verification/agent-os-p3-2026-10-10" },
+          { text: "P4 复用与跟进验证", link: "/verification/agent-os-p4-2026-10-10" },
         ],
       },
       {

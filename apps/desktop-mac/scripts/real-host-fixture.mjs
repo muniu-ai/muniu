@@ -5,7 +5,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createAgentOsHost } from "../../host/dist/index.js";
-import { validateBusinessContextSource } from "../../host/dist/business-context.js";
+import { validateHostContextSource } from "../../host/dist/context-source-validation.js";
 import { assertGoalExecutionResources } from "../../host/dist/goal-runtime.js";
 import { createOpcModelContextReader } from "../../host/dist/index.js";
 import { AgentOsWorker, createKernelAgentTurnHandler } from "../../worker/dist/index.js";
@@ -19,7 +19,7 @@ const appOrigin = process.env.MN_FIXTURE_APP_ORIGIN;
 const mode = process.env.MN_FIXTURE_MODE ?? "onboarding";
 if (!Number.isSafeInteger(port) || port <= 0 || !appOrigin) throw new Error("缺少真实 Host fixture 配置");
 
-const stateRoot = ["goals", "teams", "tasks", "delivery", "onboarding", "business", "coding", "repositories"].includes(mode) ? await mkdtemp(join(tmpdir(), `muniu-${mode}-ui-`)) : undefined;
+const stateRoot = ["goals", "teams", "tasks", "delivery", "reuse", "onboarding", "business", "coding", "repositories"].includes(mode) ? await mkdtemp(join(tmpdir(), `muniu-${mode}-ui-`)) : undefined;
 const store = stateRoot ? new SqliteStorage({ databaseFile: join(stateRoot, "state.sqlite3"), hmacKey: randomBytes(32) }) : new InMemoryKernelStore();
 const now = () => new Date().toISOString();
 const id = (kind) => `${kind}-${randomUUID()}`;
@@ -44,7 +44,7 @@ const keyProvider = new InMemoryKeyProvider(randomBytes(32));
 const secretStore = { async save(account) { return `keychain://muniu.v2/${account}`; }, async read() { return "fixture-key"; } };
 const host = await createAgentOsHost({
   ...signedUiPluginFixture(),
-  ...(["teams","delivery"].includes(mode) ? { goalPollIntervalMs: 50 } : {}),
+  ...(["teams","delivery","reuse"].includes(mode) ? { goalPollIntervalMs: 50 } : {}),
   store,
   cas,
   protectedPayloadKeyProvider: keyProvider,
@@ -64,19 +64,19 @@ const agentSimulation = mode === "opc"
   ? setInterval(() => void simulateOpcAgent(), 50)
   : undefined;
 let goalWorkerBusy = false;
-const goalWorker = ["goals", "tasks", "teams", "delivery"].includes(mode) ? new AgentOsWorker({ id: "goal-ui-worker", store,
+const goalWorker = ["goals", "tasks", "teams", "delivery", "reuse"].includes(mode) ? new AgentOsWorker({ id: "goal-ui-worker", store,
   lock: { engineLockDigest: "fixture", expectedEngineLockDigest: "fixture", pluginLockDigest: "fixture", expectedPluginLockDigest: "fixture" },
   handlers: { "agent.execution.run": createKernelAgentTurnHandler({ store, secretStore, approvalKernel: host.kernel,
-    runtimeProtection: { cas, keyProvider, validateContextSource: validateBusinessContextSource }, assertExecutionResources: assertGoalExecutionResources,
+    runtimeProtection: { cas, keyProvider, validateContextSource: validateHostContextSource }, assertExecutionResources: assertGoalExecutionResources,
     resolveThreadContext: createOpcModelContextReader({ store, cas, protectedPayloadKeyProvider: keyProvider }),
-    modelInvoker: async ({ request }) => ({ text: mode === "delivery" ? deliveryModelText(request) : mode === "teams" && request.messages.some(message => message.content.includes("当前职责：独立复核")) ? JSON.stringify({ decision: "pass", findings: [] }) : request.messages.some(message => message.content.includes("你是木牛经营助手")) ? "## 经营建议\n\n区分 **事实** 与建议；缺少收支资料。\n\n| 行动 | 完成条件 |\n| --- | --- |\n| 核对订单 | 确认交付日期 |\n\n<img src=x onerror=alert(1)>" : "三个验证问题：近期如何获客、现有方式有哪些不足、是否愿意参加下一轮访谈。现有资料是研究起点，付费意愿仍属待验证假设。", toolCalls: [], usage: { inputTokens: 10, cachedInputTokens: 0, outputTokens: 20 } }),
-    modelQuoter: async () => ({ inputTokenLimit: mode === "delivery" ? 10000 : mode === "teams" ? 2000 : 100, maxOutputTokens: mode === "delivery" ? 2500 : mode === "teams" ? 500 : 100, rates: { id: "fixture", currency: "CNY", inputNanoMinorUnitsPerToken: "0", cachedInputNanoMinorUnitsPerToken: "0", outputNanoMinorUnitsPerToken: "0" } }),
+    modelInvoker: async ({ request }) => ({ text: mode === "reuse" ? reuseModelText(request) : mode === "delivery" ? deliveryModelText(request) : mode === "teams" && request.messages.some(message => message.content.includes("当前职责：独立复核")) ? JSON.stringify({ decision: "pass", findings: [] }) : request.messages.some(message => message.content.includes("你是木牛经营助手")) ? "## 经营建议\n\n区分 **事实** 与建议；缺少收支资料。\n\n| 行动 | 完成条件 |\n| --- | --- |\n| 核对订单 | 确认交付日期 |\n\n<img src=x onerror=alert(1)>" : "三个验证问题：近期如何获客、现有方式有哪些不足、是否愿意参加下一轮访谈。现有资料是研究起点，付费意愿仍属待验证假设。", toolCalls: [], usage: { inputTokens: 10, cachedInputTokens: 0, outputTokens: 20 } }),
+    modelQuoter: async () => ({ inputTokenLimit: mode === "delivery" ? 10000 : ["teams", "reuse"].includes(mode) ? 2000 : 100, maxOutputTokens: mode === "delivery" ? 2500 : ["teams", "reuse"].includes(mode) ? 500 : 100, rates: { id: "fixture", currency: "CNY", inputNanoMinorUnitsPerToken: "0", cachedInputNanoMinorUnitsPerToken: "0", outputNanoMinorUnitsPerToken: "0" } }),
   }) },
 }) : undefined;
 const goalWorkerTimer = goalWorker ? setInterval(() => {
   if (goalWorkerBusy) return;
   goalWorkerBusy = true;
-  void store.transact("local", tx => tx.listProjections("goal.state").some(goal => ["tasks", "teams", "delivery"].includes(mode) || goal.objective === "验证目标成果验收"))
+  void store.transact("local", tx => tx.listProjections("goal.state").some(goal => ["tasks", "teams", "delivery", "reuse"].includes(mode) || goal.objective === "验证目标成果验收"))
     .then(enabled => enabled ? goalWorker.pollOnce() : undefined)
     .catch(error => process.stderr.write(`目标 fixture 失败：${error.message}\n`)).finally(() => { goalWorkerBusy = false; });
 }, 100) : undefined;
@@ -94,6 +94,12 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
   });
 }
 
+function reuseModelText(request) {
+  const text = request.messages.map(message => message.content).join("\n");
+  if (text.includes("当前职责：独立复核")) return JSON.stringify({ decision: "pass", findings: [] });
+  if (text.includes("当前职责：")) return "经营建议：依据获准资料核对事实、反证及下一步，不自动修改经营记录。";
+  return deliveryModelText(request);
+}
 function deliveryModelText(request) {
   const text=request.messages.map(message=>message.content).join("\n");
   if(text.includes("当前职责：独立复核"))return JSON.stringify({decision:"pass",findings:[]});
@@ -125,9 +131,10 @@ async function seedWorkspace(seedMode) {
     const kimi = await mutate("/v2/model-connections", { presetId: "moonshot", apiKey: "fixture-key", displayName: "Kimi" }, "seed-kimi");
     await mutate(`/v2/model-connections/${kimi.id}/probe`, { expectedStreamVersion: kimi.streamVersion }, "seed-kimi-probe");
   }
-  if (seedMode === "delivery") {
+  if (["delivery", "reuse"].includes(seedMode)) {
     await mutate("/v2/plugins/opc/business/commands",{workspaceId:workspace.id,expectedStreamVersion:0,command:{type:"customer.record",customerId:"delivery-customer",name:"合成客户",source:"合成访谈",need:"研究需求并提交报价"}},"seed-delivery-customer");
     await mutate("/v2/plugins/opc/business/commands",{workspaceId:workspace.id,expectedStreamVersion:1,command:{type:"service.record",serviceId:"delivery-service",title:"研究服务",currency:"CNY",priceMinor:"100000",inScope:["研究报告与说明"],outOfScope:[],acceptanceCriteria:["来源可核对"]}},"seed-delivery-service");
+    if (seedMode === "reuse") await mutate("/v2/memories", { workspaceId: workspace.id, scopeType: "workspace", namespace: "opc", resourceId: workspace.id, sourceEventId: "fixture-user-preference", confidence: 1, value: { summary: "报告先列来源与反证" }, provenance: { version: 1, kind: "preference", origin: "user", sourceRefs: [] } }, "seed-reuse-memory");
     return;
   }
   if (seedMode === "repositories") return;
