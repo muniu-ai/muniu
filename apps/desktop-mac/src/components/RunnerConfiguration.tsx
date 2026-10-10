@@ -62,7 +62,7 @@ function RunnerCard({ api, workspace, agent, onChanged, onConfirmed }: {
   }
   return <section className="runner-card" aria-label={`${agent.displayName} 接入状态`}>
     <header><h3>{agent.displayName}</h3><span className={`pill ${agent.status === "blocked" ? "blocked" : "pending"}`}>{agent.support === "not_supported" ? "尚未接入" : agent.status === "blocked" ? "暂不可启动" : "尚待验证"}</span></header>
-    {agent.support === "supported" && <p>适用范围：编程任务</p>}
+    {agent.support === "supported" && <p>适用范围：经营与研发任务</p>}
     {firstIssue && <p className="runner-next-step">{firstIssue.message}</p>}
     <details className="runner-readiness-details"><summary>查看检查项与处理步骤</summary>
       <ul className="runner-checks">{agent.checks.map(check => <li key={check.id}>

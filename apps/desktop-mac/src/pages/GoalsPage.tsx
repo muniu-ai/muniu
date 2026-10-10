@@ -13,7 +13,8 @@ import { SchedulingControls, SchedulingDecision, ExternalUsageForm, runnerLabel 
 const labels: Record<GoalStatusV2, string> = { draft: "草稿", awaiting_authorization: "待确认计划", running: "执行中", waiting_approval: "等待审批",
   needs_reconciliation: "待核对", failed: "未完成", awaiting_acceptance: "待验收", accepted: "已验收", cancelled: "已取消" };
 
-export function GoalsPage({ api, workspaceId, onOpenThread, pluginIds, repositories, repositoryId, onRepository, onRegisterRepository, onSettings, newTaskRequest, active, onTaskCreated }: {
+export function GoalsPage({ target, api, workspaceId, onOpenThread, pluginIds, repositories, repositoryId, onRepository, onRegisterRepository, onSettings, newTaskRequest, active, onTaskCreated }: {
+  readonly target?: { readonly id: string; readonly sequence: number };
   readonly api: AgentOsClient; readonly workspaceId: string; readonly onOpenThread: (thread: Thread) => void;
   readonly active: boolean; readonly onTaskCreated: () => void;
   readonly pluginIds: readonly string[]; readonly repositories: readonly CodingRepositorySummary[]; readonly repositoryId?: string;
@@ -38,7 +39,9 @@ export function GoalsPage({ api, workspaceId, onOpenThread, pluginIds, repositor
   const [tokens, setTokens] = useState("100000");
   const [cost, setCost] = useState("5000");
   const [duration, setDuration] = useState("60");
-  useEffect(() => { setDetail(undefined); setExisting(false); setError(undefined); }, [newTaskRequest]);
+  const navigationSequence = useRef(0);
+  function startNewTask() { navigationSequence.current += 1; setDetail(undefined); setExisting(false); setError(undefined); }
+  useEffect(() => { navigationSequence.current += 1; setDetail(undefined); setExisting(false); setError(undefined); }, [newTaskRequest]);
   const [reviewed, setReviewed] = useState<ReadonlySet<string>>(new Set());
   const readEpochs = useRef(new Map<string, number>());
   const listRequestSequence = useRef(0);
@@ -95,19 +98,31 @@ export function GoalsPage({ api, workspaceId, onOpenThread, pluginIds, repositor
     });
     return () => { active = false; stop(); if (timer) clearTimeout(timer); };
   }, [api, workspaceId, detail?.goal.id, refreshGoals]);
+  useEffect(() => {
+    if (!target) return;
+    let current = true;
+    const sequence = ++navigationSequence.current;
+    setDetail(undefined); setReviewed(new Set()); setError(undefined);
+    void api.goal(workspaceId, target.id).then(next => { if (current && sequence === navigationSequence.current) setDetail(next); })
+      .catch(caught => { if (current && sequence === navigationSequence.current) setError(message(caught)); });
+    return () => { current = false; };
+  }, [api, workspaceId, target]);
   const selectedThreadId = threads.find(thread => thread.id === threadId)?.id ?? threads[0]?.id ?? "";
   const planDirty = Boolean(detail?.plan && JSON.stringify(selection) !== JSON.stringify(detail.plan.scheduling?.request ?? { runnerId: detail.plan.runnerId, strategy: "quality", modelBindingId: detail.plan.modelBindingId }));
   async function perform(work: () => Promise<GoalDetailV2>, goalId = detail?.goal.id) {
     if (busy) return;
+    const sequence = ++navigationSequence.current;
     const epoch = goalId ? readEpochs.current.get(goalId) ?? 0 : undefined;
     setBusy(true); setError(undefined);
     try {
       const next = await work();
+      if (sequence !== navigationSequence.current) return;
       if (goalId && epoch !== (readEpochs.current.get(goalId) ?? 0)) return;
       setError(undefined);
       setDetail(previous => previous?.goal.id === next.goal.id && previous.goal.streamVersion > next.goal.streamVersion ? previous : next);
       await refreshList();
     } catch (caught) {
+      if (sequence !== navigationSequence.current) return;
       if (caught instanceof AgentOsApiError && (caught.status === 403 || caught.status === 404 || /RESOURCE|ACCESS|AUTHORIZATION/u.test(caught.detail.code))) {
         if (goalId) readEpochs.current.set(goalId, (readEpochs.current.get(goalId) ?? 0) + 1);
         setDetail(previous => previous && previous.goal.id === goalId ? { ...previous, deliverySet: null } : previous); setReviewed(new Set());
@@ -133,7 +148,7 @@ export function GoalsPage({ api, workspaceId, onOpenThread, pluginIds, repositor
   const thread = threads.find(item => item.id === detail?.goal.threadId);
   return <div ref={pageRef} className="page-stack goals-page">
     <header className="goal-heading"><div><h1>任务</h1><p>经营与研发在这里委派、跟进和验收。</p></div>
-      <button className="secondary-button" disabled={busy} onClick={() => { setDetail(undefined); setExisting(false); setError(undefined); }}>新建任务</button></header>
+      <button className={!detail || ["accepted", "cancelled", "failed"].includes(detail.goal.status) ? "primary-button" : "secondary-button"} disabled={busy} onClick={startNewTask}>新建任务</button></header>
     {error && <ErrorState detail={error} onRetry={() => detail ? void perform(() => api.goal(workspaceId, detail.goal.id)) : void refreshList().then(() => setError(undefined)).catch(caught => setError(message(caught)))} />}
     {loading ? <Loading label="正在读取目标…" /> : <div className="goal-layout">
       <section className="panel goal-list" aria-label="目标列表"><h2>工作区任务</h2><input aria-label="搜索任务" placeholder="搜索任务" value={query} onChange={event => setQuery(event.target.value)} /><select aria-label="筛选任务状态" value={filter} onChange={event => setFilter(event.target.value)}><option value="all">全部状态</option><option value="active">进行中</option><option value="awaiting_acceptance">待验收</option><option value="accepted">已验收</option></select>
@@ -141,7 +156,7 @@ export function GoalsPage({ api, workspaceId, onOpenThread, pluginIds, repositor
           <button key={goal.id} className={`goal-list-item ${detail?.goal.id === goal.id ? "selected" : ""}`} disabled={busy} onClick={() => void perform(() => api.goal(workspaceId, goal.id), goal.id)}>
             <strong>{goal.objective.split("\n")[0]}</strong><small>{goal.id === detail?.goal.id ? "当前目标" : labels[goal.status]}</small></button>)}
       </section>
-      <section className="panel task-compose-panel" hidden={Boolean(detail)}><div hidden={existing}><TaskComposer visible={active && !detail && !existing} api={api} workspaceId={workspaceId} pluginIds={pluginIds} repositories={repositories} repositoryId={repositoryId} onRepository={onRepository} onRegisterRepository={onRegisterRepository} onSettings={onSettings} onCreated={next => { setDetail(next); setError(undefined); void refreshList(); onTaskCreated(); }} /></div>
+      <section className="panel task-compose-panel" hidden={Boolean(detail)}><div hidden={existing}><TaskComposer visible={active && !detail && !existing} api={api} workspaceId={workspaceId} pluginIds={pluginIds} repositories={repositories} repositoryId={repositoryId} onRepository={onRepository} onRegisterRepository={onRegisterRepository} onSettings={onSettings} onCreated={next => { navigationSequence.current += 1; setDetail(next); setError(undefined); void refreshList(); onTaskCreated(); }} /></div>
         <button className="quiet-button existing-task-toggle" onClick={() => setExisting(value => !value)}>{existing ? "返回新任务" : "关联已有任务"}</button>
         {existing && <form className="form-stack" onSubmit={event => void create(event)}><h2>创建目标</h2>
         <div className="field"><label htmlFor="goal-objective">预期结果</label><textarea id="goal-objective" rows={3} value={objective} required maxLength={16000} disabled={busy} onChange={event => setObjective(event.target.value)} /></div>

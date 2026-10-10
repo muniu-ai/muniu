@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { appendKernelEvent } from "@mn/kernel";
 
-import type { Approval, Asset, Deliverable, Execution, ExecutionAuthority, JsonObject, Thread, Workspace, CodingTaskSummaryV2 } from "@mn/contracts";
+import type { Approval, Asset, Deliverable, DeliverableSummaryV2, Execution, ExecutionAuthority, JsonObject, ProductNavigationV2, Thread, Workspace, CodingTaskSummaryV2 } from "@mn/contracts";
 import { KernelProjectionRuntimeStore } from "@mn/agent-runtime";
 import { createProtectedRuntimeStore, type RuntimeProtection } from "@mn/worker";
 import { executionMetering, meteringCostSummary } from "./execution-metering.js";
@@ -694,6 +694,15 @@ export async function runReadOnlySample(options: Omit<ProductMutationOptions, "i
   ));
 }
 
+function resourceNavigation(transaction: KernelTransaction, tenantId: string, workspaceId: string,
+  pluginId: string, resourceRef: NonNullable<Thread["resourceRef"]>): ProductNavigationV2 | undefined {
+  const resource = transaction.getProjection<{ readonly id?: string; readonly tenantId?: string; readonly workspaceId?: string }>(
+    resourceRef.namespace, resourceRef.resourceId);
+  if (!resource || resource.id !== resourceRef.resourceId || resource.workspaceId !== workspaceId
+    || (resource.tenantId !== undefined && resource.tenantId !== tenantId)) return undefined;
+  return { pluginId, resourceRef };
+}
+
 export async function workspaceHome(store: KernelStore, tenantId: string, workspaceId: string) {
   const [opportunities, codingTasks] = await Promise.all([
     listOpportunitySummaries(store, tenantId, workspaceId),
@@ -709,14 +718,16 @@ export async function workspaceHome(store: KernelStore, tenantId: string, worksp
       .filter((item) => item.workspaceId === workspaceId)
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
       .slice(0, 5)
-      .map(deliverableSummary);
+      .map(item => deliverableSummary(item, transaction));
     return {
       todayActions: [
         ...opportunities.filter((item) => !["decided", "abandoned"].includes(item.status)).map((item) => ({
           id: item.id, title: item.title, detail: item.nextAction, pluginId: "opc" as const,
+          navigation: resourceNavigation(transaction, tenantId, workspaceId, "opc", { namespace: OPC_PROJECTION, resourceId: item.id }),
         })),
         ...codingTasks.filter((item) => !["completed", "cancelled"].includes(item.status)).map((item) => ({
           id: item.id, title: item.title, detail: item.nextAction, pluginId: "coding" as const,
+          navigation: resourceNavigation(transaction, tenantId, workspaceId, "coding", { namespace: CODING_TASK_PROJECTION, resourceId: item.id }),
         })),
       ],
       blockers: inbox.filter((item) => item.kind !== "approval").map((item) => ({
@@ -739,7 +750,13 @@ export async function workspaceHome(store: KernelStore, tenantId: string, worksp
   });
 }
 
-export function deliverableSummary(item: Deliverable) {
+export function deliverableSummary(item: Deliverable, transaction: KernelTransaction): DeliverableSummaryV2 {
+  const thread = transaction.getProjection<Thread>("thread", item.threadId);
+  const linked = thread && thread.id === item.threadId && thread.tenantId === item.tenantId
+    && thread.workspaceId === item.workspaceId && thread.pluginId === item.pluginId;
+  const navigation = linked ? thread.resourceRef
+    ? resourceNavigation(transaction, item.tenantId, item.workspaceId, thread.pluginId, thread.resourceRef)
+    : { pluginId: thread.pluginId } : undefined;
   return {
     id: item.id,
     pluginId: item.pluginId,
@@ -747,6 +764,7 @@ export function deliverableSummary(item: Deliverable) {
     outcome: item.summary,
     ...(item.nextAction ? { nextAction: item.nextAction } : {}),
     createdAt: item.createdAt,
+    ...(navigation ? { navigation: { ...navigation, threadId: thread!.id } } : {}),
   };
 }
 

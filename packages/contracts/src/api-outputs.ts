@@ -23,15 +23,18 @@ export interface ReadinessV2 {
   readonly ready: boolean;
   readonly issues: readonly { readonly code: string; readonly message: string; readonly action: string }[];
 }
+export interface ProductNavigationV2 {
+  readonly pluginId: string;
+  readonly threadId?: string;
+  readonly resourceRef?: Thread["resourceRef"];
+}
 export interface InboxItemV2 {
   readonly id: string;
   readonly tenantId: string;
   readonly workspaceId: string;
   readonly executionId?: string;
-  readonly navigation?: {
+  readonly navigation?: ProductNavigationV2 & {
     readonly threadId: string;
-    readonly pluginId: string;
-    readonly resourceRef?: Thread["resourceRef"];
   };
   readonly revocationId?: string;
   readonly streamVersion?: number;
@@ -52,12 +55,14 @@ export interface DeliverableSummaryV2 {
   readonly decision?: string;
   readonly nextAction?: string;
   readonly createdAt: string;
+  readonly navigation?: ProductNavigationV2;
 }
 export interface HomeActionV2 {
   readonly id: string;
   readonly title: string;
   readonly detail: string;
   readonly pluginId?: string;
+  readonly navigation?: ProductNavigationV2;
 }
 export interface HomeApprovalV2 {
   readonly id: string;

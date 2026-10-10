@@ -3,13 +3,14 @@ import { Command, FileCheck2, Search, Target, TerminalSquare } from "lucide-reac
 
 export interface PaletteItem {
   readonly id: string;
-  readonly kind: "命令" | "机会" | "Coding 任务" | "Skill" | "成果";
+  readonly kind: "命令" | "机会" | "Coding 任务" | "Skill" | "成果" | "任务" | "客户" | "订单" | "仓库";
   readonly title: string;
   readonly detail?: string;
   readonly action: () => void;
 }
 
 const iconByKind = {
+  "任务": FileCheck2, "客户": Target, "订单": FileCheck2, "仓库": TerminalSquare,
   "命令": Command,
   "机会": Target,
   "Coding 任务": TerminalSquare,
@@ -55,7 +56,7 @@ export function CommandPalette({ open, items, onClose }: {
       }
       if (event.key === "Tab") { event.preventDefault(); inputRef.current?.focus(); }
     }}>
-      <label className="palette-search"><Search size={18} /><input ref={inputRef} value={query} aria-controls="palette-results" aria-activedescendant={filtered.length ? `palette-option-${activeIndex}` : undefined} onChange={(event) => { setQuery(event.target.value); setSelectedIndex(0); }} placeholder="搜索命令、机会、任务、Skill 和成果" /></label>
+      <label className="palette-search"><Search size={18} /><input ref={inputRef} value={query} aria-controls="palette-results" aria-activedescendant={filtered.length ? `palette-option-${activeIndex}` : undefined} onChange={(event) => { setQuery(event.target.value); setSelectedIndex(0); }} placeholder="搜索命令、任务、客户、订单、仓库和成果" /></label>
       <div className="palette-results" id="palette-results" role="listbox" aria-label="搜索结果">
         {filtered.map((item, index) => {
           const Icon = iconByKind[item.kind];

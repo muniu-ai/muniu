@@ -9,7 +9,7 @@ import { chromium } from "playwright-core";
 import { businessDateAt } from "../../../packages/contracts/dist/index.js";
 
 const mode = process.argv[2] ?? "onboarding";
-if (!new Set(["onboarding", "opc", "coding", "goals", "business", "startup", "repositories", "tasks"]).has(mode)) throw new Error(`未知验证模式：${mode}`);
+if (!new Set(["onboarding", "opc", "coding", "goals", "business", "startup", "repositories", "tasks", "refresh"]).has(mode)) throw new Error(`未知验证模式：${mode}`);
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const desktopDir = resolve(scriptDir, "..");
 const repoRoot = resolve(desktopDir, "..", "..");
@@ -70,6 +70,7 @@ try {
   if (mode === "goals") await verifyGoals(page, requests);
   if (mode === "tasks") await verifyTasks(page, requests);
   if (mode === "business") await verifyBusiness(page, requests);
+  if (mode === "refresh") await verifyRefresh(page);
   await page.getByTitle("技术配置").click();
   if (!await page.getByRole("button", { name: "设置", exact: true }).isVisible()) await page.getByTitle("技术配置").click();
   await page.getByRole("button", { name: "设置", exact: true }).click();
@@ -119,7 +120,7 @@ try {
 }
 
 async function verifyRepositories(page, requestLog) {
-  await page.getByRole("button", { name: "首页", exact: true }).click();
+  await page.getByRole("button", { name: "工作台", exact: true }).click();
   await page.getByRole("button", { name: "委派任务", exact: true }).click();
   const capture = page.getByRole("form", { name: "委派新任务" });
   await capture.getByRole("radio", { name: "研发", exact: true }).check();
@@ -385,6 +386,13 @@ async function verifyBusiness(page, requestLog) {
   await page.getByRole("form", { name: "保存客户", exact: true }).getByRole("button", { name: "取消", exact: true }).click();
   await navigate("产品与服务");
   result = await form("新增产品或服务", "发布产品版本", { title: "品牌设计服务", price: "1000.00", inScope: "标志与使用说明", outOfScope: "印刷制作", acceptanceCriteria: "客户确认最终设计" });
+  await page.getByRole("button", { name: "工作台", exact: true }).click();
+  await page.getByRole("button", { name: /搜索命令/ }).click();
+  const customerPalette = page.getByRole("dialog", { name: "命令中心" });
+  await customerPalette.getByRole("textbox").fill("客户刚确认的新需求");
+  await customerPalette.getByRole("option").filter({ hasText: "青禾顾问" }).click();
+  await page.locator(`[data-business-resource="${customerId}"]`).getByText("客户刚确认的新需求", { exact: true }).waitFor();
+  await navigate("产品与服务");
   const product = result.state.services[0];
   const service = JSON.stringify([product.id, product.version]);
   await navigate("报价与订单");
@@ -392,6 +400,12 @@ async function verifyBusiness(page, requestLog) {
   const quoteId = result.state.quotes[0].id;
   result = await form("登记客户确认", "确认成交", { confirmedOn: today, sourceRef: "客户确认邮件 fixture-quote" }, { quoteId });
   const orderId = result.state.orders[0].id;
+  await page.getByRole("button", { name: "工作台", exact: true }).click();
+  await page.getByRole("button", { name: /搜索命令/ }).click();
+  const orderPalette = page.getByRole("dialog", { name: "命令中心" });
+  await orderPalette.getByRole("textbox").fill(orderId);
+  await orderPalette.getByRole("option").filter({ hasText: "品牌设计服务" }).click();
+  await page.locator(".business-order-detail").getByRole("heading", { name: "青禾顾问 · 品牌设计服务", exact: true }).waitFor();
   await navigate("交付与验收");
   result = await form("记录交付", "记录交付", { title: "完整品牌设计", deliveredOn: today, progressPercent: "100", artifactRef: "设计附件 fixture-artifact" }, { orderId });
   await form("登记客户验收", "登记客户验收", { acceptedOn: today, customerConfirmationRef: "客户验收邮件 fixture-acceptance" }, { orderId }, ["deliveryIds", "complete"]);
@@ -404,7 +418,7 @@ async function verifyBusiness(page, requestLog) {
   await form("登记费用", "登记费用", { category: "外包成本", description: "图形协作", amount: "100", paidOn: today, sourceRef: "支出凭证 fixture-expense" }, { orderId });
   await form("登记退款", "登记退款", { amount: "100", refundedOn: today, reason: "范围调整退还差额", sourceRef: "退款凭证 fixture-refund" }, { refundSource: JSON.stringify(["payment", paymentId]) });
   await navigate("报价与订单");
-  await page.getByRole("button", { name: "查看订单详情", exact: true }).click();
+  if (!await page.getByRole("button", { name: "调整订单金额或期限", exact: true }).isVisible()) await page.getByRole("button", { name: "查看订单详情", exact: true }).click();
   await form("调整订单金额或期限", "记录订单调整", { amountDelta: "-100", effectiveOn: today, reason: "双方确认减少范围", sourceRef: "变更确认 fixture-adjustment" }, { orderId });
   result = await form("登记已有订单", "登记已有订单", { quantity: "1", agreedAmount: "1000", contractedOn: `${previous.slice(0, 7)}-01`, dueOn: today, sourceRef: "原合同 fixture-contract", asOf: previous, openingReceived: "400", openingDelivered: "50", openingSourceRef: "期初凭证 fixture-opening" }, { customerId, service });
   const oldOrderId = result.state.orders.at(-1).id;
@@ -693,7 +707,8 @@ async function verifyOnboarding(page, requestLog) {
   await expectText(page, "选择现在要做的事");
   await page.getByRole("button", { name: /Coding/ }).click();
   await page.getByRole("button", { name: "继续" }).click();
-  await expectText(page, "连接你的模型");
+  await expectText(page, "选择开始方式");
+  await page.getByRole("button", { name: /连接内置模型/ }).click();
   if (!requestLog.some(entry => entry.method === "GET" && entry.path === "/v2/model-connections/presets")) {
     throw new Error("首次设置必须读取 Host 的模型厂商列表");
   }
@@ -767,8 +782,8 @@ async function verifyOnboarding(page, requestLog) {
 }
 
 async function verifyOpc(page, requestLog, hostUrl) {
-  await expectText(page, "首页");
-  await page.getByRole("button", { name: "经营管理", exact: true }).click();
+  await expectText(page, "工作台");
+  await page.getByRole("button", { name: "经营", exact: true }).click();
   await page.getByRole("button", { name: "机会验证", exact: true }).click();
   await expectText(page, "方案待验证");
   await expectText(page, "支持证据");
@@ -815,13 +830,12 @@ async function verifyOpc(page, requestLog, hostUrl) {
     .filter((key) => key.startsWith("muniu:v2:event-cursor:"))
     .some((key) => Number(sessionStorage.getItem(key)) > 0));
 
+  const streamCount = requestLog.filter(entry => entry.method === "GET" && entry.path.endsWith("/events")).length;
   await page.getByRole("button", { name: "返回机会列表" }).click();
   await page.getByRole("button", { name: "查看档案" }).click();
   await expectText(page, "与 OPC Agent 一起推进");
   await page.waitForTimeout(250);
-  const resumedEventStream = requestLog.find((entry) => entry.method === "GET"
-    && entry.path.endsWith("/events") && /^\?after=[1-9]\d*$/u.test(entry.search));
-  if (!resumedEventStream) throw new Error("OPC 会话重新进入时没有从已保存 SSE 游标续传");
+  if (requestLog.filter(entry => entry.method === "GET" && entry.path.endsWith("/events")).length !== streamCount) throw new Error("同一工作区的会话重新进入不应建立额外事件连接");
 
   await page.getByText("管理机会", { exact: true }).click();
   await page.getByLabel("管理原因").fill("等待两位目标客户回复");
@@ -855,7 +869,7 @@ async function verifyOpc(page, requestLog, hostUrl) {
   if ((await pluginError.locator("xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' opc-detail ')]").count()) !== 1) {
     throw new Error("OPC 命令错误没有留在插件详情边界内");
   }
-  await page.getByRole("button", { name: "首页" }).waitFor({ state: "visible" });
+  await page.getByRole("button", { name: "工作台" }).waitFor({ state: "visible" });
   await expectText(page, "记录一条市场信号");
   await page.getByLabel("来源网址").fill("https://example.com/research");
   await page.getByRole("button", { name: "保存信号" }).click();
@@ -966,7 +980,7 @@ async function verifyOpc(page, requestLog, hostUrl) {
   await page.screenshot({ path: join(temporaryRoot, "opc-export.png") });
   const exported = await hostData(hostUrl, `/v2/deliverables?workspaceId=${encodeURIComponent(workspace.id)}`);
   if (exported.length !== 6) throw new Error(`实际导出成果数不是 6：${exported.length}`);
-  await page.getByRole("button", { name: "成果", exact: true }).click();
+  await page.getByRole("button", { name: "资料与成果", exact: true }).click();
   await expectText(page, "可以交付的结果");
   await page.getByRole("button", { name: "打开成果：机会验证档案", exact: true }).click();
   await expectText(page, "机会验证");
@@ -1012,7 +1026,7 @@ async function verifyOpc(page, requestLog, hostUrl) {
   if (remainingMemories.length !== 0) throw new Error("删除后的记忆仍存在于查询投影");
   if ((await page.locator("body").innerText()).includes("目标客户明确重视可预测的获客节奏")) throw new Error("删除后的记忆仍暴露原内容");
   await page.getByRole("button", { name: "专业视图" }).click();
-  await page.getByRole("button", { name: "经营管理", exact: true }).click();
+  await page.getByRole("button", { name: "经营", exact: true }).click();
   await page.getByRole("button", { name: "机会验证", exact: true }).click();
   await page.getByRole("button", { name: "查看档案" }).click();
   await expectText(page, "机会 ID");
@@ -1036,6 +1050,7 @@ async function verifyCoding(page, requestLog) {
   await expectText(page, "Codex Runner");
   await page.getByRole("button", { name: "委派任务", exact: true }).click();
   const capture = page.getByRole("form", { name: "委派新任务" });
+  await capture.waitFor({ state: "visible" });
   const taskKinds = await capture.getByRole("radio").count();
   if (taskKinds !== 2) throw new Error("统一入口只能提供经营与研发，不得把 Runner 当成任务类型");
   await page.getByRole("button", { name: /收件箱/ }).click();
@@ -1230,7 +1245,7 @@ async function verifyTasks(page, requestLog) {
   await composer.getByLabel("添加文本资料").setInputFiles({ name: "交付约束.md", mimeType: "text/markdown", buffer: Buffer.from("现有客户优先；资料不是执行授权。") });
   await composer.getByRole("button", { name: "交付约束.md", exact: true }).click();
   await composer.getByText("现有客户优先；资料不是执行授权。", { exact: true }).waitFor();
-  await page.getByRole("button", { name: "首页", exact: true }).click();
+  await page.getByRole("button", { name: "工作台", exact: true }).click();
   await page.getByRole("button", { name: "委派任务", exact: true }).click();
   if (!(await composer.getByLabel("任务目标", { exact: true }).inputValue()).includes("现金流")) throw new Error("切换页面丢失任务草稿");
   let droppedGoal = false;
@@ -1268,7 +1283,40 @@ async function verifyTasks(page, requestLog) {
   await acceptance.getByRole("heading", { name: "经营建议", exact: true }).waitFor();
   await acceptance.getByRole("table").waitFor();
   if (await acceptance.locator("img, script").count()) throw new Error("模型正文不得执行 HTML");
+  await page.getByRole("button", { name: "工作台", exact: true }).click();
+  await page.getByRole("button", { name: /搜索命令/ }).click();
+  const palette = page.getByRole("dialog", { name: "命令中心" });
+  await palette.getByRole("textbox").fill("规划下月经营");
+  await palette.getByRole("option").filter({ hasText: "规划下月经营" }).first().click();
+  await page.getByRole("region", { name: "目标详情" }).getByRole("status").filter({ hasText: /^已验收$/u }).waitFor();
   await page.screenshot({ path: join(temporaryRoot, "task-delivery.png"), fullPage: true });
   await page.setViewportSize({ width: 960, height: 640 });
   await assertViewportFit(page);
+}
+
+async function verifyRefresh(page) {
+  let changed = false;
+  await page.route(`${apiUrl}/v2/inbox?*`, async route => {
+    const response = await route.fetch();
+    const body = await response.json();
+    if (changed) body.data.push({ id: "refresh-fixture", tenantId: "local", workspaceId: new URL(route.request().url()).searchParams.get("workspaceId"), kind: "credential", title: "外部入口待处理", summary: "检查接入状态", createdAt: new Date().toISOString(), status: "open" });
+    await route.fulfill({ response, json: body });
+  });
+  await page.getByRole("button", { name: /^收件箱/ }).click();
+  await page.getByRole("heading", { name: "收件箱", exact: true }).waitFor();
+  let workspace = (await hostData(apiUrl, "/v2/workspaces"))[0];
+  changed = true;
+  const mutation = await fetch(`${apiUrl}/v2/workspaces/${workspace.id}`, { method: "PATCH", headers: { "content-type": "application/json", "Idempotency-Key": crypto.randomUUID() }, body: JSON.stringify({ expectedStreamVersion: workspace.streamVersion, viewMode: "professional" }) });
+  if (!mutation.ok) throw new Error("外部入口切换视图失败");
+  await page.locator(".view-chip").getByText("专业视图", { exact: true }).waitFor();
+  await page.getByRole("heading", { name: "外部入口待处理", exact: true }).waitFor();
+  workspace = (await mutation.json()).data;
+  const removed = await fetch(`${apiUrl}/v2/workspaces/${workspace.id}/plugin-activations/coding`, { method: "DELETE", headers: { "content-type": "application/json", "Idempotency-Key": crypto.randomUUID() }, body: JSON.stringify({ expectedStreamVersion: workspace.streamVersion }) });
+  if (!removed.ok) throw new Error("外部入口停用插件失败");
+  await page.getByRole("button", { name: "Coding", exact: true }).waitFor({ state: "hidden" });
+  workspace = (await removed.json()).data;
+  const restored = await fetch(`${apiUrl}/v2/workspaces/${workspace.id}/plugin-activations`, { method: "POST", headers: { "content-type": "application/json", "Idempotency-Key": crypto.randomUUID() }, body: JSON.stringify({ expectedStreamVersion: workspace.streamVersion, pluginId: "coding" }) });
+  if (!restored.ok) throw new Error("外部入口启用插件失败");
+  await page.getByRole("button", { name: "Coding", exact: true }).waitFor();
+  await page.unroute(`${apiUrl}/v2/inbox?*`);
 }

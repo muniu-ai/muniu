@@ -13,6 +13,8 @@ import type {
   WorkspaceSummary,
 } from "./types";
 
+import { WorkspaceEventStream, type WorkspaceConnectionState } from "./workspace-events";
+
 const DEFAULT_API_URL = "http://127.0.0.1:7318";
 
 export class AgentOsApiError extends Error {
@@ -27,6 +29,7 @@ function idempotencyKey(): string {
 }
 
 export class AgentOsClient {
+  private readonly eventStreams = new Map<string, WorkspaceEventStream>();
   business(workspaceId: string, period?: BusinessPeriodV1) {
     return this.request(apiPath("getOpcBusiness", {}, { workspaceId, ...(period ? { periodStart: period.start, periodEnd: period.end } : {}) }));
   }
@@ -115,16 +118,16 @@ export class AgentOsClient {
     );
   }
 
-  setup() {
+  setup(requestKey?: string) {
     return this.request(apiPath("setup", { }), {
-      method: "POST", body: JSON.stringify({}),
+      method: "POST", ...(requestKey ? { headers: { "Idempotency-Key": requestKey } } : {}), body: JSON.stringify({}),
     });
   }
 
-  connectModel(presetId: string, apiKey: string) {
+  connectModel(presetId: string, apiKey: string, requestKey?: string) {
     return this.request(
       apiPath("createModelConnection", { }),
-      { method: "POST", body: JSON.stringify({ presetId, apiKey }) },
+      { method: "POST", ...(requestKey ? { headers: { "Idempotency-Key": requestKey } } : {}), body: JSON.stringify({ presetId, apiKey }) },
     );
   }
 
@@ -137,16 +140,16 @@ export class AgentOsClient {
   }
   agentReadiness(workspaceId: string) { return this.request(apiPath("getWorkspaceAgentReadiness", { workspaceId })); }
 
-  probeModel(connectionId: string, expectedStreamVersion = 1, makeDefault = false) {
+  probeModel(connectionId: string, expectedStreamVersion = 1, makeDefault = false, requestKey?: string) {
     return this.request(
       apiPath("probeModelConnection", { connectionId: connectionId }),
-      { method: "POST", body: JSON.stringify({ expectedStreamVersion, ...(makeDefault ? { makeDefault: true } : {}) }) },
+      { method: "POST", ...(requestKey ? { headers: { "Idempotency-Key": requestKey } } : {}), body: JSON.stringify({ expectedStreamVersion, ...(makeDefault ? { makeDefault: true } : {}) }) },
     );
   }
 
-  createWorkspace(name: string, viewMode: ViewMode, pluginIds: readonly ProductPluginId[]) {
+  createWorkspace(name: string, viewMode: ViewMode, pluginIds: readonly ProductPluginId[], requestKey?: string) {
     return this.request(apiPath("createWorkspace", { }), {
-      method: "POST", body: JSON.stringify({ name, viewMode, pluginIds }),
+      method: "POST", ...(requestKey ? { headers: { "Idempotency-Key": requestKey } } : {}), body: JSON.stringify({ name, viewMode, pluginIds }),
     });
   }
 
@@ -203,56 +206,14 @@ export class AgentOsClient {
     });
   }
 
-  watchWorkspaceEvents(workspaceId: string, onChange: () => void): () => void {
-    const storageKey = `muniu:v2:event-cursor:${workspaceId}`;
-    let cursor = storedEventCursor(storageKey);
-    let source: EventSource | undefined;
-    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
-    let stopped = false;
-    let consecutiveFailures = 0;
-
-    const connect = () => {
-      if (stopped) return;
-      const eventUrl = new URL(
-        apiPath("streamWorkspaceEvents", { workspaceId: workspaceId }),
-        this.baseUrl,
-      );
-      eventUrl.searchParams.set("after", String(cursor));
-      source = new EventSource(eventUrl);
-      source.addEventListener("open", () => { consecutiveFailures = 0; });
-      source.addEventListener("kernel", (event) => {
-        cursor = Math.max(cursor, reportedEventPosition(event) ?? cursor);
-        storeEventCursor(storageKey, cursor);
-        onChange();
-      });
-      source.addEventListener("cursor", (event) => {
-        const reported = reportedEventPosition(event);
-        if (reported === undefined) return;
-        const stateWasReset = reported < cursor;
-        cursor = reported;
-        storeEventCursor(storageKey, cursor);
-        if (stateWasReset) onChange();
-      });
-      source.addEventListener("error", () => {
-        source?.close();
-        source = undefined;
-        if (stopped) return;
-        consecutiveFailures += 1;
-        if (consecutiveFailures >= 2 && cursor > 0) {
-          cursor = 0;
-          storeEventCursor(storageKey, cursor);
-          onChange();
-        }
-        reconnectTimer = setTimeout(connect, Math.min(2_000, consecutiveFailures * 500));
-      });
-    };
-
-    connect();
-    return () => {
-      stopped = true;
-      source?.close();
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-    };
+  watchWorkspaceEvents(workspaceId: string, onChange: () => void, onState?: (state: WorkspaceConnectionState) => void): () => void {
+    let stream = this.eventStreams.get(workspaceId);
+    if (!stream) {
+      stream = new WorkspaceEventStream(new URL(apiPath("streamWorkspaceEvents", { workspaceId }), this.baseUrl),
+        `muniu:v2:event-cursor:${this.baseUrl}:${workspaceId}`, () => this.eventStreams.delete(workspaceId));
+      this.eventStreams.set(workspaceId, stream);
+    }
+    return stream.subscribe(onChange, onState);
   }
 
   updateViewMode(workspace: WorkspaceSummary, viewMode: ViewMode) {
@@ -261,15 +222,15 @@ export class AgentOsClient {
     });
   }
 
-  createFirstObject(workspaceId: string, pluginId: ProductPluginId, input: string) {
+  createFirstObject(workspaceId: string, pluginId: ProductPluginId, input: string, requestKey?: string) {
     return this.request(apiPath(pluginId === "opc" ? "createOpcOpportunity" : "createCodingRepository", {}), {
-      method: "POST", body: JSON.stringify({ workspaceId, expectedStreamVersion: 0, input }),
+      method: "POST", ...(requestKey ? { headers: { "Idempotency-Key": requestKey } } : {}), body: JSON.stringify({ workspaceId, expectedStreamVersion: 0, input }),
     });
   }
 
-  runReadOnlySample(workspaceId: string, pluginId: ProductPluginId) {
+  runReadOnlySample(workspaceId: string, pluginId: ProductPluginId, requestKey?: string) {
     return this.request(apiPath(pluginId === "opc" ? "runOpcReadOnlySample" : "runCodingReadOnlySample", {}), {
-      method: "POST", body: JSON.stringify({ workspaceId, expectedStreamVersion: 0 }),
+      method: "POST", ...(requestKey ? { headers: { "Idempotency-Key": requestKey } } : {}), body: JSON.stringify({ workspaceId, expectedStreamVersion: 0 }),
     });
   }
 
@@ -403,24 +364,6 @@ export class AgentOsClient {
       method: "POST", ...(requestKey ? { headers: { "Idempotency-Key": requestKey } } : {}), body: JSON.stringify({ workspaceId, expectedStreamVersion: 0, input, ...(pluginId === "coding" && repositoryId ? { repositoryId } : {}) }),
     });
   }
-}
-
-function reportedEventPosition(event: Event): number | undefined {
-  const candidate = Number((event as MessageEvent).lastEventId);
-  return Number.isSafeInteger(candidate) && candidate >= 0 ? candidate : undefined;
-}
-
-function storedEventCursor(storageKey: string): number {
-  try {
-    const candidate = Number(sessionStorage.getItem(storageKey) ?? "0");
-    return Number.isSafeInteger(candidate) && candidate >= 0 ? candidate : 0;
-  } catch {
-    return 0;
-  }
-}
-
-function storeEventCursor(storageKey: string, cursor: number): void {
-  try { sessionStorage.setItem(storageKey, String(cursor)); } catch { return; }
 }
 
 const MEDIA_TYPES_BY_EXTENSION: Readonly<Record<string, string>> = {

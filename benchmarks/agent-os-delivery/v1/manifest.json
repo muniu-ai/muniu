@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "muniu-agent-os-delivery",
+  "version": "1.0.0",
+  "frozenAt": "2026-10-10T00:00:00.000Z",
+  "license": "Apache-2.0",
+  "source": "Original synthetic cases; no upstream code, private records, credentials, or live services.",
+  "measurementStatus": "not_measured",
+  "tasksSha256": "6fdca35ff19986b7b27eeac103c63820717cd2cdb652f9d82581263120b5f9a3",
+  "controlsSha256": "9c901ff0c5c2f3ec281fd7a205a7d4c491d10b05a21a9965b113a1c4fcc3340a",
+  "counts": {
+    "total": 60,
+    "development": 40,
+    "holdout": 20,
+    "business": 20,
+    "research": 20,
+    "coding": 20
+  }
+}

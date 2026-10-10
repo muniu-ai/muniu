@@ -5,6 +5,7 @@ import type { CodingRepositorySummary, CodingTaskSummary, OpportunitySummary, Vi
 import { PageTitle, PanelHeading } from "./CorePages";
 import { OpcDetailPage } from "./OpcDetailPage";
 import { ThreadAgentPanel } from "../components/ThreadAgentPanel";
+import { useEffect, useRef } from "react";
 
 const stages = ["captured", "framed", "researching", "interviewing", "evaluating", "offer_ready", "decided"];
 const stageLabels: Record<string, string> = {
@@ -56,12 +57,12 @@ function EvidenceColumn({ title, tone, items }: { readonly title: string; readon
   return <section className={`evidence-column ${tone}`}><header>{tone === "support" ? <SearchCheck size={16} /> : <AlertTriangle size={16} />}<strong>{title}</strong><span>{items.length}</span></header>{items.map((item) => <article key={item.id}><p>{item.summary}</p><small>{item.source} · {new Date(item.capturedAt).toLocaleDateString("zh-CN")}{item.humanConfirmed ? " · 人工确认" : ""}</small></article>)}</section>;
 }
 
-export function CodingPage({ api, workspaceId, repositories, onRegisterRepository, items, selectedId, onSelect, loading, error, viewMode, onRetry }: { readonly api: AgentOsClient; readonly workspaceId: string; readonly repositories: readonly CodingRepositorySummary[]; readonly onRegisterRepository: () => void; readonly items: readonly CodingTaskSummary[]; readonly selectedId?: string; readonly onSelect: (id: string | undefined) => void; readonly loading: boolean; readonly error?: string; readonly viewMode: ViewMode; readonly onRetry: () => void }) {
+export function CodingPage({ repositoryTarget, api, workspaceId, repositories, onRegisterRepository, items, selectedId, onSelect, loading, error, viewMode, onRetry }: { readonly repositoryTarget?: { readonly id: string; readonly sequence: number }; readonly api: AgentOsClient; readonly workspaceId: string; readonly repositories: readonly CodingRepositorySummary[]; readonly onRegisterRepository: () => void; readonly items: readonly CodingTaskSummary[]; readonly selectedId?: string; readonly onSelect: (id: string | undefined) => void; readonly loading: boolean; readonly error?: string; readonly viewMode: ViewMode; readonly onRetry: () => void }) {
   const selected = items.find((task) => task.id === selectedId);
   if (selected) return <CodingDetailPage api={api} workspaceId={workspaceId} task={selected} viewMode={viewMode} onBack={() => onSelect(undefined)} />;
   return <div className="page-stack"><PageTitle eyebrow="受治理研发" title="Coding" detail="从任务、差异和检查结果做决定，技术执行细节按需展开。" />
     {loading && <Loading label="正在读取 Coding 任务" />}{error && <ErrorState title="Coding 已降级" detail={error} action="核心页面和 OPC 不受影响" onRetry={onRetry} />}
-    {!error && <CodingRepositories items={repositories} onRegister={onRegisterRepository} disabled={loading} />}
+    {!error && <CodingRepositories target={repositoryTarget} items={repositories} onRegister={onRegisterRepository} disabled={loading} />}
     {!loading && !error && items.length === 0 && <EmptyState title="还没有 Coding 任务" detail="登记仓库后，在顶部选择仓库并描述任务目标" />}
     {!loading && !error && items.map((task) => <article className="coding-card" key={task.id}>
       <header><span className="coding-icon"><Code2 size={19} /></span><div><span className="pill">{codingStatusLabels[task.status]}</span><h2>{task.title}</h2><p>{task.repository}</p></div><button className="quiet-button" onClick={() => onSelect(task.id)}>打开任务<ArrowRight size={15} /></button></header>
@@ -72,11 +73,22 @@ export function CodingPage({ api, workspaceId, repositories, onRegisterRepositor
   </div>;
 }
 
-function CodingRepositories({ items, onRegister, disabled }: { readonly items: readonly CodingRepositorySummary[]; readonly onRegister: () => void; readonly disabled: boolean }) {
-  return <section className="panel repository-manager" aria-label="Coding 仓库">
+function CodingRepositories({ target, items, onRegister, disabled }: { readonly target?: { readonly id: string; readonly sequence: number }; readonly items: readonly CodingRepositorySummary[]; readonly onRegister: () => void; readonly disabled: boolean }) {
+  const region = useRef<HTMLElement>(null);
+  const focusedSequence = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (!target || focusedSequence.current === target.sequence) return;
+    const frame = requestAnimationFrame(() => {
+      const item = [...(region.current?.querySelectorAll<HTMLElement>("[data-repository-id]") ?? [])].find(element => element.dataset.repositoryId === target.id);
+      if (!item) return;
+      item.scrollIntoView({ block: "center" }); item.focus({ preventScroll: true }); focusedSequence.current = target.sequence;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [items, target]);
+  return <section ref={region} className="panel repository-manager" aria-label="Coding 仓库">
     <header><PanelHeading title="工作区仓库" /><button className="secondary-button" disabled={disabled} onClick={onRegister}>{items.length ? "添加仓库" : "登记仓库"}</button></header>
     <p>选择本地 Git 仓库，登记后可重复用于当前工作区的 Coding 任务。</p>
-    {items.length > 0 && <ul>{items.map(item => <li key={item.id}><strong>{item.name}</strong><span>{item.rootRealPath || "尚未指定路径"}</span></li>)}</ul>}
+    {items.length > 0 && <ul>{items.map(item => <li key={item.id} tabIndex={-1} data-repository-id={item.id}><strong>{item.name}</strong><span>{item.rootRealPath || "尚未指定路径"}</span></li>)}</ul>}
   </section>;
 }
 

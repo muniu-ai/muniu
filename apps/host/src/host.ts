@@ -1915,10 +1915,10 @@ export async function createAgentOsHost(options: AgentOsHostOptions): Promise<Ag
         const workspaceId = url.searchParams.get("workspaceId") ?? undefined;
         if (workspaceId) await authorizedWorkspace(options.store, TENANT_ID, ACTOR_ID, workspaceId);
         const allowed = workspaceId ? undefined : await accessibleWorkspaceIds();
-        const values = await projectionList<Deliverable>(options.store, TENANT_ID, "deliverable");
-        return json(values
+        const values = await options.store.transact(TENANT_ID, transaction => transaction.listProjections<Deliverable>("deliverable")
           .filter((item) => workspaceId ? item.workspaceId === workspaceId : allowed!.has(item.workspaceId))
-          .map(deliverableSummary), 200, traceId);
+          .map(item => deliverableSummary(item, transaction)));
+        return json(values, 200, traceId);
       }
       if (url.pathname === "/v2/assets" && request.method === "POST") {
         const body = await readBody(request);

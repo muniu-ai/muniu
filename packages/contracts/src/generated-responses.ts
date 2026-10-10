@@ -3610,6 +3610,24 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
       }
     }
   },
+  "OutputProductNavigationV2": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "pluginId"
+    ],
+    "properties": {
+      "pluginId": {
+        "type": "string"
+      },
+      "threadId": {
+        "type": "string"
+      },
+      "resourceRef": {
+        "$ref": "#/components/schemas/OutputResourceRef"
+      }
+    }
+  },
   "OutputHomeActionV2": {
     "type": "object",
     "additionalProperties": false,
@@ -3630,6 +3648,9 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
       },
       "pluginId": {
         "type": "string"
+      },
+      "navigation": {
+        "$ref": "#/components/schemas/OutputProductNavigationV2"
       }
     }
   },
@@ -3700,6 +3721,9 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
       },
       "createdAt": {
         "type": "string"
+      },
+      "navigation": {
+        "$ref": "#/components/schemas/OutputProductNavigationV2"
       }
     }
   },
@@ -4125,14 +4149,14 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "threadId",
-          "pluginId"
+          "pluginId",
+          "threadId"
         ],
         "properties": {
-          "threadId": {
+          "pluginId": {
             "type": "string"
           },
-          "pluginId": {
+          "threadId": {
             "type": "string"
           },
           "resourceRef": {

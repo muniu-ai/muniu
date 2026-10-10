@@ -1,16 +1,17 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Activity, AlertCircle, ArrowRight, Bot, Check, Clock3, FileCheck2, KeyRound, Lightbulb, MemoryStick, ShieldCheck, Sparkles, X } from "lucide-react";
+import type { BusinessManagementViewV1, GoalV2, ProductNavigationV2 } from "@mn/contracts";
 import type { AgentOsClient } from "../api";
 import { EmptyState } from "../components/Status";
 import { RunnerConfiguration } from "../components/RunnerConfiguration";
 import { ModelConnections } from "../components/ModelConnections";
 import type { ActivitySummary, AgentCatalog, CodingReconciliationDecision, CodingReconciliationView, DeliverableSummary, HomeSummary, InboxItemSummary, MemorySummary, ViewMode, WorkspaceMemberSummary, WorkspaceSummary } from "../types";
 
-export function HomePage({ summary, onNavigate }: { readonly summary: HomeSummary; readonly onNavigate: (page: string) => void }) {
+export function HomePage({ summary, goals, business, onGoal, onObject, onNavigate }: { readonly summary: HomeSummary; readonly goals: readonly GoalV2[]; readonly business?: BusinessManagementViewV1; readonly onGoal: (id: string) => void; readonly onObject: (target?: ProductNavigationV2) => void; readonly onNavigate: (page: string) => void }) {
   return <div className="page-stack">
     <section className="hero-panel">
       <div><p className="eyebrow">今天</p><h2>{summary.todayActions[0]?.title ?? "工作区已经就绪"}</h2><p>{summary.todayActions[0]?.detail ?? "描述经营或研发目标，补充资料，审阅执行计划后开始工作。"}</p></div>
-      <button className="primary-button" onClick={() => onNavigate(summary.todayActions[0]?.pluginId ?? "goals")}><Lightbulb size={16} />开始推进</button>
+      <button className="primary-button" onClick={() => summary.todayActions[0] ? onObject(summary.todayActions[0].navigation) : onNavigate("goals")}><Lightbulb size={16} />开始推进</button>
     </section>
     <div className="metric-grid">
       <Metric icon={<ArrowRight />} label="今日行动" value={summary.todayActions.length} tone="accent" />
@@ -20,18 +21,21 @@ export function HomePage({ summary, onNavigate }: { readonly summary: HomeSummar
     </div>
     <div className="content-grid home-grid">
       <section className="panel"><PanelHeading title="接下来做什么" action="查看活动" onAction={() => onNavigate("activity")} />
-        <div className="action-list">{summary.todayActions.map((item) => <button key={item.id} onClick={() => onNavigate(item.pluginId ?? "home")}><span className="status-dot accent" /><span><strong>{item.title}</strong><small>{item.detail}</small></span><ArrowRight size={16} /></button>)}</div>
+        <div className="action-list">{summary.todayActions.map((item) => <button key={item.id} onClick={() => onObject(item.navigation)}><span className="status-dot accent" /><span><strong>{item.title}</strong><small>{item.detail}</small></span><ArrowRight size={16} /></button>)}</div>
         {summary.todayActions.length === 0 && <EmptyState title="今天没有待办" detail="所有计划内行动都已处理" />}
       </section>
-      <section className="panel"><PanelHeading title="需要你处理" action="打开收件箱" onAction={() => onNavigate("inbox")} />
+      <section className="panel"><PanelHeading title="需要我决定" action="打开收件箱" onAction={() => onNavigate("inbox")} />
         <div className="attention-list">
+          {goals.filter(goal => ["awaiting_authorization", "awaiting_acceptance", "needs_reconciliation", "failed"].includes(goal.status)).map(goal => <button className="secondary-button" key={goal.id} onClick={() => onGoal(goal.id)}>{goal.objective.split("\n")[0]} · {goalStatus(goal)}</button>)}
           {summary.blockers.map((item) => <article key={item.id}><span className="attention-icon warning"><AlertCircle size={16} /></span><div><strong>{item.title}</strong><p>{item.detail}</p></div></article>)}
           {summary.approvals.map((item) => <article key={item.id}><span className="attention-icon blue"><ShieldCheck size={16} /></span><div><strong>{item.title}</strong><p>{item.intent}</p></div></article>)}
-          {summary.blockers.length + summary.approvals.length === 0 && <EmptyState title="没有阻塞" detail="Agent 可以继续执行已授权的工作" />}
+          {summary.blockers.length + summary.approvals.length === 0 && !goals.some(goal => ["awaiting_authorization", "awaiting_acceptance", "needs_reconciliation", "failed"].includes(goal.status)) && <EmptyState title="没有阻塞" detail="Agent 可以继续执行已授权的工作" />}
         </div>
       </section>
     </div>
-    <section className="panel"><PanelHeading title="最近成果" action="查看全部" onAction={() => onNavigate("deliverables")} /><DeliverableList items={summary.recentDeliverables} onOpen={(item) => onNavigate(item.pluginId)} /></section>
+    <section className="panel"><PanelHeading title="正在推进" action="全部任务" onAction={() => onNavigate("goals")} /><div className="action-list">{goals.filter(goal => ["running", "waiting_approval"].includes(goal.status)).map(goal => <button key={goal.id} onClick={() => onGoal(goal.id)}><span><strong>{goal.objective.split("\n")[0]}</strong><small>{goalStatus(goal)} · 额度 {goal.budget.currency} {goal.budget.maxCostMinorUnits} 分</small></span><ArrowRight size={16} /></button>)}</div>{!goals.some(goal => ["running", "waiting_approval"].includes(goal.status)) && <p>暂无运行中的任务。</p>}</section>
+    {business && <section className="panel"><PanelHeading title="经营关注" action="经营总览" onAction={() => onNavigate("opc")} /><div className="action-list">{business.summary.orders.filter(order => !order.accepted || BigInt(order.outstandingMinor) > 0n).slice(0, 8).map(order => <button key={order.orderId} onClick={() => onObject({ pluginId: "opc", resourceRef: { namespace: "opc.order", resourceId: order.orderId } })}><span><strong>{business.state.customers.find(customer => customer.id === business.state.orders.find(item => item.id === order.orderId)?.customerId)?.name ?? "订单"}</strong><small>{order.overdue ? "已逾期 · " : ""}交付 {order.deliveredPercent}% · {order.accepted ? "客户已验收" : "待客户验收"}</small></span><ArrowRight size={16} /></button>)}</div></section>}
+    <section className="panel"><PanelHeading title="最近成果" action="查看全部" onAction={() => onNavigate("deliverables")} /><GoalDeliverables goals={goals} onGoal={onGoal} /><DeliverableList showEmpty={!goals.some(goal => goal.deliverySetId)} items={summary.recentDeliverables} onOpen={(item) => onObject(item.navigation)} /></section>
   </div>;
 }
 
@@ -51,15 +55,20 @@ export function InboxPage({ workspaceId, summary, api, onChanged, onOpen }: { re
   const [busyId, setBusyId] = useState<string>();
   const [notice, setNotice] = useState<string>();
 
+  const inboxSequence = useRef(0);
   const refreshInbox = useCallback(async () => {
+    const request = ++inboxSequence.current;
     setLoading(true);
+    try {
     const next = await api.inbox(workspaceId);
+    if (request !== inboxSequence.current) return;
     const actionable = next.filter((item) => item.kind !== "approval");
     setItems(actionable);
     const reconciliationItems = actionable
       .filter((item) => item.kind === "reconciliation" && item.executionId);
     const settled = await Promise.allSettled(reconciliationItems
       .map(async (item) => [item.id, await api.codingReconciliation(item.executionId!)] as const));
+    if (request !== inboxSequence.current) return;
     const details: Record<string, CodingReconciliationView> = {};
     const errors: Record<string, string> = {};
     for (let index = 0; index < settled.length; index += 1) {
@@ -70,10 +79,21 @@ export function InboxPage({ workspaceId, summary, api, onChanged, onOpen }: { re
     }
     setReconciliations(details);
     setDetailErrors(errors);
-    setLoading(false);
+    } catch (error) {
+      if (request !== inboxSequence.current) return;
+      setItems([]); setReconciliations({}); setDetailErrors({ inbox: safeInboxMessage(error) });
+    } finally { if (request === inboxSequence.current) setLoading(false); }
   }, [api, workspaceId]);
 
-  useEffect(() => { void refreshInbox().catch((error) => { setDetailErrors({ inbox: safeInboxMessage(error) }); setLoading(false); }); }, [refreshInbox]);
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    void refreshInbox();
+    const stop = api.watchWorkspaceEvents(workspaceId, () => {
+      if (timer) return;
+      timer = setTimeout(() => { timer = undefined; void refreshInbox(); }, 150);
+    });
+    return () => { stop(); if (timer) clearTimeout(timer); inboxSequence.current += 1; };
+  }, [api, workspaceId, refreshInbox]);
 
   async function decide(id: string, version: number, decision: "approve_once" | "deny") {
     await api.decideApproval(id, version, decision);
@@ -159,12 +179,19 @@ function safeInboxMessage(error: unknown): string {
   return "收件箱暂时无法更新，请稍后重试";
 }
 
-export function DeliverablesPage({ items, onOpen }: { readonly items: readonly DeliverableSummary[]; readonly onOpen: (item: DeliverableSummary) => void }) {
-  return <div className="page-stack"><PageTitle eyebrow="可以交付的结果" title="成果" detail="跨插件查看档案、方案、代码证据和决策记录。" /><section className="panel"><DeliverableList items={items} onOpen={onOpen} /></section></div>;
+export function DeliverablesPage({ items, goals, onGoal, onOpen }: { readonly items: readonly DeliverableSummary[]; readonly goals: readonly GoalV2[]; readonly onGoal: (id: string) => void; readonly onOpen: (item: DeliverableSummary) => void }) {
+  return <div className="page-stack"><PageTitle eyebrow="可以交付的结果" title="资料与成果" detail="按任务查看成果、验收状态和来源。" /><section className="panel"><GoalDeliverables goals={goals} onGoal={onGoal} /><DeliverableList showEmpty={!goals.some(goal => goal.deliverySetId)} items={items} onOpen={onOpen} /></section></div>;
 }
 
-export function DeliverableList({ items, onOpen }: { readonly items: readonly DeliverableSummary[]; readonly onOpen: (item: DeliverableSummary) => void }) {
-  if (items.length === 0) return <EmptyState title="还没有成果" detail="完成一次机会验证或 Coding 任务后，成果会出现在这里" />;
+function GoalDeliverables({ goals, onGoal }: { readonly goals: readonly GoalV2[]; readonly onGoal: (id: string) => void }) {
+  return <div className="deliverable-list">{goals.filter(goal => goal.deliverySetId).map(goal => <article key={goal.id}><span className="pill">{goalStatus(goal)}</span><div><h4>{goal.objective.split("\n")[0]}</h4><p>{goal.deliverables.map(item => item.title).join("、")}</p></div><button className="icon-button" aria-label={`打开任务成果：${goal.objective.split("\n")[0]}`} onClick={() => onGoal(goal.id)}><ArrowRight size={17} /></button></article>)}</div>;
+}
+function goalStatus(goal: GoalV2): string {
+  return ({ draft: "草稿", awaiting_authorization: "待确认计划", running: "执行中", waiting_approval: "等待审批", needs_reconciliation: "待核对", failed: "未完成", awaiting_acceptance: "待验收", accepted: "已验收", cancelled: "已取消" } as const)[goal.status];
+}
+
+export function DeliverableList({ items, onOpen, showEmpty = true }: { readonly showEmpty?: boolean; readonly items: readonly DeliverableSummary[]; readonly onOpen: (item: DeliverableSummary) => void }) {
+  if (items.length === 0) return showEmpty ? <EmptyState title="还没有成果" detail="完成一次机会验证或 Coding 任务后，成果会出现在这里" /> : null;
   return <div className="deliverable-list">{items.map((item) => <article key={item.id}><span className={`plugin-badge ${item.pluginId}`}>{item.pluginId === "opc" ? "OPC" : "CODE"}</span><div><h4>{item.title}</h4><p>{item.outcome}</p><footer>{item.decision && <span><strong>决定</strong>{item.decision}</span>}{item.nextAction && <span><strong>下一步</strong>{item.nextAction}</span>}</footer></div><button className="icon-button" aria-label={`打开成果：${item.title}`} title="打开成果" onClick={() => onOpen(item)}><ArrowRight size={17} /></button></article>)}</div>;
 }
 

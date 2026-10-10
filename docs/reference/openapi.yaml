@@ -6710,6 +6710,18 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/OutputAgentCatalogSkillV2"
+    OutputProductNavigationV2:
+      type: object
+      additionalProperties: false
+      required:
+        - pluginId
+      properties:
+        pluginId:
+          type: string
+        threadId:
+          type: string
+        resourceRef:
+          $ref: "#/components/schemas/OutputResourceRef"
     OutputHomeActionV2:
       type: object
       additionalProperties: false
@@ -6726,6 +6738,8 @@ components:
           type: string
         pluginId:
           type: string
+        navigation:
+          $ref: "#/components/schemas/OutputProductNavigationV2"
     OutputHomeApprovalV2:
       type: object
       additionalProperties: false
@@ -6776,6 +6790,8 @@ components:
           type: string
         createdAt:
           type: string
+        navigation:
+          $ref: "#/components/schemas/OutputProductNavigationV2"
     OutputHomeV2:
       type: object
       additionalProperties: false
@@ -7058,12 +7074,12 @@ components:
           type: object
           additionalProperties: false
           required:
-            - threadId
             - pluginId
+            - threadId
           properties:
-            threadId:
-              type: string
             pluginId:
+              type: string
+            threadId:
               type: string
             resourceRef:
               $ref: "#/components/schemas/OutputResourceRef"
