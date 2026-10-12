@@ -16,9 +16,10 @@ export class VaultMcpSecretStore {
   #address; #token; #mount; #namespace; #fetch;
   constructor({ address, token, mount = 'secret', namespace, fetchImplementation = fetch }) {
     this.#address = new URL(address);
+    const normalizedNamespace = namespace === '' ? undefined : namespace;
     if (!['http:', 'https:'].includes(this.#address.protocol) || this.#address.username || this.#address.password || this.#address.search || this.#address.hash
-      || !validToken(token) || !/^[A-Za-z0-9._-]+$/u.test(mount) || (namespace !== undefined && !/^[A-Za-z0-9._/-]+$/u.test(namespace))) throw denied();
-    this.#token = token; this.#mount = mount; this.#namespace = namespace; this.#fetch = fetchImplementation;
+      || !validToken(token) || !/^[A-Za-z0-9._-]+$/u.test(mount) || (normalizedNamespace !== undefined && !/^[A-Za-z0-9._/-]+$/u.test(normalizedNamespace))) throw denied();
+    this.#token = token; this.#mount = mount; this.#namespace = normalizedNamespace; this.#fetch = fetchImplementation;
   }
   reference(scope) { return `vault://muniu/v2/mcp/${account(scope)}`; }
   #url(scope) { return new URL(`/v1/${encodeURIComponent(this.#mount)}/data/muniu/v2/mcp/${account(scope)}`, this.#address); }
