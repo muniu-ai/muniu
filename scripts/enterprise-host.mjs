@@ -1,6 +1,5 @@
-// SPDX-License-Identifier: Apache-2.0
-import { VaultMcpSecretStore } from "./lib/enterprise-mcp-secrets.mjs";
 #!/usr/bin/env node
+// SPDX-License-Identifier: Apache-2.0
 
 import { createHash } from "node:crypto";
 
@@ -11,6 +10,7 @@ import {
 } from "@mn/host";
 import { S3Cas } from "@mn/storage";
 import { createPostgresPool } from "./lib/postgres-pool.mjs";
+import { VaultMcpSecretStore } from "./lib/enterprise-mcp-secrets.mjs";
 
 import { PostgresKernelStore, probePostgres } from "./lib/postgres-kernel-store.mjs";
 import {

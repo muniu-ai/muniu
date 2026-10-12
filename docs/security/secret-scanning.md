@@ -46,6 +46,10 @@ npm run test:oss-policy
 | `049203831723206ef08402c2bcd4f9b80cb7b58f` | `docker-compose.enterprise.yml`、`deploy/kind/enterprise-fixture.yaml`，各 1 条 | 固定 HMAC 测试值，解码后为明确的企业 fixture 标签；仅供测试部署，不能用于生产 |
 | `958a4612eb98def38ced61c43ff82c9c3aac5e83` | `apps/api/src/migrateAppServerV3.ts`，1 条 | S3 环境配置辅助函数的导入名称，不是凭据 |
 
+### CI 38107178551 发现复核
+
+2026-10-12 复核的 3 条 `generic-api-key` 发现均为上表已核验值在后续提交中的重复出现。`7af4956de1aa90924e321a8b0018c79ded0c6707` 在 `apps/worker/test/model-usage.test.ts` 再次使用输入 token 计数依据枚举；`dcf2cc0f0c19a101f378162bb11fdce3dcf2e0cc` 在 `docker-compose.enterprise.yml` 和 `deploy/kind/enterprise-fixture.yaml` 再次引入固定企业 fixture HMAC。新增例外继续分别限定提交、单个文件、检测规则和精确值。
+
 `scripts/test/secret-scanning.test.mjs` 从这些固定提交读取已复核内容，检查例外的规则、路径、提交和完整值集合。断言只报告范围变化，不输出匹配值。该测试随 `npm run test:oss-policy` 执行；真实扫描仍保留 CI 的完整历史扫描。
 
 本地 `--all` 还会扫描尚未推送的分支。结果与 CI 不同时，先比较两侧可达提交，不能把额外的本地发现直接加入发布例外，也不能通过删除历史、排除整个分支或跳过扫描制造通过结果。核验扫描日志中的提交数和错误信息；空扫描或 Git 错误不能仅凭退出码判定通过。

@@ -53,6 +53,7 @@ export async function isolatePdfExtraction(bytes: Uint8Array, limits: DocumentEx
       });
       let error: DocumentExtractionError | undefined;
       let size = 0; const chunks: Buffer[] = []; let polling = false; let closed = false;
+      let sampledMemory = false; let missedMemorySamples = 0;
       const stop = (code: string, message: string) => {
         error ??= new DocumentExtractionError(code, message);
         if (!closed) child.kill("SIGKILL");
@@ -66,7 +67,15 @@ export async function isolatePdfExtraction(bytes: Uint8Array, limits: DocumentEx
         const sampled = (cause: unknown, stdout: string) => {
           polling = false;
           if (closed || child.exitCode !== null || child.signalCode !== null) return;
-          if (cause || !/^\s*\d+\s*$/u.test(stdout)) { stop("PDF_ISOLATION_UNAVAILABLE", "无法核对 PDF 解析进程的内存限制"); return; }
+          if (cause || !/^\s*\d+\s*$/u.test(stdout)) {
+            // /proc and ps can disappear just before the close event becomes
+            // observable. Retry that short race, but still fail closed if
+            // monitoring never succeeds or remains unavailable.
+            missedMemorySamples++;
+            if (missedMemorySamples >= 3) stop("PDF_ISOLATION_UNAVAILABLE", "无法核对 PDF 解析进程的内存限制");
+            return;
+          }
+          sampledMemory = true; missedMemorySamples = 0;
           if (Number(stdout.trim()) * 1024 > limits.pdfRssMiB * 1024 * 1024) stop("DOCUMENT_LIMIT", "PDF 解析超过内存限制");
         };
         if (process.platform === "linux") {
@@ -86,6 +95,7 @@ export async function isolatePdfExtraction(bytes: Uint8Array, limits: DocumentEx
       child.once("close", (code, signal) => {
         closed = true; clearTimeout(deadline); clearInterval(memory);
         if (error) { reject(error); return; }
+        if (!sampledMemory) { reject(new DocumentExtractionError("PDF_ISOLATION_UNAVAILABLE", "无法核对 PDF 解析进程的内存限制")); return; }
         if (code !== 0 || signal) { reject(new DocumentExtractionError("DOCUMENT_LIMIT", "PDF 解析进程异常退出或超过资源限制")); return; }
         try {
           const reply = JSON.parse(Buffer.concat(chunks).toString("utf8"));

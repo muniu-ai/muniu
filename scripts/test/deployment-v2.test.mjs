@@ -27,6 +27,10 @@ test("container builds exclude host artifacts and compile Worker before Host", (
   }
 });
 
+test("enterprise Host keeps its executable shebang on the first line", () => {
+  assert.equal(read("scripts/enterprise-host.mjs").split(/\r?\n/u)[0], "#!/usr/bin/env node");
+});
+
 test("enterprise compose runs two v2 Hosts and two 30-second-lease Workers", () => {
   const compose = read("docker-compose.enterprise.yml");
   for (const service of ["host-a:", "host-b:", "worker-a:", "worker-b:"]) {

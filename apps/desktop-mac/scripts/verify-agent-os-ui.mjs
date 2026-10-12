@@ -1054,7 +1054,7 @@ async function verifyCoding(page, requestLog) {
   await page.getByRole("button", { name: "委派任务", exact: true }).click();
   const capture = page.getByRole("form", { name: "委派新任务" });
   await capture.waitFor({ state: "visible" });
-  const taskKinds = await capture.getByRole("radio").count();
+  const taskKinds = await capture.getByRole("group", { name: "任务类型" }).getByRole("radio").count();
   if (taskKinds !== 2) throw new Error("统一入口只能提供经营与研发，不得把 Runner 当成任务类型");
   await page.getByRole("button", { name: /收件箱/ }).click();
   await expectText(page, "模型凭据失效");
