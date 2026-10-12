@@ -26,11 +26,7 @@ const reviewed = [
   { commit: "958a4612eb98def38ced61c43ff82c9c3aac5e83", path: "apps/api/src/migrateAppServerV3.ts",
     kind: "import-name", lines: [8] },
   { commit: "7af4956de1aa90924e321a8b0018c79ded0c6707", path: "apps/worker/test/model-usage.test.ts",
-    kind: "count-basis", lines: [155] },
-  { commit: "dcf2cc0f0c19a101f378162bb11fdce3dcf2e0cc", path: "docker-compose.enterprise.yml",
-    kind: "fixture-hmac", lines: [14] },
-  { commit: "dcf2cc0f0c19a101f378162bb11fdce3dcf2e0cc", path: "deploy/kind/enterprise-fixture.yaml",
-    kind: "fixture-hmac", lines: [70] }
+    kind: "count-basis", lines: [155] }
 ];
 
 function array(block, field) {

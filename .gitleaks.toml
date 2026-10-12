@@ -196,8 +196,8 @@ regexes = [
   '''^s3RegionFromEnvironment$'''
 ]
 
-# Reviewed CI 38107178551 findings. Later commits repeated three already
-# reviewed fixture values, so each occurrence remains bound to its own commit.
+# Reviewed CI 38107178551 finding. A later commit repeated one already
+# reviewed enum value, so the occurrence remains bound to its own commit.
 
 [[allowlists]]
 description = "Model input-count basis enum misclassified as an API key; CI 38107178551"
@@ -207,24 +207,4 @@ commits = ["7af4956de1aa90924e321a8b0018c79ded0c6707"]
 paths = ['''^apps/worker/test/model-usage\.test\.ts$''']
 regexes = [
   '''^conservative_utf8_estimate$'''
-]
-
-[[allowlists]]
-description = "Explicitly synthetic enterprise fixture HMAC; CI 38107178551"
-targetRules = ["generic-api-key"]
-condition = "AND"
-commits = ["dcf2cc0f0c19a101f378162bb11fdce3dcf2e0cc"]
-paths = ['''^docker-compose\.enterprise\.yml$''']
-regexes = [
-  '''^ZW50ZXJwcmlzZS1lMmUtaG1hYy1maXh0dXJlLWtleS0wMg==$'''
-]
-
-[[allowlists]]
-description = "Explicitly synthetic enterprise fixture HMAC; CI 38107178551"
-targetRules = ["generic-api-key"]
-condition = "AND"
-commits = ["dcf2cc0f0c19a101f378162bb11fdce3dcf2e0cc"]
-paths = ['''^deploy/kind/enterprise-fixture\.yaml$''']
-regexes = [
-  '''^ZW50ZXJwcmlzZS1raW5kLWhtYWMtZml4dHVyZS1rZXktMDI=$'''
 ]
