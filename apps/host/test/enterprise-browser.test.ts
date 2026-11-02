@@ -127,3 +127,50 @@ test('两个已开通企业保持独立会话，篡改 cookie 中的租户标识
   assert.equal((await read('/v2/workspaces', forged)).status, 401);
   assert.equal((await f.login('admin-subject', 'normal', 'tenant-b')).response.status, 401);
 });
+
+test('组织权限接口按当前租户管理角色和字段，不能注入其他租户或覆盖旧版本', async t => {
+  const f = await fixture(t); const logged = await f.login();
+  const browserCookie = cookie(logged.response, '__Host-mn-enterprise-session');
+  const session = (await (await f.host.dispatch(new Request(`${origin}/v2/auth/session`, { headers: { cookie: browserCookie } }))).json() as any).data;
+  const post = (path: string, value: unknown, key: string) => f.host.dispatch(new Request(`${origin}${path}`, { method: 'POST',
+    headers: { cookie: browserCookie, origin, 'content-type': 'application/json', 'x-csrf-token': session.csrfToken, 'idempotency-key': key }, body: JSON.stringify(value) }));
+  const created = await post('/v2/workspaces', { name: '权限主体', mode: 'builtin' }, 'workspace');
+  const workspace = (await created.json() as any).data;
+  const grantBody = { principalId: 'admin', role: 'finance', scope: { kind: 'workspace' }, operations: ['read', 'write', 'business_approve'],
+    fieldClasses: ['public', 'price', 'cost'], expiresAt: new Date(Date.now() + 86400000).toISOString() };
+  const path = `/v2/workspaces/${workspace.id}/role-grants`;
+  assert.equal((await post(path, { ...grantBody, tenantId: 'tenant-b' }, 'injection')).status, 400);
+  assert.equal((await post(path, { ...grantBody, principalId: 'admin-b' }, 'foreign-principal')).status, 403);
+  const granted = await post(path, grantBody, 'grant'); assert.equal(granted.status, 200);
+  const role = (await granted.json() as any).data;
+  assert.deepEqual((await (await post(path, grantBody, 'grant')).json() as any).data, role);
+  assert.equal((await post(`${path}/${role.id}/revocations`, { expectedStreamVersion: 2 }, 'stale')).status, 409);
+  assert.equal((await post(`${path}/${role.id}/revocations`, { expectedStreamVersion: 1 }, 'revoke')).status, 200);
+  const configuration = await f.host.dispatch(new Request(`${origin}/v2/workspaces/${workspace.id}/access`, { headers: { cookie: browserCookie } }));
+  assert.equal(configuration.status, 200);
+  assert.ok((await configuration.json() as any).data.roles[0].revokedAt);
+});
+
+
+test('额度接口只分配已开通平台额度，严格校验版本、租户和金额', async t => {
+  const f = await fixture(t), logged = await f.login();
+  const browserCookie = cookie(logged.response, '__Host-mn-enterprise-session');
+  const session = (await (await f.host.dispatch(new Request(`${origin}/v2/auth/session`, { headers: { cookie: browserCookie } }))).json() as any).data;
+  const post = (path: string, value: unknown, key: string) => f.host.dispatch(new Request(`${origin}${path}`, { method: 'POST',
+    headers: { cookie: browserCookie, origin, 'content-type': 'application/json', 'x-csrf-token': session.csrfToken, 'idempotency-key': key }, body: JSON.stringify(value) }));
+  const workspace = (await (await post('/v2/workspaces', { name: '额度主体', mode: 'builtin' }, 'workspace')).json() as any).data;
+  const limits = { parallelNodes: 6, totalNodes: 32, totalAttempts: 64, automaticReplans: 3, tenantRunningNodes: 20,
+    tokens: 10000, costMinorUnits: '500', evaluationDailyTokens: 1000, evaluationDailyCostMinorUnits: '50',
+    singleEvaluationTokens: 200, singleEvaluationCostMinorUnits: '10', currency: 'CNY' as const,
+    validFrom: new Date(Date.now() - 10000).toISOString(), expiresAt: new Date(Date.now() + 86400000).toISOString() };
+  const path = `/v2/workspaces/${workspace.id}/quota`, body = { ...limits, expectedStreamVersion: 0 };
+  assert.equal((await post(path, body, 'unconfigured')).status, 409);
+  await f.host.quotas.provision('tenant-a', 'operator', 0, limits);
+  assert.equal((await post(path, { ...body, tenantId: 'tenant-b' }, 'foreign')).status, 400);
+  assert.equal((await post(path, { ...body, tokens: 10001 }, 'over')).status, 409);
+  const response = await post(path, body, 'configure'); assert.equal(response.status, 200, await response.clone().text());
+  assert.equal((await response.json() as any).data.streamVersion, 1);
+  assert.equal((await post(path, body, 'stale')).status, 409);
+  const read = await f.host.dispatch(new Request(`${origin}${path}`, { headers: { cookie: browserCookie } }));
+  assert.equal(read.status, 200); assert.equal((await read.json() as any).data.workspace.tokens, 10000);
+});

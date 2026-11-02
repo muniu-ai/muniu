@@ -14,7 +14,7 @@ async function main() {
     } } : {}) }];
   }));
   const host = await startEnterpriseLocalHost({ origin: configuration.origin, profile: configuration.profile, providers,
-    organizations: configuration.organizations, ...(configuration.port === undefined ? {} : { port: configuration.port }) });
+    organizations: configuration.organizations, platformQuotas: configuration.platformQuotas, ...(configuration.port === undefined ? {} : { port: configuration.port }) });
   process.stdout.write(`木牛企业入口已启动，模式=${configuration.profile}，地址=${host.address.host}:${host.address.port}\n`);
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { void host.close().catch(() => { process.exitCode = 1; }); });
 }

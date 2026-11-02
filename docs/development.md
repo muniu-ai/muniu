@@ -23,7 +23,7 @@
 
 企业对象结构与接口族由 `enterprise-schema.ts` 定义，示例在 `enterprise-examples.ts`。`planned` 接口不是当前 Host 能力；结构校验不替代可信服务的权限和版本检查。
 
-E1.1 新入口与本地协议检查见[企业身份](enterprise-identity.md)。新增企业服务 `packages/enterprise-services` 为私有包，产品插件不能依赖。企业 HTTP 类型由 `enterprise-api-schema.ts` 生成，客户端入口为 `@mn/contracts/enterprise-client`。
+E1.1 新入口与本地协议检查见[企业身份](enterprise-identity.md)，E1.2 对象权限、额度与存储命名空间见[企业权限](enterprise-access.md)。新增企业服务 `packages/enterprise-services` 为私有包，产品插件不能依赖。企业 HTTP 类型由 `enterprise-api-schema.ts` 生成，客户端入口为 `@mn/contracts/enterprise-client`。
 
 ## 仓库地图
 

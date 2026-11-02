@@ -6,7 +6,7 @@ import { mkdir, readdir, readFile, writeFile, lstat } from 'node:fs/promises';
 import { acquireLocalStateLock, FileCas, MacOsKeychainKeyProvider, SqliteStorage, runKeychainCommand, type KeyProvider } from '@mn/storage';
 import { createEnterpriseEventRepository } from './enterprise-event-repository.js';
 import { createEnterpriseHost, type EnterpriseHostOptions } from './enterprise-host.js';
-import type { EnterpriseIdentityService } from '@mn/enterprise-services';
+import type { EnterpriseIdentityService, EnterpriseQuotaLimits } from '@mn/enterprise-services';
 export const ENTERPRISE_KEYCHAIN_SERVICE = 'com.muniu.enterprise.v1';
 const missing = (error: unknown) => error instanceof Error && /not found|could not be found|-25300|errSecItemNotFound/iu.test(error.message);
 async function hmacKey(account: string, existing: boolean): Promise<Buffer> {
@@ -26,6 +26,7 @@ export interface StartEnterpriseLocalOptions extends Omit<EnterpriseHostOptions,
   readonly host?: string;
   readonly port?: number;
   readonly organizations: readonly Parameters<EnterpriseIdentityService['provision']>[0][];
+  readonly platformQuotas?: readonly { tenantId: string; idempotencyKey: string; expectedStreamVersion: number; limits: EnterpriseQuotaLimits; capacityEvidenceDigest?: string }[];
   /** Explicit trusted injection for fixtures or an operator-owned KMS adapter. */
   readonly keys?: { readonly hmacKey: Uint8Array; readonly keyProvider: KeyProvider };
 }
@@ -66,6 +67,7 @@ export async function startEnterpriseLocalHost(options: StartEnterpriseLocalOpti
       if (options.providers[organization.tenantId]?.issuer !== organization.issuer) throw new Error('OIDC_PROVISIONING_ISSUER_MISMATCH');
       await host.identity.provision(organization);
     }
+    for (const quota of options.platformQuotas ?? []) await host.quotas.provision(quota.tenantId, quota.idempotencyKey, quota.expectedStreamVersion, quota.limits, quota.capacityEvidenceDigest);
     const address = await host.listen({ host: options.host ?? '127.0.0.1', port: options.port ?? 7319 });
     const activeHost = host, activeStore = store;
     let closed = false;

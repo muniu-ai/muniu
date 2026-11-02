@@ -8,7 +8,7 @@ export * from './enterprise-examples.js';
 interface Schema {
   readonly $ref?: string; readonly const?: unknown; readonly enum?: readonly unknown[];
   readonly type?: string; readonly format?: string; readonly pattern?: string; readonly minLength?: number; readonly maxLength?: number;
-  readonly minimum?: number; readonly maximum?: number; readonly minItems?: number; readonly uniqueItems?: boolean;
+  readonly minimum?: number; readonly maximum?: number; readonly minItems?: number; readonly maxItems?: number; readonly uniqueItems?: boolean;
   readonly properties?: Readonly<Record<string, Schema>>; readonly required?: readonly string[];
   readonly additionalProperties?: boolean | Schema; readonly items?: Schema;
   readonly oneOf?: readonly Schema[]; readonly anyOf?: readonly Schema[];
@@ -44,6 +44,7 @@ export function parseEnterpriseContract<K extends keyof EnterpriseContractTypes>
       && (schema.type !== 'integer' || Number.isSafeInteger(item)) && (schema.minimum === undefined || item >= schema.minimum)
       && (schema.maximum === undefined || item <= schema.maximum);
     if (schema.type === 'array') return Array.isArray(item) && (schema.minItems === undefined || item.length >= schema.minItems)
+      && (schema.maxItems === undefined || item.length <= schema.maxItems)
       && (!schema.uniqueItems || new Set(item.map(entry => JSON.stringify(entry))).size === item.length)
       && item.every(entry => schema.items !== undefined && matches(schema.items, entry, depth + 1));
     if (schema.type === 'object') {

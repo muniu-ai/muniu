@@ -181,6 +181,7 @@ export interface S3ClientLike {
 }
 
 export interface S3CasOptions {
+  readonly namespace?: 'v2' | 'enterprise-v1';
   readonly client: S3ClientLike;
   readonly bucket: string;
   readonly prefix?: string;
@@ -194,10 +195,13 @@ export class S3Cas implements ContentAddressedStorage {
   constructor(options: S3CasOptions) {
     this.#client = options.client;
     this.#bucket = options.bucket;
-    const prefix = options.prefix ?? "v2/";
+    const namespace = options.namespace ?? 'v2';
+    if (namespace !== 'v2' && namespace !== 'enterprise-v1') throw new TypeError('Unsupported S3 CAS namespace');
+    const root = `${namespace}/`;
+    const prefix = options.prefix ?? root;
     this.#prefix = prefix.endsWith("/") ? prefix : `${prefix}/`;
-    if (this.#prefix !== "v2/" && !this.#prefix.startsWith("v2/")) {
-      throw new TypeError("S3 CAS prefix must remain under v2/");
+    if (!this.#prefix.startsWith(root) || this.#prefix.slice(0, -1).split('/').some(segment => !segment || segment === '.' || segment === '..')) {
+      throw new TypeError(`S3 CAS prefix must remain under ${root}`);
     }
   }
 

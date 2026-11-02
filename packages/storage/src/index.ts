@@ -14,3 +14,5 @@ export * from "./projection-journal.js";
 export * from "./key-revocation.js";
 export * from "./sqlite.js";
 export * from "./types.js";
+
+export * from './postgres-namespace.js';

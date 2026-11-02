@@ -2,6 +2,14 @@
 import { ENTERPRISE_SCHEMAS } from './enterprise-schema.js';
 import type { JsonObject } from './json.js';
 export const ENTERPRISE_HTTP_OPERATIONS = [
+  { id: 'getQuotaConfiguration', method: 'get', path: '/v2/workspaces/{workspaceId}/quota', response: 'EnterpriseQuotaConfiguration', mutation: false },
+  { id: 'configureWorkspaceQuota', method: 'post', path: '/v2/workspaces/{workspaceId}/quota', body: 'EnterpriseQuotaConfigure', response: 'EnterpriseQuotaView', mutation: true },
+  { id: 'getAccessConfiguration', method: 'get', path: '/v2/workspaces/{workspaceId}/access', response: 'EnterpriseAccessConfiguration', mutation: false },
+  { id: 'createDepartment', method: 'post', path: '/v2/workspaces/{workspaceId}/departments', body: 'EnterpriseDepartmentCreate', response: 'EnterpriseDepartmentView', mutation: true },
+  { id: 'grantBusinessRole', method: 'post', path: '/v2/workspaces/{workspaceId}/role-grants', body: 'BusinessRoleGrantCreate', response: 'BusinessRoleGrantView', mutation: true },
+  { id: 'grantBusinessObject', method: 'post', path: '/v2/workspaces/{workspaceId}/object-grants', body: 'BusinessObjectGrantCreate', response: 'BusinessObjectGrantView', mutation: true },
+  { id: 'revokeBusinessRole', method: 'post', path: '/v2/workspaces/{workspaceId}/role-grants/{grantId}/revocations', body: 'EnterpriseAccessRevoke', response: 'BusinessRoleGrantView', mutation: true },
+  { id: 'revokeBusinessObject', method: 'post', path: '/v2/workspaces/{workspaceId}/object-grants/{grantId}/revocations', body: 'EnterpriseAccessRevoke', response: 'BusinessObjectGrantView', mutation: true },
   { id: 'enterpriseHealth', method: 'get', path: '/v2/health', response: 'EnterpriseHealthView', mutation: false },
   { id: 'enterpriseSession', method: 'get', path: '/v2/auth/session', response: 'EnterpriseSessionView', mutation: false },
   { id: 'listOrganizations', method: 'get', path: '/v2/organizations', response: 'OrganizationList', mutation: false },

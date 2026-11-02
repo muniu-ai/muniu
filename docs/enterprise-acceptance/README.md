@@ -1,6 +1,6 @@
 # 企业经营平台验收基线
 
-E0.2 冻结两模式任务、故障规格、评估口径和旧测试覆盖关系。本目录不保存产品通过成绩，也不启动模型、Sales 或企业微信。实现依据为[完整计划](../proposals/enterprise-operating-platform-2026-11-02.md)第 10、11 节，结构契约见 [ADR 0015](../adr/0015-enterprise-operating-platform.md)。
+E0.2 冻结两模式任务、故障规格、评估口径和旧测试覆盖关系。冻结规格不保存产品通过成绩，也不启动模型、Sales 或企业微信。后续局部工程证据单独记录，当前见[E1 证据映射](e1-evidence.md)。实现依据为[完整计划](../proposals/enterprise-operating-platform-2026-11-02.md)第 10、11 节，结构契约见 [ADR 0015](../adr/0015-enterprise-operating-platform.md)。
 
 ## 文件与执行
 

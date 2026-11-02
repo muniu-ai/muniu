@@ -67,6 +67,7 @@ export default defineConfig({
           { text: "企业 E0.1 验证", link: "/verification/enterprise-e0-1-2026-11-02" },
           { text: "企业验收基线", link: "/enterprise-acceptance/README" },
           { text: "企业身份与本地入口", link: "/enterprise-identity" },
+          { text: "企业权限与额度", link: "/enterprise-access" },
           { text: "OPC 经营管理体系", link: "/proposals/opc-business-management-2026-10-09" },
           { text: "多 Agent、多模型提案", link: "/proposals/agent-os-multi-agent-optimization-2026-10-09" },
           { text: "经营到交付实施计划", link: "/proposals/agent-os-delivery-2026-10-10" },

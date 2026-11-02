@@ -3,7 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { ENTERPRISE_HTTP_OPERATIONS, createEnterpriseOpenApiDocument } from '@mn/contracts';
 import { parseEnterpriseContract, canonicalJson, type EnterpriseContractTypes } from '@mn/contracts';
-import { BrowserAuthService, EnterpriseError, EnterpriseIdentityService, equalOpaque, opaqueHash, type EnterpriseRepository } from '@mn/enterprise-services';
+import { BrowserAuthService, EnterpriseError, EnterpriseIdentityService, EnterprisePermissionService, EnterpriseQuotaService, equalOpaque, opaqueHash, type EnterpriseRepository } from '@mn/enterprise-services';
+import { dispatchEnterpriseAccess } from './enterprise-access-api.js';
 import { createEnterpriseOidc, type EnterpriseOidcProvider } from './enterprise-oidc.js';
 
 export interface EnterpriseHostOptions {
@@ -57,7 +58,7 @@ export function createEnterpriseHost(options: EnterpriseHostOptions) {
   const sessionName = secure ? '__Host-mn-enterprise-session' : 'mn-enterprise-dev-session';
   const loginName = secure ? '__Host-mn-enterprise-login' : 'mn-enterprise-dev-login';
   const cookie = (name: string, value: string, age: number) => `${name}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${age}${secure ? '; Secure' : ''}`;
-  const identity = new EnterpriseIdentityService(options), auth = new BrowserAuthService(options);
+  const identity = new EnterpriseIdentityService(options), auth = new BrowserAuthService(options), permissions = new EnterprisePermissionService(options), quotas = new EnterpriseQuotaService(options);
   const oidc = createEnterpriseOidc({ providers: options.providers, redirectUri: `${options.origin}/v2/auth/callback`, development: options.profile === 'development' });
   const headers = () => new Headers({ 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff' });
   const reply = (data: unknown, status: number, traceId: string, schema?: keyof EnterpriseContractTypes) => {
@@ -130,6 +131,8 @@ export function createEnterpriseHost(options: EnterpriseHostOptions) {
       const key = request.headers.get('idempotency-key')?.trim();
       if (op.mutation && (!key || key.length > 200)) throw new EnterpriseError('IDEMPOTENCY_KEY_REQUIRED', 400);
       const input = 'body' in op ? parse(op.body, await body(request)) : undefined;
+      const access = await dispatchEnterpriseAccess({ operationId: op.id, params, input, actor: current.actor, key, permissions, quotas });
+      if (access.handled) return reply(access.value, 200, traceId, op.response);
       let data: unknown;
       switch (op.id) {
         case 'enterpriseSession': data = { tenantId: current.actor.tenantId, principalId: current.member.id, displayName: current.member.displayName,
@@ -163,7 +166,7 @@ export function createEnterpriseHost(options: EnterpriseHostOptions) {
         retryable: code === 'STREAM_VERSION_CONFLICT' || code === 'CONCURRENT_COMMAND_RETRY' || code === 'SERVICE_UNAVAILABLE' }), { status, headers: h });
     }
   };
-  return { identity, dispatch,
+  return { identity, permissions, quotas, dispatch,
     async listen(input: { host?: string; port: number }) {
       if (server) throw new Error('Host 已启动');
       server = createServer({ requestTimeout: 30000, headersTimeout: 10000, maxHeaderSize: 16384 }, async (incoming, outgoing) => {

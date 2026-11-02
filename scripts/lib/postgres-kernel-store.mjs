@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+import { scopePostgresPool } from "@mn/storage";
 import { randomUUID } from "node:crypto";
 import { createProjectionFacts, CORE_PROJECTION_NAMESPACES, replayCoreProjections } from "@mn/contracts";
 
@@ -94,12 +95,12 @@ export class PostgresKernelStore {
   #now;
   #projectionJournal;
 
-  constructor({ pool, hmacKey, now = () => new Date().toISOString(), projectionJournal }) {
+  constructor({ pool, hmacKey, now = () => new Date().toISOString(), projectionJournal, namespace = "mn_v2" }) {
     if (!pool?.connect || !pool?.query) throw new TypeError("PostgreSQL pool 无效");
     if (!(hmacKey instanceof Uint8Array) || hmacKey.byteLength < 32) {
       throw new TypeError("事件 HMAC 密钥至少需要 32 字节");
     }
-    this.#pool = pool;
+    this.#pool = scopePostgresPool(pool, namespace);
     this.#hmacKey = Buffer.from(hmacKey);
     this.#now = now;
     this.#projectionJournal = projectionJournal;

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+import { scopePostgresPool, type PostgresNamespace } from './postgres-namespace.js';
 import { randomUUID } from "node:crypto";
 
 import type { EventAppendRequest, JsonObject, JsonValue, KernelEventV1 } from "@mn/contracts";
@@ -153,6 +154,7 @@ export interface PostgresPoolLike {
 
 export interface PostgresStorageOptions {
   readonly pool: PostgresPoolLike;
+  readonly namespace?: PostgresNamespace;
   readonly hmacKey: Uint8Array;
   readonly now?: () => Date;
 }
@@ -261,7 +263,7 @@ export class PostgresStorage implements StoragePort {
 
   constructor(options: PostgresStorageOptions) {
     if (options.hmacKey.byteLength < 32) throw new TypeError("Event HMAC key must contain at least 32 bytes");
-    this.#pool = options.pool;
+    this.#pool = scopePostgresPool(options.pool, options.namespace ?? 'mn_v2');
     this.#hmacKey = Buffer.from(options.hmacKey);
     this.#now = options.now ?? (() => new Date());
   }

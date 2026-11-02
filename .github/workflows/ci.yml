@@ -100,6 +100,7 @@ jobs:
           scripts/test/postgres-worker-store.test.mjs
       - run: docker compose -f docker-compose.enterprise.yml config --quiet
       - run: npm run verify:enterprise-fixture
+      - run: npm run verify:enterprise-access-postgres
 
   kubernetes-sandbox:
     name: Kind enterprise failover and Pod boundary
