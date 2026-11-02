@@ -11,6 +11,14 @@ Navigation: [Agent workflow](docs/agent-guide.md) · [Development guide](docs/de
 - Do not commit generated `dist`, `dist-test`, `target`, coverage, sidecar binaries, local state, or credentials.
 - First-party 0.2 workspaces remain private. Publishing an npm package requires a separate release review.
 
+## Active enterprise upgrade
+
+- The approved design is `docs/proposals/enterprise-operating-platform-2026-11-02.md` and ADR 0015. Execute E0–E8 by dependency, with one worktree per work package.
+- Enterprise objects use independent streams. Authority revisions are the single execution authorization model; templates do not limit the target task graph.
+- Use independent enterprise state namespaces. Do not load, migrate, delete, or modify existing 0.2 state, credentials, or other worktrees.
+- API schemas are authoritative. Generate request/response types and documentation; planned contracts do not make endpoints available.
+- Preserve old evidence until replacement coverage is verified; retire obsolete OPC and fixed-team code in E6.3.
+
 ## Architecture boundaries
 
 - `apps/host` is the only composition root. Product plugins must not be imported by `packages/kernel`.

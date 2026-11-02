@@ -5,7 +5,7 @@
 ## 阅读顺序与事实来源
 
 1. 阅读根目录 [AGENTS.md](https://github.com/muniu-ai/muniu/blob/main/AGENTS.md) 和修改目录内的同名文件，确认工具链、依赖与安全约束。
-2. 阅读[架构](architecture.md)和任务涉及的 ADR。[ADR 0011](adr/0011-agent-os-v2-hard-cutover.md)规定 0.2 隔离边界；[ADR 0012](adr/0012-application-boundaries.md)说明应用与内核边界及尚未完成的存储分离。
+2. 企业改造先读 [ADR 0015](adr/0015-enterprise-operating-platform.md)和[执行计划](proposals/enterprise-operating-platform-2026-11-02.md)，再阅读[架构](architecture.md)和历史 ADR。[ADR 0011](adr/0011-agent-os-v2-hard-cutover.md)规定 0.2 隔离边界；[ADR 0012](adr/0012-application-boundaries.md)说明应用与内核边界及尚未完成的存储分离。
 3. 确认本次已批准子计划的范围、验收条件和额外检查，再读目标模块源码、测试与 README。
 4. 按[验证矩阵](#验证矩阵)执行检查，按[贡献指南](https://github.com/muniu-ai/muniu/blob/main/CONTRIBUTING.zh-CN.md)准备拉取请求。
 
@@ -13,13 +13,15 @@
 | --- | --- |
 | 工具链与可执行命令 | 根目录 [package.json](https://github.com/muniu-ai/muniu/blob/main/package.json)、各 workspace 的 `package.json`、[rust-toolchain.toml](https://github.com/muniu-ai/muniu/blob/main/rust-toolchain.toml) |
 | 架构约束与设计决定 | [AGENTS.md](https://github.com/muniu-ai/muniu/blob/main/AGENTS.md)、[架构](architecture.md)、[ADR](adr/)及当前已批准子计划 |
-| HTTP 路由、输入与响应 | [api.ts](https://github.com/muniu-ai/muniu/blob/main/packages/contracts/src/api.ts)、[openapi.ts](https://github.com/muniu-ai/muniu/blob/main/packages/contracts/src/openapi.ts)、[api-outputs.ts](https://github.com/muniu-ai/muniu/blob/main/packages/contracts/src/api-outputs.ts)；查阅入口为 [API 路由](reference/api-routes.md)和 [OpenAPI](reference/openapi.md) |
+| HTTP 路由、输入与响应 | [api.ts](https://github.com/muniu-ai/muniu/blob/main/packages/contracts/src/api.ts)、[openapi.ts](https://github.com/muniu-ai/muniu/blob/main/packages/contracts/src/openapi.ts)、[api-response-schema.ts](https://github.com/muniu-ai/muniu/blob/main/packages/contracts/src/api-response-schema.ts)；查阅入口为 [API 路由](reference/api-routes.md)和 [OpenAPI](reference/openapi.md) |
 | CLI 命令与参数 | [CLI 源码](https://github.com/muniu-ai/muniu/blob/main/apps/cli/src/index.ts)中的 `HELP` 与命令处理；生成结果见 [CLI 参考](reference/cli.md) |
 | 插件贡献与依赖 | [公共 SDK](https://github.com/muniu-ai/muniu/tree/main/packages/plugin-sdk)、插件的 `package.json` 与源码；编写规则见[插件开发](plugin-authoring.md) |
 | 实际行为与已验证范围 | 当前源码、对应测试及标明提交和环境的验收记录，例如[应用边界验收](verification/application-boundaries-2026-09-28.md) |
 | CI 执行内容 | [ci.yml](https://github.com/muniu-ai/muniu/blob/main/.github/workflows/ci.yml)；发布检查另见 [release.yml](https://github.com/muniu-ai/muniu/blob/main/.github/workflows/release.yml) |
 
 设计要求、当前实现和验收结果分别回答“应该怎样”“目前怎样”“已验证什么”。发现不一致时记录差异，不把提案或历史验收记录当成当前实现，也不以现有代码为理由放宽约束。[TECHNICAL_DESIGN.md](TECHNICAL_DESIGN.md)保留供发布检查引用的稳定路径，详细设计由架构页维护。
+
+企业对象结构与接口族由 `enterprise-schema.ts` 定义，示例在 `enterprise-examples.ts`。`planned` 接口不是当前 Host 能力；结构校验不替代可信服务的权限和版本检查。
 
 ## 仓库地图
 
@@ -59,6 +61,8 @@ npm ci
 生产行为按 TDD 修改：先增加或复现失败测试，确认失败原因，再实现最小改动，执行目标测试和受影响模块检查。纯文档改动不需要虚构行为测试，验证要求见下一节。
 
 首次执行单个 workspace 测试前，先在根目录执行 `npm run build`。包间导入使用构建后的输出，单包测试不会自动构建全部上游依赖。修改上游源码后也应重建依赖，避免测试读取旧产物。
+
+Host 测试固定最多两个并行测试进程，限制真实沙箱和 SQLite fixture 的同机资源竞争。测试断言、沙箱要求和各场景期限保持原样；全量入口仍为 `npm test`。
 
 本地 Host、浏览器与原生 Desktop 的启动步骤见[快速开始](quickstart.md)和 [Desktop README](https://github.com/muniu-ai/muniu/blob/main/apps/desktop-mac/README.md)。启动前先检查[状态与操作边界](#状态与操作边界)。
 
@@ -123,14 +127,14 @@ sidecar 构建只支持 macOS，使用 Apple 的 `lipo` 和 `codesign`。`--smok
 
 | 生成内容 | 修改来源 | 更新与检查 |
 | --- | --- | --- |
-| `packages/contracts/src/generated-api.ts`、`generated-responses.ts` | `api.ts`、`openapi.ts`、`api-outputs.ts` 及引用的契约类型 | `npm run generate:contracts`；`npm run verify:contracts` |
+| `packages/contracts/src/generated-api.ts`、`api-outputs.ts`、`enterprise-types.ts` | `api.ts`、`openapi.ts`、`api-response-schema.ts` 与 `enterprise-schema.ts` | `npm run generate:contracts`；`npm run verify:contracts` |
 | `docs/reference/api-routes.md` 的生成区块、`openapi.yaml` | `packages/contracts/src/openapi.ts` 及关联契约 | `npm run docs:generate`；`npm run docs:check` |
 | `docs/reference/cli.md` 的生成区块 | `apps/cli/src/index.ts` 中的 `HELP` | 同上 |
 | `docs/reference/plugins.md` 的生成区块 | `plugins/*/package.json` | 同上 |
 | `THIRD_PARTY_NPM_LICENSES.json` | `package-lock.json` | `npm run generate:npm-license-inventory`；`npm run verify:licenses` |
 | `THIRD_PARTY_CARGO_LICENSES.json` | `apps/desktop-mac/src-tauri/Cargo.lock` 与 crates.io 许可证元数据 | `npm run generate:cargo-license-inventory`；`npm run verify:licenses` |
 
-不要直接修改标为 `Generated` 的契约文件，或 Markdown 中 `generated:…:start` 与 `generated:…:end` 之间的内容。区块外说明可直接编辑。API 响应类型变更后先生成契约，再生成文档，以免 OpenAPI 使用过期响应结构。
+不要直接修改标为 `Generated` 的契约文件，或 Markdown 中 `generated:…:start` 与 `generated:…:end` 之间的内容。区块外说明可直接编辑。API schema 变更后先生成契约，再生成文档，以免 OpenAPI 使用过期响应结构。
 
 修改公共契约、CLI、插件、配置、安全行为或发布步骤后，更新对应参考或指南并执行：
 

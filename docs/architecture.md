@@ -1,5 +1,7 @@
 # Agent OS 0.2 架构
 
+当前升级目标由 [ADR 0015](adr/0015-enterprise-operating-platform.md) 和[企业经营平台计划](proposals/enterprise-operating-platform-2026-11-02.md)定义。以下记录现有 0.2 实现；固定团队、工作区经营聚合和旧状态升级不是后续工作包的设计约束。E0 契约声明不表示新企业运行能力已经可用。
+
 0.2 的 Kernel 管理执行与治理状态。Desktop、CLI 与 HTTP API 是 Shell；OPC、Coding 与外部 Runner 通过插件贡献能力。询价候选和报价动作的控制规则位于私有 `@mn/business-execution`，由 Host 与 Worker 调用，Kernel 不包含行业规则。0.1 数据与协议保持隔离，不提供迁移或兼容入口。
 
 业务主数据归应用所有；当前 OPC、Coding 与签名插件的领域仓储仍由 Host 数据端口承载，尚未完成独立数据库分离。本次边界修复及验收范围见 [ADR 0012](adr/0012-application-boundaries.md)。

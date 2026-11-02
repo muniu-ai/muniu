@@ -1,5 +1,7 @@
 # ADR 0014：OPC 持续经营与业务事实
 
+> 2026-11-02：工作区大聚合与 OPC 产品归属由 [ADR 0015](0015-enterprise-operating-platform.md) 取代。下文保留历史决定及验收条件。
+
 - 日期：2026-10-09
 - 状态：采用
 - 范围：[OPC 经营管理体系](../proposals/opc-business-management-2026-10-09.md)的 M1，服务和项目型一人公司

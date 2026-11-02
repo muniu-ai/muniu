@@ -18,7 +18,7 @@ test("Kernel 不包含行业类型、规则或应用执行服务依赖", () => {
   for (const path of sources("packages/kernel/src")) {
     const source = readFileSync(join(root, path), "utf8");
     assert.doesNotMatch(source,
-      /Business(?:Candidate|Action|Scope)|IssueQuotePackage|EffectReceiptV1|\b(?:sales|industry)\b|询价|报价|business[-.]execution|business[-.](?:candidates|actions)/u,
+      /Business(?:Candidate|Action|Scope|ObjectRef)|ProviderBinding|ExternalObjectRef|OperatingObjective|OperatingPolicy|EnterpriseMember|IssueQuotePackage|EffectReceiptV1|\b(?:sales|industry)\b|询价|报价|business[-.]execution|business[-.](?:candidates|actions)|enterprise-services/u,
       path);
   }
   assert.deepEqual(manifest("packages/kernel").dependencies, { "@mn/contracts": "0.2.0" });
@@ -44,12 +44,12 @@ test("产品插件不能依赖业务执行服务或内核事务", () => {
     const configuration = manifest(path);
     for (const field of ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"]) {
       for (const dependency of Object.keys(configuration[field] ?? {})) {
-        assert.ok(!["@mn/business-execution", "@mn/task-orchestration", "@mn/kernel"].includes(dependency), `${path}: ${dependency}`);
+        assert.ok(!["@mn/business-execution", "@mn/task-orchestration", "@mn/enterprise-services", "@mn/storage", "@mn/agent-runtime", "@mn/kernel"].includes(dependency), `${path}: ${dependency}`);
       }
     }
     for (const source of sources(join(path, "src"))) {
       assert.doesNotMatch(readFileSync(join(root, source), "utf8"),
-        /(?:from|import\()\s*["'][^"']*(?:@mn\/(?:business-execution|task-orchestration|kernel)|packages\/(?:business-execution|task-orchestration|kernel))/u, source);
+        /(?:from|import\()\s*["'][^"']*(?:@mn\/(?:business-execution|task-orchestration|enterprise-services|storage|agent-runtime|kernel)|packages\/(?:business-execution|task-orchestration|enterprise-services|storage|agent-runtime|kernel))/u, source);
     }
   }
 });
@@ -64,12 +64,12 @@ test("企业镜像在消费者之前构建业务执行服务", () => {
 });
 
 
-test("团队编排保持私有且仅由 Host 装配", () => {
+test("任务编排保持私有，由 Host 装配并允许 Worker 调用", () => {
   const application = manifest("packages/task-orchestration");
   assert.equal(application.private, true);
   assert.deepEqual(application.dependencies, { "@mn/contracts": "0.2.0" });
   assert.equal(manifest("apps/host").dependencies["@mn/task-orchestration"], "0.2.0");
-  for (const path of ["packages/kernel", "apps/worker", "packages/agent-runtime", "apps/cli", "apps/desktop-mac"]) {
+  for (const path of ["packages/kernel", "packages/agent-runtime", "apps/cli", "apps/desktop-mac"]) {
     assert.equal(manifest(path).dependencies?.["@mn/task-orchestration"], undefined, path);
     for (const source of sources(join(path, "src"))) assert.doesNotMatch(readFileSync(join(root, source), "utf8"),
       /(?:from|import\()\s*["'][^"']*(?:@mn\/task-orchestration|packages\/task-orchestration)/u, source);

@@ -4,7 +4,7 @@ import { followupMutationSchema } from './followup-api-schema.js';
 import { teamSkillVersionCreateSchema, teamSkillEvaluationRegisterSchema, teamSkillEvaluationSubmitSchema, teamSkillCommandSchema } from './team-skill-api-schema.js';
 import { CORE_API_ROUTES } from "./api.js";
 import type { JsonObject } from "./json.js";
-import { API_OUTPUT_COMPONENTS_V2, API_OUTPUT_SCHEMAS_V2 } from "./generated-responses.js";
+import { API_OUTPUT_COMPONENTS_V2, API_OUTPUT_SCHEMAS_V2 } from "./api-response-schema.js";
 import type { ApiOutputsV2 } from "./api-outputs.js";
 import { goalMutationSchema } from "./goal-api-schema.js";
 import { opcBusinessCandidateCreateSchema, opcBusinessCandidateDecisionSchema } from "./opc-business-candidate-schema.js";
@@ -323,89 +323,6 @@ export function createOpenApiDocument(): JsonObject {
           properties: {
             expectedStreamVersion: { type: "integer", minimum: 1 },
             decision: { type: "string", enum: ["mark_completed", "terminate"] },
-          },
-        },
-        RunnerBinaryInspectionEnvelope: {
-          type: "object",
-          additionalProperties: false,
-          required: ["data", "traceId"],
-          properties: {
-            data: { $ref: "#/components/schemas/RunnerBinaryInspection" },
-            traceId: { type: "string" },
-          },
-        },
-        RunnerBinaryInspection: {
-          type: "object",
-          additionalProperties: false,
-          required: [
-            "requestedPath", "realPath", "sha256", "device", "inode", "byteLength", "modifiedAtMs",
-          ],
-          properties: {
-            requestedPath: { type: "string", minLength: 1 },
-            realPath: { type: "string", minLength: 1 },
-            sha256: { type: "string", pattern: "^[0-9a-f]{64}$" },
-            device: { type: "string", minLength: 1 },
-            inode: { type: "string", minLength: 1 },
-            byteLength: { type: "integer", minimum: 1 },
-            modifiedAtMs: { type: "number", minimum: 0 },
-          },
-        },
-        CodingReconciliationEnvelope: {
-          type: "object",
-          additionalProperties: false,
-          required: ["data", "traceId"],
-          properties: {
-            data: { $ref: "#/components/schemas/CodingReconciliation" },
-            traceId: { type: "string" },
-          },
-        },
-        CodingReconciliation: {
-          type: "object",
-          additionalProperties: false,
-          required: [
-            "executionId", "workspaceId", "taskTitle", "nextStep", "runnerId", "status",
-            "expectedStreamVersion", "expectedCodingStreamVersion", "evidence", "newCall",
-            "availableDecisions",
-          ],
-          properties: {
-            executionId: { type: "string", minLength: 1 },
-            workspaceId: { type: "string", minLength: 1 },
-            taskTitle: { type: "string", minLength: 1 },
-            nextStep: { type: "string", minLength: 1 },
-            runnerId: { type: "string", enum: ["claude-cli", "codex-cli"] },
-            status: { type: "string", const: "needs_reconciliation" },
-            expectedStreamVersion: { type: "integer", minimum: 1 },
-            expectedCodingStreamVersion: { type: "integer", minimum: 1 },
-            evidence: {
-              type: "object",
-              additionalProperties: false,
-              required: ["candidateCount", "gateCount", "markCompletedAllowed", "summary"],
-              properties: {
-                candidateCount: { type: "integer", minimum: 0 },
-                gateCount: { type: "integer", minimum: 0 },
-                markCompletedAllowed: { type: "boolean" },
-                codeEvidenceDigest: { type: "string", pattern: "^[0-9a-f]{64}$" },
-                summary: { type: "string", minLength: 1 },
-              },
-            },
-            newCall: {
-              type: "object",
-              additionalProperties: false,
-              required: ["allowed", "summary"],
-              properties: {
-                allowed: { type: "boolean" },
-                summary: { type: "string", minLength: 1 },
-              },
-            },
-            availableDecisions: {
-              type: "array",
-              minItems: 0,
-              uniqueItems: true,
-              items: {
-                type: "string",
-                enum: ["terminate", "mark_completed", "create_new_call"],
-              },
-            },
           },
         },
         ApiError: {

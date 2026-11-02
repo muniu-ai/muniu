@@ -10,3 +10,4 @@ export * from "./registry.js";
 export * from "./resources.js";
 export * from "./surfaces.js";
 export * from "./business-effects.js";
+export * from "./business-provider.js";

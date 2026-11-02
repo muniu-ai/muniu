@@ -1,4 +1,4 @@
-// Generated from api-outputs.ts. Do not edit.
+// Canonical response schemas. DTOs are generated from this file.
 // SPDX-License-Identifier: Apache-2.0
 import type { JsonObject } from "./json.js";
 export const API_OUTPUT_SCHEMAS_V2: Readonly<Record<string, JsonObject>> = {
@@ -11717,40 +11717,7 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
     ]
   },
   "OutputRunnerBinaryInspectionV1": {
-    "type": "object",
-    "additionalProperties": false,
-    "required": [
-      "requestedPath",
-      "realPath",
-      "sha256",
-      "device",
-      "inode",
-      "byteLength",
-      "modifiedAtMs"
-    ],
-    "properties": {
-      "requestedPath": {
-        "type": "string"
-      },
-      "realPath": {
-        "type": "string"
-      },
-      "sha256": {
-        "type": "string"
-      },
-      "device": {
-        "type": "string"
-      },
-      "inode": {
-        "type": "string"
-      },
-      "byteLength": {
-        "type": "number"
-      },
-      "modifiedAtMs": {
-        "type": "number"
-      }
-    }
+    "$ref": "#/components/schemas/RunnerBinaryInspection"
   },
   "OutputCodingReconciliationEvidenceV2": {
     "type": "object",
@@ -11805,91 +11772,7 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
     ]
   },
   "OutputCodingReconciliationViewV2": {
-    "type": "object",
-    "additionalProperties": false,
-    "required": [
-      "executionId",
-      "workspaceId",
-      "taskTitle",
-      "nextStep",
-      "runnerId",
-      "status",
-      "expectedStreamVersion",
-      "expectedCodingStreamVersion",
-      "evidence",
-      "newCall",
-      "availableDecisions"
-    ],
-    "properties": {
-      "executionId": {
-        "type": "string"
-      },
-      "workspaceId": {
-        "type": "string"
-      },
-      "taskTitle": {
-        "type": "string"
-      },
-      "nextStep": {
-        "type": "string"
-      },
-      "runnerId": {
-        "anyOf": [
-          {
-            "type": "string",
-            "const": "claude-cli"
-          },
-          {
-            "type": "string",
-            "const": "codex-cli"
-          }
-        ]
-      },
-      "status": {
-        "type": "string",
-        "const": "needs_reconciliation"
-      },
-      "expectedStreamVersion": {
-        "type": "number"
-      },
-      "expectedCodingStreamVersion": {
-        "type": "number"
-      },
-      "evidence": {
-        "$ref": "#/components/schemas/OutputCodingReconciliationEvidenceV2"
-      },
-      "newCall": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "allowed",
-          "summary"
-        ],
-        "properties": {
-          "allowed": {
-            "anyOf": [
-              {
-                "type": "boolean",
-                "const": false
-              },
-              {
-                "type": "boolean",
-                "const": true
-              }
-            ]
-          },
-          "summary": {
-            "type": "string"
-          }
-        }
-      },
-      "availableDecisions": {
-        "type": "array",
-        "items": {
-          "$ref": "#/components/schemas/OutputCodingReconciliationDecisionV2"
-        }
-      }
-    }
+    "$ref": "#/components/schemas/CodingReconciliation"
   },
   "OutputCodingCandidateV2": {
     "type": "object",
@@ -12358,5 +12241,229 @@ export const API_OUTPUT_COMPONENTS_V2: Readonly<Record<string, JsonObject>> = {
         "$ref": "#/components/schemas/OutputExecution"
       }
     }
+  },
+  "RunnerBinaryInspectionEnvelope": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "data",
+      "traceId"
+    ],
+    "properties": {
+      "data": {
+        "$ref": "#/components/schemas/RunnerBinaryInspection"
+      },
+      "traceId": {
+        "type": "string"
+      }
+    }
+  },
+  "RunnerBinaryInspection": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "requestedPath",
+      "realPath",
+      "sha256",
+      "device",
+      "inode",
+      "byteLength",
+      "modifiedAtMs"
+    ],
+    "properties": {
+      "requestedPath": {
+        "type": "string",
+        "minLength": 1
+      },
+      "realPath": {
+        "type": "string",
+        "minLength": 1
+      },
+      "sha256": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      },
+      "device": {
+        "type": "string",
+        "minLength": 1
+      },
+      "inode": {
+        "type": "string",
+        "minLength": 1
+      },
+      "byteLength": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "modifiedAtMs": {
+        "type": "number",
+        "minimum": 0
+      }
+    }
+  },
+  "CodingReconciliationEnvelope": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "data",
+      "traceId"
+    ],
+    "properties": {
+      "data": {
+        "$ref": "#/components/schemas/CodingReconciliation"
+      },
+      "traceId": {
+        "type": "string"
+      }
+    }
+  },
+  "CodingReconciliation": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "executionId",
+      "workspaceId",
+      "taskTitle",
+      "nextStep",
+      "runnerId",
+      "status",
+      "expectedStreamVersion",
+      "expectedCodingStreamVersion",
+      "evidence",
+      "newCall",
+      "availableDecisions"
+    ],
+    "properties": {
+      "executionId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "workspaceId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "taskTitle": {
+        "type": "string",
+        "minLength": 1
+      },
+      "nextStep": {
+        "type": "string",
+        "minLength": 1
+      },
+      "runnerId": {
+        "type": "string",
+        "enum": [
+          "claude-cli",
+          "codex-cli"
+        ]
+      },
+      "status": {
+        "type": "string",
+        "const": "needs_reconciliation"
+      },
+      "expectedStreamVersion": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "expectedCodingStreamVersion": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "evidence": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "candidateCount",
+          "gateCount",
+          "markCompletedAllowed",
+          "summary"
+        ],
+        "properties": {
+          "candidateCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "gateCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "markCompletedAllowed": {
+            "type": "boolean"
+          },
+          "codeEvidenceDigest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "newCall": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "allowed",
+          "summary"
+        ],
+        "properties": {
+          "allowed": {
+            "type": "boolean"
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "availableDecisions": {
+        "type": "array",
+        "minItems": 0,
+        "uniqueItems": true,
+        "items": {
+          "type": "string",
+          "enum": [
+            "terminate",
+            "mark_completed",
+            "create_new_call"
+          ]
+        }
+      }
+    }
   }
 };
+export const API_OUTPUT_PUBLIC_TYPES_V2 = {
+  "HostHealthV2": "OutputHostHealthV2",
+  "ReadinessV2": "OutputReadinessV2",
+  "ProductNavigationV2": "OutputProductNavigationV2",
+  "InboxItemV2": "OutputInboxItemV2",
+  "DeliverableSummaryV2": "OutputDeliverableSummaryV2",
+  "HomeActionV2": "OutputHomeActionV2",
+  "HomeApprovalV2": "OutputHomeApprovalV2",
+  "HomeV2": "OutputHomeV2",
+  "ActivityV2": "OutputActivityV2",
+  "MemorySummaryV2": "OutputMemorySummaryV2",
+  "MemoryViewV2": "OutputMemoryViewV2",
+  "ModelConnectionV2": "OutputModelConnectionV2",
+  "ModelPresetV2": "OutputModelPresetV2",
+  "PluginCatalogItemV2": "OutputPluginCatalogItemV2",
+  "OfficialPluginV2": "OutputOfficialPluginV2",
+  "OpportunityEvidenceV2": "OutputOpportunityEvidenceV2",
+  "OpportunitySummaryV2": "OutputOpportunitySummaryV2",
+  "OpportunityViewV2": "OutputOpportunityViewV2",
+  "OpcDeliverableV2": "OutputOpcDeliverableV2",
+  "StoredOpcDeliverableV2": "OutputStoredOpcDeliverableV2",
+  "ReadOnlySampleV2": "OutputReadOnlySampleV2",
+  "CodingRepositoryV2": "OutputCodingRepositoryV2",
+  "CodingTaskStatusV2": "OutputCodingTaskStatusV2",
+  "CodingTaskV2": "OutputCodingTaskV2",
+  "CodingTaskSummaryV2": "OutputCodingTaskSummaryV2",
+  "CodingCandidateV2": "OutputCodingCandidateV2",
+  "CodingGateV2": "OutputCodingGateV2",
+  "CodingControlPlaneV2": "OutputCodingControlPlaneV2",
+  "CodeEvidenceV2": "OutputCodeEvidenceV2",
+  "CodingResultV2": "OutputCodingResultV2",
+  "CodingReconciliationResultV2": "OutputCodingReconciliationResultV2",
+  "CodingRunnerViewV2": "OutputCodingRunnerViewV2"
+} as const;

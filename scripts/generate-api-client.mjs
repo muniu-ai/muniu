@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 import { readFile, writeFile } from "node:fs/promises";
 import { loadApiContract } from "./lib/api-contract.mjs";
-import { generateResponseSchemas } from "./lib/generate-response-schemas.mjs";
-await generateResponseSchemas({ check: process.argv.includes("--check") });
+import { generateResponseTypes } from "./lib/generate-response-types.mjs";
+import { generateEnterpriseTypes } from "./lib/generate-enterprise-types.mjs";
+await generateResponseTypes({ check: process.argv.includes("--check") });
+await generateEnterpriseTypes({ check: process.argv.includes("--check") });
 const { createOpenApiDocument } = await loadApiContract();
 
 const document = createOpenApiDocument();
