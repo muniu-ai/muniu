@@ -1003,6 +1003,8 @@ async function seed(
   maxDurationMs: number,
   taskRequest: string,
 ): Promise<void> {
+  const { seedFixturePrincipals } = await import('./fixtures/principals.js');
+  await seedFixturePrincipals(store, 'local', ['local-owner'], NOW);
   const task = createCodingTask({
     id: "task-1",
     workspaceId: "workspace-1",

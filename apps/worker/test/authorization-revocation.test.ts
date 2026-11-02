@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+import { seedFixturePrincipals } from './fixtures/principals.js';
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -22,6 +23,7 @@ async function fixture(t: TestContext, hooks: {
   const root = await mkdtemp(join(tmpdir(), "muniu-revocation-"));
   const store = new SqliteStorage({ databaseFile: join(root, "state.sqlite3"), hmacKey: Buffer.alloc(32, 1) });
   t.after(async () => { store.close(); await rm(root, { recursive: true, force: true }); });
+  await seedFixturePrincipals(store, 'local', ['owner', 'operator'], NOW);
   const kernel = new AgentOsKernel(store, { now: () => NOW });
   const workspace = await kernel.createWorkspace("local", "owner", "workspace", {
     name: "撤权测试", viewMode: "professional", pluginIds: ["fixture"],

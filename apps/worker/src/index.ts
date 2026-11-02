@@ -1171,3 +1171,5 @@ export { assertContextSource, assertExecutionContextSources, assertMemoryOriginE
 export { assertModelContextLimit, MAX_MODEL_CONTEXT_BYTES } from './model-context.js';
 
 export * from "./memory-selection.js";
+
+export { createProviderActionWorkerHandler } from "./provider-action-worker.js";

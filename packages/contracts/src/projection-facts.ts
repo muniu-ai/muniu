@@ -7,6 +7,7 @@ export const CORE_PROJECTION_NAMESPACES = [
   "tenant", "principal", "workspace", "membership", "thread", "execution", "authority",
   "approval", "inbox", "toolIntent", "toolAdmission", "job", "session-log-entry", "memory", "memoryTombstone",
   "shareGrant", "modelConnection", "modelPreference", "asset", "assetTombstone",
+  "budget.account", "budget.reservation",
   "coordination.group", "coordination.run", "coordination.attempt", "coordination.control", "coordination.reuse",
 ] as const;
 
@@ -16,6 +17,7 @@ export type CoreProjectionNamespace = typeof CORE_PROJECTION_NAMESPACES[number];
 export const PROTECTED_CORE_PROJECTION_NAMESPACES: readonly CoreProjectionNamespace[] = Object.freeze([
   "tenant", "principal", "workspace", "thread", "approval", "inbox", "toolIntent",
   "session-log-entry", "modelConnection", "memoryTombstone", "asset",
+  "budget.account", "budget.reservation",
   "coordination.group", "coordination.run", "coordination.attempt", "coordination.control", "coordination.reuse",
 ]);
 

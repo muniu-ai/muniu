@@ -38,6 +38,8 @@ const approvalIntent: ToolCallIntent = {
 };
 
 function authorizationProjection<U>(namespace: string): U | undefined {
+  if (namespace === "principal") return { id: "local-owner", tenantId: "local", kind: "human",
+    displayName: "fixture owner", streamVersion: 1, createdAt: "2026-09-04T00:00:00.000Z", updatedAt: "2026-09-04T00:00:00.000Z" } as U;
   if (namespace === "execution") return { id: "execution-1", tenantId: "local", workspaceId: "workspace-1",
     initiatedBy: "local-owner", generation: 1, status: "running" } as U;
   if (namespace === "membership") return { tenantId: "local", workspaceId: "workspace-1",

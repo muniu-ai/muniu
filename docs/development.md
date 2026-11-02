@@ -155,3 +155,5 @@ npm run docs:build
 - 企业 fixture 会创建和清理本地服务。执行前检查 [Compose 配置](https://github.com/muniu-ai/muniu/blob/main/docker-compose.enterprise.yml)的项目资源与端口；Kind 脚本拒绝覆盖同名现存集群，正常结束时删除本次创建的集群。不要复用业务环境执行这些检查。
 - 不提交 `.env`、凭据、受保护业务数据、日志、`dist/`、`dist-test/`、`target/`、coverage 或 sidecar。忽略规则见 [.gitignore](https://github.com/muniu-ai/muniu/blob/main/.gitignore)；`examples/microservice-repo/` 内显式追踪的 `.mn` 示例是例外，不能按目录名批量清除。
 - 发布包、签名、公证、部署、数据维护或真实外部调用必须属于已授权范围，并遵守对应发布或运维流程。发布入口见 [macOS 发布](release/macos.md)；npm 包发布需要独立发布评审。不要以调试为由绕过审批、关闭必需 sandbox 或重放结果未知的副作用。
+
+E3.1 的动作协调、预算预留与回执核对说明见[持久动作与预算预留](enterprise-actions.md)。该能力须由受信 Host 装配当前企业权限与提供方，不能直接作为免批准工具调用入口。

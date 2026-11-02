@@ -26,6 +26,8 @@ for (const scenario of [
   const store = new SqliteStorage({ databaseFile: join(root, "state.sqlite3"), hmacKey: Buffer.alloc(32, 1) });
   t.after(async () => { store.close(); await rm(root, { recursive: true, force: true }); });
   const now = "2026-09-04T00:00:00.000Z";
+  const { seedFixturePrincipals } = await import('./fixtures/principals.js');
+  await seedFixturePrincipals(store, 'local', ['local-owner'], now);
   const entity = { tenantId: "local", createdAt: now, updatedAt: now, streamVersion: 0 };
   await store.transact("local", tx => {
     tx.putProjection("membership", "workspace:local-owner", { ...entity, id: "workspace:local-owner",

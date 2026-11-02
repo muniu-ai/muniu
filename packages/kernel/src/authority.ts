@@ -7,6 +7,7 @@ import type {
   ResourceRef,
   ToolCallIntent,
   ToolEffectClass,
+  Principal,
 } from "@mn/contracts";
 import { approvalStillMatches, isPotentiallyAutoApprovable } from "@mn/contracts";
 import { sha256 } from "./canonical.js";
@@ -19,10 +20,12 @@ export function assertCurrentExecutionAuthorization(
   transaction: Pick<KernelTransaction, "getProjection">,
   execution: Execution,
 ): void {
+  const principal = transaction.getProjection<Principal>('principal', execution.initiatedBy);
   const membership = transaction.getProjection<WorkspaceMembership>(
     "membership", `${execution.workspaceId}:${execution.initiatedBy}`,
   );
-  if (!membership || membership.tenantId !== execution.tenantId
+  if (!principal || principal.id !== execution.initiatedBy || principal.tenantId !== execution.tenantId || principal.disabledAt
+    || !membership || membership.tenantId !== execution.tenantId
     || membership.workspaceId !== execution.workspaceId || membership.principalId !== execution.initiatedBy
     || membership.removedAt || !["owner", "operator"].includes(membership.workspaceRole)) {
     throw new KernelError("EXECUTION_AUTHORIZATION_REVOKED", "执行发起人的当前授权已撤销", "由有操作权限的成员重新发起执行");
@@ -33,10 +36,12 @@ export function assertCurrentApprovalAuthorization(
   transaction: Pick<KernelTransaction, "getProjection">,
   approval: Approval,
 ): void {
+  const principal = approval.decidedBy && transaction.getProjection<Principal>('principal', approval.decidedBy);
   const membership = approval.decidedBy && transaction.getProjection<WorkspaceMembership>(
     "membership", `${approval.workspaceId}:${approval.decidedBy}`,
   );
-  if (!membership || membership.tenantId !== approval.tenantId
+  if (!principal || principal.id !== approval.decidedBy || principal.tenantId !== approval.tenantId || principal.disabledAt
+    || !membership || membership.tenantId !== approval.tenantId
     || membership.workspaceId !== approval.workspaceId || membership.principalId !== approval.decidedBy
     || membership.removedAt || !["owner", "operator", "reviewer"].includes(membership.workspaceRole)) {
     throw new KernelError("APPROVER_AUTHORIZATION_REVOKED", "批准人的当前审核授权已撤销", "由有审核权限的成员重新批准");
@@ -172,6 +177,11 @@ export function assertApprovalUsable(
   }
   if (approval.expiresAt <= now) {
     throw new KernelError("APPROVAL_EXPIRED", "批准已过期", "重新审阅当前操作");
+  }
+  if (approval.toolCallId !== currentIntent.id || approval.executionId !== currentIntent.executionId
+    || approval.authorityCommitment !== currentIntent.authorityCommitment || approval.effectClass !== currentIntent.effectClass
+    || approval.expiresAt !== currentIntent.expiresAt || sha256(approval.resourceRefs) !== sha256(currentIntent.resourceRefs)) {
+    throw new KernelError('STALE_APPROVAL', '批准不属于当前工具调用、资源或授权', '重新审阅当前操作');
   }
   if (!approvalStillMatches(approvedIntent, currentIntent)) {
     throw new KernelError("STALE_APPROVAL", "工具、参数、资源或执行代次已变化", "重新审阅当前操作");

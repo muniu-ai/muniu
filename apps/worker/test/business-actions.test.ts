@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+import { seedFixturePrincipals } from './fixtures/principals.js';
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -25,6 +26,7 @@ for (const scenario of ["completed", "unknown", "abandoned", "revoked", "revoked
     const store = new SqliteStorage({ databaseFile: join(root, "state.sqlite"), hmacKey: Buffer.alloc(32, 1), now: () => new Date(timestamp) });
     store.configureProjectionJournal({ cas: new FileCas({ rootDir: join(root, "cas") }), keyProvider: new InMemoryKeyProvider(Buffer.alloc(32, 2)), namespaces: ["*non-core"] });
     t.after(async () => { store.close(); await rm(root, { recursive: true, force: true }); });
+    await seedFixturePrincipals(store, 'local', ['owner', 'admin'], timestamp);
     await store.transact("local", tx => tx.putProjection("membership", "workspace:owner", {
       id: "workspace:owner", tenantId: "local", workspaceId: "workspace", principalId: "owner", workspaceRole: "owner",
       organizationRoles: [], streamVersion: 1, createdAt: timestamp, updatedAt: timestamp,
@@ -104,6 +106,7 @@ for (const revoked of [false, true]) test(`出包检查点${revoked ? "撤权并
   const store = new SqliteStorage({ databaseFile: join(root, "state.sqlite"), hmacKey: Buffer.alloc(32, 1), now: () => new Date(clock) });
   store.configureProjectionJournal({ cas: new FileCas({ rootDir: join(root, "cas") }), keyProvider: new InMemoryKeyProvider(Buffer.alloc(32, 2)), namespaces: ["*non-core"] });
   t.after(async () => { store.close(); await rm(root, { recursive: true, force: true }); });
+  await seedFixturePrincipals(store, 'local', ['owner', 'admin'], timestamp);
   await store.transact("local", tx => tx.putProjection("membership", "workspace:owner", {
     id: "workspace:owner", tenantId: "local", workspaceId: "workspace", principalId: "owner", workspaceRole: "owner",
     organizationRoles: [], streamVersion: 0, createdAt: timestamp, updatedAt: timestamp,

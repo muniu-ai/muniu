@@ -90,7 +90,8 @@
     "test:reuse-cli": "tsc -p apps/cli/tsconfig.test.json && node --test apps/cli/dist-test/test/reuse-flow.test.js",
     "verify:agent-os-p4-ui": "npm run test:reuse-views && node --test apps/desktop-mac/scripts/test/reuse-flow.test.mjs && node apps/desktop-mac/scripts/verify-reuse-ui.mjs",
     "test:delivery-expansion-views": "node --test apps/desktop-mac/scripts/test/delivery-expansion-api.test.mjs apps/desktop-mac/scripts/test/binary-export.test.mjs apps/desktop-mac/scripts/test/collaboration-views.test.mjs apps/desktop-mac/scripts/test/mcp-views.test.mjs",
-    "verify:agent-os-p5-ui": "npm run test:delivery-expansion-views && node --test apps/desktop-mac/scripts/test/delivery-expansion-flow.test.mjs && node apps/desktop-mac/scripts/verify-delivery-expansion-ui.mjs"
+    "verify:agent-os-p5-ui": "npm run test:delivery-expansion-views && node --test apps/desktop-mac/scripts/test/delivery-expansion-flow.test.mjs && node apps/desktop-mac/scripts/verify-delivery-expansion-ui.mjs",
+    "verify:enterprise-actions": "npm run build && npm run test -w @mn/kernel && npm run test -w @mn/business-execution && tsc -p apps/worker/tsconfig.test.json && node --test apps/worker/dist-test/test/provider-action-worker.test.js"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",

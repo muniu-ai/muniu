@@ -2,13 +2,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Approval, Execution, ExecutionAuthority, ToolCallIntent } from "@mn/contracts";
-import { AgentOsKernel, InMemoryKernelStore, recordToolAdmission, replayCoreProjections, type ToolAdmission } from "../src/index.js";
+import { AgentOsKernel, InMemoryKernelStore, appendKernelEvent, recordToolAdmission, replayCoreProjections, type ToolAdmission } from "../src/index.js";
 
 const NOW = "2026-09-04T00:00:00.000Z";
 
 async function fixture() {
   const store = new InMemoryKernelStore(Buffer.alloc(32), () => NOW);
   const kernel = new AgentOsKernel(store, { now: () => NOW });
+  await store.transact('local', tx => {
+    for (const id of ['owner', 'operator', 'reviewer']) {
+      tx.putProjection('principal', id, { id, tenantId: 'local', kind: 'human', displayName: id, streamVersion: 1, createdAt: NOW, updatedAt: NOW });
+      appendKernelEvent(tx, { tenantId: 'local', aggregateType: 'principal', aggregateId: id, expectedStreamVersion: 0,
+        type: 'principal.fixture_registered', actorId: id, generation: 0, correlationId: id, publicPayload: {} });
+    }
+  });
   const workspace = await kernel.createWorkspace("local", "owner", "workspace", {
     name: "撤权测试", viewMode: "professional", pluginIds: ["fixture"],
   });

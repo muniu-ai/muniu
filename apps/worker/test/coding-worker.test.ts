@@ -453,6 +453,8 @@ function interceptCodingCompletion(
 }
 
 async function seed(store: SqliteStorage, repositoryPath: string, inputMessage?: string): Promise<void> {
+  const { seedFixturePrincipals } = await import('./fixtures/principals.js');
+  await seedFixturePrincipals(store, 'local', ['local-owner'], NOW);
   const task = createCodingTask({
     id: "task-1",
     workspaceId: "workspace-1",

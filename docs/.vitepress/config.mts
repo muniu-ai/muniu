@@ -98,6 +98,7 @@ export default defineConfig({
         collapsed: true,
         items: [
           { text: "企业运维", link: "/enterprise-operations" },
+          { text: "持久动作与预算预留", link: "/enterprise-actions" },
           { text: "安全边界", link: "/security/overview" },
           { text: "日志脱敏", link: "/security/redaction-policy" },
           { text: "密钥扫描", link: "/security/secret-scanning" },
