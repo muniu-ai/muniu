@@ -85,6 +85,7 @@ jobs:
       - run: npm run verify:release
       - run: npm run build
       - run: npm run typecheck
+      - run: npm run verify:enterprise-acceptance-spec
       - run: npm run docs:check
       - run: npm run docs:links
       - run: npm run docs:build

@@ -2,7 +2,7 @@
 
 木牛 Agent OS 0.2 是持久 Agent 执行平台。Desktop、CLI 与 API 通过 Host 使用同一套工作区、执行、审批和恢复能力；OPC 与 Coding 提供具体业务流程。
 
-当前改造依据为[企业经营平台完整执行计划](./proposals/enterprise-operating-platform-2026-11-02.md)与 [ADR 0015](./adr/0015-enterprise-operating-platform.md)，进度见 [E0.1 记录](./verification/enterprise-e0-1-2026-11-02.md)。以下使用指南描述现有 0.2 产品。
+当前改造依据为[企业经营平台完整执行计划](./proposals/enterprise-operating-platform-2026-11-02.md)与 [ADR 0015](./adr/0015-enterprise-operating-platform.md)，进度见 [E0.1 记录](./verification/enterprise-e0-1-2026-11-02.md)。验收材料见 [E0.2 基线](./enterprise-acceptance/README.md)。以下使用指南描述现有 0.2 产品。
 
 ## 按任务开始
 
