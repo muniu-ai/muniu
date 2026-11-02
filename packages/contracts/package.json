@@ -8,10 +8,17 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
-    "./client": { "types": "./dist/client.d.ts", "import": "./dist/client.js" },
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "import": "./dist/client.js"
+    },
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./enterprise-client": {
+      "types": "./dist/enterprise-client.d.ts",
+      "import": "./dist/enterprise-client.js"
     }
   },
   "scripts": {

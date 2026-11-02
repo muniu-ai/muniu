@@ -38,3 +38,4 @@ export * from './goal-export-api-schema.js';
 export * from './mcp.js';
 export * from './mcp-api-schema.js';
 export * from './enterprise-contracts.js';
+export * from "./enterprise-api-schema.js";

@@ -4,7 +4,7 @@ import { readdir, readFile, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import process from "node:process";
 import { stringify as stringifyYaml } from "yaml";
-import { loadApiContract } from "./lib/api-contract.mjs";
+import { loadApiContract, loadEnterpriseApiContract } from "./lib/api-contract.mjs";
 
 const root = process.cwd();
 const check = process.argv.includes("--check");
@@ -71,6 +71,8 @@ async function pluginCatalog() {
 const { API_OPERATIONS_V2: operations, createOpenApiDocument } = await loadApiContract();
 addBlock("docs/reference/api-routes.md", "contracts-routes", operationTable(operations));
 addFile("docs/reference/openapi.yaml", stringifyYaml(createOpenApiDocument(), { lineWidth: 0 }));
+const { createEnterpriseOpenApiDocument } = await loadEnterpriseApiContract();
+addFile("docs/reference/enterprise-openapi.yaml", stringifyYaml(createEnterpriseOpenApiDocument(), { lineWidth: 0 }));
 
 const cliSource = await readFile(join(root, "apps/cli/src/index.ts"), "utf8");
 const cliHelp = /const HELP = `([\s\S]*?)`;/u.exec(cliSource)?.[1];

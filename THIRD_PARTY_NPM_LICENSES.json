@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "packageLockSha256": "e6e337aaa4af2a1362f5194ef3ec28b6f290470f393a44cba237c4a4af7acbb0",
+  "packageLockSha256": "bed9d59704b16cf981d7b256dbe381cbecdb0d877b02a0c779b60c32501b4c54",
   "packages": [
     {
       "name": "@algolia/abtesting",
@@ -1984,6 +1984,13 @@
       "integrity": "sha512-VLghIWNM6ELQzo7zwmcg0NmTVyWKYjvIeM83yjp0wRDTmUnrM678fQbcKBo6n2CJEF0szoG//ytg+TKla89ALQ=="
     },
     {
+      "name": "jose",
+      "version": "6.2.15",
+      "license": "MIT",
+      "resolved": "https://registry.npmjs.org/jose/-/jose-6.2.15.tgz",
+      "integrity": "sha512-qdF6ewcZARtef63fJ9AKKZPgxw+t7USH6HLXYcD4CrdmSvDp79rpJSPFEKc90QBeGS63u1KQtN2MZQHC0yDIzA=="
+    },
+    {
       "name": "js-tokens",
       "version": "4.0.0",
       "license": "MIT",
@@ -2271,6 +2278,13 @@
       "integrity": "sha512-O5lz91xSOeoXP6DulyHfllpq+Eg00MWitZIbtPfoSEvqIHdl5gfcY6hYzDWnj0qD5tz52PI08u9qUvSVeUBeHw=="
     },
     {
+      "name": "oauth4webapi",
+      "version": "3.8.8",
+      "license": "MIT",
+      "resolved": "https://registry.npmjs.org/oauth4webapi/-/oauth4webapi-3.8.8.tgz",
+      "integrity": "sha512-8N28E+a/oxfXWBgOMt+ZP/JUf/XR+IFbvkAEPP3gznXOMv9BpAAwiIj0TFNz3tGTPc0ZQ8zmWBNgN1nAys0gng=="
+    },
+    {
       "name": "once",
       "version": "1.4.0",
       "license": "ISC",
@@ -2283,6 +2297,13 @@
       "license": "MIT",
       "resolved": "https://registry.npmjs.org/oniguruma-to-es/-/oniguruma-to-es-3.1.1.tgz",
       "integrity": "sha512-bUH8SDvPkH3ho3dvwJwfonjlQ4R80vjyvrU8YpxuROddv55vAEJrTuCuCVUhhsHbtlD9tGGbaNApGQckXhS8iQ=="
+    },
+    {
+      "name": "openid-client",
+      "version": "6.8.8",
+      "license": "MIT",
+      "resolved": "https://registry.npmjs.org/openid-client/-/openid-client-6.8.8.tgz",
+      "integrity": "sha512-ZsucJA5Ad04Uv7YN4ql+s4GXNmb9uAYQwyJTsJx7CH/MX3JZioLE2pVKi1SC+YrbSLA4Px3Gi30dMjgOZtb6pA=="
     },
     {
       "name": "pako",

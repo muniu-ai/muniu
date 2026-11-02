@@ -164,7 +164,7 @@ export class MacOsKeychainKeyProvider implements KeyProvider {
   constructor(options: MacOsKeychainKeyProviderOptions) {
     this.#account = options.account;
     this.#service = options.service ?? "com.muniu.agent-os.v2";
-    if (!this.#service.includes("v2")) throw new TypeError("Keychain service must be isolated for v2");
+    if (!this.#service.includes("v2") && this.#service !== "com.muniu.enterprise.v1") throw new TypeError("Keychain service must use an isolated approved namespace");
     this.#command = options.command ?? runKeychainCommand;
     this.#individuallyRevocable = options.individuallyRevocable ?? false;
   }

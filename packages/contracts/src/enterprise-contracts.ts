@@ -7,7 +7,7 @@ export * from './enterprise-examples.js';
 
 interface Schema {
   readonly $ref?: string; readonly const?: unknown; readonly enum?: readonly unknown[];
-  readonly type?: string; readonly format?: string; readonly pattern?: string; readonly minLength?: number;
+  readonly type?: string; readonly format?: string; readonly pattern?: string; readonly minLength?: number; readonly maxLength?: number;
   readonly minimum?: number; readonly maximum?: number; readonly minItems?: number; readonly uniqueItems?: boolean;
   readonly properties?: Readonly<Record<string, Schema>>; readonly required?: readonly string[];
   readonly additionalProperties?: boolean | Schema; readonly items?: Schema;
@@ -28,8 +28,10 @@ export function parseEnterpriseContract<K extends keyof EnterpriseContractTypes>
     if (schema.anyOf) return schema.anyOf.some(child => matches(child, item, depth + 1));
     if (Object.hasOwn(schema, 'const')) return item === schema.const;
     if (schema.enum && !schema.enum.includes(item)) return false;
+    if (schema.type === 'boolean') return typeof item === 'boolean';
     if (schema.type === 'string') {
       if (typeof item !== 'string' || (schema.minLength !== undefined && item.length < schema.minLength)
+        || (schema.maxLength !== undefined && item.length > schema.maxLength)
         || (schema.pattern !== undefined && !new RegExp(schema.pattern, 'u').test(item))) return false;
       if (schema.format === 'date') return /^\d{4}-\d{2}-\d{2}$/u.test(item) && Number.isFinite(Date.parse(item)) && new Date(item).toISOString().slice(0, 10) === item;
       if (schema.format === 'date-time') {

@@ -1,5 +1,19 @@
 // Generated from enterprise-schema.ts. Do not edit.
 // SPDX-License-Identifier: Apache-2.0
+export type OrganizationView = { readonly "id": string; readonly "name": string; readonly "issuer": string; readonly "maxMembers": number; readonly "streamVersion": number; };
+export type OrganizationList = readonly (OrganizationView)[];
+export type OrganizationMemberView = { readonly "id": string; readonly "tenantId": string; readonly "issuer": string; readonly "subject": string; readonly "displayName": string; readonly "organizationAdmin": boolean; readonly "status": "invited" | "active" | "disabled" | "removed"; readonly "streamVersion": number; readonly "sessionEpoch": number; readonly "invitedUntil"?: string; };
+export type OrganizationMemberList = readonly (OrganizationMemberView)[];
+export type EnterpriseWorkspaceView = { readonly "id": string; readonly "tenantId": string; readonly "name": string; readonly "mode": "builtin" | "sales"; readonly "streamVersion": number; };
+export type EnterpriseWorkspaceList = readonly (EnterpriseWorkspaceView)[];
+export type EnterpriseWorkspaceCreate = { readonly "name": string; readonly "mode": "builtin" | "sales"; };
+export type OrganizationInvitationCreate = { readonly "subject": string; readonly "displayName": string; readonly "organizationAdmin": boolean; };
+export type OrganizationInvitationView = { readonly "id": string; readonly "member": OrganizationMemberView; readonly "token": string; };
+export type OrganizationInvitationAccept = { readonly "expectedStreamVersion": number; readonly "token": string; };
+export type OrganizationMemberCommand = ({ readonly "expectedStreamVersion": number; readonly "type": "disable" | "activate" | "remove"; }) | ({ readonly "expectedStreamVersion": number; readonly "type": "rebind"; readonly "subject": string; });
+export type EnterpriseSessionView = { readonly "tenantId": string; readonly "principalId": string; readonly "displayName": string; readonly "status": "invited" | "active"; readonly "organizationAdmin": boolean; readonly "csrfToken": string; readonly "expiresAt": string; readonly "profile": "development" | "hosted"; };
+export type EnterpriseHealthView = { readonly "status": "healthy"; readonly "profile": "development" | "hosted"; };
+export type EnterpriseApiError = { readonly "code": string; readonly "message": string; readonly "action": string; readonly "traceId": string; readonly "retryable": boolean; readonly "fieldIssues": readonly ({ readonly "field": string; readonly "message": string; })[]; };
 export type BusinessObjectRef = { readonly "tenantId": string; readonly "workspaceId": string; readonly "objectType": "operating_objective" | "metric_definition" | "business_review" | "customer" | "contact" | "opportunity" | "service_version" | "quote_version" | "contract" | "order" | "project" | "milestone" | "delivery_version" | "customer_acceptance" | "change_request" | "payment_schedule" | "receipt" | "refund" | "expense" | "adjustment" | "goal" | "artifact_version" | "evidence_ref" | "decision_record" | "memory_entry"; readonly "objectId": string; readonly "streamVersion": number; readonly "digest": string; };
 export type ExternalObjectRef = { readonly "tenantId": string; readonly "workspaceId": string; readonly "provider": string; readonly "objectType": "operating_objective" | "metric_definition" | "business_review" | "customer" | "contact" | "opportunity" | "service_version" | "quote_version" | "contract" | "order" | "project" | "milestone" | "delivery_version" | "customer_acceptance" | "change_request" | "payment_schedule" | "receipt" | "refund" | "expense" | "adjustment" | "goal" | "artifact_version" | "evidence_ref" | "decision_record" | "memory_entry"; readonly "objectId": string; readonly "sourceVersion": string; readonly "digest": string; readonly "observedAt": string; readonly "permissionRef": string; };
 export type ProviderBinding = { readonly "tenantId": string; readonly "workspaceId": string; readonly "id": string; readonly "streamVersion": number; readonly "mode": "builtin" | "sales"; readonly "bindings": readonly ({ readonly "objectType": "operating_objective" | "metric_definition" | "business_review" | "customer" | "contact" | "opportunity" | "service_version" | "quote_version" | "contract" | "order" | "project" | "milestone" | "delivery_version" | "customer_acceptance" | "change_request" | "payment_schedule" | "receipt" | "refund" | "expense" | "adjustment" | "goal" | "artifact_version" | "evidence_ref" | "decision_record" | "memory_entry"; readonly "provider": string; readonly "allowedActions": readonly ("create_followup_task" | "update_followup_date" | "issue_quote_package")[]; readonly "supportedPorts": readonly ("readSnapshot" | "listChanges" | "prepareAction" | "executeAction" | "getReceipt")[]; })[]; };
@@ -21,6 +35,20 @@ export type BusinessApproval = { readonly "tenantId": string; readonly "workspac
 export type ExecutionApproval = { readonly "tenantId": string; readonly "workspaceId": string; readonly "id": string; readonly "streamVersion": number; readonly "authorityRevisionId": string; readonly "actionIntentId": string; readonly "actionDigest": string; readonly "approvedByPrincipalId": string; readonly "decision": "approve_once" | "deny"; readonly "validUntil": string; };
 export type EnterpriseGoal = { readonly "tenantId": string; readonly "workspaceId": string; readonly "id": string; readonly "streamVersion": number; readonly "responsiblePrincipalId": string; readonly "status": "draft" | "awaiting_authorization" | "running" | "waiting_person" | "waiting_external" | "awaiting_acceptance" | "needs_reconciliation" | "completed" | "failed" | "cancelled"; readonly "objectiveRef"?: BusinessObjectRef; readonly "activePlanRevisionId"?: string; readonly "authorityRevisionId"?: string; readonly "requiredArtifactIds": readonly (string)[]; readonly "acceptanceCriteria": readonly (string)[]; readonly "budget": EnterpriseExecutionBudget; };
 export interface EnterpriseContractTypes {
+  readonly OrganizationView: OrganizationView;
+  readonly OrganizationList: OrganizationList;
+  readonly OrganizationMemberView: OrganizationMemberView;
+  readonly OrganizationMemberList: OrganizationMemberList;
+  readonly EnterpriseWorkspaceView: EnterpriseWorkspaceView;
+  readonly EnterpriseWorkspaceList: EnterpriseWorkspaceList;
+  readonly EnterpriseWorkspaceCreate: EnterpriseWorkspaceCreate;
+  readonly OrganizationInvitationCreate: OrganizationInvitationCreate;
+  readonly OrganizationInvitationView: OrganizationInvitationView;
+  readonly OrganizationInvitationAccept: OrganizationInvitationAccept;
+  readonly OrganizationMemberCommand: OrganizationMemberCommand;
+  readonly EnterpriseSessionView: EnterpriseSessionView;
+  readonly EnterpriseHealthView: EnterpriseHealthView;
+  readonly EnterpriseApiError: EnterpriseApiError;
   readonly BusinessObjectRef: BusinessObjectRef;
   readonly ExternalObjectRef: ExternalObjectRef;
   readonly ProviderBinding: ProviderBinding;
