@@ -45,7 +45,7 @@ export function reduceQuotaEvents(records: readonly EnterpriseRecord[]) {
 /** Admission policy only; the execution coordinator must atomically reserve and settle the shared accounts. */
 export function assertModelQuota(records: readonly EnterpriseRecord[], actor: EnterpriseActor, workspaceId: string,
   request: { tokens: number; costMinorUnits: string; expiresAt: string; purpose: 'goal' | 'evaluation' }, now: string): EnterpriseQuota {
-  const identity = reduceIdentityEvents(records); requireActor(identity, actor);
+  const identity = reduceIdentityEvents(records); requireActor(identity, actor, false, now);
   if (!identity.workspaces.has(workspaceId)) throw new EnterpriseError('WORKSPACE_NOT_FOUND', 404);
   const state = reduceQuotaEvents(records), quota = state.workspaces.get(workspaceId);
   if (!state.platform || !quota) throw new EnterpriseError('MODEL_QUOTA_UNCONFIGURED', 409);
@@ -75,7 +75,7 @@ export class EnterpriseQuotaService {
     return this.options.repository.transact(tenantId, records => {
       const identity = reduceIdentityEvents(records);
       if (!identity.organization || identity.organization.id !== tenantId) throw new EnterpriseError('ORGANIZATION_NOT_FOUND', 404);
-      if (actor && !requireActor(identity, actor).organizationAdmin) throw new EnterpriseError('ORGANIZATION_ADMIN_REQUIRED');
+      if (actor && !requireActor(identity, actor, false, this.now()).organizationAdmin) throw new EnterpriseError('ORGANIZATION_ADMIN_REQUIRED');
       if (workspaceId && !identity.workspaces.has(workspaceId)) throw new EnterpriseError('WORKSPACE_NOT_FOUND', 404);
       const state = reduceQuotaEvents(records), prior = state.receipts.get(id);
       if (prior) { if (prior.requestDigest !== requestDigest) throw new EnterpriseError('IDEMPOTENCY_KEY_REUSED', 409); return { events: [], value: prior.response }; }
@@ -92,7 +92,9 @@ export class EnterpriseQuotaService {
       const value: EnterpriseQuota = { ...structuredClone(input), tenantId, ...(workspaceId ? { workspaceId } : {}), streamVersion: expectedStreamVersion + 1,
         ...(capacityEvidenceDigest ? { capacityEvidenceDigest } : {}) };
       return { events: [this.event(workspaceId ? 'enterprise.quota.workspace_configured' : 'enterprise.quota.platform_configured', namespace, workspaceId ?? tenantId, expectedStreamVersion, actorId, { value }),
-        this.event('enterprise.quota.command_recorded', 'enterprise.quota.command', id, 0, actorId, { requestDigest, response: value })], value };
+        this.event('enterprise.quota.command_recorded', 'enterprise.quota.command', id, 0, actorId, { requestDigest, response: value })], value, assertBeforeCommit: () => {
+          if (actor && !requireActor(identity, actor, false, this.now()).organizationAdmin) throw new EnterpriseError('ORGANIZATION_ADMIN_REQUIRED');
+        } };
     });
   }
   /** Trusted Host provisioning only. A digest is an operator attestation, not an automatically verified capacity result. */
@@ -104,7 +106,7 @@ export class EnterpriseQuotaService {
   }
   async configuration(actor: EnterpriseActor, workspaceId: string) {
     const records = await this.options.repository.read(actor.tenantId), identity = reduceIdentityEvents(records);
-    if (!requireActor(identity, actor).organizationAdmin) throw new EnterpriseError('ORGANIZATION_ADMIN_REQUIRED');
+    if (!requireActor(identity, actor, false, this.now()).organizationAdmin) throw new EnterpriseError('ORGANIZATION_ADMIN_REQUIRED');
     if (!identity.workspaces.has(workspaceId)) throw new EnterpriseError('WORKSPACE_NOT_FOUND', 404);
     const state = reduceQuotaEvents(records);
     return { platform: state.platform ?? null, workspace: state.workspaces.get(workspaceId) ?? null };

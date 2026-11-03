@@ -96,7 +96,7 @@ function matchesScope(state: AccessState, scope: AccessScope, object: ObjectAcce
 export function resolveObjectAccess(records: readonly EnterpriseRecord[], actor: EnterpriseActor, object: ObjectAccessDescriptor,
   operation: ObjectOperation, now: string): ReadonlySet<FieldClass> {
   if (actor.tenantId !== object.tenantId || !objectTypes.has(object.objectType)) throw new EnterpriseError('OBJECT_ACCESS_DENIED');
-  const state = reduceAccessEvents(records); requireActor(state.identity, actor);
+  const state = reduceAccessEvents(records); requireActor(state.identity, actor, false, now);
   if (!state.identity.workspaces.has(object.workspaceId)) throw new EnterpriseError('OBJECT_ACCESS_DENIED');
   const fields = new Set<FieldClass>(); let allowed = false;
   const shares = [...state.grants.values()].filter(grant => grant.principalId === actor.principalId && grant.workspaceId === object.workspaceId
@@ -114,7 +114,8 @@ export function assertBusinessDecisionAccess(records: readonly EnterpriseRecord[
   preparedByPrincipalId: string, now: string): void {
   const fields = resolveObjectAccess(records, actor, object, 'business_approve', now);
   if (!object.approvalFields?.length) throw new EnterpriseError('APPROVAL_FIELDS_REQUIRED', 503);
-  if (object.approvalFields.some(field => !Object.hasOwn(object.fieldClasses, field) || !fields.has(object.fieldClasses[field]!))) throw new EnterpriseError('FIELD_ACCESS_DENIED');
+  const readable = resolveObjectAccess(records, actor, object, 'read', now);
+  if (object.approvalFields.some(field => !Object.hasOwn(object.fieldClasses, field) || !fields.has(object.fieldClasses[field]!) || !readable.has(object.fieldClasses[field]!))) throw new EnterpriseError('FIELD_ACCESS_DENIED');
   if (!preparedByPrincipalId || actor.principalId === preparedByPrincipalId) throw new EnterpriseError('SEPARATION_OF_DUTIES_REQUIRED');
 }
 export class EnterprisePermissionService {
@@ -126,13 +127,15 @@ export class EnterprisePermissionService {
   private async command<T>(actor: EnterpriseActor, key: string, kind: string, body: unknown, work: (state: AccessState) => { events: readonly EnterpriseRecord[]; value: T }): Promise<T> {
     text(key); const id = opaqueHash(canonicalJson([actor.principalId, key])), requestDigest = opaqueHash(canonicalJson([kind, body]));
     return this.options.repository.transact(actor.tenantId, records => {
-      const state = reduceAccessEvents(records), member = requireActor(state.identity, actor);
+      const state = reduceAccessEvents(records), member = requireActor(state.identity, actor, false, this.now());
       if (!member.organizationAdmin) throw new EnterpriseError('ORGANIZATION_ADMIN_REQUIRED');
       const prior = state.receipts.get(id);
       if (prior) { if (prior.requestDigest !== requestDigest) throw new EnterpriseError('IDEMPOTENCY_KEY_REUSED', 409); return { events: [], value: prior.response as T }; }
       const result = work(state);
       return { events: [...result.events, this.event('enterprise.permissions.command_recorded', 'enterprise.permissions.command', id, 0, actor.principalId,
-        { requestDigest, response: result.value })], value: result.value };
+        { requestDigest, response: result.value })], value: result.value, assertBeforeCommit: () => {
+          if (!requireActor(state.identity, actor, false, this.now()).organizationAdmin) throw new EnterpriseError('ORGANIZATION_ADMIN_REQUIRED');
+        } };
     });
   }
   private workspace(state: AccessState, id: string): void { if (!state.identity.workspaces.has(id)) throw new EnterpriseError('WORKSPACE_NOT_FOUND', 404); }
@@ -193,7 +196,7 @@ export class EnterprisePermissionService {
   }
   async configuration(actor: EnterpriseActor, workspaceId: string) {
     const state = reduceAccessEvents(await this.options.repository.read(actor.tenantId));
-    if (!requireActor(state.identity, actor).organizationAdmin) throw new EnterpriseError('ORGANIZATION_ADMIN_REQUIRED');
+    if (!requireActor(state.identity, actor, false, this.now()).organizationAdmin) throw new EnterpriseError('ORGANIZATION_ADMIN_REQUIRED');
     this.workspace(state, workspaceId);
     return { departments: [...state.departments.values()].filter(value => value.workspaceId === workspaceId),
       roles: [...state.roles.values()].filter(value => value.workspaceId === workspaceId), grants: [...state.grants.values()].filter(value => value.workspaceId === workspaceId) };

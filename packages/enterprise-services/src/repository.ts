@@ -9,7 +9,11 @@ export interface EnterpriseRecord {
   readonly occurredAt: string;
   readonly payload: JsonObject;
 }
-export interface EnterpriseChange<T> { readonly events: readonly EnterpriseRecord[]; readonly value: T; }
+export interface EnterpriseChange<T> {
+  readonly events: readonly EnterpriseRecord[]; readonly value: T;
+  /** Revalidate time-sensitive policy synchronously after encryption, inside the guarded commit. */
+  readonly assertBeforeCommit?: () => void;
+}
 export interface EnterpriseRepository {
   read(tenantId: string): Promise<readonly EnterpriseRecord[]>;
   /** Work is pure and may be recalculated after a known transaction conflict. */

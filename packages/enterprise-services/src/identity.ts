@@ -5,7 +5,7 @@ import type { EnterpriseRecord, EnterpriseRepository } from './repository.js';
 export class EnterpriseError extends Error {
   constructor(readonly code: string, readonly status = 403) { super(code); this.name = 'EnterpriseError'; }
 }
-export interface EnterpriseActor { readonly tenantId: string; readonly principalId: string; readonly sessionEpoch: number; }
+export interface EnterpriseActor { readonly tenantId: string; readonly principalId: string; readonly sessionEpoch: number; readonly sessionId?: string; }
 export interface Organization { readonly id: string; readonly name: string; readonly issuer: string; readonly maxMembers: number; readonly streamVersion: number; }
 export interface OrganizationMember {
   readonly id: string; readonly tenantId: string; readonly issuer: string; readonly subject: string; readonly displayName: string;
@@ -16,6 +16,7 @@ export interface EnterpriseWorkspace { readonly id: string; readonly tenantId: s
 interface Receipt { readonly requestDigest: string; readonly response: unknown; }
 export interface IdentityState {
   organization?: Organization;
+  readonly sessions: Map<string, { principalId: string; sessionEpoch: number; expiresAt: string; revoked: boolean }>;
   readonly members: Map<string, OrganizationMember>;
   readonly workspaces: Map<string, EnterpriseWorkspace>;
   readonly receipts: Map<string, Receipt>;
@@ -31,9 +32,14 @@ function requireVersion(actual: number, expected: number): void {
   if (!Number.isSafeInteger(expected) || actual !== expected) throw new EnterpriseError('STREAM_VERSION_CONFLICT', 409);
 }
 export function reduceIdentityEvents(events: readonly EnterpriseRecord[]): IdentityState {
-  const state: IdentityState = { members: new Map(), workspaces: new Map(), receipts: new Map() };
+  const state: IdentityState = { sessions: new Map(), members: new Map(), workspaces: new Map(), receipts: new Map() };
   for (const e of events) {
-    if (e.type === 'enterprise.organization.provisioned') state.organization = e.payload.organization as unknown as Organization;
+    if (e.type === 'enterprise.auth.session_created') state.sessions.set(e.aggregateId, e.payload.session as unknown as { principalId: string; sessionEpoch: number; expiresAt: string; revoked: boolean });
+    else if (e.type === 'enterprise.auth.session_revoked') {
+      const session = state.sessions.get(e.aggregateId); if (!session) throw new EnterpriseError('EVENT_HISTORY_INVALID', 503);
+      state.sessions.set(e.aggregateId, { ...session, revoked: true });
+    }
+    else if (e.type === 'enterprise.organization.provisioned') state.organization = e.payload.organization as unknown as Organization;
     else if (e.type === 'enterprise.member.created' || e.type === 'enterprise.member.invited') state.members.set(e.aggregateId, e.payload.member as unknown as OrganizationMember);
     else if (e.type === 'enterprise.member.invitation_accepted') {
       const current = state.members.get(e.aggregateId);
@@ -50,15 +56,20 @@ export function reduceIdentityEvents(events: readonly EnterpriseRecord[]): Ident
   }
   return state;
 }
-export function requireActor(state: IdentityState, actor: EnterpriseActor, invited = false): OrganizationMember {
+export function requireActor(state: IdentityState, actor: EnterpriseActor, invited = false, now = new Date().toISOString()): OrganizationMember {
   if (!state.organization || state.organization.id !== actor.tenantId) throw new EnterpriseError('ORGANIZATION_NOT_FOUND', 404);
+  if (actor.sessionId !== undefined) {
+    const session = state.sessions.get(actor.sessionId);
+    if (!session || session.revoked || session.principalId !== actor.principalId || session.sessionEpoch !== actor.sessionEpoch
+      || !Number.isFinite(Date.parse(session.expiresAt)) || Date.parse(session.expiresAt) <= Date.parse(now)) throw new EnterpriseError('AUTHENTICATION_REQUIRED', 401);
+  }
   const member = state.members.get(actor.principalId);
   if (!member || member.tenantId !== actor.tenantId || (member.status !== 'active' && !(invited && member.status === 'invited'))) throw new EnterpriseError('MEMBER_UNAVAILABLE');
   if (member.sessionEpoch !== actor.sessionEpoch) throw new EnterpriseError('SESSION_REVOKED', 401);
   return member;
 }
-const requireAdmin = (state: IdentityState, actor: EnterpriseActor) => {
-  const member = requireActor(state, actor);
+const requireAdmin = (state: IdentityState, actor: EnterpriseActor, now: string) => {
+  const member = requireActor(state, actor, false, now);
   if (!member.organizationAdmin) throw new EnterpriseError('ORGANIZATION_ADMIN_REQUIRED');
   return member;
 };
@@ -100,7 +111,7 @@ export class EnterpriseIdentityService {
     return member;
   }
   async assertActor(actor: EnterpriseActor, invited = false): Promise<OrganizationMember> {
-    return requireActor(reduceIdentityEvents(await this.options.repository.read(actor.tenantId)), actor, invited);
+    return requireActor(reduceIdentityEvents(await this.options.repository.read(actor.tenantId)), actor, invited, this.now());
   }
   private async command<T>(actor: EnterpriseActor, key: string, operation: string, input: unknown, authorize: (state: IdentityState) => void,
     work: (state: IdentityState) => { events: readonly EnterpriseRecord[]; value: T }): Promise<T> {
@@ -114,14 +125,16 @@ export class EnterpriseIdentityService {
       }
       const result = work(state);
       return { events: [...result.events, this.event('enterprise.identity.command_recorded', 'enterprise.identity.command', id, 0, actor.principalId,
-        { requestDigest, response: result.value })], value: result.value };
+        { requestDigest, response: result.value })], value: result.value, assertBeforeCommit: () => {
+          const current = reduceIdentityEvents(records); authorize(current); work(current);
+        } };
     });
   }
   async invite(actor: EnterpriseActor, key: string, input: { id: string; subject: string; displayName: string; organizationAdmin: boolean }) {
     text(input.id); text(input.subject); text(input.displayName);
     if (typeof input.organizationAdmin !== 'boolean') throw new EnterpriseError('INVALID_BODY', 400);
     const token = randomBytes(32).toString('base64url');
-    return this.command(actor, key, 'invite', input, state => { requireAdmin(state, actor); }, state => {
+    return this.command(actor, key, 'invite', input, state => { requireAdmin(state, actor, this.now()); }, state => {
       if (state.members.has(input.id) || [...state.members.values()].some(m => m.subject === input.subject && m.status !== 'removed')) throw new EnterpriseError('IDENTITY_ALREADY_BOUND', 409);
       if ([...state.members.values()].filter(m => m.status !== 'removed').length >= state.organization!.maxMembers) throw new EnterpriseError('MEMBER_QUOTA_EXCEEDED', 409);
       const member: OrganizationMember = { ...input, tenantId: actor.tenantId, issuer: state.organization!.issuer, status: 'invited',
@@ -131,7 +144,7 @@ export class EnterpriseIdentityService {
     });
   }
   async acceptInvitation(actor: EnterpriseActor, key: string, memberId: string, expectedStreamVersion: number, token: string) {
-    return this.command(actor, key, 'accept_invitation', { memberId, expectedStreamVersion, tokenHash: opaqueHash(token) }, state => { requireActor(state, actor, true); }, state => {
+    return this.command(actor, key, 'accept_invitation', { memberId, expectedStreamVersion, tokenHash: opaqueHash(token) }, state => { requireActor(state, actor, true, this.now()); }, state => {
       if (actor.principalId !== memberId) throw new EnterpriseError('INVITATION_IDENTITY_MISMATCH');
       const member = state.members.get(memberId)!; requireVersion(member.streamVersion, expectedStreamVersion);
       if (member.status !== 'invited' || !member.invitedUntil || Date.parse(member.invitedUntil) <= Date.parse(this.now())
@@ -145,7 +158,7 @@ export class EnterpriseIdentityService {
     command: { type: 'disable' | 'activate' | 'remove' } | { type: 'rebind'; subject: string }) {
     if (!['disable', 'activate', 'remove', 'rebind'].includes(command.type)) throw new EnterpriseError('INVALID_BODY', 400);
     if (command.type === 'rebind') text(command.subject);
-    return this.command(actor, key, 'member_command', { memberId, expectedStreamVersion, command }, state => { requireAdmin(state, actor); }, state => {
+    return this.command(actor, key, 'member_command', { memberId, expectedStreamVersion, command }, state => { requireAdmin(state, actor, this.now()); }, state => {
       const current = state.members.get(memberId);
       if (!current || current.status === 'removed') throw new EnterpriseError('MEMBER_UNAVAILABLE');
       requireVersion(current.streamVersion, expectedStreamVersion);
@@ -164,20 +177,20 @@ export class EnterpriseIdentityService {
   async createWorkspace(actor: EnterpriseActor, key: string, input: { name: string; mode: 'builtin' | 'sales' }) {
     text(input.name); if (!['builtin', 'sales'].includes(input.mode)) throw new EnterpriseError('INVALID_BODY', 400);
     const id = randomUUID();
-    return this.command(actor, key, 'workspace_create', input, state => { requireAdmin(state, actor); }, state => {
+    return this.command(actor, key, 'workspace_create', input, state => { requireAdmin(state, actor, this.now()); }, state => {
       if (state.workspaces.size) throw new EnterpriseError('WORKSPACE_LIMIT_EXCEEDED', 409);
       const workspace: EnterpriseWorkspace = { ...input, id, tenantId: actor.tenantId, streamVersion: 1 };
       return { events: [this.event('enterprise.workspace.created', 'enterprise.workspace', id, 0, actor.principalId, { workspace })], value: workspace };
     });
   }
   async listWorkspaces(actor: EnterpriseActor) {
-    const state = reduceIdentityEvents(await this.options.repository.read(actor.tenantId)); requireActor(state, actor);
+    const state = reduceIdentityEvents(await this.options.repository.read(actor.tenantId)); requireActor(state, actor, false, this.now());
     return [...state.workspaces.values()];
   }
   async organization(actor: EnterpriseActor) {
-    const state = reduceIdentityEvents(await this.options.repository.read(actor.tenantId)); requireActor(state, actor, true); return state.organization!;
+    const state = reduceIdentityEvents(await this.options.repository.read(actor.tenantId)); requireActor(state, actor, true, this.now()); return state.organization!;
   }
   async listMembers(actor: EnterpriseActor) {
-    const state = reduceIdentityEvents(await this.options.repository.read(actor.tenantId)); requireAdmin(state, actor); return [...state.members.values()].map(memberView);
+    const state = reduceIdentityEvents(await this.options.repository.read(actor.tenantId)); requireAdmin(state, actor, this.now()); return [...state.members.values()].map(memberView);
   }
 }

@@ -1,6 +1,6 @@
+#!/usr/bin/env node
 // SPDX-License-Identifier: Apache-2.0
 import { VaultMcpSecretStore } from "./lib/enterprise-mcp-secrets.mjs";
-#!/usr/bin/env node
 
 import { createHash } from "node:crypto";
 

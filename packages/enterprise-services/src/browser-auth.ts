@@ -43,7 +43,9 @@ export class BrowserAuthService {
       returnTo, expiresAt: new Date(Date.parse(this.now()) + 600000).toISOString(), consumed: false };
     return this.options.repository.transact(tenantId, records => {
       if (!reduceIdentityEvents(records).organization) throw new EnterpriseError('ORGANIZATION_NOT_FOUND', 404);
-      return { events: [this.event('enterprise.auth.login_started', id, 0, 'authentication', { attempt })], value: { ...attempt, browserSecret } };
+      return { events: [this.event('enterprise.auth.login_started', id, 0, 'authentication', { attempt })], value: { ...attempt, browserSecret }, assertBeforeCommit: () => {
+        if (Date.parse(attempt.expiresAt) <= Date.parse(this.now())) throw new EnterpriseError('LOGIN_ATTEMPT_INVALID', 401);
+      } };
     });
   }
   async claimLogin(tenantId: string, id: string, browserSecret: string, state: string): Promise<LoginAttempt> {
@@ -51,7 +53,9 @@ export class BrowserAuthService {
       const attempt = authState(records).logins.get(id);
       if (!attempt || attempt.consumed || Date.parse(attempt.expiresAt) <= Date.parse(this.now()) || !equalOpaque(attempt.state, state)
         || !equalOpaque(attempt.browserHash, opaqueHash(browserSecret))) throw new EnterpriseError('LOGIN_ATTEMPT_INVALID', 401);
-      return { events: [this.event('enterprise.auth.login_consumed', id, 1, 'authentication', {})], value: attempt };
+      return { events: [this.event('enterprise.auth.login_consumed', id, 1, 'authentication', {})], value: attempt, assertBeforeCommit: () => {
+        if (Date.parse(attempt.expiresAt) <= Date.parse(this.now())) throw new EnterpriseError('LOGIN_ATTEMPT_INVALID', 401);
+      } };
     });
   }
   /** This proof is produced by the Host OIDC adapter, never by a JSON request body. */
@@ -61,19 +65,22 @@ export class BrowserAuthService {
       const state = reduceIdentityEvents(records);
       const member = [...state.members.values()].find(item => item.issuer === proof.issuer && item.subject === proof.subject && item.status !== 'removed');
       if (state.organization?.issuer !== proof.issuer || !member) throw new EnterpriseError('IDENTITY_NOT_BOUND', 401);
-      requireActor(state, { tenantId, principalId: member.id, sessionEpoch: member.sessionEpoch }, true);
+      requireActor(state, { tenantId, principalId: member.id, sessionEpoch: member.sessionEpoch }, true, this.now());
       if (member.status === 'invited' && (!member.invitedUntil || Date.parse(member.invitedUntil) <= Date.parse(this.now()))) throw new EnterpriseError('INVITATION_INVALID', 401);
       const session: BrowserSession = { id: opaqueHash(token), principalId: member.id, sessionEpoch: member.sessionEpoch, csrfToken: opaque(),
         expiresAt: new Date(Date.parse(this.now()) + 8 * 3600000).toISOString(), revoked: false, streamVersion: 1 };
-      return { events: [this.event('enterprise.auth.session_created', session.id, 0, member.id, { session })], value: { token, session, member } };
+      return { events: [this.event('enterprise.auth.session_created', session.id, 0, member.id, { session })], value: { token, session, member }, assertBeforeCommit: () => {
+        if (Date.parse(session.expiresAt) <= Date.parse(this.now())) throw new EnterpriseError('AUTHENTICATION_REQUIRED', 401);
+        if (member.status === 'invited' && (!member.invitedUntil || Date.parse(member.invitedUntil) <= Date.parse(this.now()))) throw new EnterpriseError('INVITATION_INVALID', 401);
+      } };
     });
   }
   async resolveSession(tenantId: string, token: string): Promise<{ actor: EnterpriseActor; session: BrowserSession; member: OrganizationMember }> {
     const records = await this.options.repository.read(tenantId);
     const session = authState(records).sessions.get(opaqueHash(token));
     if (!session || session.revoked || Date.parse(session.expiresAt) <= Date.parse(this.now())) throw new EnterpriseError('AUTHENTICATION_REQUIRED', 401);
-    const actor = { tenantId, principalId: session.principalId, sessionEpoch: session.sessionEpoch };
-    const member = requireActor(reduceIdentityEvents(records), actor, true);
+    const actor = { tenantId, principalId: session.principalId, sessionEpoch: session.sessionEpoch, sessionId: session.id };
+    const member = requireActor(reduceIdentityEvents(records), actor, true, this.now());
     return { actor, session, member };
   }
   async logout(tenantId: string, token: string): Promise<void> {

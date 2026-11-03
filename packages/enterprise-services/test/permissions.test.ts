@@ -95,3 +95,13 @@ test('角色或共享到期后不能继续读取，修改旧查询结果不能�
   f.advance('2027-01-01T00:00:00.000Z');
   await assert.rejects(f.permissions.assertAccess(f.actor('sales-a'), object, 'read'), { code: 'OBJECT_ACCESS_DENIED' });
 });
+
+test('批准操作的字段类别不代替读取许可，审批前必须能读取关键字段', async () => {
+  const f = await fixture();
+  await f.permissions.grantRole(f.admin, 'approve-without-read', { id: 'approve-only', workspaceId: f.workspace.id, principalId: 'manager', role: 'sales_manager',
+    scope: { kind: 'workspace' }, operations: ['business_approve'], fieldClasses: ['public', 'price'], expiresAt: '2027-01-01T00:00:00.000Z' });
+  await assert.rejects(f.permissions.assertBusinessDecision(f.actor('manager'), f.ref('quote_version', 'quote'), 'sales-a'), { code: 'OBJECT_ACCESS_DENIED' });
+  await f.permissions.grantRole(f.admin, 'read-public-only', { id: 'read-only', workspaceId: f.workspace.id, principalId: 'manager', role: 'sales_manager',
+    scope: { kind: 'workspace' }, operations: ['read'], fieldClasses: ['public'], expiresAt: '2027-01-01T00:00:00.000Z' });
+  await assert.rejects(f.permissions.assertBusinessDecision(f.actor('manager'), f.ref('quote_version', 'quote'), 'sales-a'), { code: 'FIELD_ACCESS_DENIED' });
+});

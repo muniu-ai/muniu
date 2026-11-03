@@ -74,6 +74,14 @@ export function createEnterpriseEventRepository(options: { store: KernelStore; c
           }));
           try {
             await options.store.transact(tenantId, tx => {
+              if (change.assertBeforeCommit) {
+                if (change.assertBeforeCommit.constructor.name === 'AsyncFunction') throw new EnterpriseError('COMMIT_GUARD_INVALID', 503);
+                const result: unknown = change.assertBeforeCommit();
+                if (result !== undefined) {
+                  if (result instanceof Promise) void result.catch(() => {});
+                  throw new EnterpriseError('COMMIT_GUARD_INVALID', 503);
+                }
+              }
               for (const item of prepared) tx.appendEvent({ tenantId, aggregateType: item.record.aggregateType, aggregateId: item.record.aggregateId,
                 expectedStreamVersion: item.record.expectedStreamVersion, type: item.record.type, actorId: item.record.actorId,
                 generation: 0, correlationId: item.recordId, publicPayload: { recordId: item.recordId }, protectedPayloadRef: item.protectedPayloadRef });

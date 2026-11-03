@@ -75,3 +75,64 @@ test('权限与额度从加密事件重放，两个实例并发撤销仅接受�
   await assert.rejects(restored.assertAccess(actor, { tenantId: 'tenant', workspaceId: workspace.id, objectType: 'order', objectId: 'order', fieldClasses: { amount: 'price' } }, 'read'), { code: 'OBJECT_ACCESS_DENIED' });
   assert.equal((await new EnterpriseQuotaService({ repository: repository() }).configuration(actor, workspace.id)).workspace!.tokens, 10000);
 });
+
+test('加密准备之后、事实提交之前重验同步准入，拒绝不得留下事实', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'mn-enterprise-commit-guard-'));
+  const store = new SqliteStorage({ databaseFile: join(root, 'state.sqlite'), hmacKey: randomBytes(32) });
+  t.after(async () => { await store.close(); await rm(root, { recursive: true, force: true }); });
+  const cas = new FileCas({ rootDir: join(root, 'cas') }); let prepared = false;
+  const repository = createEnterpriseEventRepository({ store, keyProvider: new InMemoryKeyProvider(randomBytes(32)), cas: {
+    put: async bytes => { const result = await cas.put(bytes); prepared = true; return result; },
+    get: digest => cas.get(digest), has: digest => cas.has(digest), gcOrphans: (refs, cutoff) => cas.gcOrphans(refs, cutoff),
+  } });
+  const event = { type: 'enterprise.fixture.created', aggregateType: 'enterprise.fixture', aggregateId: 'one', expectedStreamVersion: 0,
+    actorId: 'fixture', occurredAt: new Date().toISOString(), payload: {} };
+  await assert.rejects(repository.transact('tenant', () => ({ events: [event], value: 'must not commit', assertBeforeCommit() {
+    assert.equal(prepared, true); throw new Error('PERMISSION_EXPIRED_AFTER_ENCRYPTION');
+  } })), /PERMISSION_EXPIRED_AFTER_ENCRYPTION/);
+  assert.equal((await store.readEventHistory('tenant', 0, 100)).events.length, 0);
+});
+
+test('加密等待期间登录期限与会话期限到期均拒绝提交', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'mn-enterprise-expiry-'));
+  const store = new SqliteStorage({ databaseFile: join(root, 'state.sqlite'), hmacKey: randomBytes(32) });
+  t.after(async () => { await store.close(); await rm(root, { recursive: true, force: true }); });
+  let clock = '2026-11-02T01:00:00.000Z', delayed = false;
+  const cas = new FileCas({ rootDir: join(root, 'cas') });
+  const repository = createEnterpriseEventRepository({ store, keyProvider: new InMemoryKeyProvider(randomBytes(32)), cas: {
+    put: async bytes => { const result = await cas.put(bytes); if (delayed) clock = '2026-11-03T01:00:00.000Z'; return result; },
+    get: digest => cas.get(digest), has: digest => cas.has(digest), gcOrphans: (refs, cutoff) => cas.gcOrphans(refs, cutoff),
+  } });
+  const identity = new EnterpriseIdentityService({ repository, now: () => clock }), auth = new BrowserAuthService({ repository, now: () => clock });
+  await identity.provision({ tenantId: 'tenant', name: '合成企业', issuer: 'https://issuer.test/', maxMembers: 20,
+    administrator: { id: 'admin', subject: 'admin', displayName: '管理员' } });
+  const login = await auth.startLogin('tenant', '/'); delayed = true;
+  await assert.rejects(auth.claimLogin('tenant', login.id, login.browserSecret, login.state), { code: 'LOGIN_ATTEMPT_INVALID' });
+  delayed = false; clock = '2026-11-02T01:01:00.000Z';
+  await auth.claimLogin('tenant', login.id, login.browserSecret, login.state);
+  const session = await auth.createSession('tenant', { issuer: 'https://issuer.test/', subject: 'admin' });
+  const { actor } = await auth.resolveSession('tenant', session.token); delayed = true;
+  await assert.rejects(identity.createWorkspace(actor, 'workspace', { name: '不应提交', mode: 'builtin' }), { code: 'AUTHENTICATION_REQUIRED' });
+  assert.equal((await repository.read('tenant')).filter(event => event.type === 'enterprise.workspace.created').length, 0);
+});
+
+test('另一实例在加密等待期间注销会话，原命令不能靠旧成员版本提交', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'mn-enterprise-logout-'));
+  const store = new SqliteStorage({ databaseFile: join(root, 'state.sqlite'), hmacKey: randomBytes(32) });
+  t.after(async () => { await store.close(); await rm(root, { recursive: true, force: true }); });
+  const cas = new FileCas({ rootDir: join(root, 'cas') }), keyProvider = new InMemoryKeyProvider(randomBytes(32));
+  let beforeCommit: (() => Promise<void>) | undefined;
+  const repository = createEnterpriseEventRepository({ store, keyProvider, cas: {
+    put: async bytes => { const result = await cas.put(bytes); const hook = beforeCommit; beforeCommit = undefined; await hook?.(); return result; },
+    get: digest => cas.get(digest), has: digest => cas.has(digest), gcOrphans: (refs, cutoff) => cas.gcOrphans(refs, cutoff),
+  } });
+  const identity = new EnterpriseIdentityService({ repository }), auth = new BrowserAuthService({ repository });
+  const secondAuth = new BrowserAuthService({ repository: createEnterpriseEventRepository({ store, cas, keyProvider }) });
+  await identity.provision({ tenantId: 'tenant', name: '合成企业', issuer: 'https://issuer.test/', maxMembers: 20,
+    administrator: { id: 'admin', subject: 'admin', displayName: '管理员' } });
+  const session = await auth.createSession('tenant', { issuer: 'https://issuer.test/', subject: 'admin' });
+  const { actor } = await auth.resolveSession('tenant', session.token);
+  beforeCommit = () => secondAuth.logout('tenant', session.token);
+  await assert.rejects(identity.createWorkspace(actor, 'workspace', { name: '不应提交', mode: 'builtin' }), { code: 'AUTHENTICATION_REQUIRED' });
+  assert.equal((await repository.read('tenant')).filter(event => event.type === 'enterprise.workspace.created').length, 0);
+});
