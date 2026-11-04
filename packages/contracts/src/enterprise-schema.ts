@@ -3,6 +3,7 @@ import type { JsonObject } from './json.js';
 import { ENTERPRISE_BUSINESS_SCHEMAS } from './enterprise-business-schema.js';
 import { ENTERPRISE_OBJECT_TYPES } from './enterprise-object-types.js';
 export { ENTERPRISE_OBJECT_TYPES } from './enterprise-object-types.js';
+import { ENTERPRISE_EXECUTION_SCHEMAS } from './enterprise-execution-schema.js';
 import { ENTERPRISE_ACCESS_SCHEMAS } from './enterprise-access-schema.js';
 import { ENTERPRISE_IDENTITY_SCHEMAS } from './enterprise-identity-schema.js';
 const text = { type: 'string', minLength: 1 };
@@ -31,6 +32,7 @@ export const ENTERPRISE_SCHEMAS: Readonly<Record<string, JsonObject>> = {
   ...ENTERPRISE_IDENTITY_SCHEMAS,
   ...ENTERPRISE_BUSINESS_SCHEMAS,
   ...ENTERPRISE_ACCESS_SCHEMAS,
+  ...ENTERPRISE_EXECUTION_SCHEMAS,
   BusinessObjectRef: object({ ...scope, objectType: enumeration(...ENTERPRISE_OBJECT_TYPES), objectId: text, streamVersion: version, digest }),
   ExternalObjectRef: object({ ...scope, provider: text, objectType: enumeration(...ENTERPRISE_OBJECT_TYPES), objectId: text,
     sourceVersion: text, digest, observedAt: timestamp, permissionRef: text }),

@@ -38,3 +38,5 @@ export * from "./enterprise-host.js";
 export * from "./enterprise-event-repository.js";
 export type { EnterpriseOidcProvider } from "./enterprise-oidc.js";
 export * from "./enterprise-local.js";
+export * from './enterprise-execution-runtime.js';
+export * from './enterprise-execution-config.js';

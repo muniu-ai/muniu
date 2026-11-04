@@ -17,6 +17,8 @@ test('新入口使用独立状态标识，拒绝非空旧目录，重启保持�
     organizations: [{ tenantId: 'tenant', name: '合成企业', issuer: 'https://issuer.test/', maxMembers: 200,
       administrator: { id: 'admin', subject: 'admin-subject', displayName: '管理员' } }] };
   const host = await startEnterpriseLocalHost(config);
+  assert.ok((host as any).executionRuntime, '企业入口必须装配执行准入服务');
+  await (host as any).executionRuntime.bridge.store.transact('tenant',(tx:any)=>assert.equal(tx.protectedFactStorage,true));
   assert.equal((await host.dispatch(new Request('http://127.0.0.1:7319/v2/health'))).status, 200);
   await host.close();
   const marker = JSON.parse(await readFile(join(config.stateRoot, 'enterprise-state.json'), 'utf8'));

@@ -1,4 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
+import { KernelError } from '@mn/kernel';
+import { EnterpriseExecutionConfigurationService } from './enterprise-execution-config.js';
+import type { EnterpriseExecutionRuntime } from './enterprise-execution-runtime.js';
+import { dispatchEnterpriseExecution } from './enterprise-execution-api.js';
 import { randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { ENTERPRISE_HTTP_OPERATIONS, createEnterpriseOpenApiDocument } from '@mn/contracts';
@@ -10,6 +14,7 @@ import { dispatchEnterpriseAccess } from './enterprise-access-api.js';
 import { createEnterpriseOidc, type EnterpriseOidcProvider } from './enterprise-oidc.js';
 
 export interface EnterpriseHostOptions {
+  readonly executionRuntime?: EnterpriseExecutionRuntime;
   readonly repository: EnterpriseRepository;
   readonly origin: string;
   readonly profile: 'development' | 'hosted';
@@ -63,6 +68,7 @@ export function createEnterpriseHost(options: EnterpriseHostOptions) {
   const cookie = (name: string, value: string, age: number) => `${name}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${age}${secure ? '; Secure' : ''}`;
   const identity = new EnterpriseIdentityService(options), auth = new BrowserAuthService(options), permissions = new EnterprisePermissionService(options), quotas = new EnterpriseQuotaService(options);
   const business = new EnterpriseBusinessService(options);
+  const executionConfiguration = new EnterpriseExecutionConfigurationService(options);
   const oidc = createEnterpriseOidc({ providers: options.providers, redirectUri: `${options.origin}/v2/auth/callback`, development: options.profile === 'development' });
   const headers = () => new Headers({ 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff' });
   const reply = (data: unknown, status: number, traceId: string, schema?: keyof EnterpriseContractTypes) => {
@@ -139,6 +145,8 @@ export function createEnterpriseHost(options: EnterpriseHostOptions) {
       if (access.handled) return reply(access.value, 200, traceId, op.response);
       const businessResult = await dispatchEnterpriseBusiness({ operationId: op.id, params, input, actor: current.actor, key, business });
       if (businessResult.handled) return reply(businessResult.value, 200, traceId, op.response);
+      const executionResult = await dispatchEnterpriseExecution({operationId:op.id,params,input,actor:current.actor,key,configuration:executionConfiguration,runtime:options.executionRuntime});
+      if(executionResult.handled)return reply(executionResult.value,200,traceId,op.response);
       let data: unknown;
       switch (op.id) {
         case 'enterpriseSession': data = { tenantId: current.actor.tenantId, principalId: current.member.id, displayName: current.member.displayName,
@@ -162,9 +170,9 @@ export function createEnterpriseHost(options: EnterpriseHostOptions) {
       }
       return reply(data, ['createEnterpriseWorkspace', 'inviteOrganizationMember'].includes(op.id) ? 201 : 200, traceId, op.response);
     } catch (error) {
-      const own = error instanceof EnterpriseError;
-      const status = own ? error.status : callback ? 401 : 503;
-      const code = own ? error.code : callback ? 'AUTHENTICATION_FAILED' : 'SERVICE_UNAVAILABLE';
+      const own = error instanceof EnterpriseError, kernel = error instanceof KernelError;
+      const status = own ? error.status : kernel ? (/NOT_FOUND/u.test(error.code)?404:/AUTHORIZATION_REVOKED|FORBIDDEN|HUMAN_APPROVAL/u.test(error.code)?403:409) : callback ? 401 : 503;
+      const code = own || kernel ? error.code : callback ? 'AUTHENTICATION_FAILED' : 'SERVICE_UNAVAILABLE';
       const h = headers(); h.set('Content-Type', 'application/json; charset=utf-8');
       if (callback) h.append('Set-Cookie', cookie(loginName, '', 0));
       return new Response(JSON.stringify({ code, message: status === 401 ? '登录已失效，请重新登录' : '请求未完成，请核对权限、版本或服务状态',
@@ -172,7 +180,7 @@ export function createEnterpriseHost(options: EnterpriseHostOptions) {
         retryable: code === 'STREAM_VERSION_CONFLICT' || code === 'CONCURRENT_COMMAND_RETRY' || code === 'SERVICE_UNAVAILABLE' }), { status, headers: h });
     }
   };
-  return { identity, permissions, quotas, dispatch,
+  return { identity, permissions, quotas, executionConfiguration, executionRuntime:options.executionRuntime, dispatch,
     async listen(input: { host?: string; port: number }) {
       if (server) throw new Error('Host 已启动');
       server = createServer({ requestTimeout: 30000, headersTimeout: 10000, maxHeaderSize: 16384 }, async (incoming, outgoing) => {

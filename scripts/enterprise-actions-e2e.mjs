@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import assert from 'node:assert/strict';
+import {verifyEnterpriseAdmission} from './lib/enterprise-admission-fixture.mjs';
 import {randomBytes,randomUUID} from 'node:crypto';
 import {createServer} from 'node:http';
 import {execFile,fork} from 'node:child_process';
@@ -15,21 +16,28 @@ import {waitForFixturePort} from './lib/fixture-network.mjs';
 import {actionFixture} from './lib/enterprise-action-fixture.mjs';
 const exec=promisify(execFile),docker=async(...args)=>(await exec('docker',args,{maxBuffer:1024*1024})).stdout.trim();
 const root=await mkdtemp(join(tmpdir(),'mn-actions-')),name='mn-enterprise-actions-'+randomUUID(),sessions=[];
-let container,server,child;
+let container,server,child;const coordinators=new Map();
 try{
  container=await docker('run','--detach','--name',name,'--memory','192m','--cpus','0.5','--tmpfs','/var/lib/postgresql/data:rw,size=256m','-p','127.0.0.1::5432','-e','POSTGRES_USER=mn','-e','POSTGRES_PASSWORD=synthetic-only','-e','POSTGRES_DB=actions_fixture','postgres:16-alpine');
  const address=await waitForFixturePort(()=>docker('port',container,'5432/tcp'));
  for(let i=0;;i++){const ready=await exec('docker',['exec',container,'pg_isready','-h','127.0.0.1','-U','mn']).then(()=>true,()=>false);if(ready)break;if(i===60)throw new Error('POSTGRES_NOT_READY');await delay(500);}
  const config={connectionString:`postgres://mn:synthetic-only@${address}/actions_fixture`,casRoot:join(root,'cas'),hmac:randomBytes(32).toString('hex'),key:randomBytes(32).toString('hex')};
  const connect=async extra=>{const f=await actionFixture({...config,...extra},{workerId:'worker-'+sessions.length,offset:extra?.offset??0});sessions.push(f);return f;};
- const a=await connect();await a.pool.query("create schema fixture_provider;create table fixture_provider.receipts(operation_key text primary key, receipt jsonb not null, calls integer not null);create schema mn_v2;create table mn_v2.sentinel(value text);insert into mn_v2.sentinel values('untouched')");
+ const a=await connect();coordinators.set('local',a.coordinator);await a.pool.query("create schema fixture_provider;create table fixture_provider.receipts(operation_key text primary key, receipt jsonb not null, calls integer not null);create schema mn_v2;create table mn_v2.sentinel(value text);insert into mn_v2.sentinel values('untouched')");
+ await a.store.transact('guard-tenant',tx=>{
+  assert.equal(tx.getStreamVersion('guard','counter'),0);tx.appendEvent({tenantId:'guard-tenant',aggregateType:'guard',aggregateId:'counter',expectedStreamVersion:0,type:'guard.created',actorId:'fixture',generation:0,correlationId:'guard',publicPayload:{}});
+  tx.beforeCommit(()=>assert.equal(tx.getStreamVersion('guard','counter'),1));
+ });
+ let authorized=true;const put=a.cas.put.bind(a.cas);a.cas.put=async bytes=>{const result=await put(bytes);authorized=false;return result;};
+ await assert.rejects(a.store.transact('guard-tenant',tx=>{tx.beforeCommit(()=>{if(!authorized)throw new Error('EXPIRED_AFTER_PROTECTION');});tx.putProjection('guard-protected','item',{streamVersion:1,value:'synthetic'});tx.appendEvent({tenantId:'guard-tenant',aggregateType:'guard',aggregateId:'expired',expectedStreamVersion:0,type:'guard.created',actorId:'fixture',generation:0,correlationId:'guard',publicPayload:{}});}),/EXPIRED_AFTER_PROTECTION/);
+ a.cas.put=put;await a.store.transact('guard-tenant',tx=>{assert.equal(tx.getStreamVersion('guard','expired'),0);assert.equal(tx.getProjection('guard-protected','item'),undefined);});
  server=createServer((request,response)=>{void(async()=>{
   if(request.method==='GET'){const key=decodeURIComponent(request.url.slice('/receipt/'.length));const result=await a.pool.query('select receipt from fixture_provider.receipts where operation_key=$1',[key]);if(!result.rows.length){response.writeHead(404).end();return;}response.setHeader('content-type','application/json');response.end(JSON.stringify(result.rows[0].receipt));return;}
   let raw='';for await(const chunk of request)raw+=chunk;const intent=JSON.parse(raw),time=new Date().toISOString();
-  assert.equal((await a.coordinator.get('local',intent.id)).status,'committed');
+  const committed=await coordinators.get(intent.tenantId)?.get(intent.tenantId,intent.id);assert.equal(committed?.status,'committed');assert.equal(computeActionIntentDigest(intent),committed.actionDigest);
   const receipt={id:'receipt-'+intent.operationKey,tenantId:intent.tenantId,workspaceId:intent.workspaceId,provider:'fixture',operationKey:intent.operationKey,actionDigest:computeActionIntentDigest(intent),status:'succeeded',receivedAt:time,completedAt:time,evidenceRefs:[{id:'proof',tenantId:intent.tenantId,workspaceId:intent.workspaceId,sourceKind:'business_fact',sourceVersion:'1',digest:'c'.repeat(64),permissionRef:'fixture',protectedContentRef:'protected-provider-receipt',locator:{paragraph:'record'}}]};
   await a.pool.query('insert into fixture_provider.receipts values($1,$2,1) on conflict(operation_key) do update set calls=fixture_provider.receipts.calls+1',[intent.operationKey,JSON.stringify(receipt)]);
-  if(intent.operationKey==='lost-response'){request.socket.destroy();return;}response.setHeader('content-type','application/json');response.end(JSON.stringify(receipt));
+  if(intent.operationKey.endsWith('lost-response')){request.socket.destroy();return;}response.setHeader('content-type','application/json');response.end(JSON.stringify(receipt));
  })().catch(()=>{response.writeHead(500).end();});});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));config.providerUrl=`http://127.0.0.1:${server.address().port}`;
  await a.kernel.bootstrapLocal('bootstrap');const workspace=await a.kernel.createWorkspace('local','local-owner','workspace',{name:'动作验收',viewMode:'business',pluginIds:['business']});config.workspaceId=workspace.id;
  const thread=await a.kernel.createThread('local','local-owner','thread',{workspaceId:workspace.id,pluginId:'business',subject:'合成任务'});
@@ -59,6 +67,7 @@ try{
  const raw=await a.pool.query('select public_payload::text from mn_enterprise_v1.events');assert.doesNotMatch(JSON.stringify(raw.rows),/CONFIDENTIAL-input-ref|heldCostMinorUnits/);assert.deepEqual((await a.pool.query('select value from mn_v2.sentinel')).rows,[{value:'untouched'}]);
  assert.equal((await a.pool.query('select count(*)::int as count from fixture_provider.receipts where calls<>1')).rows[0].count,0);
  assert.equal((await a.pool.query("select count(*)::int as count from mn_enterprise_v1.outbox where topic='action.queued'")).rows[0].count,4);
+ if(process.argv.includes('--with-enterprise-admission'))await verifyEnterpriseAdmission({store:a.store,cas:a.cas,key:config.key,providerUrl:config.providerUrl,registerCoordinator:(tenant,coordinator)=>coordinators.set(tenant,coordinator),pool:a.pool,rebuild:tenant=>a.kernelStore.rebuildProjections(tenant)});
  process.stdout.write('E3.1 PostgreSQL：双 Worker 竞争、事务派发、响应丢失、SIGKILL、重建、不重放、预算保留、核对去重和取消通过。\n');
 }finally{
  child?.kill('SIGKILL');if(server){server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}

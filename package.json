@@ -98,7 +98,9 @@
     "verify:business-domain": "npm run build && npm run test -w @mn/plugin-business && tsc -p apps/host/tsconfig.test.json && node --test --test-concurrency=1 apps/host/dist-test/test/enterprise-business.test.js apps/host/dist-test/test/enterprise-business-http.test.js apps/host/dist-test/test/enterprise-fulfillment.test.js",
     "verify:business-postgres": "node scripts/enterprise-business-e2e.mjs",
     "verify:enterprise-actions": "npm run build && npm run test -w @mn/kernel && npm run test -w @mn/business-execution && tsc -p apps/worker/tsconfig.test.json && node --test --test-concurrency=1 apps/worker/dist-test/test/provider-action-worker.test.js",
-    "verify:enterprise-actions-postgres": "node scripts/enterprise-actions-e2e.mjs"
+    "verify:enterprise-actions-postgres": "node scripts/enterprise-actions-e2e.mjs",
+    "verify:enterprise-admission": "npm run build && npm run test -w @mn/enterprise-services && tsc -p apps/host/tsconfig.test.json && node --test --test-concurrency=1 apps/host/dist-test/test/enterprise-execution-*.test.js apps/host/dist-test/test/enterprise-kernel-bridge.test.js",
+    "verify:enterprise-admission-postgres": "node scripts/enterprise-actions-e2e.mjs --with-enterprise-admission"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",

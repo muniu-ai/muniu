@@ -7,7 +7,7 @@ import type {
   Job,
   Execution,
 } from "@mn/contracts";
-import { computeEventDigest, computeEventHmac } from "@mn/contracts";
+import { computeEventDigest, computeEventHmac, guardedTransaction } from "@mn/contracts";
 import { StreamVersionConflictError } from "./errors.js";
 import { appendKernelEvent } from './projections.js';
 
@@ -71,6 +71,9 @@ export interface KernelJobInvalidationReceipt extends KernelJobInvalidation {
 }
 
 export interface KernelTransaction {
+  readonly protectedFactStorage?: boolean;
+  getStreamVersion?(aggregateType: string, aggregateId: string): number;
+  beforeCommit?(check: () => void): void;
   appendEvent(request: EventAppendRequest): KernelEventV1;
   getProjection<T>(namespace: string, id: string): T | undefined;
   listProjections<T>(namespace: string): readonly T[];
@@ -150,6 +153,7 @@ export class InMemoryKernelStore implements KernelStore {
     const staged = cloneState(this.state);
     let ordinal = 0;
     const transaction: KernelTransaction = {
+      getStreamVersion: (type,id) => staged.streamVersions.get(`${tenantId}:${type}:${id}`) ?? 0,
       appendEvent: (request) => {
         if (request.tenantId !== tenantId) throw new Error("事务不能跨租户写入");
         const streamKey = `${tenantId}:${request.aggregateType}:${request.aggregateId}`;
@@ -277,9 +281,12 @@ export class InMemoryKernelStore implements KernelStore {
         };
       },
     };
-    const result = work(transaction);
-    this.state = staged;
-    return result;
+    const guarded = guardedTransaction(transaction);
+    try {
+      const result = work(guarded.transaction);
+      if (result && typeof (result as {then?: unknown}).then === 'function') { if(result instanceof Promise)void result.catch(()=>{});throw new TypeError('Transaction callbacks must be synchronous'); }
+      guarded.validate(); this.state = staged; return result;
+    } finally { guarded.close(); }
   }
 
   async readEvents(tenantId: string, afterPosition: number, limit: number): Promise<EventPage> {

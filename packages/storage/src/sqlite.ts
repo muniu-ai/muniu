@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+import { guardedTransaction, PROTECTED_CORE_PROJECTION_NAMESPACES } from '@mn/contracts';
 
 import { randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync } from "node:fs";
@@ -332,8 +333,14 @@ export class SqliteStorage implements StoragePort {
   async transact<T>(tenantId: string, work: (transaction: KernelTransactionLike) => T): Promise<T> {
     this.#assertOpen();
     this.#database.exec("begin immediate");
+    let guarded: ReturnType<typeof guardedTransaction<KernelTransactionLike>> | undefined;
     try {
       const transaction: KernelTransactionLike = {
+        protectedFactStorage: this.#projectionJournal?.namespaces.includes("*non-core") === true && PROTECTED_CORE_PROJECTION_NAMESPACES.every(name => this.#projectionJournal!.namespaces.includes(name)),
+        getStreamVersion: (type,id) => {
+          const row = this.#database.prepare('select stream_version from stream_heads where tenant_id = ? and aggregate_type = ? and aggregate_id = ?').get(tenantId,type,id) as RecordRow | undefined;
+          return row ? safePosition(row.stream_version) : 0;
+        },
         appendEvent: (request) => {
           if (request.tenantId !== tenantId) throw new Error("A storage transaction cannot cross tenants");
           return this.#appendEvent(request, this.#now().toISOString());
@@ -530,17 +537,20 @@ export class SqliteStorage implements StoragePort {
               requestDigest: String(row.request_hash), response: parseJson(row.response_json), createdAt: String(row.created_at) }];
           })) : undefined;
       await journal?.prepare();
-      const result = work(journal?.transaction ?? transaction);
+      guarded = guardedTransaction(journal?.transaction ?? transaction);
+      const result = work(guarded.transaction);
       if (result && typeof (result as { then?: unknown }).then === "function") {
+        if(result instanceof Promise)void result.catch(()=>{});
         throw new TypeError("Storage transaction callbacks must be synchronous");
       }
       await journal?.flush(() => this.#now().toISOString());
+      guarded.validate();
       this.#database.exec("commit");
       return result;
     } catch (error) {
       this.#database.exec("rollback");
       throw error;
-    }
+    } finally { guarded?.close(); }
   }
 
   async commit(batch: StorageCommit): Promise<StorageCommitResult> {

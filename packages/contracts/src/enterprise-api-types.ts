@@ -2,6 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 import type * as Types from "./enterprise-types.js";
 export interface EnterpriseApiInputs {
+  readonly getExecutionConfiguration: { readonly path: { readonly workspaceId: string; }; };
+  readonly configureExecutionSettings: { readonly path: { readonly workspaceId: string; }; readonly body: Types.EnterpriseExecutionSettingsWrite; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
+  readonly writeExecutionPolicy: { readonly path: { readonly workspaceId: string; }; readonly body: Types.EnterpriseExecutionPolicyWrite; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
+  readonly acceptExecutionPolicy: { readonly path: { readonly workspaceId: string; readonly policyId: string; }; readonly body: Types.EnterpriseExecutionPolicyCommand; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
+  readonly revokeExecutionPolicy: { readonly path: { readonly workspaceId: string; readonly policyId: string; }; readonly body: Types.EnterpriseExecutionPolicyCommand; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
+  readonly getEnterpriseAction: { readonly path: { readonly actionId: string; }; };
+  readonly getEnterpriseExecutionApproval: { readonly path: { readonly approvalId: string; }; };
+  readonly decideEnterpriseExecutionApproval: { readonly path: { readonly approvalId: string; }; readonly body: Types.EnterpriseExecutionApprovalDecision; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
+  readonly cancelEnterpriseAction: { readonly path: { readonly actionId: string; }; readonly body: Types.EnterpriseActionControl; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
+  readonly reconcileEnterpriseAction: { readonly path: { readonly actionId: string; }; readonly body: Types.EnterpriseActionControl; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
   readonly getBusinessBalance: { readonly path: { readonly workspaceId: string; readonly orderId: string; readonly asOfDate: string; }; };
   readonly getBusinessProgress: { readonly path: { readonly workspaceId: string; readonly projectId: string; }; };
   readonly getBusinessCosts: { readonly path: { readonly workspaceId: string; readonly projectId: string; }; };
@@ -32,6 +42,16 @@ export interface EnterpriseApiInputs {
   readonly commandOrganizationMember: { readonly path: { readonly organizationId: string; readonly memberId: string; }; readonly body: Types.OrganizationMemberCommand; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
 }
 export interface EnterpriseApiOutputs {
+  readonly getExecutionConfiguration: Types.EnterpriseExecutionConfiguration;
+  readonly configureExecutionSettings: Types.EnterpriseExecutionSettings;
+  readonly writeExecutionPolicy: Types.EnterpriseExecutionPolicyView;
+  readonly acceptExecutionPolicy: Types.EnterpriseExecutionPolicyView;
+  readonly revokeExecutionPolicy: Types.EnterpriseExecutionPolicyView;
+  readonly getEnterpriseAction: Types.EnterpriseActionView;
+  readonly getEnterpriseExecutionApproval: Types.EnterpriseExecutionApprovalView;
+  readonly decideEnterpriseExecutionApproval: Types.EnterpriseActionView;
+  readonly cancelEnterpriseAction: Types.EnterpriseActionControlResult;
+  readonly reconcileEnterpriseAction: Types.EnterpriseActionView;
   readonly getBusinessBalance: Types.EnterpriseOrderBalance;
   readonly getBusinessProgress: Types.EnterpriseProjectProgress;
   readonly getBusinessCosts: Types.EnterpriseProjectCosts;

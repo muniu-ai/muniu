@@ -22,5 +22,5 @@ export async function actionFixture(config,{offset=0,workerId='worker',afterComm
   async executeAction(intent){const response=await fetch(config.providerUrl+'/execute',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(intent)});if(!response.ok)throw new Error('PROVIDER_REJECTED');return {status:'supported',value:await response.json()};},
   async getReceipt(operationKey){const response=await fetch(config.providerUrl+'/receipt/'+encodeURIComponent(operationKey));if(!response.ok)throw new Error('RECEIPT_UNKNOWN');return {status:'supported',value:await response.json()};}});
  const worker=(workspaceId)=>new AgentOsWorker({id:workerId,store,now:()=>new Date(now()),lock:{engineLockDigest:'fixture',expectedEngineLockDigest:'fixture',pluginLockDigest:'fixture',expectedPluginLockDigest:'fixture'},handlers:{[PROVIDER_ACTION_JOB_KIND]:createProviderActionWorkerHandler({store,coordinator,now,resolveProvider:async()=>provider(workspaceId),usageForReceipt:()=>({tokens:2,costMinorUnits:'3',currency:'CNY'})})}});
- return {pool,kernelStore,store,kernel,coordinator,worker,provider,now,close:()=>pool.end()};
+ return {cas:projectionJournal.cas,pool,kernelStore,store,kernel,coordinator,worker,provider,now,close:()=>pool.end()};
 }

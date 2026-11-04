@@ -11,11 +11,12 @@ export const PROVIDER_ACTION_NAMESPACE = 'provider.action';
 export interface CoordinatedAction extends ActionIntent {
   readonly executionId: string; readonly toolId: string; readonly toolVersion: string; readonly actionDigest: string;
   readonly requestDigest: string; readonly resourceKey: string; readonly jobId?: string; readonly receipt?: ActionReceipt;
+  readonly cancelRequestedAt?: string; readonly cancelRequestedBy?: string;
   readonly localOutcome?: 'cancelled'; readonly createdAt: string; readonly updatedAt: string;
 }
 export interface ActionPolicyContext {
   readonly action: ActionIntent; readonly execution: Execution; readonly actorId: string;
-  readonly phase: 'prepare' | 'read' | 'queue' | 'dispatch' | 'cancel' | 'reconcile';
+  readonly phase: 'prepare' | 'read' | 'queue' | 'dispatch' | 'cancel' | 'reconcile' | 'inflight';
   readonly lease?: KernelJobLeaseAssertion;
 }
 type PreparedActionInput = Omit<ActionIntent, 'streamVersion' | 'status' | 'reservationId' | 'executionApprovalRef'>;
@@ -24,6 +25,17 @@ interface PreparationOptions {
   readonly toolId: string; readonly toolVersion: string; readonly amount: BudgetAmountV1;
 }
 function fail(code: string): never { throw new KernelError(code, '动作尚未满足授权、版本或回执条件', '核对原操作、当前授权和业务系统回执'); }
+
+/** A meter is a synchronous trusted reader; rejected promises cannot escape the accounting boundary. */
+export function verifiedActionUsage(meter:(receipt:ActionReceipt,action:CoordinatedAction)=>BudgetAmountV1,receipt:ActionReceipt,action:CoordinatedAction):BudgetAmountV1 {
+  const value:unknown=meter(receipt,action);
+  if(value&&typeof (value as {then?:unknown}).then==='function'){
+    void Promise.resolve(value).catch(()=>{});fail('ACTION_USAGE_UNVERIFIED');
+  }
+  const usage=value as BudgetAmountV1|undefined;
+  if(!usage||!Number.isSafeInteger(usage.tokens)||usage.tokens<0||!/^(0|[1-9]\d{0,29})$/u.test(usage.costMinorUnits)||!/^[A-Z]{3}$/u.test(usage.currency))fail('ACTION_USAGE_UNVERIFIED');
+  return usage!;
+}
 
 /** One provider-action Execution owns one effect. All state uses the existing Kernel transaction and Job store. */
 export class ActionCoordinator {
@@ -80,6 +92,9 @@ export class ActionCoordinator {
       argumentsDigest: action.actionDigest, resourceRefs: resources, resourcesDigest: sha256(resources), authorityCommitment: authority!.commitment, expiresAt: action.expiresAt };
   }
   async prepare(input: PreparedActionInput, options: PreparationOptions): Promise<CoordinatedAction> {
+    return this.options.store.transact(input.tenantId, tx => this.prepareInTransaction(tx,input,options));
+  }
+  prepareInTransaction(tx: KernelTransaction,input: PreparedActionInput,options: PreparationOptions): CoordinatedAction {
     parseEnterpriseContract('ActionIntent', { ...input, reservationId: 'pending', status: 'prepared', streamVersion: 1 });
     if (!options.idempotencyKey || !options.toolId || !options.toolVersion || input.target.tenantId !== input.tenantId || input.target.workspaceId !== input.workspaceId
       || ('provider' in input.target && input.target.provider !== input.provider) || (input.action === 'issue_quote_package' && !input.businessApprovalRef)) fail('ACTION_INPUT_INVALID');
@@ -87,7 +102,6 @@ export class ActionCoordinator {
     const { idempotencyKey: _key, ...executionContext } = options;
     const requestDigest = sha256({ semantic, executionContext });
     const resourceKey = sha256([input.tenantId, input.workspaceId, input.provider, input.target.objectType, input.target.objectId]);
-    return this.options.store.transact(input.tenantId, tx => {
       const execution = this.execution(tx, { ...input, status: 'prepared', streamVersion: 1, reservationId: 'pending', executionId: options.executionId });
       if (execution.initiatedBy !== options.actorId) fail('ACTION_ACTOR_MISMATCH');
       assertCurrentExecutionAuthorization(tx, execution);
@@ -133,24 +147,20 @@ export class ActionCoordinator {
       tx.putOutbox({ id: `action-prepared:${input.id}`, tenantId: input.tenantId, topic: 'action.prepared', payload: { actionId: input.id, executionId: execution.id }, availableAt: this.now() });
       tx.putIdempotency({ tenantId: input.tenantId, scope: `action.prepare:${options.actorId}`, key: options.idempotencyKey, requestDigest, response: { id: input.id }, createdAt: this.now() });
       return action;
-    });
+
   }
-  async requestApproval(tenantId: string, id: string): Promise<Approval> {
-    const prepared = await this.options.store.transact(tenantId, tx => {
-      const action = this.require(tx, tenantId, id); this.check(tx, action, 'prepare');
-      if (!['prepared', 'awaiting_approval'].includes(action.status)) fail('ACTION_STATE_CONFLICT');
-      return { action, intent: this.toolIntent(tx, action), execution: this.execution(tx, action) };
-    });
-    const result = await this.options.kernel.requestToolApproval(tenantId, prepared.execution.initiatedBy, `action:${id}:approval`, prepared.intent);
-    if (result.mode !== 'approval') fail('ACTION_EXACT_APPROVAL_REQUIRED');
-    const approvalId = result.approval.id;
-    return this.options.store.transact(tenantId, tx => {
-      const action = this.require(tx, tenantId, id);
-      this.check(tx, action, 'prepare', prepared.execution.initiatedBy);
-      if (action.executionApprovalRef && action.executionApprovalRef !== approvalId) fail('ACTION_APPROVAL_CONFLICT');
-      if (!action.executionApprovalRef) this.write(tx, action, { status: 'awaiting_approval', executionApprovalRef: approvalId }, 'action.approval_requested', prepared.execution.initiatedBy);
-      return tx.getProjection<Approval>('approval', approvalId)!;
-    });
+  async requestApproval(tenantId: string,id: string): Promise<Approval> {
+    return this.options.store.transact(tenantId,tx=>this.requestApprovalInTransaction(tx,tenantId,id));
+  }
+  requestApprovalInTransaction(tx: KernelTransaction,tenantId: string,id: string): Approval {
+    const action=this.require(tx,tenantId,id),execution=this.check(tx,action,'prepare');
+    if(!['prepared','awaiting_approval'].includes(action.status))fail('ACTION_STATE_CONFLICT');
+    const result=this.options.kernel.requestToolApprovalInTransaction(tx,tenantId,execution.initiatedBy,`action:${id}:approval`,this.toolIntent(tx,action));
+    if(result.mode!=='approval')fail('ACTION_EXACT_APPROVAL_REQUIRED');
+    const approvalId=result.approval.id;
+    if(action.executionApprovalRef&&action.executionApprovalRef!==approvalId)fail('ACTION_APPROVAL_CONFLICT');
+    if(!action.executionApprovalRef)this.write(tx,action,{status:'awaiting_approval',executionApprovalRef:approvalId},'action.approval_requested',execution.initiatedBy);
+    return tx.getProjection<Approval>('approval',approvalId)!;
   }
   private approval(tx: KernelTransaction, action: CoordinatedAction): ToolCallIntent {
     const intent = this.toolIntent(tx, action), execution = this.execution(tx, action);
@@ -165,8 +175,10 @@ export class ActionCoordinator {
     if (tx.getProjection<Principal>('principal', approval!.decidedBy!)?.kind !== 'human') fail('ACTION_HUMAN_APPROVAL_REQUIRED');
     return intent;
   }
-  async enqueue(tenantId: string, id: string): Promise<CoordinatedAction> {
-    return this.options.store.transact(tenantId, tx => {
+  async enqueue(tenantId: string,id: string): Promise<CoordinatedAction> {
+    return this.options.store.transact(tenantId,tx=>this.enqueueInTransaction(tx,tenantId,id));
+  }
+  enqueueInTransaction(tx: KernelTransaction,tenantId: string,id: string): CoordinatedAction {
       const action = this.require(tx, tenantId, id), execution = this.check(tx, action, 'queue'); this.approval(tx, action);
       if (action.jobId) return action;
       if (!['prepared', 'awaiting_approval'].includes(action.status) || execution.status !== 'running') fail('ACTION_STATE_CONFLICT');
@@ -181,7 +193,7 @@ export class ActionCoordinator {
         executionId: execution.id, generation: action.generation, correlationId: action.operationKey, publicPayload: { workspaceId: action.workspaceId, kind: PROVIDER_ACTION_JOB_KIND } });
       tx.putOutbox({ id: `action-queued:${id}`, tenantId, topic: 'action.queued', payload: { actionId: id, executionId: execution.id, jobId }, availableAt: this.now() });
       return this.write(tx, action, { jobId, status: 'prepared' }, 'action.queued', execution.initiatedBy);
-    });
+
   }
   private lease(tx: KernelTransaction, action: CoordinatedAction, lease: KernelJobLeaseAssertion): KernelJobLeaseAssertion {
     if (!tx.assertJobLease || action.jobId !== lease.jobId) fail('ACTION_LEASE_REQUIRED');
@@ -263,7 +275,9 @@ export class ActionCoordinator {
     });
   }
   async reconcile(tenantId: string, id: string, expectedStreamVersion: number, actorId: string, input: ActionReceipt, usage: BudgetAmountV1): Promise<CoordinatedAction> {
-    return this.options.store.transact(tenantId, tx => {
+    return this.options.store.transact(tenantId,tx=>this.reconcileInTransaction(tx,tenantId,id,expectedStreamVersion,actorId,input,usage));
+  }
+  reconcileInTransaction(tx: KernelTransaction,tenantId: string,id: string,expectedStreamVersion: number,actorId: string,input: ActionReceipt,usage: BudgetAmountV1): CoordinatedAction {
       const action = this.require(tx, tenantId, id); this.check(tx, action, 'reconcile', actorId);
       const receipt = this.receipt(action, input);
       if (action.status === 'settled' && action.receipt && computeActionReceiptDigest(action.receipt) === computeActionReceiptDigest(receipt)) {
@@ -279,10 +293,12 @@ export class ActionCoordinator {
         this.invalidate(tx, action, job, actorId, 'ACTION_RECONCILED');
       }
       return next;
-    });
+
   }
-  async cancelBeforeDispatch(tenantId: string, id: string, actorId: string): Promise<CoordinatedAction> {
-    return this.options.store.transact(tenantId, tx => {
+  async cancelBeforeDispatch(tenantId: string,id: string,actorId: string): Promise<CoordinatedAction> {
+    return this.options.store.transact(tenantId,tx=>this.cancelBeforeDispatchInTransaction(tx,tenantId,id,actorId));
+  }
+  cancelBeforeDispatchInTransaction(tx: KernelTransaction,tenantId: string,id: string,actorId: string): CoordinatedAction {
       const action = this.require(tx, tenantId, id);
       if (['committed', 'needs_reconciliation'].includes(action.status)) fail('ACTION_RECONCILIATION_REQUIRED');
       this.check(tx, action, 'cancel', actorId);
@@ -298,7 +314,16 @@ export class ActionCoordinator {
       const next = this.write(tx, action, { status: 'settled', localOutcome: 'cancelled' }, 'action.cancelled_before_dispatch', actorId);
       tx.putOutbox({ id: `action-result:${action.id}`, tenantId, topic: 'action.result_available', payload: { actionId: action.id, executionId: action.executionId }, availableAt: this.now() });
       return next;
-    });
+
+  }
+  requestCancellationInTransaction(tx: KernelTransaction,tenantId: string,id: string,actorId: string): CoordinatedAction {
+    const action=this.require(tx,tenantId,id);this.check(tx,action,'cancel',actorId);
+    if(action.status==='settled'||action.cancelRequestedAt)return action;
+    if(!['committed','needs_reconciliation'].includes(action.status))return this.cancelBeforeDispatchInTransaction(tx,tenantId,id,actorId);
+    const execution=this.execution(tx,action);
+    markBudgetUnknown(tx,{tenantId,workspaceId:action.workspaceId,principalId:actorId,occurredAt:this.now(),reservationId:action.reservationId,operationKey:action.operationKey});
+    this.executionState(tx,execution,'needs_reconciliation',actorId);
+    return this.write(tx,action,{status:'needs_reconciliation',cancelRequestedAt:this.now(),cancelRequestedBy:actorId},'action.cancellation_requested',actorId);
   }
   async rejectBeforeDispatch(tenantId: string, id: string, lease: KernelJobLeaseAssertion): Promise<KernelJobSettlementReceipt> {
     return this.options.store.transact(tenantId, tx => {

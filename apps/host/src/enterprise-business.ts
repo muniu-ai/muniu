@@ -253,3 +253,5 @@ export class EnterpriseBusinessService {
     });
   }
 }
+
+export { facts as enterpriseBusinessFacts, descriptor as businessAccessDescriptor };

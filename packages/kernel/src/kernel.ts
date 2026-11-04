@@ -515,7 +515,11 @@ export class AgentOsKernel {
       readonly authority: Omit<ExecutionAuthority, "id" | "tenantId" | "executionId" | "commitment" | "streamVersion" | "createdAt" | "updatedAt">;
     },
   ): Promise<Execution> {
-    return this.mutation(tenantId, "execution.create", idempotencyKey, input, (transaction) => {
+    return this.store.transact(tenantId, tx => this.createExecutionInTransaction(tx, tenantId, actorId, idempotencyKey, input));
+  }
+
+  createExecutionInTransaction(transaction: KernelTransaction, tenantId: string, actorId: string, idempotencyKey: string, input: Parameters<AgentOsKernel["createExecution"]>[3]): Execution {
+    return this.mutationInTransaction(transaction, tenantId, "execution.create", idempotencyKey, input, (transaction) => {
       const now = this.now();
       const id = this.nextId("execution");
       const authorityId = this.nextId("authority");
@@ -856,7 +860,11 @@ export class AgentOsKernel {
     idempotencyKey: string,
     intent: ToolCallIntent,
   ): Promise<{ readonly mode: "auto"; readonly intent: ToolCallCommitment } | { readonly mode: "approval"; readonly approval: Approval }> {
-    return this.mutation(tenantId, `tool.intent:${intent.executionId}`, idempotencyKey, intent, (transaction) => {
+    return this.store.transact(tenantId, tx => this.requestToolApprovalInTransaction(tx, tenantId, actorId, idempotencyKey, intent));
+  }
+
+  requestToolApprovalInTransaction(transaction: KernelTransaction, tenantId: string, actorId: string, idempotencyKey: string, intent: ToolCallIntent): { readonly mode: "auto"; readonly intent: ToolCallCommitment } | { readonly mode: "approval"; readonly approval: Approval } {
+    return this.mutationInTransaction(transaction, tenantId, `tool.intent:${intent.executionId}`, idempotencyKey, intent, (transaction) => {
       const execution = transaction.getProjection<Execution>("execution", intent.executionId);
       if (!execution) throw new KernelError("EXECUTION_NOT_FOUND", "执行不存在", "刷新执行状态");
       assertCurrentExecutionAuthorization(transaction, execution);
@@ -932,7 +940,11 @@ export class AgentOsKernel {
     expectedStreamVersion: number,
     decision: "approve_once" | "deny",
   ): Promise<Approval> {
-    return this.mutation(tenantId, `approval.decide:${approvalId}`, idempotencyKey, { expectedStreamVersion, decision }, (transaction) => {
+    return this.store.transact(tenantId, tx => this.decideApprovalInTransaction(tx,tenantId,actorId,idempotencyKey,approvalId,expectedStreamVersion,decision));
+  }
+
+  decideApprovalInTransaction(transaction: KernelTransaction, tenantId: string, actorId: string, idempotencyKey: string, approvalId: string, expectedStreamVersion: number, decision: "approve_once" | "deny"): Approval {
+    return this.mutationInTransaction(transaction, tenantId, `approval.decide:${approvalId}`, idempotencyKey, { expectedStreamVersion, decision }, (transaction) => {
       const approval = transaction.getProjection<Approval>("approval", approvalId);
       if (!approval) throw new KernelError("APPROVAL_NOT_FOUND", "批准请求不存在", "刷新收件箱");
       if (approval.streamVersion !== expectedStreamVersion) {

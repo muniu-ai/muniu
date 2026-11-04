@@ -3,7 +3,9 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join, resolve, isAbsolute } from 'node:path';
 import { mkdir, readdir, readFile, writeFile, lstat } from 'node:fs/promises';
-import { acquireLocalStateLock, FileCas, MacOsKeychainKeyProvider, SqliteStorage, runKeychainCommand, type KeyProvider } from '@mn/storage';
+import { acquireLocalStateLock, FileCas, MacOsKeychainKeyProvider, SqliteStorage, DEFAULT_PROJECTION_JOURNAL_NAMESPACES, runKeychainCommand, type KeyProvider } from '@mn/storage';
+import { EnterpriseExecutionRuntime } from './enterprise-execution-runtime.js';
+import { EnterpriseError } from '@mn/enterprise-services';
 import { createEnterpriseEventRepository } from './enterprise-event-repository.js';
 import { createEnterpriseHost, type EnterpriseHostOptions } from './enterprise-host.js';
 import type { EnterpriseIdentityService, EnterpriseQuotaLimits } from '@mn/enterprise-services';
@@ -21,7 +23,8 @@ async function hmacKey(account: string, existing: boolean): Promise<Buffer> {
   if (key.length !== 32) throw new Error('ENTERPRISE_KEY_INVALID');
   return key;
 }
-export interface StartEnterpriseLocalOptions extends Omit<EnterpriseHostOptions, 'repository'> {
+export interface StartEnterpriseLocalOptions extends Omit<EnterpriseHostOptions, 'repository' | 'executionRuntime'> {
+  readonly executionProviders?: Pick<ConstructorParameters<typeof EnterpriseExecutionRuntime>[0], 'resolveProvider' | 'usageForReceipt'>;
   readonly stateRoot?: string;
   readonly host?: string;
   readonly port?: number;
@@ -60,9 +63,13 @@ export async function startEnterpriseLocalHost(options: StartEnterpriseLocalOpti
     const existing = await lstat(databaseFile).then(() => true, error => { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error; });
     const keys = options.keys ?? { hmacKey: await hmacKey(`${marker.instanceId}:event-hmac`, existing),
       keyProvider: new MacOsKeychainKeyProvider({ account: `${marker.instanceId}:wrapping-key`, service: ENTERPRISE_KEYCHAIN_SERVICE }) };
-    store = new SqliteStorage({ databaseFile, hmacKey: keys.hmacKey });
-    const repository = createEnterpriseEventRepository({ store, cas: new FileCas({ rootDir: join(root, 'objects') }), keyProvider: keys.keyProvider });
-    host = createEnterpriseHost({ ...options, repository });
+    const cas = new FileCas({ rootDir: join(root, 'objects') });
+    store = new SqliteStorage({ databaseFile, hmacKey: keys.hmacKey, projectionJournal:{cas,keyProvider:keys.keyProvider,namespaces:DEFAULT_PROJECTION_JOURNAL_NAMESPACES} });
+    const repository = createEnterpriseEventRepository({ store, cas, keyProvider: keys.keyProvider, allowExecutionEvents:true });
+    const executionRuntime = new EnterpriseExecutionRuntime({store,repository,now:options.now,
+      resolveProvider:options.executionProviders?.resolveProvider??(async()=>{throw new EnterpriseError('PROVIDER_NOT_CONFIGURED',409);}),
+      usageForReceipt:options.executionProviders?.usageForReceipt??(()=>{throw new EnterpriseError('USAGE_METER_UNCONFIGURED',503);})});
+    host = createEnterpriseHost({ ...options, repository, executionRuntime });
     for (const organization of options.organizations) {
       if (options.providers[organization.tenantId]?.issuer !== organization.issuer) throw new Error('OIDC_PROVISIONING_ISSUER_MISMATCH');
       await host.identity.provision(organization);

@@ -2,7 +2,7 @@
 import type { ActionReceipt, BudgetAmountV1, Execution, JsonValue } from '@mn/contracts';
 import { actionIntentView, parseEnterpriseContract } from '@mn/contracts';
 import type { BusinessProviderContribution } from '@mn/plugin-sdk';
-import type { ActionCoordinator, CoordinatedAction } from '@mn/business-execution';
+import { verifiedActionUsage, type ActionCoordinator, type CoordinatedAction } from '@mn/business-execution';
 import { KernelError, type KernelStore } from '@mn/kernel';
 import { UnknownExternalSideEffectError, type WorkerJobHandler } from './index.js';
 
@@ -42,7 +42,7 @@ export function createProviderActionWorkerHandler(options: {
       if (response.status !== 'supported') throw new UnknownExternalSideEffectError(action.executionId);
       const receipt = parseEnterpriseContract('ActionReceipt', response.value);
       if (!['succeeded', 'not_executed'].includes(receipt.status)) throw new UnknownExternalSideEffectError(action.executionId);
-      const settlement = await options.coordinator.complete(job.tenantId, action.id, receipt, options.usageForReceipt(receipt, action), lease());
+      const settlement = await options.coordinator.complete(job.tenantId, action.id, receipt, verifiedActionUsage(options.usageForReceipt, receipt, action), lease());
       context.acknowledgeJobSettlement?.(settlement);
       return { actionId: action.id, operationKey: action.operationKey, receiptStatus: receipt.status };
     } catch (error) {

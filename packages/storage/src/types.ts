@@ -175,6 +175,9 @@ export interface KernelIdempotencyRecordLike {
 }
 
 export interface KernelTransactionLike {
+  readonly protectedFactStorage?: boolean;
+  getStreamVersion?(aggregateType: string, aggregateId: string): number;
+  beforeCommit?(check: () => void): void;
   appendEvent(request: EventAppendRequest): KernelEventV1;
   getProjection<T>(namespace: string, id: string): T | undefined;
   listProjections<T>(namespace: string): readonly T[];

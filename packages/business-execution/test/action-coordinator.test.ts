@@ -128,3 +128,16 @@ test('正式动作不能由服务主体代替人员批准，即使工作区角�
   await assert.rejects(f.coordinator.begin('local', queued.id, lease), { code: 'ACTION_HUMAN_APPROVAL_REQUIRED' });
   assert.equal(await f.store.transact('local', tx => tx.listProjections('toolAdmission').length), 0);
 });
+
+test('业务准入可与动作、批准和派发共用同一事务，失败时无部分结果',async()=>{
+ const f=await fixture();
+ await assert.rejects(f.store.transact('local',tx=>{
+  (f.coordinator as any).prepareInTransaction(tx,f.input,f.options);
+  const approval=(f.coordinator as any).requestApprovalInTransaction(tx,'local',f.input.id);
+  (f.kernel as any).decideApprovalInTransaction(tx,'local','local-owner','approve',approval.id,approval.streamVersion,'approve_once');
+  (f.coordinator as any).enqueueInTransaction(tx,'local',f.input.id);
+  throw new Error('ENTERPRISE_SCOPE_REJECTED');
+ }),/ENTERPRISE_SCOPE_REJECTED/);
+ assert.equal(await f.coordinator.get('local',f.input.id),undefined);assert.equal(f.store.readJobs('local').length,0);
+ assert.equal((await f.store.transact('local',tx=>tx.getProjection<any>('budget.account',f.account.id))).heldTokens,0);
+});

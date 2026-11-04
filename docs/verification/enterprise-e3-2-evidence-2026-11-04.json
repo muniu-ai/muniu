@@ -1,0 +1,141 @@
+{
+  "package": "E3.2",
+  "date": "2026-11-04",
+  "baseCommit": "f7f9b4b",
+  "branch": "codex/enterprise-e3-2",
+  "toolchain": {
+    "node": "22.19.0",
+    "npm": "11.10.1",
+    "typescript": "5.7.2"
+  },
+  "image": {
+    "image": "mn-e32-recheck:74776e52099f",
+    "sourceDigest": "74776e52099fe57f398922425187c45df9252d22e12a125069b7ab55c8c82fbd",
+    "lockDigest": "9689c184c5c7c11fa4628713129699bd0254ccb0e226db7ba63047cc9b8fc632",
+    "baseImage": "mn-e31-recheck:4b0209eb4291",
+    "externalLockMatchesBase": true,
+    "baseImageId": "sha256:f3598c53eb22cdfa090570c73637c585106232b12b9dae43c41192cd9397c75c",
+    "imageId": "sha256:335216083f3e5c22948a6c6426bb77073c6c0d584ab53ccfeeca0185d4a70bb9"
+  },
+  "checks": [
+    {
+      "name": "regression-final",
+      "exitCode": 0,
+      "elapsedSeconds": 483.7,
+      "peakProcessTreeRSSMiB": 541.4,
+      "minimumHostFreePercent": 27,
+      "resourceStopped": false,
+      "tests": 1312,
+      "logSha256": "02811022a79b29d537804fe1b9e85a2b4ebc0767f4da84c17aef9f9cadb3faed"
+    },
+    {
+      "name": "typecheck",
+      "exitCode": 0,
+      "elapsedSeconds": 50.3,
+      "peakProcessTreeRSSMiB": 542.1,
+      "minimumHostFreePercent": 28,
+      "resourceStopped": false,
+      "tests": 0,
+      "logSha256": "0919626c69efc73938f4291befbb930767b431a6acd3689de5ef27c70006cb87"
+    },
+    {
+      "name": "desktop",
+      "exitCode": 0,
+      "elapsedSeconds": 30.4,
+      "peakProcessTreeRSSMiB": 506.0,
+      "minimumHostFreePercent": 27,
+      "resourceStopped": false,
+      "tests": 0,
+      "logSha256": "56bb4fe91ac4504237dba40a42c6b9f628d9b72ed8b5f4977ccae6376bfdf100"
+    },
+    {
+      "name": "rust",
+      "exitCode": 0,
+      "elapsedSeconds": 24.9,
+      "peakProcessTreeRSSMiB": 254.3,
+      "minimumHostFreePercent": 27,
+      "resourceStopped": false,
+      "tests": 0,
+      "logSha256": "e6a732a81e491d739824bc6288d1c00e6b285aa49317af75a5d53f2db1dabb9a"
+    },
+    {
+      "name": "postgres-final",
+      "exitCode": 0,
+      "elapsedSeconds": 16.8,
+      "peakProcessTreeRSSMiB": 146.2,
+      "minimumHostFreePercent": 27,
+      "resourceStopped": false,
+      "tests": 0,
+      "logSha256": "3dcc5b932879f5695b4d5197c833a044650e2bc6dd7cd64bae90f204b62224ac"
+    },
+    {
+      "name": "policies",
+      "exitCode": 0,
+      "elapsedSeconds": 10.1,
+      "peakProcessTreeRSSMiB": 123.0,
+      "minimumHostFreePercent": 27,
+      "resourceStopped": false,
+      "tests": 26,
+      "logSha256": "68f20e1c878a9cb3ee4d9d3c7bc67631769c4b66f1c8d7e9a7fff74346940846"
+    },
+    {
+      "name": "linux",
+      "exitCode": 0,
+      "elapsedSeconds": 20.8,
+      "peakProcessTreeRSSMiB": 12.6,
+      "minimumHostFreePercent": 27,
+      "resourceStopped": false,
+      "tests": 195,
+      "logSha256": "d205f9192294febf25b1b91ba2100f73b1189774da941fb0832968b352327c8a"
+    },
+    {
+      "name": "admission",
+      "exitCode": 0,
+      "elapsedSeconds": 40.3,
+      "peakProcessTreeRSSMiB": 580.5,
+      "minimumHostFreePercent": 27,
+      "resourceStopped": false,
+      "tests": 41,
+      "logSha256": "68ecbc75c8c376603d9e8bdec092ef2dd9e9765c99d99ad33e544cc76e139c6a"
+    }
+  ],
+  "deployment": {
+    "code": 0,
+    "signal": null,
+    "reason": null,
+    "cleanupCode": 0,
+    "originalServicesUnchanged": true,
+    "sampledPeakContainerMiB": 603.48,
+    "minimumHostFreePercent": 27,
+    "allOomKilledFalse": true,
+    "logSha256": "4647d4211cc98a379019bf076d5f04cc895fce0317cd27dced37576ff8e64a7f"
+  },
+  "originalServices": {
+    "count": 11,
+    "unchanged": true,
+    "stateSha256": "f96ec1f674f6e7626b7f6f43532a04f53f40560ff40932d87425d1e5c8aa4d53"
+  },
+  "resourceAbort": {
+    "check": "runtime-boundaries-red",
+    "minimumHostFreePercent": 15,
+    "countedAsPassed": false
+  },
+  "boundaries": [
+    "Fast permission tests use memory object storage and real SQLite/encryption",
+    "Durable storage, HTTP, PostgreSQL and container tests retain real dependencies",
+    "Synthetic provider is not real Sales or WeCom",
+    "Real model evaluation, E7 capacity/joint disaster recovery and E8 pilots not accepted"
+  ],
+  "documentation": {
+    "exitCode": 0,
+    "commands": [
+      "docs:generate",
+      "docs:check",
+      "docs:links",
+      "docs:build",
+      "verify:enterprise-acceptance-spec",
+      "git diff --check"
+    ],
+    "logSha256": "20efd899cf1fb6dfc2f263bed5398ae56b3de735eb09babffe4507aa023dacae"
+  }
+}

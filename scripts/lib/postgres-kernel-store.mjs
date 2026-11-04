@@ -2,7 +2,7 @@
 
 import { scopePostgresPool } from "@mn/storage";
 import { randomUUID } from "node:crypto";
-import { createProjectionFacts, CORE_PROJECTION_NAMESPACES, replayCoreProjections } from "@mn/contracts";
+import { createProjectionFacts, CORE_PROJECTION_NAMESPACES, replayCoreProjections, guardedTransaction, PROTECTED_CORE_PROJECTION_NAMESPACES } from "@mn/contracts";
 
 import { assertProtectedIdempotencyState, assertIdempotencyReplayCoverage, assertProtectedCoreProjectionState, prepareCoreProjectionProtectionUpgrade, computeEventDigest, computeEventHmac, POSTGRES_SCHEMA_SQL, captureProjectionJournal, prepareJournalRebuild, isJournalNamespace, assertEventPageIntegrity } from "@mn/storage";
 
@@ -167,6 +167,7 @@ export class PostgresKernelStore {
   async #transactOnce(tenantId, work) {
     if (typeof tenantId !== "string" || !tenantId.trim()) throw new TypeError("tenantId 不能为空");
     const client = await this.#pool.connect();
+    let guarded;
     try {
       await client.query("begin isolation level serializable");
       await client.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [tenantId]);
@@ -230,6 +231,8 @@ export class PostgresKernelStore {
       const invalidatedJobs = [];
 
       const transaction = {
+        protectedFactStorage: this.#projectionJournal?.namespaces.includes("*non-core") === true && PROTECTED_CORE_PROJECTION_NAMESPACES.every(name => this.#projectionJournal.namespaces.includes(name)),
+        getStreamVersion: (type,id) => streams.get(`${type}\0${id}`) ?? 0,
         appendEvent: (request) => {
           if (request.tenantId !== tenantId) throw new Error("事务不能跨租户写入");
           const streamKey = `${request.aggregateType}\0${request.aggregateId}`;
@@ -469,7 +472,8 @@ export class PostgresKernelStore {
       const journal = this.#projectionJournal ? captureProjectionJournal(transaction, tenantId, this.#projectionJournal,
         [...projections].map(([key, value]) => { const [namespace, id] = splitPair(key, "投影"); return { namespace, id, value }; }), [...idempotency.values()]) : undefined;
       await journal?.prepare();
-      const result = await work(journal?.transaction ?? transaction);
+      guarded = guardedTransaction(journal?.transaction ?? transaction);
+      const result = await work(guarded.transaction);
       await journal?.flush(this.#now);
 
       for (const invalidation of invalidatedJobs) {
@@ -612,12 +616,14 @@ export class PostgresKernelStore {
           record.createdAt,
         ]);
       }
+      guarded.validate();
       await client.query("commit");
       return result;
     } catch (error) {
       await client.query("rollback");
       throw error;
     } finally {
+      guarded?.close();
       client.release();
     }
   }

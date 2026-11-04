@@ -2,6 +2,16 @@
 import { ENTERPRISE_SCHEMAS } from './enterprise-schema.js';
 import type { JsonObject } from './json.js';
 export const ENTERPRISE_HTTP_OPERATIONS = [
+  { id:'getExecutionConfiguration',method:'get',path:'/v2/workspaces/{workspaceId}/execution-configuration',response:'EnterpriseExecutionConfiguration',mutation:false },
+  { id:'configureExecutionSettings',method:'post',path:'/v2/workspaces/{workspaceId}/execution-settings',body:'EnterpriseExecutionSettingsWrite',response:'EnterpriseExecutionSettings',mutation:true },
+  { id:'writeExecutionPolicy',method:'post',path:'/v2/workspaces/{workspaceId}/execution-policies',body:'EnterpriseExecutionPolicyWrite',response:'EnterpriseExecutionPolicyView',mutation:true },
+  { id:'acceptExecutionPolicy',method:'post',path:'/v2/workspaces/{workspaceId}/execution-policies/{policyId}/acceptances',body:'EnterpriseExecutionPolicyCommand',response:'EnterpriseExecutionPolicyView',mutation:true },
+  { id:'revokeExecutionPolicy',method:'post',path:'/v2/workspaces/{workspaceId}/execution-policies/{policyId}/revocations',body:'EnterpriseExecutionPolicyCommand',response:'EnterpriseExecutionPolicyView',mutation:true },
+  { id:'getEnterpriseAction',method:'get',path:'/v2/actions/{actionId}',response:'EnterpriseActionView',mutation:false },
+  { id:'getEnterpriseExecutionApproval',method:'get',path:'/v2/approvals/{approvalId}',response:'EnterpriseExecutionApprovalView',mutation:false },
+  { id:'decideEnterpriseExecutionApproval',method:'post',path:'/v2/approvals/{approvalId}/decisions',body:'EnterpriseExecutionApprovalDecision',response:'EnterpriseActionView',mutation:true },
+  { id:'cancelEnterpriseAction',method:'post',path:'/v2/actions/{actionId}/cancellations',body:'EnterpriseActionControl',response:'EnterpriseActionControlResult',mutation:true },
+  { id:'reconcileEnterpriseAction',method:'post',path:'/v2/actions/{actionId}/reconciliation',body:'EnterpriseActionControl',response:'EnterpriseActionView',mutation:true },
   { id:'getBusinessBalance',method:'get',path:'/v2/workspaces/{workspaceId}/business-balances/{orderId}/{asOfDate}',response:'EnterpriseOrderBalance',mutation:false },
   { id:'getBusinessProgress',method:'get',path:'/v2/workspaces/{workspaceId}/business-progress/{projectId}',response:'EnterpriseProjectProgress',mutation:false },
   { id:'getBusinessCosts',method:'get',path:'/v2/workspaces/{workspaceId}/business-costs/{projectId}',response:'EnterpriseProjectCosts',mutation:false },

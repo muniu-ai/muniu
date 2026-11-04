@@ -1,0 +1,67 @@
+// SPDX-License-Identifier: Apache-2.0
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { EnterpriseExecutionRuntime } from '../src/enterprise-execution-runtime.js';
+import { EnterpriseExecutionConfigurationService } from '../src/enterprise-execution-config.js';
+import { createEnterpriseHost } from '../src/enterprise-host.js';
+import { EnterpriseQuotaService } from '@mn/enterprise-services';
+import { fixture } from './fixtures/business.js';
+import { createTestOidcIssuer } from './fixtures/enterprise-oidc-issuer.js';
+test('浏览器执行入口使用企业会话、精确摘要与版本，配置权限不等于业务批准权', async (t) => {
+    const issuer = await createTestOidcIssuer();
+    t.after(() => issuer.close());
+    const f = await fixture(t, true, false, issuer.issuer), base = await f.base(), origin = 'https://execution.example.test';
+    await f.permissions.grantRole(f.admin, 'manager-exec', { id: 'manager-exec', workspaceId: f.workspace.id, principalId: 'manager', role: 'sales_manager', scope: { kind: 'workspace' }, operations: ['read', 'execution_approve'], fieldClasses: ['public', 'price'], expiresAt: '2027-01-01T00:00:00.000Z' });
+    const binding = { id: 'binding', tenantId: 'tenant', workspaceId: f.workspace.id, streamVersion: 1, mode: 'builtin' as const, bindings: [{ objectType: 'opportunity' as const, provider: 'fixture', allowedActions: ['create_followup_task' as const], supportedPorts: ['executeAction' as const, 'getReceipt' as const] }] };
+    const provider = { id: 'fixture', version: '1', binding };
+    const runtime = new EnterpriseExecutionRuntime({ store: f.store, repository: f.repository, now: f.now, resolveProvider: async () => provider as never, usageForReceipt: () => ({ tokens: 0, costMinorUnits: '0', currency: 'CNY' }) });
+    const host = createEnterpriseHost({ repository: f.repository, origin, profile: 'development', providers: { tenant: { issuer: issuer.issuer, clientId: 'muniu-fixture' } }, now: f.now, executionRuntime: runtime } as any);
+    t.after(() => host.close());
+    const cookies = new Map<string, {
+        cookie: string;
+        csrf: string;
+    }>();
+    for (const id of ['admin', 'sales', 'manager', 'viewer']) {
+        const start = await host.dispatch(new Request(origin + '/v2/auth/login?organizationId=tenant'));
+        const login = start.headers.getSetCookie()[0]!.split(';')[0]!;
+        const callback = await host.dispatch(new Request(issuer.callback(start.headers.get('location')!, id), { headers: { cookie: login } }));
+        assert.equal(callback.status, 303);
+        const cookie = callback.headers.getSetCookie().find(v => v.startsWith('__Host-mn-enterprise-session='))!.split(';')[0]!;
+        const session = await host.dispatch(new Request(origin + '/v2/auth/session', { headers: { cookie } }));
+        cookies.set(id, { cookie, csrf: (await session.json() as any).data.csrfToken });
+    }
+    let n = 0;
+    const call = (path: string, person = 'sales', body?: unknown, key = 'request-' + (++n)) => { const c = cookies.get(person)!; return host.dispatch(new Request(origin + path, { method: body === undefined ? 'GET' : 'POST', headers: { origin, cookie: c.cookie, 'x-csrf-token': c.csrf, 'idempotency-key': key, 'content-type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) })); };
+    const prefix = '/v2/workspaces/' + f.workspace.id;
+    const setting = { expectedStreamVersion: 0, responsibilities: [{ id: 'sales-support', capabilities: ['create_followup_task'], fieldClasses: ['public'] }] };
+    assert.equal((await call(prefix + '/execution-settings', 'sales', setting)).status, 403);
+    assert.equal((await call(prefix + '/execution-settings', 'admin', setting)).status, 200);
+    await new EnterpriseExecutionConfigurationService({ repository: f.repository, now: f.now }).registerBinding(f.admin, f.workspace.id, 'binding', 0, binding);
+    const quota = new EnterpriseQuotaService({ repository: f.repository, now: f.now });
+    const limits = { parallelNodes: 6, totalNodes: 32, totalAttempts: 64, automaticReplans: 3, tenantRunningNodes: 20, tokens: 100, costMinorUnits: '100', currency: 'CNY' as const, evaluationDailyTokens: 100, evaluationDailyCostMinorUnits: '100', singleEvaluationTokens: 10, singleEvaluationCostMinorUnits: '10', validFrom: '2026-11-01T00:00:00.000Z', expiresAt: '2027-01-01T00:00:00.000Z' };
+    await quota.provision('tenant', 'quota-platform', 0, limits);
+    await quota.configure(f.admin, 'quota', f.workspace.id, 0, limits);
+    const action = await runtime.prepare(f.actor('sales'), { idempotencyKey: 'prepare', operationKey: 'operation', goalId: 'goal', nodeId: 'node', attemptId: 'attempt', responsibilityId: 'sales-support', target: base.opportunity.reference, action: 'create_followup_task', preparedInputRef: 'opaque-input', inputDigest: 'a'.repeat(64), expiresAt: '2026-11-02T02:00:00.000Z', amount: { tokens: 10, costMinorUnits: '10', currency: 'CNY' }, goalBudget: { tokens: 20, costMinorUnits: '20', currency: 'CNY' } });
+    const viewed = await call('/v2/actions/' + action.id);
+    assert.equal(viewed.status, 200);
+    assert.doesNotMatch(await viewed.clone().text(), /permissionDigest|relationSalt|workspaceAccountId/);
+    assert.equal((await call('/v2/actions/' + action.id, 'admin')).status, 403);
+    const approvalPath = '/v2/approvals/' + action.executionApprovalRef;
+    const preview = await call(approvalPath, 'manager');
+    assert.equal(preview.status, 200);
+    assert.equal((await preview.json() as any).data.canDecide, true);
+    assert.equal((await call(approvalPath + '/decisions', 'viewer', { expectedStreamVersion: 1, actionDigest: action.actionDigest, decision: 'approve_once' })).status, 403);
+    assert.equal((await call(approvalPath + '/decisions', 'manager', { expectedStreamVersion: 1, actionDigest: '0'.repeat(64), decision: 'approve_once' })).status, 409);
+    const decided = await call(approvalPath + '/decisions', 'manager', { expectedStreamVersion: 1, actionDigest: action.actionDigest, decision: 'approve_once' }, 'approve');
+    assert.equal(decided.status, 200, await decided.clone().text());
+    await f.permissions.revoke(f.admin, 'remove-sales-access', 'role', 'sales-own', 1);
+    assert.equal((await call('/v2/actions/' + action.id, 'sales')).status, 403);
+    const current = (await decided.json() as any).data.action;
+    const cancelled = await call('/v2/actions/' + action.id + '/cancellations', 'sales', { expectedStreamVersion: current.streamVersion });
+    assert.equal(cancelled.status, 200);
+    const cancellation = (await cancelled.json() as any).data;
+    assert.equal(cancellation.status, 'settled');
+    assert.doesNotMatch(JSON.stringify(cancellation), /preparedInputRef|target|receipt|permissionDigest/);
+    const c = cookies.get('sales')!;
+    assert.equal((await host.dispatch(new Request(origin + '/v2/actions/' + action.id + '/cancellations', { method: 'POST', headers: { cookie: c.cookie, origin, 'content-type': 'application/json' }, body: JSON.stringify({ expectedStreamVersion: current.streamVersion }) }))).status, 403);
+});

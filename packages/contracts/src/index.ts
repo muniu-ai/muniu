@@ -41,3 +41,4 @@ export * from './enterprise-contracts.js';
 export * from "./enterprise-api-schema.js";
 export * from './budget-reservations.js';
 export * from './enterprise-actions.js';
+export * from './transaction-guards.js';
