@@ -429,3 +429,20 @@ for (const withEvidence of [false, true]) {
     } finally { await source.close(); rmSync(root, { recursive: true, force: true }); }
   });
 }
+
+test('enterprise namespace applies to initialization, pool reads and transactional clients without legacy reads', async () => {
+  const statements = [];
+  const query = async (sql, parameters = []) => {
+    statements.push({ sql, parameters });
+    if (sql.includes('select next_position, previous_digest from mn_enterprise_v1.tenant_heads')) return { rows: [{ next_position: 1, previous_digest: null }], rowCount: 1 };
+    return { rows: [], rowCount: 0 };
+  };
+  const pool = { query, connect: async () => ({ query, release() {} }) };
+  const store = new PostgresKernelStore({ pool, hmacKey: Buffer.alloc(32, 91), namespace: 'mn_enterprise_v1' });
+  await store.initialize(); await store.runtimeLocks();
+  await store.transact('synthetic-tenant', () => 'read-only');
+  assert.ok(statements.some(({ sql }) => sql.includes('create schema if not exists mn_enterprise_v1')));
+  assert.ok(statements.some(({ sql }) => sql.includes('from mn_enterprise_v1.tenant_heads')));
+  assert.ok(statements.some(({ sql }) => sql.includes('from mn_enterprise_v1.runtime_locks')));
+  assert.ok(statements.every(({ sql }) => !/\bmn_v2\b/u.test(sql)));
+});

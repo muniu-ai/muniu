@@ -1,0 +1,146 @@
+{
+  "package": "E3.1",
+  "date": "2026-11-04",
+  "baseCommit": "e66aae6",
+  "integratedBaseline": "2899d02",
+  "toolchain": {
+    "node": "22.19.0",
+    "npm": "11.10.1",
+    "typescript": "5.7.2"
+  },
+  "lockSha256": "9689c184c5c7c11fa4628713129699bd0254ccb0e226db7ba63047cc9b8fc632",
+  "image": {
+    "image": "mn-e31-recheck:4b0209eb4291",
+    "sourceDigest": "4b0209eb42913738a133ec40b6565f73595a1f00370143d88c8064c1b34fad62",
+    "lockDigest": "9689c184c5c7c11fa4628713129699bd0254ccb0e226db7ba63047cc9b8fc632",
+    "baseImage": "mn-e22-recheck:c12284d962a4",
+    "externalLockMatchesBase": true,
+    "baseImageId": "sha256:3820e2dc0a5a7c51fc3ae57945f6c3402192fc0106ee57ed1caf31e12f507f6f",
+    "imageId": "sha256:f3598c53eb22cdfa090570c73637c585106232b12b9dae43c41192cd9397c75c"
+  },
+  "checks": [
+    {
+      "name": "baseline",
+      "exitCode": 0,
+      "elapsedSeconds": 40.3,
+      "peakProcessTreeRSSMiB": 494.0,
+      "minimumHostFreePercent": 27,
+      "resourceStopped": false,
+      "logSha256": "2efa1d3c5fc75b0eca0071a9a5db72fd86319ff3be11d6844203890e8257099e",
+      "nodeTestCount": 86
+    },
+    {
+      "name": "action-fix",
+      "exitCode": 0,
+      "elapsedSeconds": 10.1,
+      "peakProcessTreeRSSMiB": 150.8,
+      "minimumHostFreePercent": 27,
+      "resourceStopped": false,
+      "logSha256": "ba2aeaad02b5eb8ce6985d08dad6d7467b43e39ca73417cc9996bf26685a4f1d",
+      "nodeTestCount": 18
+    },
+    {
+      "name": "postgres-fixed",
+      "exitCode": 0,
+      "elapsedSeconds": 8.4,
+      "peakProcessTreeRSSMiB": 92.8,
+      "minimumHostFreePercent": 27,
+      "resourceStopped": false,
+      "logSha256": "2c9133c340eb1dd8b9aae7a7065c16f3e21ba7ff8a44e86a1c4e15479235ee02",
+      "nodeTestCount": 0
+    },
+    {
+      "name": "regression",
+      "exitCode": 0,
+      "elapsedSeconds": 472.9,
+      "peakProcessTreeRSSMiB": 626.5,
+      "minimumHostFreePercent": 26,
+      "resourceStopped": false,
+      "logSha256": "121288f03e5117058a38b641705c5052f54842c24f5dcbaa3027ff4750e1cf23",
+      "nodeTestCount": 1283
+    },
+    {
+      "name": "typecheck",
+      "exitCode": 0,
+      "elapsedSeconds": 55.3,
+      "peakProcessTreeRSSMiB": 568.8,
+      "minimumHostFreePercent": 27,
+      "resourceStopped": false,
+      "logSha256": "0919626c69efc73938f4291befbb930767b431a6acd3689de5ef27c70006cb87",
+      "nodeTestCount": 0
+    },
+    {
+      "name": "desktop",
+      "exitCode": 0,
+      "elapsedSeconds": 30.3,
+      "peakProcessTreeRSSMiB": 493.2,
+      "minimumHostFreePercent": 27,
+      "resourceStopped": false,
+      "logSha256": "1992e719b736a756337917e58129e7d4d7232dffc96dd140d8bf831be5412865",
+      "nodeTestCount": 0
+    },
+    {
+      "name": "rust",
+      "exitCode": 0,
+      "elapsedSeconds": 20.3,
+      "peakProcessTreeRSSMiB": 412.0,
+      "minimumHostFreePercent": 35,
+      "resourceStopped": false,
+      "logSha256": "a8bb85cd0125082554b207409af5d064042c206db0258ae1e1d0c76e9b0466c1",
+      "nodeTestCount": 0
+    },
+    {
+      "name": "policies",
+      "exitCode": 0,
+      "elapsedSeconds": 10.1,
+      "peakProcessTreeRSSMiB": 80.4,
+      "minimumHostFreePercent": 29,
+      "resourceStopped": false,
+      "logSha256": "74daf694f6bdfc87766fa8fad30112772611471dabd70d24915bc4b4fd15e553",
+      "nodeTestCount": 26
+    },
+    {
+      "name": "linux",
+      "exitCode": 0,
+      "elapsedSeconds": 14.4,
+      "peakProcessTreeRSSMiB": 12.8,
+      "minimumHostFreePercent": 26,
+      "resourceStopped": false,
+      "logSha256": "2b88d16469afb4e4a2916b5121a7e2282d66804cd848b2cfaf9ebfb91fc5d475",
+      "nodeTestCount": 161
+    }
+  ],
+  "deployment": {
+    "code": 0,
+    "signal": null,
+    "reason": null,
+    "cleanupCode": 0,
+    "originalServicesUnchanged": true,
+    "sampledPeakContainerMiB": 557.39,
+    "minimumHostFreePercent": 26,
+    "allOomKilledFalse": true,
+    "logSha256": "b809be02259e5d91572ad3cd2562c9ba1202b709f327b516a58e137ad231a636"
+  },
+  "originalServices": {
+    "count": 11,
+    "unchanged": true,
+    "stateSha256": "f96ec1f674f6e7626b7f6f43532a04f53f40560ff40932d87425d1e5c8aa4d53"
+  },
+  "boundaries": [
+    "Synthetic HTTP provider, not Sales or WeCom",
+    "Enterprise admission integration belongs to E3.2",
+    "E7 capacity/disaster recovery and E8 pilot not accepted"
+  ],
+  "documentation": {
+    "exitCode": 0,
+    "logSha256": "925a821de4a3e982c8b140292062a19959581d08f9228b3a08de1be40a7b698a",
+    "commands": [
+      "docs:generate",
+      "docs:check",
+      "docs:links",
+      "docs:build",
+      "verify:enterprise-acceptance-spec",
+      "git diff --check"
+    ]
+  }
+}

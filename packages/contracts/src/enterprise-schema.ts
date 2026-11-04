@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 import type { JsonObject } from './json.js';
+import { ENTERPRISE_BUSINESS_SCHEMAS } from './enterprise-business-schema.js';
+import { ENTERPRISE_OBJECT_TYPES } from './enterprise-object-types.js';
+export { ENTERPRISE_OBJECT_TYPES } from './enterprise-object-types.js';
+import { ENTERPRISE_ACCESS_SCHEMAS } from './enterprise-access-schema.js';
+import { ENTERPRISE_IDENTITY_SCHEMAS } from './enterprise-identity-schema.js';
 const text = { type: 'string', minLength: 1 };
 const digest = { type: 'string', pattern: '^[0-9a-f]{64}$' };
 const integer = { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER };
@@ -14,9 +19,7 @@ const object = (properties: Record<string, JsonObject>, optional: string[] = [])
 });
 const scope = { tenantId: text, workspaceId: text };
 const aggregate = { ...scope, id: text, streamVersion: version };
-export const ENTERPRISE_OBJECT_TYPES = ['operating_objective', 'metric_definition', 'business_review', 'customer', 'contact', 'opportunity',
-  'service_version', 'quote_version', 'contract', 'order', 'project', 'milestone', 'delivery_version', 'customer_acceptance', 'change_request',
-  'payment_schedule', 'receipt', 'refund', 'expense', 'adjustment', 'goal', 'artifact_version', 'evidence_ref', 'decision_record', 'memory_entry'] as const;
+
 export const ENTERPRISE_PROVIDER_PORTS = ['readSnapshot', 'listChanges', 'prepareAction', 'executeAction', 'getReceipt'] as const;
 export const ENTERPRISE_GOAL_STATES = ['draft', 'awaiting_authorization', 'running', 'waiting_person', 'waiting_external',
   'awaiting_acceptance', 'needs_reconciliation', 'completed', 'failed', 'cancelled'] as const;
@@ -25,6 +28,9 @@ const receiptBase = { ...scope, id: text, operationKey: text, actionDigest: dige
 
 /** E0 design contracts; publishing a schema does not mount a Host route or grant authority. */
 export const ENTERPRISE_SCHEMAS: Readonly<Record<string, JsonObject>> = {
+  ...ENTERPRISE_IDENTITY_SCHEMAS,
+  ...ENTERPRISE_BUSINESS_SCHEMAS,
+  ...ENTERPRISE_ACCESS_SCHEMAS,
   BusinessObjectRef: object({ ...scope, objectType: enumeration(...ENTERPRISE_OBJECT_TYPES), objectId: text, streamVersion: version, digest }),
   ExternalObjectRef: object({ ...scope, provider: text, objectType: enumeration(...ENTERPRISE_OBJECT_TYPES), objectId: text,
     sourceVersion: text, digest, observedAt: timestamp, permissionRef: text }),

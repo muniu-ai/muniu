@@ -62,7 +62,7 @@ async function fixture(t: test.TestContext, loseResponse: boolean) {
     lock: { engineLockDigest: 'fixture', expectedEngineLockDigest: 'fixture', pluginLockDigest: 'fixture', expectedPluginLockDigest: 'fixture' },
     handlers: { [PROVIDER_ACTION_JOB_KIND]: createProviderActionWorkerHandler({ store, coordinator, resolveProvider: async () => provider,
       usageForReceipt: () => ({ tokens: 0, costMinorUnits: '0', currency: 'CNY' }) }) } });
-  return { get store() { return store; }, get coordinator() { return coordinator; }, now,
+  return { cas:storageOptions.projectionJournal.cas, get store() { return store; }, get coordinator() { return coordinator; }, now,
     action: queued, account, worker, calls: () => calls, receipt: () => saved!, revoke: () => { allowed = false; },
     async restart() {
       const policy = coordinator.options.assertCurrent;
@@ -109,4 +109,24 @@ test('承诺后在调用前进程退出，重开数据库并重建投影也不�
   assert.equal((await f.coordinator.get('local', f.action.id))?.operationKey, 'operation');
   const account = await f.store.transact('local', tx => tx.getProjection<any>('budget.account', f.account.id));
   assert.equal(account.heldCostMinorUnits, '10');
+});
+
+test('同一操作用新请求键重发时，持久幂等记录也能从已认证事件恢复',async t=>{
+ const f=await fixture(t,false);
+ const {actionIntentView}=await import('@mn/contracts');
+ const {streamVersion:_version,status:_status,reservationId:_reservation,executionApprovalRef:_approval,...input}=actionIntentView(f.action);
+ const options={executionId:f.action.executionId,accountId:f.account.id,actorId:'local-owner',idempotencyKey:'second-request',toolId:f.action.toolId,toolVersion:f.action.toolVersion,amount:{tokens:10,costMinorUnits:'10',currency:'CNY'}};
+ const replay=await f.coordinator.prepare(input,options);assert.equal(replay.id,f.action.id);assert.equal(replay.streamVersion,f.action.streamVersion);
+ await f.restart();assert.equal((await f.coordinator.prepare(input,options)).id,f.action.id);
+ assert.equal((await f.worker().pollOnce()).status,'completed');assert.equal(f.calls(),1);
+});
+
+
+test('保护事实写入期间租约到期会回滚承诺，新 Worker 可以安全接管未开始动作',async t=>{
+ const f=await fixture(t,false);const put=f.cas.put.bind(f.cas);let armed=true;
+ f.cas.put=async bytes=>{const result=await put(bytes);if(armed){armed=false;f.advance(31000);}return result;};
+ assert.equal((await f.worker().pollOnce()).status,'lost_lease');assert.equal(f.calls(),0);
+ assert.equal((await f.coordinator.get('local',f.action.id))?.status,'prepared');
+ const reservation=await f.store.transact('local',tx=>tx.getProjection<any>('budget.reservation',f.action.reservationId));assert.equal(reservation.status,'reserved');
+ assert.equal((await f.worker().pollOnce()).status,'completed');assert.equal(f.calls(),1);
 });

@@ -1,6 +1,10 @@
 # 能力与验证状态
 
-企业经营平台升级已获实施授权，E0.1 出口已通过，E0.2 验收基线已通过规格检查，见 [E0.2 记录](verification/enterprise-e0-2-2026-11-02.md)。新契约、示例和生成器的验证见 [E0.1 记录](verification/enterprise-e0-1-2026-11-02.md)。[E0.2 基线](enterprise-acceptance/README.md)只冻结材料，E1—E8 产品能力尚未验收，E3.1 持久动作与预算预留的本地出口通过，完整套件分段执行及失败项隔离复验通过，见[E3.1 记录](verification/enterprise-e3-1-2026-11-02.md)。以下历史通过项不代替新产品验收。
+2026-11-04：E3.1 合入 E1/E2 基线并通过当前工程与合成数据复验，见[E3.1 基线复验](verification/enterprise-e3-1-review-2026-11-04.md)。下一包为 E3.2 企业执行准入。
+
+2026-11-03 更新：E1 权限与部署入口缺口已补修，聚焦检查、完整容器复验及新命名空间复验通过，E1 工程与合成数据出口关闭，恢复 E2 实施。2026-11-04：E2.1 工程与合成数据出口通过，见[E2.1 验收记录](verification/enterprise-e2-1-2026-11-04.md)；E2.2 内置模式工程与合成数据出口通过，见[E2.2 验收记录](verification/enterprise-e2-2-2026-11-04.md)。E2 的本地实现已完成，Sales 双模式、E7 整体验收和 E8 试点仍待后续工作包。见[E1 复核记录](verification/enterprise-e1-review-2026-11-03.md)。
+
+企业经营平台升级已获实施授权。E0.1 契约与架构基线、E0.2 验收材料已通过各自检查，见 [E0.1](verification/enterprise-e0-1-2026-11-02.md)和 [E0.2](verification/enterprise-e0-2-2026-11-02.md)记录。E1 的原始本地验证结果保留，当前状态以[E1 复核记录](verification/enterprise-e1-review-2026-11-03.md)为准。以下 0.2 历史通过项不代替新企业平台验收。
 
 本文帮助评估木牛 Agent OS 0.2 的使用范围。源码实现、某轮测试通过、可公开分发的安装包和生产部署验收是不同结论。
 

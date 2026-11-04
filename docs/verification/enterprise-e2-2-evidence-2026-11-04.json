@@ -1,0 +1,199 @@
+{
+  "workPackage": "E2.2",
+  "date": "2026-11-04",
+  "baseCommit": "57c917087af2891f604870e127a3f5726dc11cd2",
+  "branch": "codex/enterprise-e2-2",
+  "toolchain": {
+    "node": "22.19.0",
+    "npm": "11.10.1",
+    "typescript": "5.7.2"
+  },
+  "lockSha256": "4bacb566a4421f96805c05e8893441a6e9c51a9289ccd76cd98dea2738120051",
+  "checks": [
+    {
+      "name": "regression",
+      "exitCode": 1,
+      "elapsedSeconds": 627.2,
+      "sampledProcessTreeRSSMiB": 537.8,
+      "minimumHostFreePercent": 23,
+      "resourceStopped": false,
+      "tests": 1190,
+      "failures": 1,
+      "logSha256": "0954dbfa256c9a8f0a9ae2490105d56fb09b6563cad967b23c3aaed96cfc8bb3"
+    },
+    {
+      "name": "regression-final",
+      "exitCode": 0,
+      "elapsedSeconds": 581.7,
+      "sampledProcessTreeRSSMiB": 565.0,
+      "minimumHostFreePercent": 24,
+      "resourceStopped": false,
+      "tests": 1261,
+      "failures": 0,
+      "logSha256": "5857d17be63456d1d024a1d6c0d61471e0472a64a50639678dbaa1d0d2d7ad47"
+    },
+    {
+      "name": "scope-final",
+      "exitCode": 0,
+      "elapsedSeconds": 30.2,
+      "sampledProcessTreeRSSMiB": 332.8,
+      "minimumHostFreePercent": 27,
+      "resourceStopped": false,
+      "tests": 47,
+      "failures": 0,
+      "logSha256": "16dd200fc94a4182a8122b1abb8f6a09955ee7e954ffbb47e72ef42d272806f9"
+    },
+    {
+      "name": "typecheck",
+      "exitCode": 0,
+      "elapsedSeconds": 76.0,
+      "sampledProcessTreeRSSMiB": 506.7,
+      "minimumHostFreePercent": 26,
+      "resourceStopped": false,
+      "tests": 0,
+      "failures": 0,
+      "logSha256": "0919626c69efc73938f4291befbb930767b431a6acd3689de5ef27c70006cb87"
+    },
+    {
+      "name": "desktop",
+      "exitCode": 0,
+      "elapsedSeconds": 35.6,
+      "sampledProcessTreeRSSMiB": 352.4,
+      "minimumHostFreePercent": 26,
+      "resourceStopped": false,
+      "tests": 0,
+      "failures": 0,
+      "logSha256": "781aefa18bc2e92dc8c15ec38a1c8e63b2308f36cfddd28d656ad2b42b13532c"
+    },
+    {
+      "name": "rust",
+      "exitCode": 0,
+      "elapsedSeconds": 25.6,
+      "sampledProcessTreeRSSMiB": 344.0,
+      "minimumHostFreePercent": 26,
+      "resourceStopped": false,
+      "tests": 0,
+      "failures": 0,
+      "logSha256": "b8b28492810dddee1c772f5543dd94f7f6ac6406a8538583ab44ff327d8086ba"
+    },
+    {
+      "name": "fixture-static",
+      "exitCode": 0,
+      "elapsedSeconds": 5.1,
+      "sampledProcessTreeRSSMiB": 0.0,
+      "minimumHostFreePercent": 27,
+      "resourceStopped": false,
+      "tests": 26,
+      "failures": 0,
+      "logSha256": "bcb9957863bb39a7f97eea17f933e8c0c73d466952a21af893c53ce6eb9cede3"
+    },
+    {
+      "name": "policies",
+      "exitCode": 0,
+      "elapsedSeconds": 5.1,
+      "sampledProcessTreeRSSMiB": 1.0,
+      "minimumHostFreePercent": 26,
+      "resourceStopped": false,
+      "tests": 4,
+      "failures": 0,
+      "logSha256": "2a1c6d4c2c20a3ac2047e772ce731617baa1a34ea32e15000db317ab5ca7574f"
+    },
+    {
+      "name": "business-domain",
+      "exitCode": 0,
+      "elapsedSeconds": 50.4,
+      "sampledProcessTreeRSSMiB": 535.2,
+      "minimumHostFreePercent": 25,
+      "resourceStopped": false,
+      "tests": 40,
+      "failures": 0,
+      "logSha256": "ee23e1ec0df406de5eb423e7d2c69f68cc0b8865aa5fd909c48a809f83f12b3c"
+    },
+    {
+      "name": "postgres",
+      "exitCode": 0,
+      "elapsedSeconds": 16.4,
+      "sampledProcessTreeRSSMiB": 119.0,
+      "minimumHostFreePercent": 26,
+      "resourceStopped": false,
+      "tests": 0,
+      "failures": 0,
+      "logSha256": "41e3a7bca916a9f86aeb715efdd3fdaddf502b5a8215b0efce453378a64c3624"
+    },
+    {
+      "name": "postgres-final",
+      "exitCode": 0,
+      "elapsedSeconds": 15.1,
+      "sampledProcessTreeRSSMiB": 150.3,
+      "minimumHostFreePercent": 27,
+      "resourceStopped": false,
+      "tests": 0,
+      "failures": 0,
+      "logSha256": "4d8adb1ff95936b6b3040345b3d576d99f8360ca7d773fb4a21a7d0ec3f1a884"
+    },
+    {
+      "name": "linux-final",
+      "exitCode": 0,
+      "elapsedSeconds": 12.3,
+      "sampledProcessTreeRSSMiB": 14.9,
+      "minimumHostFreePercent": 27,
+      "resourceStopped": false,
+      "tests": 73,
+      "failures": 0,
+      "logSha256": "446bb1079e3e3a15cb312442d5d0a3bc43afbcfe17c15ba8b3dcaf7904c5ad51"
+    }
+  ],
+  "scope": "builtin engineering and synthetic data",
+  "compose": {
+    "code": 0,
+    "signal": null,
+    "reason": null,
+    "cleanupCode": 0,
+    "originalServicesUnchanged": true,
+    "imageId": "sha256:80652f6ca62d3caaa0d6645dec41ba57cdfde0e99da42a0ee7b669a4737e1693",
+    "sourceDigest": "523df248749d86086c5b680ad68c01087590479436557b4664b642726b99f454",
+    "sampledPeakContainerMiB": 578.01,
+    "minimumHostFreePercent": 24,
+    "logSha256": "8f215388cfd3f034c392d2433599e685149858e9adb0b43e1f22899beff0eb31",
+    "allOomKilledFalse": true
+  },
+  "finalLinux": {
+    "imageId": "sha256:3820e2dc0a5a7c51fc3ae57945f6c3402192fc0106ee57ed1caf31e12f507f6f",
+    "sourceDigest": "c12284d962a479df3909e15406f50cde598c1ca4d45245082fcc22c831688f54",
+    "baseImageId": "sha256:4c8065e36ccaa9365041277a331b90011329a4ba1e4cdd633b6165d8af041e6e",
+    "memoryLimitMiB": 512,
+    "nodeHeapMiB": 256,
+    "cpuLimit": 0.75,
+    "tests": 73
+  },
+  "postgres": {
+    "memoryLimitMiB": 192,
+    "cpuLimit": 0.5,
+    "sampledInitialPeakMiB": 64.91
+  },
+  "originalServices": {
+    "count": 11,
+    "unchanged": true,
+    "stateSha256": "f96ec1f674f6e7626b7f6f43532a04f53f40560ff40932d87425d1e5c8aa4d53"
+  },
+  "sequenceNote": "Full Node and Compose regressions preceded the final milestone-boundary fix. Final domain, contract, Host, type, PostgreSQL and Linux checks include that fix. The two image digests are deliberately distinct.",
+  "notRun": [
+    "real OIDC issuer",
+    "Sales dual mode",
+    "WeCom",
+    "E7 capacity and joint disaster recovery",
+    "E8 pilot"
+  ],
+  "documentation": {
+    "exitCode": 0,
+    "commands": [
+      "docs:generate",
+      "docs:check",
+      "docs:links",
+      "docs:build",
+      "verify:enterprise-acceptance-spec",
+      "git diff --check"
+    ],
+    "logSha256": "b740880be02dbdca00909a6689eaac193d707482ee124594d48662150d7df068"
+  }
+}

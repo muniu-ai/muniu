@@ -33,3 +33,8 @@ export { createMcpWorkerPorts } from "./mcp-resources.js";
 export type { McpOptions } from "./mcp-resources.js";
 export type { McpSecretStore, McpSecretScope } from "./mcp-sources.js";
 export type { McpTransport } from "./mcp-transport.js";
+
+export * from "./enterprise-host.js";
+export * from "./enterprise-event-repository.js";
+export type { EnterpriseOidcProvider } from "./enterprise-oidc.js";
+export * from "./enterprise-local.js";

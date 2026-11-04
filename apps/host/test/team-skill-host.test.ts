@@ -68,7 +68,8 @@ async function startTeam(f: Awaited<ReturnType<typeof fixture>>, templateId = 'r
   return started.body.data;
 }
 async function drive(f: Awaited<ReturnType<typeof fixture>>, runner: AgentOsWorker, done: (detail: any) => boolean) {
-  const deadline = Date.now() + 30_000;
+  // Allow the configured execution budget plus settlement time on serial, low-priority runners.
+  const deadline = Date.now() + f.created.goal.budget.maxDurationMs + 30_000;
   let latest: any;
   while (Date.now() < deadline) {
     await runner.pollOnce();

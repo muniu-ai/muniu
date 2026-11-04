@@ -1,0 +1,4970 @@
+openapi: 3.1.0
+info:
+  title: Muniu Enterprise API
+  version: 0.2.0
+paths:
+  /v2/workspaces/{workspaceId}/business-balances/{orderId}/{asOfDate}:
+    get:
+      operationId: getBusinessBalance
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: path
+          name: orderId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: path
+          name: asOfDate
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EnterpriseOrderBalance"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+  /v2/workspaces/{workspaceId}/business-progress/{projectId}:
+    get:
+      operationId: getBusinessProgress
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: path
+          name: projectId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EnterpriseProjectProgress"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+  /v2/workspaces/{workspaceId}/business-costs/{projectId}:
+    get:
+      operationId: getBusinessCosts
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: path
+          name: projectId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EnterpriseProjectCosts"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+  /v2/workspaces/{workspaceId}/business-approvals/{approvalId}:
+    get:
+      operationId: getBusinessApproval
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: path
+          name: approvalId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/BusinessApproval"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+  /v2/workspaces/{workspaceId}/business/commands:
+    post:
+      operationId: executeBusinessCommand
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: header
+          name: X-CSRF-Token
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnterpriseBusinessCommand"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EnterpriseBusinessObjectView"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+  /v2/workspaces/{workspaceId}/business/{objectType}:
+    get:
+      operationId: listBusinessObjects
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: path
+          name: objectType
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EnterpriseBusinessObjectList"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+  /v2/workspaces/{workspaceId}/business/{objectType}/{objectId}:
+    get:
+      operationId: getBusinessObject
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: path
+          name: objectType
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: path
+          name: objectId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EnterpriseBusinessObjectView"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+  /v2/workspaces/{workspaceId}/business/{objectType}/{objectId}/versions/{streamVersion}:
+    get:
+      operationId: getBusinessObjectVersion
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: path
+          name: objectType
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: path
+          name: objectId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: path
+          name: streamVersion
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EnterpriseBusinessObjectView"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+  /v2/workspaces/{workspaceId}/business-evidence:
+    post:
+      operationId: recordBusinessEvidence
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: header
+          name: X-CSRF-Token
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnterpriseBusinessEvidenceCreate"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EvidenceRef"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+  /v2/workspaces/{workspaceId}/business-evidence/{evidenceId}:
+    get:
+      operationId: getBusinessEvidence
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: path
+          name: evidenceId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EnterpriseBusinessEvidenceView"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+  /v2/workspaces/{workspaceId}/business-evidence/{evidenceId}/withdrawals:
+    post:
+      operationId: withdrawBusinessEvidence
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: path
+          name: evidenceId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: header
+          name: X-CSRF-Token
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnterpriseBusinessEvidenceWithdraw"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EnterpriseBusinessEvidenceWithdrawn"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+  /v2/workspaces/{workspaceId}/quota:
+    get:
+      operationId: getQuotaConfiguration
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EnterpriseQuotaConfiguration"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+    post:
+      operationId: configureWorkspaceQuota
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: header
+          name: X-CSRF-Token
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnterpriseQuotaConfigure"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EnterpriseQuotaView"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+  /v2/workspaces/{workspaceId}/access:
+    get:
+      operationId: getAccessConfiguration
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EnterpriseAccessConfiguration"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+  /v2/workspaces/{workspaceId}/departments:
+    post:
+      operationId: createDepartment
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: header
+          name: X-CSRF-Token
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnterpriseDepartmentCreate"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EnterpriseDepartmentView"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+  /v2/workspaces/{workspaceId}/role-grants:
+    post:
+      operationId: grantBusinessRole
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: header
+          name: X-CSRF-Token
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BusinessRoleGrantCreate"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/BusinessRoleGrantView"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+  /v2/workspaces/{workspaceId}/object-grants:
+    post:
+      operationId: grantBusinessObject
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: header
+          name: X-CSRF-Token
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BusinessObjectGrantCreate"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/BusinessObjectGrantView"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+  /v2/workspaces/{workspaceId}/role-grants/{grantId}/revocations:
+    post:
+      operationId: revokeBusinessRole
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: path
+          name: grantId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: header
+          name: X-CSRF-Token
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnterpriseAccessRevoke"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/BusinessRoleGrantView"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+  /v2/workspaces/{workspaceId}/object-grants/{grantId}/revocations:
+    post:
+      operationId: revokeBusinessObject
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: path
+          name: grantId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: header
+          name: X-CSRF-Token
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnterpriseAccessRevoke"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/BusinessObjectGrantView"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+  /v2/health:
+    get:
+      operationId: enterpriseHealth
+      parameters: []
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EnterpriseHealthView"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+  /v2/auth/session:
+    get:
+      operationId: enterpriseSession
+      parameters: []
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EnterpriseSessionView"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+  /v2/organizations:
+    get:
+      operationId: listOrganizations
+      parameters: []
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/OrganizationList"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+  /v2/workspaces:
+    get:
+      operationId: listEnterpriseWorkspaces
+      parameters: []
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EnterpriseWorkspaceList"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+    post:
+      operationId: createEnterpriseWorkspace
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: header
+          name: X-CSRF-Token
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnterpriseWorkspaceCreate"
+      responses:
+        "201":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EnterpriseWorkspaceView"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+  /v2/organizations/{organizationId}/members:
+    get:
+      operationId: listOrganizationMembers
+      parameters:
+        - in: path
+          name: organizationId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/OrganizationMemberList"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+  /v2/organizations/{organizationId}/invitations:
+    post:
+      operationId: inviteOrganizationMember
+      parameters:
+        - in: path
+          name: organizationId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: header
+          name: X-CSRF-Token
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OrganizationInvitationCreate"
+      responses:
+        "201":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/OrganizationInvitationView"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+  /v2/organizations/{organizationId}/invitations/{memberId}/accept:
+    post:
+      operationId: acceptOrganizationInvitation
+      parameters:
+        - in: path
+          name: organizationId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: path
+          name: memberId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: header
+          name: X-CSRF-Token
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OrganizationInvitationAccept"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/OrganizationMemberView"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+  /v2/organizations/{organizationId}/members/{memberId}/commands:
+    post:
+      operationId: commandOrganizationMember
+      parameters:
+        - in: path
+          name: organizationId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: path
+          name: memberId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: header
+          name: X-CSRF-Token
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OrganizationMemberCommand"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/OrganizationMemberView"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+  /v2/auth/login:
+    get:
+      operationId: enterpriseLogin
+      parameters:
+        - name: organizationId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: returnTo
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "302":
+          description: 跳转至已配置 OIDC 提供方
+  /v2/auth/callback:
+    get:
+      operationId: enterpriseLoginCallback
+      description: state、nonce、PKCE 和单次浏览器绑定校验；不接受业务命令
+      responses:
+        "303":
+          description: 设置 HttpOnly 会话并返回工作台
+        "401":
+          description: 登录校验失败
+  /v2/auth/logout:
+    post:
+      operationId: enterpriseLogout
+      parameters:
+        - in: header
+          name: X-CSRF-Token
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: 会话已撤销
+        "403":
+          description: 跨站防护拒绝
+components:
+  schemas:
+    OrganizationView:
+      type: object
+      additionalProperties: false
+      properties:
+        id: &a1
+          type: string
+          minLength: 1
+          maxLength: 200
+        name: *a1
+        issuer: *a1
+        maxMembers: &a2
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+        streamVersion: *a2
+      required:
+        - id
+        - name
+        - issuer
+        - maxMembers
+        - streamVersion
+    OrganizationList:
+      type: array
+      items:
+        $ref: "#/components/schemas/OrganizationView"
+    OrganizationMemberView:
+      type: object
+      additionalProperties: false
+      properties:
+        id: *a1
+        tenantId: *a1
+        issuer: *a1
+        subject: *a1
+        displayName: *a1
+        organizationAdmin: &a3
+          type: boolean
+        status:
+          type: string
+          enum:
+            - invited
+            - active
+            - disabled
+            - removed
+        streamVersion: *a2
+        sessionEpoch: *a2
+        invitedUntil: &a4
+          type: string
+          format: date-time
+      required:
+        - id
+        - tenantId
+        - issuer
+        - subject
+        - displayName
+        - organizationAdmin
+        - status
+        - streamVersion
+        - sessionEpoch
+    OrganizationMemberList:
+      type: array
+      items:
+        $ref: "#/components/schemas/OrganizationMemberView"
+    EnterpriseWorkspaceView:
+      type: object
+      additionalProperties: false
+      properties:
+        id: *a1
+        tenantId: *a1
+        name: *a1
+        mode:
+          type: string
+          enum:
+            - builtin
+            - sales
+        streamVersion: *a2
+      required:
+        - id
+        - tenantId
+        - name
+        - mode
+        - streamVersion
+    EnterpriseWorkspaceList:
+      type: array
+      items:
+        $ref: "#/components/schemas/EnterpriseWorkspaceView"
+    EnterpriseWorkspaceCreate:
+      type: object
+      additionalProperties: false
+      properties:
+        name: *a1
+        mode:
+          type: string
+          enum:
+            - builtin
+            - sales
+      required:
+        - name
+        - mode
+    OrganizationInvitationCreate:
+      type: object
+      additionalProperties: false
+      properties:
+        subject: *a1
+        displayName: *a1
+        organizationAdmin: *a3
+      required:
+        - subject
+        - displayName
+        - organizationAdmin
+    OrganizationInvitationView:
+      type: object
+      additionalProperties: false
+      properties:
+        id: *a1
+        member:
+          $ref: "#/components/schemas/OrganizationMemberView"
+        token: *a1
+      required:
+        - id
+        - member
+        - token
+    OrganizationInvitationAccept:
+      type: object
+      additionalProperties: false
+      properties:
+        expectedStreamVersion: *a2
+        token: *a1
+      required:
+        - expectedStreamVersion
+        - token
+    OrganizationMemberCommand:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          properties:
+            expectedStreamVersion: *a2
+            type:
+              type: string
+              enum:
+                - disable
+                - activate
+                - remove
+          required:
+            - expectedStreamVersion
+            - type
+        - type: object
+          additionalProperties: false
+          properties:
+            expectedStreamVersion: *a2
+            type:
+              const: rebind
+            subject: *a1
+          required:
+            - expectedStreamVersion
+            - type
+            - subject
+    EnterpriseSessionView:
+      type: object
+      additionalProperties: false
+      properties:
+        tenantId: *a1
+        principalId: *a1
+        displayName: *a1
+        status:
+          type: string
+          enum:
+            - invited
+            - active
+        organizationAdmin: *a3
+        csrfToken: *a1
+        expiresAt: *a4
+        profile:
+          type: string
+          enum:
+            - development
+            - hosted
+      required:
+        - tenantId
+        - principalId
+        - displayName
+        - status
+        - organizationAdmin
+        - csrfToken
+        - expiresAt
+        - profile
+    EnterpriseHealthView:
+      type: object
+      additionalProperties: false
+      properties:
+        status:
+          const: healthy
+        profile:
+          type: string
+          enum:
+            - development
+            - hosted
+      required:
+        - status
+        - profile
+    EnterpriseApiError:
+      type: object
+      additionalProperties: false
+      properties:
+        code: *a1
+        message: *a1
+        action: *a1
+        traceId: *a1
+        retryable: *a3
+        fieldIssues:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              field: *a1
+              message: *a1
+            required:
+              - field
+              - message
+      required:
+        - code
+        - message
+        - action
+        - traceId
+        - retryable
+        - fieldIssues
+    EnterpriseOrderBalance:
+      type: object
+      properties:
+        reference: &a7
+          $ref: "#/components/schemas/BusinessObjectRef"
+        values:
+          type: object
+          properties:
+            orderId: &a6
+              type: string
+            totalMinor: &a5
+              type: integer
+              minimum: 0
+              maximum: 9007199254740991
+            grossReceivedMinor: *a5
+            refundedMinor: *a5
+            reversedMinor: *a5
+            netReceivedMinor: *a5
+            allocatedMinor: *a5
+            unallocatedMinor: *a5
+            writtenOffMinor: *a5
+            outstandingMinor: *a5
+            dueMinor: *a5
+            periods:
+              type: array
+              items:
+                type: object
+                properties:
+                  id: *a6
+                  dueDate:
+                    type: string
+                    format: date
+                  amountMinor: *a5
+                  allocatedMinor: *a5
+                  writtenOffMinor: *a5
+                  outstandingMinor: *a5
+                required:
+                  - id
+                  - dueDate
+                  - amountMinor
+                  - allocatedMinor
+                  - writtenOffMinor
+                  - outstandingMinor
+                additionalProperties: false
+          required:
+            - orderId
+            - totalMinor
+            - grossReceivedMinor
+            - refundedMinor
+            - reversedMinor
+            - netReceivedMinor
+            - allocatedMinor
+            - unallocatedMinor
+            - writtenOffMinor
+            - outstandingMinor
+            - dueMinor
+            - periods
+          additionalProperties: false
+      required:
+        - reference
+        - values
+      additionalProperties: false
+    EnterpriseProjectProgress:
+      type: object
+      properties:
+        reference: *a7
+        values:
+          type: object
+          properties:
+            project: *a7
+            status: *a6
+            lines:
+              type: array
+              items:
+                type: object
+                properties:
+                  lineId: *a6
+                  promised: *a5
+                  delivered: *a5
+                  internallyReceived: *a5
+                  accepted: *a5
+                  remaining: *a5
+                required:
+                  - lineId
+                  - promised
+                  - delivered
+                  - internallyReceived
+                  - accepted
+                  - remaining
+                additionalProperties: false
+          required:
+            - project
+            - status
+            - lines
+          additionalProperties: false
+      required:
+        - reference
+        - values
+      additionalProperties: false
+    EnterpriseProjectCosts:
+      type: object
+      properties:
+        reference: *a7
+        values:
+          type: object
+          properties:
+            costsComplete:
+              type: boolean
+            confirmedCostMinor: *a5
+            marginMinor:
+              oneOf:
+                - type: integer
+                  minimum: -9007199254740991
+                  maximum: 9007199254740991
+                - const: null
+            marginBasis:
+              const: order_value_minus_confirmed_cost
+          required:
+            - costsComplete
+            - confirmedCostMinor
+            - marginMinor
+            - marginBasis
+          additionalProperties: false
+      required:
+        - reference
+        - values
+      additionalProperties: false
+    EnterpriseBusinessEvidenceWithdraw:
+      type: object
+      additionalProperties: false
+      properties:
+        expectedStreamVersion: &a8
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+      required:
+        - expectedStreamVersion
+    EnterpriseBusinessEvidenceWithdrawn:
+      type: object
+      additionalProperties: false
+      properties:
+        id: &a10
+          type: string
+          minLength: 1
+          maxLength: 200
+          pattern: ^(?=.*\S)[^\u0000-\u001f\u007f]+$
+        streamVersion: *a8
+      required:
+        - id
+        - streamVersion
+    EnterpriseBusinessEvidenceCreate:
+      type: object
+      additionalProperties: false
+      properties:
+        subject:
+          $ref: "#/components/schemas/BusinessObjectRef"
+        attestation: &a9
+          type: string
+          minLength: 1
+          maxLength: 4000
+        additionalFieldClasses:
+          type: array
+          uniqueItems: true
+          maxItems: 4
+          items:
+            type: string
+            enum:
+              - public
+              - price
+              - cost
+              - contact
+      required:
+        - subject
+        - attestation
+        - additionalFieldClasses
+    EnterpriseBusinessEvidenceView:
+      type: object
+      additionalProperties: false
+      properties:
+        reference:
+          $ref: "#/components/schemas/EvidenceRef"
+        subject:
+          $ref: "#/components/schemas/BusinessObjectRef"
+        attestation: *a9
+        requiredClasses:
+          type: array
+          items:
+            type: string
+            enum:
+              - public
+              - price
+              - cost
+              - contact
+        recordedBy: *a10
+        recordedAt: &a21
+          type: string
+          format: date-time
+        streamVersion: *a8
+      required:
+        - reference
+        - subject
+        - attestation
+        - requiredClasses
+        - recordedBy
+        - recordedAt
+        - streamVersion
+    EnterpriseBusinessCommand:
+      oneOf:
+        - type: object
+          properties:
+            type:
+              const: project.create
+            id: &a11
+              type: string
+              minLength: 1
+              maxLength: 200
+              pattern: ^(?!\.{1,2}$)(?=.*\S)[^\u0000-\u001f\u007f]+$
+            order:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            title: &a12
+              type: string
+              minLength: 1
+              maxLength: 200
+              pattern: ^(?=.*\S)[^\u0000-\u001f\u007f]+$
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - order
+            - title
+        - type: object
+          properties:
+            type:
+              const: milestone.create
+            id: *a11
+            project:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            title: *a12
+            dueDate: &a15
+              type: string
+              format: date
+            lines: &a13
+              type: array
+              items: &a19
+                type: object
+                properties:
+                  lineId: *a12
+                  quantity: &a14
+                    type: integer
+                    minimum: 1
+                    maximum: 9007199254740991
+                additionalProperties: false
+                required:
+                  - lineId
+                  - quantity
+              minItems: 1
+              maxItems: 100
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - project
+            - title
+            - dueDate
+            - lines
+        - type: object
+          properties:
+            type:
+              const: delivery.report
+            id: *a11
+            milestone:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            summary: &a18
+              type: string
+              minLength: 1
+              maxLength: 4000
+              pattern: \S
+            lines: *a13
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - milestone
+            - summary
+            - lines
+        - type: object
+          properties:
+            type:
+              const: delivery.receive
+            id: *a11
+            expectedStreamVersion: *a14
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - expectedStreamVersion
+        - type: object
+          properties:
+            type:
+              const: acceptance.prepare
+            id: *a11
+            delivery:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            lines: *a13
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - delivery
+            - lines
+        - type: object
+          properties:
+            type:
+              const: acceptance.confirm
+            id: *a11
+            expectedStreamVersion: *a14
+            evidence: &a16
+              $ref: "#/components/schemas/EvidenceRef"
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - expectedStreamVersion
+            - evidence
+        - type: object
+          properties:
+            type:
+              const: payment_schedule.create
+            id: *a11
+            order:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            amountMinor: *a14
+            dueDate: *a15
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - order
+            - amountMinor
+            - dueDate
+        - type: object
+          properties:
+            type:
+              const: payment_schedule.confirm
+            id: *a11
+            expectedStreamVersion: *a14
+            evidence: *a16
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - expectedStreamVersion
+            - evidence
+        - type: object
+          properties:
+            type:
+              const: receipt.prepare
+            id: *a11
+            order:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            amountMinor: *a14
+            businessDate: *a15
+            allocations: &a17
+              type: array
+              items:
+                type: object
+                properties:
+                  schedule:
+                    $ref: "#/components/schemas/BusinessObjectRef"
+                  amountMinor: *a14
+                additionalProperties: false
+                required:
+                  - schedule
+                  - amountMinor
+              minItems: 0
+              maxItems: 100
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - order
+            - amountMinor
+            - businessDate
+            - allocations
+        - type: object
+          properties:
+            type:
+              const: receipt.confirm
+            id: *a11
+            expectedStreamVersion: *a14
+            evidence: *a16
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - expectedStreamVersion
+            - evidence
+        - type: object
+          properties:
+            type:
+              const: receipt.cancel
+            id: *a11
+            expectedStreamVersion: *a14
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - expectedStreamVersion
+        - type: object
+          properties:
+            type:
+              const: refund.prepare
+            id: *a11
+            receipt:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            amountMinor: *a14
+            businessDate: *a15
+            releasedAllocations: *a17
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - receipt
+            - amountMinor
+            - businessDate
+            - releasedAllocations
+        - type: object
+          properties:
+            type:
+              const: refund.confirm
+            id: *a11
+            expectedStreamVersion: *a14
+            evidence: *a16
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - expectedStreamVersion
+            - evidence
+        - type: object
+          properties:
+            type:
+              const: refund.cancel
+            id: *a11
+            expectedStreamVersion: *a14
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - expectedStreamVersion
+        - type: object
+          properties:
+            type:
+              const: adjustment.prepare
+            id: *a11
+            kind:
+              const: write_off
+            order:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            schedule:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            amountMinor: *a14
+            businessDate: *a15
+            reason: *a18
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - kind
+            - order
+            - schedule
+            - amountMinor
+            - businessDate
+            - reason
+        - type: object
+          properties:
+            type:
+              const: adjustment.prepare
+            id: *a11
+            kind:
+              const: receipt_reversal
+            receipt:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            amountMinor: *a14
+            businessDate: *a15
+            reason: *a18
+            releasedAllocations: *a17
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - kind
+            - receipt
+            - amountMinor
+            - businessDate
+            - reason
+            - releasedAllocations
+        - type: object
+          properties:
+            type:
+              const: adjustment.prepare
+            id: *a11
+            kind:
+              const: schedule_revision
+            schedule:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            proposedAmountMinor: *a14
+            proposedDueDate: *a15
+            businessDate: *a15
+            reason: *a18
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - kind
+            - schedule
+            - proposedAmountMinor
+            - proposedDueDate
+            - businessDate
+            - reason
+        - type: object
+          properties:
+            type:
+              const: adjustment.prepare
+            id: *a11
+            kind:
+              const: receipt_allocation
+            receipt:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            schedule:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            amountMinor: *a14
+            businessDate: *a15
+            reason: *a18
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - kind
+            - receipt
+            - schedule
+            - amountMinor
+            - businessDate
+            - reason
+        - type: object
+          properties:
+            type:
+              const: adjustment.confirm
+            id: *a11
+            expectedStreamVersion: *a14
+            evidence: *a16
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - expectedStreamVersion
+            - evidence
+        - type: object
+          properties:
+            type:
+              const: adjustment.cancel
+            id: *a11
+            expectedStreamVersion: *a14
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - expectedStreamVersion
+        - type: object
+          properties:
+            type:
+              const: expense.prepare
+            id: *a11
+            project:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            amountMinor: *a14
+            businessDate: *a15
+            description: *a18
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - project
+            - amountMinor
+            - businessDate
+            - description
+        - type: object
+          properties:
+            type:
+              const: expense.confirm
+            id: *a11
+            expectedStreamVersion: *a14
+            evidence: *a16
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - expectedStreamVersion
+            - evidence
+        - type: object
+          properties:
+            type:
+              const: expense.cancel
+            id: *a11
+            expectedStreamVersion: *a14
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - expectedStreamVersion
+        - type: object
+          properties:
+            type:
+              const: project.costs.confirm
+            id: *a11
+            expectedStreamVersion: *a14
+            evidence: *a16
+            expenseRefs:
+              type: array
+              items:
+                $ref: "#/components/schemas/BusinessObjectRef"
+              minItems: 0
+              maxItems: 100
+            zeroCost:
+              type: boolean
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - expectedStreamVersion
+            - evidence
+            - expenseRefs
+            - zeroCost
+        - type: object
+          properties:
+            type:
+              const: metric.publish
+            id: *a11
+            metric:
+              type: string
+              enum:
+                - net_received
+                - outstanding
+                - confirmed_cost
+            title: *a12
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - metric
+            - title
+        - type: object
+          properties:
+            type:
+              const: objective.create
+            id: *a11
+            order:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            metric:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            periodStart: *a15
+            periodEnd: *a15
+            targetMinor:
+              type: integer
+              minimum: 0
+              maximum: 9007199254740991
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - order
+            - metric
+            - periodStart
+            - periodEnd
+            - targetMinor
+        - type: object
+          properties:
+            type:
+              const: business_review.snapshot
+            id: *a11
+            order:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            periodStart: *a15
+            periodEnd: *a15
+            includeCosts:
+              type: boolean
+            objective:
+              $ref: "#/components/schemas/BusinessObjectRef"
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - order
+            - periodStart
+            - periodEnd
+            - includeCosts
+        - type: object
+          properties:
+            type:
+              const: change_request.prepare
+            id: *a11
+            project:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            description: *a18
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - project
+            - description
+        - type: object
+          properties:
+            type:
+              const: change_request.price
+            id: *a11
+            expectedStreamVersion: *a14
+            lines:
+              type: array
+              items:
+                oneOf:
+                  - type: object
+                    properties:
+                      service:
+                        $ref: "#/components/schemas/BusinessObjectRef"
+                      quantity: *a14
+                    additionalProperties: false
+                    required:
+                      - service
+                      - quantity
+                  - type: object
+                    properties:
+                      orderLineId: *a12
+                      quantity: *a14
+                    additionalProperties: false
+                    required:
+                      - orderLineId
+                      - quantity
+              minItems: 1
+              maxItems: 100
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - expectedStreamVersion
+            - lines
+        - type: object
+          properties:
+            type:
+              const: change_request.approve
+            id: *a11
+            expectedStreamVersion: *a14
+            evidence: *a16
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - expectedStreamVersion
+            - evidence
+        - type: object
+          properties:
+            type:
+              const: change_request.cancel
+            id: *a11
+            expectedStreamVersion: *a14
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - expectedStreamVersion
+        - type: object
+          properties:
+            type:
+              const: change_request.project_confirm
+            id: *a11
+            expectedStreamVersion: *a14
+            milestones:
+              type: array
+              items:
+                type: object
+                properties:
+                  milestone:
+                    $ref: "#/components/schemas/BusinessObjectRef"
+                  expectedStreamVersion: *a14
+                  lines:
+                    type: array
+                    items: *a19
+                    minItems: 0
+                    maxItems: 100
+                additionalProperties: false
+                required:
+                  - milestone
+                  - expectedStreamVersion
+                  - lines
+              minItems: 0
+              maxItems: 100
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - expectedStreamVersion
+            - milestones
+        - type: object
+          additionalProperties: false
+          properties:
+            type:
+              const: customer.create
+            id: &a20
+              type: string
+              minLength: 1
+              maxLength: 200
+              pattern: ^(?!\.{1,2}$)(?=.*\S)[^\u0000-\u001f\u007f]+$
+            name: *a10
+            departmentId: *a10
+          required:
+            - type
+            - id
+            - name
+        - type: object
+          additionalProperties: false
+          properties:
+            type:
+              const: customer.rename
+            id: *a20
+            expectedStreamVersion: *a8
+            name: *a10
+          required:
+            - type
+            - id
+            - expectedStreamVersion
+            - name
+        - type: object
+          additionalProperties: false
+          properties:
+            type:
+              const: contact.create
+            id: *a20
+            customer:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            name: *a10
+            email: *a10
+            phone: *a10
+          required:
+            - type
+            - id
+            - customer
+            - name
+        - type: object
+          additionalProperties: false
+          properties:
+            type:
+              const: contact.update
+            id: *a20
+            expectedStreamVersion: *a8
+            name: *a10
+            email: *a10
+            phone: *a10
+          required:
+            - type
+            - id
+            - expectedStreamVersion
+            - name
+        - type: object
+          additionalProperties: false
+          properties:
+            type:
+              const: opportunity.create
+            id: *a20
+            customer:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            title: *a10
+          required:
+            - type
+            - id
+            - customer
+            - title
+        - type: object
+          additionalProperties: false
+          properties:
+            type:
+              const: opportunity.update
+            id: *a20
+            expectedStreamVersion: *a8
+            customer:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            title: *a10
+          required:
+            - type
+            - id
+            - expectedStreamVersion
+            - customer
+            - title
+        - type: object
+          additionalProperties: false
+          properties:
+            type:
+              const: service.publish
+            id: *a20
+            serviceCode: *a10
+            title: *a10
+            unit: *a10
+            unitPriceMinor: *a8
+            scope: *a9
+            acceptanceCriteria:
+              type: array
+              items: *a9
+              minItems: 1
+              maxItems: 100
+            validFrom: *a21
+            validUntil: *a21
+            supersedes:
+              type: object
+              additionalProperties: false
+              properties:
+                id: *a10
+                expectedStreamVersion: *a8
+              required:
+                - id
+                - expectedStreamVersion
+          required:
+            - type
+            - id
+            - serviceCode
+            - title
+            - unit
+            - unitPriceMinor
+            - scope
+            - acceptanceCriteria
+            - validFrom
+            - validUntil
+        - type: object
+          additionalProperties: false
+          properties:
+            type:
+              const: quote.prepare
+            id: *a20
+            opportunity:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            lines:
+              type: array
+              items:
+                type: object
+                additionalProperties: false
+                properties:
+                  service:
+                    $ref: "#/components/schemas/BusinessObjectRef"
+                  quantity: *a8
+                required:
+                  - service
+                  - quantity
+              minItems: 1
+              maxItems: 100
+            validUntil: *a21
+          required:
+            - type
+            - id
+            - opportunity
+            - lines
+            - validUntil
+        - type: object
+          additionalProperties: false
+          properties:
+            type:
+              const: quote.approve
+            id: *a20
+            expectedStreamVersion: *a8
+          required:
+            - type
+            - id
+            - expectedStreamVersion
+        - type: object
+          additionalProperties: false
+          properties:
+            type:
+              const: quote.record_acceptance
+            id: *a20
+            expectedStreamVersion: *a8
+            evidence:
+              $ref: "#/components/schemas/EvidenceRef"
+          required:
+            - type
+            - id
+            - expectedStreamVersion
+            - evidence
+        - type: object
+          additionalProperties: false
+          properties:
+            type:
+              const: contract.create
+            id: *a20
+            quote:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            title: *a10
+          required:
+            - type
+            - id
+            - quote
+            - title
+        - type: object
+          additionalProperties: false
+          properties:
+            type:
+              const: contract.activate
+            id: *a20
+            expectedStreamVersion: *a8
+            evidence:
+              $ref: "#/components/schemas/EvidenceRef"
+          required:
+            - type
+            - id
+            - expectedStreamVersion
+            - evidence
+        - type: object
+          additionalProperties: false
+          properties:
+            type:
+              const: order.create
+            id: *a20
+            contract:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            lines:
+              type: array
+              items:
+                type: object
+                additionalProperties: false
+                properties:
+                  quoteLineId: *a10
+                  quantity: *a8
+                required:
+                  - quoteLineId
+                  - quantity
+              minItems: 1
+              maxItems: 100
+          required:
+            - type
+            - id
+            - contract
+            - lines
+        - type: object
+          additionalProperties: false
+          properties:
+            type:
+              const: order.activate
+            id: *a20
+            expectedStreamVersion: *a8
+          required:
+            - type
+            - id
+            - expectedStreamVersion
+    EnterpriseBusinessObjectView:
+      type: object
+      additionalProperties: false
+      properties:
+        reference:
+          $ref: "#/components/schemas/BusinessObjectRef"
+        values:
+          type: object
+          additionalProperties: true
+      required:
+        - reference
+        - values
+    EnterpriseBusinessObjectList:
+      type: array
+      items:
+        $ref: "#/components/schemas/EnterpriseBusinessObjectView"
+    EnterpriseQuotaConfigure:
+      type: object
+      additionalProperties: false
+      properties:
+        parallelNodes: &a23
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        totalNodes: &a24
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        totalAttempts: &a25
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        automaticReplans: &a26
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        tenantRunningNodes: &a27
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        tokens: &a28
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        evaluationDailyTokens: &a29
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        singleEvaluationTokens: &a30
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        costMinorUnits: &a31
+          type: string
+          pattern: ^(0|[1-9][0-9]{0,17})$
+        evaluationDailyCostMinorUnits: &a32
+          type: string
+          pattern: ^(0|[1-9][0-9]{0,17})$
+        singleEvaluationCostMinorUnits: &a33
+          type: string
+          pattern: ^(0|[1-9][0-9]{0,17})$
+        currency: &a34
+          const: CNY
+        validFrom: &a22
+          type: string
+          format: date-time
+        expiresAt: *a22
+        expectedStreamVersion:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+      required:
+        - parallelNodes
+        - totalNodes
+        - totalAttempts
+        - automaticReplans
+        - tenantRunningNodes
+        - tokens
+        - evaluationDailyTokens
+        - singleEvaluationTokens
+        - costMinorUnits
+        - evaluationDailyCostMinorUnits
+        - singleEvaluationCostMinorUnits
+        - currency
+        - validFrom
+        - expiresAt
+        - expectedStreamVersion
+    EnterpriseQuotaView:
+      type: object
+      additionalProperties: false
+      properties:
+        parallelNodes: *a23
+        totalNodes: *a24
+        totalAttempts: *a25
+        automaticReplans: *a26
+        tenantRunningNodes: *a27
+        tokens: *a28
+        evaluationDailyTokens: *a29
+        singleEvaluationTokens: *a30
+        costMinorUnits: *a31
+        evaluationDailyCostMinorUnits: *a32
+        singleEvaluationCostMinorUnits: *a33
+        currency: *a34
+        validFrom: *a22
+        expiresAt: *a22
+        tenantId: &a35
+          type: string
+          minLength: 1
+          maxLength: 200
+        workspaceId: *a35
+        streamVersion: &a36
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+        capacityEvidenceDigest: *a35
+      required:
+        - parallelNodes
+        - totalNodes
+        - totalAttempts
+        - automaticReplans
+        - tenantRunningNodes
+        - tokens
+        - evaluationDailyTokens
+        - singleEvaluationTokens
+        - costMinorUnits
+        - evaluationDailyCostMinorUnits
+        - singleEvaluationCostMinorUnits
+        - currency
+        - validFrom
+        - expiresAt
+        - tenantId
+        - streamVersion
+    EnterpriseQuotaConfiguration:
+      type: object
+      additionalProperties: false
+      properties:
+        platform:
+          oneOf:
+            - $ref: "#/components/schemas/EnterpriseQuotaView"
+            - type: "null"
+        workspace:
+          oneOf:
+            - $ref: "#/components/schemas/EnterpriseQuotaView"
+            - type: "null"
+      required:
+        - platform
+        - workspace
+    BusinessAccessScope:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          properties:
+            kind:
+              const: owned
+          required:
+            - kind
+        - type: object
+          additionalProperties: false
+          properties:
+            kind:
+              const: workspace
+          required:
+            - kind
+        - type: object
+          additionalProperties: false
+          properties:
+            kind:
+              const: department
+            departmentId: *a35
+          required:
+            - kind
+            - departmentId
+        - type: object
+          additionalProperties: false
+          properties:
+            kind:
+              const: objects
+            objects:
+              type: array
+              items:
+                type: object
+                additionalProperties: false
+                properties:
+                  objectType: &a40
+                    type: string
+                    enum:
+                      - operating_objective
+                      - metric_definition
+                      - business_review
+                      - customer
+                      - contact
+                      - opportunity
+                      - service_version
+                      - quote_version
+                      - contract
+                      - order
+                      - project
+                      - milestone
+                      - delivery_version
+                      - customer_acceptance
+                      - change_request
+                      - payment_schedule
+                      - receipt
+                      - refund
+                      - expense
+                      - adjustment
+                      - goal
+                      - artifact_version
+                      - evidence_ref
+                      - decision_record
+                      - memory_entry
+                  objectId: *a35
+                required:
+                  - objectType
+                  - objectId
+              minItems: 1
+              uniqueItems: true
+              maxItems: 200
+          required:
+            - kind
+            - objects
+    EnterpriseDepartmentCreate:
+      type: object
+      additionalProperties: false
+      properties:
+        name: *a35
+        parentId: *a35
+      required:
+        - name
+    EnterpriseDepartmentView:
+      type: object
+      additionalProperties: false
+      properties:
+        id: *a35
+        tenantId: *a35
+        workspaceId: *a35
+        streamVersion: *a36
+        revokedAt: *a22
+        name: *a35
+        parentId: *a35
+      required:
+        - id
+        - tenantId
+        - workspaceId
+        - streamVersion
+        - name
+    BusinessRoleGrantCreate:
+      type: object
+      additionalProperties: false
+      properties:
+        principalId: *a35
+        operations: &a37
+          type: array
+          items:
+            type: string
+            enum:
+              - read
+              - draft
+              - write
+              - business_approve
+              - execution_approve
+              - audit
+          minItems: 1
+          uniqueItems: true
+        fieldClasses: &a38
+          type: array
+          items:
+            type: string
+            enum:
+              - public
+              - price
+              - cost
+              - contact
+          minItems: 1
+          uniqueItems: true
+        expiresAt: *a22
+        role: &a39
+          type: string
+          enum:
+            - sales
+            - sales_manager
+            - project_owner
+            - finance
+            - auditor
+        scope:
+          $ref: "#/components/schemas/BusinessAccessScope"
+      required:
+        - principalId
+        - operations
+        - fieldClasses
+        - expiresAt
+        - role
+        - scope
+    BusinessRoleGrantView:
+      type: object
+      additionalProperties: false
+      properties:
+        id: *a35
+        tenantId: *a35
+        workspaceId: *a35
+        streamVersion: *a36
+        revokedAt: *a22
+        principalId: *a35
+        operations: *a37
+        fieldClasses: *a38
+        expiresAt: *a22
+        role: *a39
+        scope:
+          $ref: "#/components/schemas/BusinessAccessScope"
+      required:
+        - id
+        - tenantId
+        - workspaceId
+        - streamVersion
+        - principalId
+        - operations
+        - fieldClasses
+        - expiresAt
+        - role
+        - scope
+    BusinessObjectGrantCreate:
+      type: object
+      additionalProperties: false
+      properties:
+        principalId: *a35
+        operations: *a37
+        fieldClasses: *a38
+        expiresAt: *a22
+        objectType: *a40
+        objectId: *a35
+      required:
+        - principalId
+        - operations
+        - fieldClasses
+        - expiresAt
+        - objectType
+        - objectId
+    BusinessObjectGrantView:
+      type: object
+      additionalProperties: false
+      properties:
+        id: *a35
+        tenantId: *a35
+        workspaceId: *a35
+        streamVersion: *a36
+        revokedAt: *a22
+        principalId: *a35
+        operations: *a37
+        fieldClasses: *a38
+        expiresAt: *a22
+        objectType: *a40
+        objectId: *a35
+      required:
+        - id
+        - tenantId
+        - workspaceId
+        - streamVersion
+        - principalId
+        - operations
+        - fieldClasses
+        - expiresAt
+        - objectType
+        - objectId
+    EnterpriseAccessRevoke:
+      type: object
+      additionalProperties: false
+      properties:
+        expectedStreamVersion: *a36
+      required:
+        - expectedStreamVersion
+    EnterpriseAccessConfiguration:
+      type: object
+      additionalProperties: false
+      properties:
+        departments:
+          type: array
+          items:
+            $ref: "#/components/schemas/EnterpriseDepartmentView"
+        roles:
+          type: array
+          items:
+            $ref: "#/components/schemas/BusinessRoleGrantView"
+        grants:
+          type: array
+          items:
+            $ref: "#/components/schemas/BusinessObjectGrantView"
+      required:
+        - departments
+        - roles
+        - grants
+    BusinessObjectRef:
+      type: object
+      additionalProperties: false
+      properties:
+        tenantId: &a41
+          type: string
+          minLength: 1
+        workspaceId: *a41
+        objectType:
+          type: string
+          enum:
+            - operating_objective
+            - metric_definition
+            - business_review
+            - customer
+            - contact
+            - opportunity
+            - service_version
+            - quote_version
+            - contract
+            - order
+            - project
+            - milestone
+            - delivery_version
+            - customer_acceptance
+            - change_request
+            - payment_schedule
+            - receipt
+            - refund
+            - expense
+            - adjustment
+            - goal
+            - artifact_version
+            - evidence_ref
+            - decision_record
+            - memory_entry
+        objectId: *a41
+        streamVersion: &a43
+          type: integer
+          minimum: 1
+          maximum: 9007199254740991
+        digest: &a42
+          type: string
+          pattern: ^[0-9a-f]{64}$
+      required:
+        - tenantId
+        - workspaceId
+        - objectType
+        - objectId
+        - streamVersion
+        - digest
+    ExternalObjectRef:
+      type: object
+      additionalProperties: false
+      properties:
+        tenantId: *a41
+        workspaceId: *a41
+        provider: *a41
+        objectType:
+          type: string
+          enum:
+            - operating_objective
+            - metric_definition
+            - business_review
+            - customer
+            - contact
+            - opportunity
+            - service_version
+            - quote_version
+            - contract
+            - order
+            - project
+            - milestone
+            - delivery_version
+            - customer_acceptance
+            - change_request
+            - payment_schedule
+            - receipt
+            - refund
+            - expense
+            - adjustment
+            - goal
+            - artifact_version
+            - evidence_ref
+            - decision_record
+            - memory_entry
+        objectId: *a41
+        sourceVersion: *a41
+        digest: *a42
+        observedAt: &a45
+          type: string
+          format: date-time
+        permissionRef: *a41
+      required:
+        - tenantId
+        - workspaceId
+        - provider
+        - objectType
+        - objectId
+        - sourceVersion
+        - digest
+        - observedAt
+        - permissionRef
+    ProviderBinding:
+      type: object
+      additionalProperties: false
+      properties:
+        tenantId: *a41
+        workspaceId: *a41
+        id: *a41
+        streamVersion: *a43
+        mode:
+          type: string
+          enum:
+            - builtin
+            - sales
+        bindings:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              objectType:
+                type: string
+                enum:
+                  - operating_objective
+                  - metric_definition
+                  - business_review
+                  - customer
+                  - contact
+                  - opportunity
+                  - service_version
+                  - quote_version
+                  - contract
+                  - order
+                  - project
+                  - milestone
+                  - delivery_version
+                  - customer_acceptance
+                  - change_request
+                  - payment_schedule
+                  - receipt
+                  - refund
+                  - expense
+                  - adjustment
+                  - goal
+                  - artifact_version
+                  - evidence_ref
+                  - decision_record
+                  - memory_entry
+              provider: *a41
+              allowedActions:
+                type: array
+                items: &a46
+                  type: string
+                  enum:
+                    - create_followup_task
+                    - update_followup_date
+                    - issue_quote_package
+                minItems: 0
+              supportedPorts:
+                type: array
+                items:
+                  type: string
+                  enum:
+                    - readSnapshot
+                    - listChanges
+                    - prepareAction
+                    - executeAction
+                    - getReceipt
+                minItems: 0
+                uniqueItems: true
+            required:
+              - objectType
+              - provider
+              - allowedActions
+              - supportedPorts
+          minItems: 1
+      required:
+        - tenantId
+        - workspaceId
+        - id
+        - streamVersion
+        - mode
+        - bindings
+    OperatingObjective:
+      type: object
+      additionalProperties: false
+      properties:
+        tenantId: *a41
+        workspaceId: *a41
+        id: *a41
+        streamVersion: *a43
+        periodStart: &a44
+          type: string
+          format: date
+        periodEnd: *a44
+        metricDefinition:
+          $ref: "#/components/schemas/BusinessObjectRef"
+        targetValue:
+          type: number
+        responsiblePrincipalId: *a41
+        sourceRefs:
+          type: array
+          items:
+            $ref: "#/components/schemas/BusinessObjectRef"
+          minItems: 0
+      required:
+        - tenantId
+        - workspaceId
+        - id
+        - streamVersion
+        - periodStart
+        - periodEnd
+        - metricDefinition
+        - targetValue
+        - responsiblePrincipalId
+        - sourceRefs
+    OperatingPolicy:
+      type: object
+      additionalProperties: false
+      properties:
+        tenantId: *a41
+        workspaceId: *a41
+        id: *a41
+        streamVersion: *a43
+        responsiblePrincipalId: *a41
+        authorityRevisionId: *a41
+        mode:
+          type: string
+          enum:
+            - observe
+            - execute
+        status:
+          type: string
+          enum:
+            - active
+            - paused
+            - closed
+        sourceScopes:
+          type: array
+          items: *a41
+          minItems: 1
+        triggerTypes:
+          type: array
+          items: *a41
+          minItems: 1
+        objectRefs:
+          type: array
+          items:
+            $ref: "#/components/schemas/BusinessObjectRef"
+          minItems: 0
+        validUntil: *a45
+        budget:
+          $ref: "#/components/schemas/EnterpriseExecutionBudget"
+        evaluationBudget:
+          $ref: "#/components/schemas/EvaluationBudget"
+        notificationPolicyVersion: *a41
+      required:
+        - tenantId
+        - workspaceId
+        - id
+        - streamVersion
+        - responsiblePrincipalId
+        - authorityRevisionId
+        - mode
+        - status
+        - sourceScopes
+        - triggerTypes
+        - objectRefs
+        - validUntil
+        - budget
+        - evaluationBudget
+        - notificationPolicyVersion
+    SourceTrigger:
+      type: object
+      additionalProperties: false
+      properties:
+        tenantId: *a41
+        workspaceId: *a41
+        id: *a41
+        streamVersion: *a43
+        source:
+          type: string
+          enum:
+            - web
+            - cli
+            - wecom
+            - business
+            - sales
+            - timer
+        sourceInstanceId: *a41
+        sourceEventId: *a41
+        sourceEventType: *a41
+        deduplicationKey: *a41
+        senderPrincipalId: *a41
+        sourceOccurredAt: *a45
+        receivedAt: *a45
+        protectedPayloadRef: *a41
+        status:
+          type: string
+          enum:
+            - received
+            - quarantined
+            - unevaluated
+            - evaluated
+        policyId: *a41
+      required:
+        - tenantId
+        - workspaceId
+        - id
+        - streamVersion
+        - source
+        - sourceInstanceId
+        - sourceEventId
+        - sourceEventType
+        - deduplicationKey
+        - sourceOccurredAt
+        - receivedAt
+        - protectedPayloadRef
+        - status
+    AuthorityRevision:
+      type: object
+      additionalProperties: false
+      properties:
+        tenantId: *a41
+        workspaceId: *a41
+        id: *a41
+        authorityId: *a41
+        revision: *a43
+        responsiblePrincipalId: *a41
+        objectRefs:
+          type: array
+          items:
+            $ref: "#/components/schemas/BusinessObjectRef"
+          minItems: 0
+        capabilityIds:
+          type: array
+          items: *a41
+          minItems: 1
+        modelBindingIds:
+          type: array
+          items: *a41
+          minItems: 0
+        allowedFields:
+          type: array
+          items: *a41
+          minItems: 0
+        allowedDestinations:
+          type: array
+          items: *a41
+          minItems: 0
+        policyVersion: *a41
+        budget:
+          $ref: "#/components/schemas/EnterpriseExecutionBudget"
+        validUntil: *a45
+        commitmentDigest: *a42
+      required:
+        - tenantId
+        - workspaceId
+        - id
+        - authorityId
+        - revision
+        - responsiblePrincipalId
+        - objectRefs
+        - capabilityIds
+        - modelBindingIds
+        - allowedFields
+        - allowedDestinations
+        - policyVersion
+        - budget
+        - validUntil
+        - commitmentDigest
+    PlanRevision:
+      type: object
+      additionalProperties: false
+      properties:
+        tenantId: *a41
+        workspaceId: *a41
+        id: *a41
+        goalId: *a41
+        revision: *a43
+        authorityRevisionId: *a41
+        reason: *a41
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/TaskNode"
+          minItems: 1
+        inputRefs:
+          type: array
+          items:
+            $ref: "#/components/schemas/BusinessObjectRef"
+          minItems: 0
+        budget:
+          $ref: "#/components/schemas/EnterpriseExecutionBudget"
+        acceptanceCriteria:
+          type: array
+          items: *a41
+          minItems: 1
+        createdAt: *a45
+      required:
+        - tenantId
+        - workspaceId
+        - id
+        - goalId
+        - revision
+        - authorityRevisionId
+        - reason
+        - nodes
+        - inputRefs
+        - budget
+        - acceptanceCriteria
+        - createdAt
+    TaskNode:
+      type: object
+      additionalProperties: false
+      properties:
+        id: *a41
+        dependsOn:
+          type: array
+          items: *a41
+          minItems: 0
+          uniqueItems: true
+        capabilityId: *a41
+        capabilityVersion: *a41
+        modelBindingId: *a41
+        inputRefs:
+          type: array
+          items:
+            $ref: "#/components/schemas/BusinessObjectRef"
+          minItems: 0
+        budget:
+          $ref: "#/components/schemas/EnterpriseExecutionBudget"
+        acceptanceCriteria:
+          type: array
+          items: *a41
+          minItems: 1
+        effect:
+          type: string
+          enum:
+            - read
+            - draft
+            - internal_write
+            - formal_action
+      required:
+        - id
+        - dependsOn
+        - capabilityId
+        - capabilityVersion
+        - inputRefs
+        - budget
+        - acceptanceCriteria
+        - effect
+    ActionIntent:
+      type: object
+      additionalProperties: false
+      properties:
+        tenantId: *a41
+        workspaceId: *a41
+        id: *a41
+        streamVersion: *a43
+        operationKey: *a41
+        goalId: *a41
+        nodeId: *a41
+        attemptId: *a41
+        generation: &a47
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        provider: *a41
+        action: *a46
+        target:
+          oneOf:
+            - $ref: "#/components/schemas/BusinessObjectRef"
+            - $ref: "#/components/schemas/ExternalObjectRef"
+        authorityRevisionId: *a41
+        providerBindingVersion: *a43
+        preparedInputRef: *a41
+        inputDigest: *a42
+        businessApprovalRef: *a41
+        executionApprovalRef: *a41
+        reservationId: *a41
+        expiresAt: *a45
+        status:
+          type: string
+          enum:
+            - prepared
+            - awaiting_approval
+            - committed
+            - needs_reconciliation
+            - settled
+      required:
+        - tenantId
+        - workspaceId
+        - id
+        - streamVersion
+        - operationKey
+        - goalId
+        - nodeId
+        - attemptId
+        - generation
+        - provider
+        - action
+        - target
+        - authorityRevisionId
+        - providerBindingVersion
+        - preparedInputRef
+        - inputDigest
+        - reservationId
+        - expiresAt
+        - status
+    ActionReceipt:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          properties:
+            tenantId: *a41
+            workspaceId: *a41
+            id: *a41
+            operationKey: *a41
+            actionDigest: *a42
+            provider: *a41
+            receivedAt: *a45
+            status:
+              const: succeeded
+            evidenceRefs:
+              type: array
+              items:
+                $ref: "#/components/schemas/EvidenceRef"
+              minItems: 1
+            completedAt: *a45
+          required:
+            - tenantId
+            - workspaceId
+            - id
+            - operationKey
+            - actionDigest
+            - provider
+            - receivedAt
+            - status
+            - evidenceRefs
+            - completedAt
+        - type: object
+          additionalProperties: false
+          properties:
+            tenantId: *a41
+            workspaceId: *a41
+            id: *a41
+            operationKey: *a41
+            actionDigest: *a42
+            provider: *a41
+            receivedAt: *a45
+            status:
+              type: string
+              enum:
+                - pending
+                - unknown
+          required:
+            - tenantId
+            - workspaceId
+            - id
+            - operationKey
+            - actionDigest
+            - provider
+            - receivedAt
+            - status
+        - type: object
+          additionalProperties: false
+          properties:
+            tenantId: *a41
+            workspaceId: *a41
+            id: *a41
+            operationKey: *a41
+            actionDigest: *a42
+            provider: *a41
+            receivedAt: *a45
+            status:
+              const: not_executed
+            reasonCode: *a41
+          required:
+            - tenantId
+            - workspaceId
+            - id
+            - operationKey
+            - actionDigest
+            - provider
+            - receivedAt
+            - status
+            - reasonCode
+    AttentionItem:
+      type: object
+      additionalProperties: false
+      properties:
+        tenantId: *a41
+        workspaceId: *a41
+        id: *a41
+        streamVersion: *a43
+        kind:
+          type: string
+          enum:
+            - approval
+            - question
+            - conflict
+            - reconciliation
+        subjectRef: *a41
+        subjectVersion: *a43
+        assignedPrincipalIds:
+          type: array
+          items: *a41
+          minItems: 1
+        status:
+          type: string
+          enum:
+            - open
+            - resolved
+        createdAt: *a45
+      required:
+        - tenantId
+        - workspaceId
+        - id
+        - streamVersion
+        - kind
+        - subjectRef
+        - subjectVersion
+        - assignedPrincipalIds
+        - status
+        - createdAt
+    EvidenceRef:
+      type: object
+      additionalProperties: false
+      properties:
+        tenantId: *a41
+        workspaceId: *a41
+        id: *a41
+        sourceKind:
+          type: string
+          enum:
+            - raw_material
+            - business_fact
+            - human_decision
+            - candidate_experience
+        protectedContentRef: *a41
+        sourceVersion: *a41
+        digest: *a42
+        permissionRef: *a41
+        locator:
+          oneOf:
+            - type: object
+              additionalProperties: false
+              properties:
+                page: *a43
+              required:
+                - page
+            - type: object
+              additionalProperties: false
+              properties:
+                paragraph: *a41
+              required:
+                - paragraph
+            - type: object
+              additionalProperties: false
+              properties:
+                sheet: *a41
+                cell: *a41
+              required:
+                - sheet
+                - cell
+      required:
+        - tenantId
+        - workspaceId
+        - id
+        - sourceKind
+        - protectedContentRef
+        - sourceVersion
+        - digest
+        - permissionRef
+        - locator
+    EnterpriseExecutionBudget:
+      type: object
+      additionalProperties: false
+      properties:
+        maxTokens: *a47
+        maxCostMinor: *a47
+        currency:
+          const: CNY
+        deadline: *a45
+      required:
+        - maxTokens
+        - maxCostMinor
+        - currency
+        - deadline
+    EvaluationBudget:
+      type: object
+      additionalProperties: false
+      properties:
+        dailyCostMinor: *a47
+        perAttemptCostMinor: *a47
+        maxTokensPerAttempt: *a47
+      required:
+        - dailyCostMinor
+        - perAttemptCostMinor
+        - maxTokensPerAttempt
+    EnterpriseMember:
+      type: object
+      additionalProperties: false
+      properties:
+        tenantId: *a41
+        workspaceId: *a41
+        id: *a41
+        streamVersion: *a43
+        principalId: *a41
+        issuer: *a41
+        subject: *a41
+        status:
+          type: string
+          enum:
+            - invited
+            - active
+            - disabled
+            - removed
+        departmentIds:
+          type: array
+          items: *a41
+          minItems: 0
+      required:
+        - tenantId
+        - workspaceId
+        - id
+        - streamVersion
+        - principalId
+        - issuer
+        - subject
+        - status
+        - departmentIds
+    ObjectGrant:
+      type: object
+      additionalProperties: false
+      properties:
+        tenantId: *a41
+        workspaceId: *a41
+        id: *a41
+        streamVersion: *a43
+        principalId: *a41
+        objectRef:
+          $ref: "#/components/schemas/BusinessObjectRef"
+        actions:
+          type: array
+          items:
+            type: string
+            enum:
+              - read
+              - draft
+              - write
+              - business_approve
+              - execution_approve
+              - audit
+          minItems: 1
+        readableFields:
+          type: array
+          items: *a41
+          minItems: 0
+        writableFields:
+          type: array
+          items: *a41
+          minItems: 0
+        validUntil: *a45
+      required:
+        - tenantId
+        - workspaceId
+        - id
+        - streamVersion
+        - principalId
+        - objectRef
+        - actions
+        - readableFields
+        - writableFields
+        - validUntil
+    BusinessApproval:
+      type: object
+      additionalProperties: false
+      properties:
+        tenantId: *a41
+        workspaceId: *a41
+        id: *a41
+        streamVersion: *a43
+        subjectRef:
+          $ref: "#/components/schemas/BusinessObjectRef"
+        actionDigest: *a42
+        preparedByPrincipalId: *a41
+        approvedByPrincipalId: *a41
+        decision:
+          type: string
+          enum:
+            - approve
+            - reject
+        decidedAt: *a45
+      required:
+        - tenantId
+        - workspaceId
+        - id
+        - streamVersion
+        - subjectRef
+        - actionDigest
+        - preparedByPrincipalId
+        - approvedByPrincipalId
+        - decision
+        - decidedAt
+    ExecutionApproval:
+      type: object
+      additionalProperties: false
+      properties:
+        tenantId: *a41
+        workspaceId: *a41
+        id: *a41
+        streamVersion: *a43
+        authorityRevisionId: *a41
+        actionIntentId: *a41
+        actionDigest: *a42
+        approvedByPrincipalId: *a41
+        decision:
+          type: string
+          enum:
+            - approve_once
+            - deny
+        validUntil: *a45
+      required:
+        - tenantId
+        - workspaceId
+        - id
+        - streamVersion
+        - authorityRevisionId
+        - actionIntentId
+        - actionDigest
+        - approvedByPrincipalId
+        - decision
+        - validUntil
+    EnterpriseGoal:
+      type: object
+      additionalProperties: false
+      properties:
+        tenantId: *a41
+        workspaceId: *a41
+        id: *a41
+        streamVersion: *a43
+        responsiblePrincipalId: *a41
+        status:
+          type: string
+          enum:
+            - draft
+            - awaiting_authorization
+            - running
+            - waiting_person
+            - waiting_external
+            - awaiting_acceptance
+            - needs_reconciliation
+            - completed
+            - failed
+            - cancelled
+        objectiveRef:
+          $ref: "#/components/schemas/BusinessObjectRef"
+        activePlanRevisionId: *a41
+        authorityRevisionId: *a41
+        requiredArtifactIds:
+          type: array
+          items: *a41
+          minItems: 0
+        acceptanceCriteria:
+          type: array
+          items: *a41
+          minItems: 1
+        budget:
+          $ref: "#/components/schemas/EnterpriseExecutionBudget"
+      required:
+        - tenantId
+        - workspaceId
+        - id
+        - streamVersion
+        - responsiblePrincipalId
+        - status
+        - requiredArtifactIds
+        - acceptanceCriteria
+        - budget

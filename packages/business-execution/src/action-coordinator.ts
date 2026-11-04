@@ -97,8 +97,13 @@ export class ActionCoordinator {
       if (duplicate) {
         if (duplicate.requestDigest !== requestDigest || (cached && cached.requestDigest !== requestDigest)) fail('ACTION_OPERATION_CONFLICT');
         this.check(tx, duplicate, 'read', options.actorId);
-        if (!cached) tx.putIdempotency({ tenantId: input.tenantId, scope: `action.prepare:${options.actorId}`, key: options.idempotencyKey,
-          requestDigest, response: { id: duplicate.id }, createdAt: this.now() });
+        if (!cached) {
+          appendKernelEvent(tx, { tenantId:input.tenantId,aggregateType:'action.command',aggregateId:sha256([options.actorId,options.idempotencyKey]),
+            expectedStreamVersion:0,type:'action.prepare_resolved',actorId:options.actorId,generation:duplicate.generation,
+            executionId:duplicate.executionId,correlationId:duplicate.operationKey,publicPayload:{workspaceId:duplicate.workspaceId,actionId:duplicate.id} });
+          tx.putIdempotency({ tenantId: input.tenantId, scope: `action.prepare:${options.actorId}`, key: options.idempotencyKey,
+            requestDigest, response: { id: duplicate.id }, createdAt: this.now() });
+        }
         return duplicate;
       }
       if (records.some(item => item.resourceKey === resourceKey && ['committed', 'needs_reconciliation'].includes(item.status))) fail('ACTION_RECONCILIATION_REQUIRED');

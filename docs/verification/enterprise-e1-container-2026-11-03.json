@@ -1,0 +1,153 @@
+{
+  "commit": "7b77aae20ecb92f98ae3c65e3917b526f90f25fe",
+  "dependencyImage": "sha256:ea766307814295cb711dbf6a7aeedcdbe5f6c465740332106bbffa394242c8b6",
+  "lockDigest": "bed9d59704b16cf981d7b256dbe381cbecdb0d877b02a0c779b60c32501b4c54",
+  "modules": 15,
+  "files": 1955,
+  "image": "mn-e1-recheck:7b77aae20ecb",
+  "date": "2026-11-03",
+  "applicationImageId": "sha256:60e55cd9190e0980d181b493ac127d677ffd991d865c490e0c4fd713b50488b7",
+  "minioImageId": "sha256:9a85bd522d1894f476fb1c2e13535df3650c1fb45dd718e58d01dc6123731d44",
+  "verificationCommand": "node scripts/enterprise-e2e.mjs --keep-compose",
+  "composeBuildMode": "verified prebuilt image; --build replaced with --no-build; all runtime assertions unchanged",
+  "resourceOverrides": {
+    "services": {
+      "host-a": {
+        "image": "mn-e1-recheck:7b77aae20ecb",
+        "pull_policy": "never",
+        "mem_limit": "384m",
+        "cpus": 0.35,
+        "environment": {
+          "NODE_OPTIONS": "--max-old-space-size=256"
+        }
+      },
+      "host-b": {
+        "image": "mn-e1-recheck:7b77aae20ecb",
+        "pull_policy": "never",
+        "mem_limit": "384m",
+        "cpus": 0.35,
+        "environment": {
+          "NODE_OPTIONS": "--max-old-space-size=256"
+        }
+      },
+      "worker-a": {
+        "image": "mn-e1-recheck:7b77aae20ecb",
+        "pull_policy": "never",
+        "mem_limit": "384m",
+        "cpus": 0.35,
+        "environment": {
+          "NODE_OPTIONS": "--max-old-space-size=256"
+        }
+      },
+      "worker-b": {
+        "image": "mn-e1-recheck:7b77aae20ecb",
+        "pull_policy": "never",
+        "mem_limit": "384m",
+        "cpus": 0.35,
+        "environment": {
+          "NODE_OPTIONS": "--max-old-space-size=256"
+        }
+      },
+      "jwks": {
+        "image": "mn-e1-recheck:7b77aae20ecb",
+        "pull_policy": "never",
+        "mem_limit": "192m",
+        "cpus": 0.35,
+        "environment": {
+          "NODE_OPTIONS": "--max-old-space-size=96"
+        }
+      },
+      "migrate": {
+        "image": "mn-e1-recheck:7b77aae20ecb",
+        "pull_policy": "never",
+        "mem_limit": "192m",
+        "cpus": 0.35,
+        "environment": {
+          "NODE_OPTIONS": "--max-old-space-size=96"
+        }
+      },
+      "minio": {
+        "image": "mn-enterprise-e11-minio:9a85bd522d18",
+        "pull_policy": "never",
+        "mem_limit": "384m",
+        "cpus": 0.35,
+        "environment": {
+          "GOMEMLIMIT": "256MiB",
+          "GOMAXPROCS": "1"
+        }
+      },
+      "minio-init": {
+        "image": "mn-enterprise-e11-minio:9a85bd522d18",
+        "pull_policy": "never",
+        "mem_limit": "128m",
+        "cpus": 0.35,
+        "environment": {
+          "GOMEMLIMIT": "256MiB",
+          "GOMAXPROCS": "1"
+        }
+      },
+      "postgres": {
+        "mem_limit": "192m",
+        "cpus": 0.35,
+        "command": [
+          "postgres",
+          "-c",
+          "shared_buffers=32MB",
+          "-c",
+          "max_connections=60"
+        ]
+      },
+      "vault": {
+        "mem_limit": "128m",
+        "cpus": 0.25,
+        "environment": {
+          "GOMEMLIMIT": "96MiB",
+          "GOMAXPROCS": "1"
+        }
+      },
+      "vault-init": {
+        "mem_limit": "128m",
+        "cpus": 0.25,
+        "environment": {
+          "GOMEMLIMIT": "96MiB",
+          "GOMAXPROCS": "1"
+        }
+      }
+    }
+  },
+  "result": {
+    "code": 0,
+    "signal": null,
+    "reason": null,
+    "cleanupCode": 0,
+    "originalServicesUnchanged": true
+  },
+  "originalServiceCount": 11,
+  "memory": {
+    "samplingIntervalSeconds": 10,
+    "samples": 14,
+    "minimumHostFreePercent": 28,
+    "peakSampledFixtureMiB": 592.28,
+    "oomKilled": false
+  },
+  "logSha256": "2b135664559dff482887df9b081a7a98972332f66ed4c765bc7dac9ce758405b",
+  "runtimeManifestSha256": "c737b883bf0a03ee22dc16386220e63a987ecbbafbf8491820ae2755b5109a67",
+  "namespaceVerification": {
+    "command": "node scripts/enterprise-access-e2e.mjs",
+    "result": "passed",
+    "postgresNamespace": "mn_enterprise_v1",
+    "objectStorage": "local encrypted FileCas"
+  },
+  "protocolVerification": {
+    "tests": 30,
+    "pass": 30,
+    "fail": 0,
+    "network": "none",
+    "memoryLimitMiB": 512,
+    "nodeHeapMiB": 256,
+    "concurrency": 1,
+    "oomKilled": false,
+    "exitCode": 0,
+    "logSha256": "1752fad1f196ba0e64e7ad0ed410432549e8e5a98cbcb1f4a8633790be6a4301"
+  }
+}
