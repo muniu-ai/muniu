@@ -2,6 +2,18 @@
 // SPDX-License-Identifier: Apache-2.0
 import type * as Types from "./enterprise-types.js";
 export interface EnterpriseApiInputs {
+  readonly adoptOperatingEvaluation: { readonly path: { readonly workspaceId: string; }; readonly body: Types.EnterpriseGoalAdopt; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
+  readonly getGoalConfiguration: { readonly path: { readonly workspaceId: string; }; };
+  readonly listOperatingGoals: { readonly path: { readonly workspaceId: string; }; };
+  readonly createOperatingGoal: { readonly path: { readonly workspaceId: string; }; readonly body: Types.EnterpriseGoalCreate; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
+  readonly getOperatingGoal: { readonly path: { readonly goalId: string; }; };
+  readonly getOperatingGoalControlState: { readonly path: { readonly goalId: string; }; };
+  readonly reviseOperatingGoal: { readonly path: { readonly goalId: string; }; readonly body: Types.EnterpriseGoalRevise; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
+  readonly authorizeOperatingGoal: { readonly path: { readonly goalId: string; }; readonly body: Types.EnterpriseGoalAuthorize; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
+  readonly commitOperatingPlan: { readonly path: { readonly goalId: string; }; readonly body: Types.EnterpriseGoalPlanWrite; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
+  readonly requestOperatingPlan: { readonly path: { readonly goalId: string; }; readonly body: Types.EnterpriseGoalPlanningRequest; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
+  readonly controlOperatingGoal: { readonly path: { readonly goalId: string; }; readonly body: Types.EnterpriseGoalControl; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
+  readonly getOperatingGoalReport: { readonly path: { readonly goalId: string; readonly attemptId: string; }; };
   readonly getEnterpriseEvaluation: { readonly path: { readonly attemptId: string; }; };
   readonly getOperatingState: { readonly path: { readonly workspaceId: string; }; };
   readonly writeOperatingPolicy: { readonly path: { readonly workspaceId: string; }; readonly body: Types.EnterpriseOperatingPolicyWrite; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
@@ -50,6 +62,18 @@ export interface EnterpriseApiInputs {
   readonly commandOrganizationMember: { readonly path: { readonly organizationId: string; readonly memberId: string; }; readonly body: Types.OrganizationMemberCommand; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
 }
 export interface EnterpriseApiOutputs {
+  readonly adoptOperatingEvaluation: Types.EnterpriseGoalView;
+  readonly getGoalConfiguration: Types.EnterpriseGoalConfiguration;
+  readonly listOperatingGoals: Types.EnterpriseGoalList;
+  readonly createOperatingGoal: Types.EnterpriseGoalView;
+  readonly getOperatingGoal: Types.EnterpriseGoalView;
+  readonly getOperatingGoalControlState: Types.EnterpriseGoalControlResult;
+  readonly reviseOperatingGoal: Types.EnterpriseGoalView;
+  readonly authorizeOperatingGoal: Types.EnterpriseGoalView;
+  readonly commitOperatingPlan: Types.EnterpriseGoalView;
+  readonly requestOperatingPlan: Types.EnterpriseGoalView;
+  readonly controlOperatingGoal: Types.EnterpriseGoalControlResult;
+  readonly getOperatingGoalReport: Types.EnterpriseGoalReportView;
   readonly getEnterpriseEvaluation: Types.EnterpriseEvaluationView;
   readonly getOperatingState: Types.EnterpriseOperatingState;
   readonly writeOperatingPolicy: Types.EnterpriseOperatingPolicyView;

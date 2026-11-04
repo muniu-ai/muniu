@@ -14,7 +14,7 @@ export type OperatingSources = PolicyView['sources'];
 export interface OperatingPolicy extends PolicyView { readonly acceptedEpoch?: number; readonly permissionDigest?: string; readonly salt: string; readonly relations: readonly string[]; }
 interface Versioned { readonly id: string; readonly tenantId: string; readonly workspaceId: string; readonly streamVersion: number; }
 export interface OperatingSource { readonly id: string; readonly tenantId: string; readonly workspaceId: string; readonly kind: 'web' | 'internal' | 'sales' | 'wecom' | 'timer'; }
-interface OperatingSubscription extends Versioned { readonly batchId: string; readonly owner: EnterpriseActor; readonly permissionDigest: string; readonly sources: OperatingSources; readonly sourceIds: readonly string[]; readonly triggerIds: readonly string[]; readonly validUntil: string; readonly status: 'active' | 'paused'; }
+export interface OperatingSubscription extends Versioned { readonly goalId?: string; readonly goalScopeId?: string; readonly batchId: string; readonly owner: EnterpriseActor; readonly permissionDigest: string; readonly sources: OperatingSources; readonly sourceIds: readonly string[]; readonly triggerIds: readonly string[]; readonly validUntil: string; readonly status: 'active' | 'paused'; }
 interface SourceState extends OperatingSource { readonly streamVersion: number; }
 export interface OperatingSourceEvent { readonly id: string; readonly type: string; readonly objectRefs: readonly BusinessObjectRef[]; readonly origin: 'external' | 'muniu'; readonly senderPrincipalId?: string; readonly message?: string; }
 export interface OperatingTrigger extends Versioned { readonly sourceId: string; readonly sourceEventId: string; readonly eventType: string; readonly digest: string; readonly objectRefs: readonly BusinessObjectRef[]; readonly status: 'received' | 'quarantined' | 'loop_filtered' | 'unauthorized'; readonly receivedAt: string; readonly senderPrincipalId?: string; readonly message?: string; }
@@ -117,6 +117,7 @@ export class EnterpriseOperatingService {
         if (!reduceIdentityEvents(this.bridge.snapshot(tx).records).members.has(input.responsiblePrincipalId)) throw new EnterpriseError('MEMBER_UNAVAILABLE', 409);
         const validate = () => {
           if (Date.parse(input.validUntil) <= Date.parse(this.now())) throw new EnterpriseError('POLICY_EXPIRED', 409);
+          if (input.work && (sha256(input.work.sources) !== sha256(input.sources) || Date.parse(input.work.budget.deadline) > Date.parse(input.validUntil))) throw new EnterpriseError('POLICY_WORK_SCOPE_INVALID', 409);
           for (const id of input.sourceIds) if (tx.getProjection<SourceState>(OPERATING.source, id)?.workspaceId !== workspaceId) throw new EnterpriseError('SOURCE_UNAVAILABLE', 409);
           for (const s of input.sources) { if (s.reference.tenantId !== actor.tenantId || s.reference.workspaceId !== workspaceId) throw new EnterpriseError('OBJECT_SCOPE_MISMATCH'); executionBusinessObject(this.bridge.snapshot(tx).records, s.reference); }
         };
@@ -176,21 +177,26 @@ export class EnterpriseOperatingService {
         try { if (sender) this.sources(tx, { tenantId: source.tenantId, principalId: sender.id, sessionEpoch: sender.sessionEpoch }, source.workspaceId, p.sources); allowed.push(p); }
         catch (error) { if (!(error instanceof EnterpriseError)) throw error; }
       }
-      if (status === 'received' && !allowed.length) status = 'unauthorized';
+      const subscribed = tx.listProjections<OperatingSubscription>(OPERATING.subscription).some(s => s.goalId && s.status === 'active' && s.workspaceId === source.workspaceId && s.sourceIds.includes(source.id) && input.objectRefs.every(r => s.sources.some(item => objectKey(item.reference) === objectKey(r))));
+      if (status === 'received' && !allowed.length && !subscribed) status = 'unauthorized';
       const trigger: OperatingTrigger = { id, tenantId: source.tenantId, workspaceId: source.workspaceId, streamVersion: 1, sourceId: source.id, sourceEventId: input.id, eventType: input.type, digest, objectRefs: input.objectRefs, status, receivedAt: this.now(), ...(input.senderPrincipalId ? { senderPrincipalId: input.senderPrincipalId } : {}), ...(input.message ? { message: input.message } : {}) };
       this.record(tx, OPERATING.trigger, trigger, 'enterprise-system:router', 'operating.source_received'); accepted++;
+      const deliveredPolicies = new Set<string>();
       if (status === 'received') for (const subscription of tx.listProjections<OperatingSubscription>(OPERATING.subscription).filter(s => s.workspaceId === source.workspaceId && s.sourceIds.includes(source.id) && s.status === 'active'
         && input.objectRefs.every(r => s.sources.some(s => objectKey(s.reference) === objectKey(r))))) {
         try {
-          const check = () => { this.sources(tx, subscription.owner, subscription.workspaceId, subscription.sources);
+          const target = subscription.goalId ? tx.getProjection<{ scopeId?: string; status: string; owner: EnterpriseActor; spec: { budget: { deadline: string } } }>('enterprise-work.goal', subscription.goalId) : undefined;
+          if (subscription.goalId && (!target || target.scopeId !== subscription.goalScopeId || target.owner.principalId !== subscription.owner.principalId || ['completed', 'cancelled', 'failed'].includes(target.status) || Date.parse(target.spec.budget.deadline) <= Date.parse(this.now()))) continue;
+          const check = () => { this.sources(tx, subscription.owner, subscription.workspaceId, subscription.sources); if (sender) this.sources(tx, { tenantId: source.tenantId, principalId: sender.id, sessionEpoch: sender.sessionEpoch }, source.workspaceId, subscription.sources);
             if (Date.parse(subscription.validUntil) <= Date.parse(this.now()) || executionPermissionDigest(this.bridge.snapshot(tx).records, subscription.owner.principalId, subscription.workspaceId) !== subscription.permissionDigest) throw new EnterpriseError('SUBSCRIPTION_REVOKED', 409); };
           this.guard(tx, check);
           this.record(tx, OPERATING.subscription, { ...subscription, streamVersion: subscription.streamVersion + 1, triggerIds: [...subscription.triggerIds, id] }, 'enterprise-system:router', 'operating.subscription_delivered');
+          if (target) { const original = tx.getProjection<OperatingBatch>(OPERATING.batch, subscription.batchId); if (original?.policyId) deliveredPolicies.add(original.policyId); }
         } catch (error) { if (!(error instanceof EnterpriseError)) throw error;
           this.record(tx, OPERATING.subscription, { ...subscription, streamVersion: subscription.streamVersion + 1, status: 'paused' }, 'enterprise-system:router', 'operating.subscription_suspended'); }
       }
 
-      for (const p of allowed) {
+      for (const p of allowed.filter(p => !deliveredPolicies.has(p.id))) {
         const owner = this.currentPolicy(tx, p), topic = sha256([p.id, p.streamVersion, source.id, ...input.objectRefs.map(objectKey).sort()]);
         const pending = tx.listProjections<OperatingBatch>(OPERATING.batch).find(b => b.workspaceId === p.workspaceId && b.topic === topic && b.status === 'pending');
         const batch: OperatingBatch = pending ? { ...pending, streamVersion: pending.streamVersion + 1, triggerIds: [...pending.triggerIds, id] } : {

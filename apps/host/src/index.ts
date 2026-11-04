@@ -44,3 +44,5 @@ export * from './enterprise-execution-config.js';
 export * from './enterprise-operating.js';
 export * from './enterprise-evaluation.js';
 export * from './enterprise-model-config.js';
+export * from './enterprise-goals.js';
+export * from './enterprise-task-runtime.js';

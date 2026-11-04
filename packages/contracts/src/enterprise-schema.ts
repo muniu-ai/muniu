@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+import { ENTERPRISE_GOAL_SCHEMAS } from './enterprise-goals-schema.js';
 import { ENTERPRISE_OPERATING_SCHEMAS } from './enterprise-operating-schema.js';
 import type { JsonObject } from './json.js';
 import { ENTERPRISE_BUSINESS_SCHEMAS } from './enterprise-business-schema.js';
@@ -35,6 +36,8 @@ export const ENTERPRISE_SCHEMAS: Readonly<Record<string, JsonObject>> = {
   ...ENTERPRISE_ACCESS_SCHEMAS,
   ...ENTERPRISE_EXECUTION_SCHEMAS,
   ...ENTERPRISE_OPERATING_SCHEMAS,
+  ...ENTERPRISE_GOAL_SCHEMAS,
+  EnterpriseGoalStatus: { type: 'string', enum: [...ENTERPRISE_GOAL_STATES] },
   BusinessObjectRef: object({ ...scope, objectType: enumeration(...ENTERPRISE_OBJECT_TYPES), objectId: text, streamVersion: version, digest }),
   ExternalObjectRef: object({ ...scope, provider: text, objectType: enumeration(...ENTERPRISE_OBJECT_TYPES), objectId: text,
     sourceVersion: text, digest, observedAt: timestamp, permissionRef: text }),

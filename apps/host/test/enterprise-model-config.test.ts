@@ -14,3 +14,11 @@ test('模型配置按企业与工作区选择，只读取新企业凭据命名�
   assert.throws(() => enterpriseEvaluationConfiguration([binding, binding], env));
   assert.equal(enterpriseEvaluationConfiguration(undefined, env).modelFor('tenant', 'workspace'), undefined);
 });
+
+test('同一工作区可登记多个不同模型绑定，入站评估保持明确的首选绑定', () => {
+  const binding = { tenantId: 'tenant', workspaceId: 'workspace', id: 'primary', version: 1, providerId: 'deepseek', modelId: 'deepseek-chat', secretEnvironment: 'MN_ENTERPRISE_MODEL_TEST' };
+  const config = enterpriseEvaluationConfiguration([binding, { ...binding, id: 'alternative', modelId: 'deepseek-reasoner' }], {});
+  assert.equal(config.modelFor('tenant', 'workspace')!.id, 'primary');
+  assert.deepEqual(config.modelsFor('tenant', 'workspace').map(m => m.id), ['primary', 'alternative']);
+  assert.deepEqual(config.modelsFor('other', 'workspace'), []);
+});

@@ -20,6 +20,8 @@ test('新入口使用独立状态标识，拒绝非空旧目录，重启保持�
   assert.ok((host as any).executionRuntime, '企业入口必须装配执行准入服务');
   assert.ok(host.operating, '企业入口必须装配事件接收服务');
   assert.ok(host.evaluation, '企业入口必须装配持久评估服务');
+  assert.ok(host.goals, '企业入口必须装配工作与计划服务');
+  assert.ok(host.taskRuntime, '企业入口必须装配原生节点 Worker');
   const workspace = await host.identity.createWorkspace({ tenantId: 'tenant', principalId: 'admin', sessionEpoch: 1 }, 'operating-workspace', { name: '持续经营', mode: 'builtin' });
   await host.runOperatingCycle();
   assert.equal((await host.operating.inspect({ tenantId: 'tenant', principalId: 'admin', sessionEpoch: 1 }, workspace.id)).sources.length, 2);

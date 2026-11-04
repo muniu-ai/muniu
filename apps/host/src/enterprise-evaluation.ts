@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
+import { checkedEnterpriseModel } from './enterprise-models.js';
 import { type ModelRequest, type ModelResponse, reduceModelBudget } from '@mn/agent-runtime';
 import type { BudgetAccountV1, BudgetReservationV1, Execution, ExecutionAuthority, EnterpriseContractTypes, JsonObject } from '@mn/contracts';
-import { AgentOsKernel, appendKernelEvent, findModelPrice, computeExecutionAuthorityCommitment, createBudgetAccount, reserveBudget, commitBudgetReservation, markBudgetUnknown, releaseBudget, settleBudget, sha256, type KernelStore, type KernelTransaction } from '@mn/kernel';
+import { AgentOsKernel, appendKernelEvent, computeExecutionAuthorityCommitment, createBudgetAccount, reserveBudget, commitBudgetReservation, markBudgetUnknown, releaseBudget, settleBudget, sha256, type KernelStore, type KernelTransaction } from '@mn/kernel';
 import { EnterpriseError, assertModelQuota, type EnterpriseActor } from '@mn/enterprise-services';
 import { createProtectedRuntimeStore, fencedCodingStore, invokeBudgetedByokModel, createByokModelInvoker, createByokModelQuoter, type RuntimeProtection, type ByokModelInvoker, type ByokModelQuoter, type ByokProviderId, type WorkerJobHandler, type WorkerJobStore } from '@mn/worker';
 import { enterpriseBudgetPrincipal, ENTERPRISE_AGENT_PREFIX } from './enterprise-kernel-bridge.js';
@@ -31,12 +32,7 @@ export class EnterpriseEvaluationRuntime {
   }
   private model(tenantId: string, workspaceId: string): EvaluationModel {
     const model = this.options.modelFor(tenantId, workspaceId);
-    if (!model) throw new EnterpriseError('MODEL_CONNECTION_UNCONFIGURED', 409);
-    if (!model.id || !Number.isSafeInteger(model.version) || model.version < 1 || !['openai', 'deepseek', 'anthropic', 'moonshot', 'qwen'].includes(model.providerId) || !model.modelId
-      || !(/^env:\/\/muniu\.enterprise\/MN_ENTERPRISE_MODEL_[A-Z0-9_]+$/u.test(model.secretRef) || model.secretRef.startsWith('keychain://muniu.enterprise/') || model.secretRef.startsWith('vault://muniu.enterprise/') || (model.mode === 'test_fixture' && model.secretRef.startsWith('fixture://enterprise/')))) throw new EnterpriseError('MODEL_CONNECTION_INVALID', 409);
-    const price = findModelPrice(model.providerId, model.modelId);
-    if (model.mode === 'live' && (!price || price.rates.currency !== 'CNY')) throw new EnterpriseError('MODEL_PRICE_UNAVAILABLE', 409);
-    return structuredClone(model);
+    return checkedEnterpriseModel(model);
   }
   private batch(tx: KernelTransaction, id: string): OperatingBatch { const value = tx.getProjection<OperatingBatch>(OPERATING.batch, id); if (!value) throw new EnterpriseError('BATCH_NOT_FOUND', 404); return value; }
   private current(tx: KernelTransaction, batch: OperatingBatch, exactSources?: OperatingSources): void {

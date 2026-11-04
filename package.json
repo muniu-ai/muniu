@@ -102,7 +102,9 @@
     "verify:enterprise-admission": "npm run build && npm run test -w @mn/enterprise-services && tsc -p apps/host/tsconfig.test.json && node --test --test-concurrency=1 apps/host/dist-test/test/enterprise-execution-*.test.js apps/host/dist-test/test/enterprise-kernel-bridge.test.js",
     "verify:enterprise-admission-postgres": "node scripts/enterprise-actions-e2e.mjs --with-enterprise-admission",
     "verify:enterprise-operating": "npm run build && tsc -p apps/host/tsconfig.test.json && node --test --test-concurrency=1 apps/host/dist-test/test/enterprise-operating*.test.js apps/host/dist-test/test/enterprise-model-config.test.js apps/host/dist-test/test/enterprise-local.test.js",
-    "verify:enterprise-operating-postgres": "node scripts/enterprise-actions-e2e.mjs --with-enterprise-operating"
+    "verify:enterprise-operating-postgres": "node scripts/enterprise-actions-e2e.mjs --with-enterprise-operating",
+    "verify:agent-coordination": "npm run build && npm run test -w @mn/kernel && npm run test -w @mn/task-orchestration && npm run test -w @mn/business-execution && tsc -p apps/host/tsconfig.test.json && node --test --test-concurrency=1 apps/host/dist-test/test/enterprise-*.test.js",
+    "verify:agent-coordination-postgres": "node scripts/enterprise-actions-e2e.mjs --with-enterprise-goals"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",

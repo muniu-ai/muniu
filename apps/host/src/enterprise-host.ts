@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
+import type { EnterpriseGoalService } from './enterprise-goals.js';
+import { dispatchEnterpriseGoals } from './enterprise-goals-api.js';
 import { dispatchEnterpriseOperating } from './enterprise-operating-api.js';
 import type { EnterpriseEvaluationRuntime } from './enterprise-evaluation.js';
 import type { EnterpriseOperatingService } from './enterprise-operating.js';
+import { EnterprisePlanError } from '@mn/task-orchestration';
 import { KernelError } from '@mn/kernel';
 import { EnterpriseExecutionConfigurationService } from './enterprise-execution-config.js';
 import type { EnterpriseExecutionRuntime } from './enterprise-execution-runtime.js';
@@ -17,6 +20,7 @@ import { dispatchEnterpriseAccess } from './enterprise-access-api.js';
 import { createEnterpriseOidc, type EnterpriseOidcProvider } from './enterprise-oidc.js';
 
 export interface EnterpriseHostOptions {
+  readonly goals?: EnterpriseGoalService;
   readonly operating?: EnterpriseOperatingService;
   readonly evaluation?: EnterpriseEvaluationRuntime;
   readonly executionRuntime?: EnterpriseExecutionRuntime;
@@ -41,7 +45,7 @@ function cookieValue(request: Request, name: string): string | undefined {
   if (found.length > 1) throw new EnterpriseError('AUTHENTICATION_REQUIRED', 401);
   return found[0]?.slice(name.length + 1);
 }
-const requestBodyLimit = (path: string) => /^\/v2\/workspaces\/[^/]+\/business\/commands$/u.test(path) ? 262144 : 16384;
+const requestBodyLimit = (path: string) => /^\/v2\/workspaces\/[^/]+\/(business\/commands|goals)$/u.test(path) || /^\/v2\/goals\/[^/]+\/(plans|scope-revisions)$/u.test(path) ? 262144 : 16384;
 async function body(request: Request): Promise<unknown> {
   if (request.headers.get('content-type')?.split(';')[0]?.trim() !== 'application/json') throw new EnterpriseError('INVALID_CONTENT_TYPE', 415);
   const reader = request.body?.getReader(); if (!reader) throw new EnterpriseError('INVALID_BODY', 400);
@@ -154,6 +158,8 @@ export function createEnterpriseHost(options: EnterpriseHostOptions) {
       if(executionResult.handled)return reply(executionResult.value,200,traceId,op.response);
       const operatingResult = await dispatchEnterpriseOperating({ operationId: op.id, params, input, actor: current.actor, key, operating: options.operating, evaluation: options.evaluation });
       if (operatingResult.handled) return reply(operatingResult.value, 200, traceId, op.response);
+      const goalsResult = await dispatchEnterpriseGoals({ operationId: op.id, params, input, actor: current.actor, key, goals: options.goals });
+      if (goalsResult.handled) return reply(goalsResult.value, 200, traceId, op.response);
       let data: unknown;
       switch (op.id) {
         case 'enterpriseSession': data = { tenantId: current.actor.tenantId, principalId: current.member.id, displayName: current.member.displayName,
@@ -177,7 +183,7 @@ export function createEnterpriseHost(options: EnterpriseHostOptions) {
       }
       return reply(data, ['createEnterpriseWorkspace', 'inviteOrganizationMember'].includes(op.id) ? 201 : 200, traceId, op.response);
     } catch (error) {
-      const own = error instanceof EnterpriseError, kernel = error instanceof KernelError;
+      const own = error instanceof EnterpriseError, kernel = error instanceof KernelError || error instanceof EnterprisePlanError;
       const status = own ? error.status : kernel ? (/NOT_FOUND/u.test(error.code)?404:/AUTHORIZATION_REVOKED|FORBIDDEN|HUMAN_APPROVAL/u.test(error.code)?403:409) : callback ? 401 : 503;
       const code = own || kernel ? error.code : callback ? 'AUTHENTICATION_FAILED' : 'SERVICE_UNAVAILABLE';
       const h = headers(); h.set('Content-Type', 'application/json; charset=utf-8');

@@ -163,3 +163,5 @@ E2.1 的业务命令、权限与验收说明见[客户到订单](enterprise-sale
 E3.1 的动作、预算与 Worker 检查入口为 `npm run verify:enterprise-actions`，语义见[持久动作与预算预留](enterprise-actions.md)。
 
 企业来源与持续规则由 E4.1 维护，执行 `npm run verify:enterprise-operating` 与 `npm run verify:enterprise-operating-postgres`。前者检查本地与合成行为；后者创建隔离 PostgreSQL，串行复验 E3 协议及 E4 的持久评估。使用说明见[来源事件与持续规则](enterprise-operating-events.md)。
+
+动态计划与监督由 E4.2 维护，执行 `npm run verify:agent-coordination` 和 `npm run verify:agent-coordination-postgres`。后者包含 E3/E4.1 故障断言，按[资源约束](verification/enterprise-e4-2-2026-11-05.md)串行运行。

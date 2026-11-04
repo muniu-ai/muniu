@@ -19,9 +19,11 @@ test('会话响应拒绝密钥字段、继承的信封字段与错误角色类�
   assert.throws(() => parseEnterpriseResponse('enterpriseSession', Object.assign(Object.create({ traceId: 'inherited' }), { data })));
   assert.throws(() => parseEnterpriseResponse('enterpriseSession', { data: { ...data, organizationAdmin: 'true' }, traceId: 'trace' }));
 });
-test('企业 OpenAPI 只公布已实现身份入口，认证回调不要求业务幂等键', () => {
+test('企业 OpenAPI 公布已实现入口，认证回调不要求业务幂等键', () => {
   const document = createEnterpriseOpenApiDocument() as any;
   assert.equal(document.paths['/v2/auth/callback'].get.parameters, undefined);
   assert.equal(document.paths['/v2/workspaces'].post.parameters.find((p: any) => p.name === 'Idempotency-Key').required, true);
-  assert.equal(document.paths['/v2/workspaces/{workspaceId}/goals'], undefined);
+  assert.equal(document.paths['/v2/workspaces/{workspaceId}/goals'].post.operationId, 'createOperatingGoal');
+  assert.equal(document.paths['/v2/goals/{goalId}/authorizations'].post.parameters.find((p: any) => p.name === 'Idempotency-Key').required, true);
+  assert.equal(document.paths['/v2/knowledge/search'], undefined);
 });

@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { AgentOsKernel, InMemoryKernelStore, createBudgetAccount, reserveBudget, commitBudgetReservation,
-  markBudgetUnknown, settleBudget, releaseBudget, closeBudgetAccount, replayCoreProjections } from '../src/index.js';
+  amendBudgetAccount, markBudgetUnknown, settleBudget, releaseBudget, closeBudgetAccount, replayCoreProjections } from '../src/index.js';
 const now = '2026-11-02T01:00:00.000Z', expiry = '2026-11-03T01:00:00.000Z';
 async function fixture() {
   const store = new InMemoryKernelStore(Buffer.alloc(32, 42), () => now);
@@ -75,4 +75,20 @@ test('其他成员不能承诺他人的预留，关闭账户阻止排队操作�
   });
   const closed = await f.store.transact('local', tx => tx.getProjection<any>('budget.account', f.child.id));
   assert.equal(closed.status, 'closed'); assert.equal(closed.spentCostMinorUnits, '5'); assert.equal(closed.heldCostMinorUnits, '0');
+});
+
+
+test('明确修订预算保留已用与未知预留，禁止陈旧版本、低于占用和越过父上限', async () => {
+  const f = await fixture();
+  const reservation = await f.store.transact('local', tx => reserveBudget(tx, { ...f.context, accountId: f.child.id, operationKey: 'held', amount: { tokens: 30, costMinorUnits: '30', currency: 'CNY' } }));
+  await f.store.transact('local', tx => commitBudgetReservation(tx, { ...f.context, reservationId: reservation.id, operationKey: 'held' }));
+  await f.store.transact('local', tx => markBudgetUnknown(tx, { ...f.context, reservationId: reservation.id, operationKey: 'held' }));
+  const current = await f.store.transact('local', tx => tx.getProjection<any>('budget.account', f.child.id));
+  const request = { ...f.context, accountId: f.child.id, expectedStreamVersion: current.streamVersion, limit: { tokens: 90, costMinorUnits: '90', currency: 'CNY' }, expiresAt: expiry };
+  const changed = await f.store.transact('local', tx => amendBudgetAccount(tx, request));
+  assert.equal(changed.heldTokens, 30); assert.equal(changed.spentTokens, 0); assert.equal(changed.limit.tokens, 90);
+  await assert.rejects(f.store.transact('local', tx => amendBudgetAccount(tx, request)), { code: 'BUDGET_ACCOUNT_VERSION_CONFLICT' });
+  await assert.rejects(f.store.transact('local', tx => amendBudgetAccount(tx, { ...request, expectedStreamVersion: changed.streamVersion, limit: { ...request.limit, tokens: 20 } })), { code: 'BUDGET_BELOW_COMMITTED' });
+  await assert.rejects(f.store.transact('local', tx => amendBudgetAccount(tx, { ...request, expectedStreamVersion: changed.streamVersion, limit: { ...request.limit, tokens: 101 } })), { code: 'BUDGET_PARENT_INVALID' });
+  await assert.rejects(f.store.transact('local', tx => releaseBudget(tx, { ...f.context, reservationId: reservation.id, operationKey: 'held' })), { code: 'BUDGET_RECONCILIATION_REQUIRED' });
 });

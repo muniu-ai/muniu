@@ -2,6 +2,18 @@
 import { ENTERPRISE_SCHEMAS } from './enterprise-schema.js';
 import type { JsonObject } from './json.js';
 export const ENTERPRISE_HTTP_OPERATIONS = [
+  { id:'adoptOperatingEvaluation',method:'post',path:'/v2/workspaces/{workspaceId}/goal-adoptions',body:'EnterpriseGoalAdopt',response:'EnterpriseGoalView',mutation:true },
+  { id:'getGoalConfiguration',method:'get',path:'/v2/workspaces/{workspaceId}/goal-configuration',response:'EnterpriseGoalConfiguration',mutation:false },
+  { id:'listOperatingGoals',method:'get',path:'/v2/workspaces/{workspaceId}/goals',response:'EnterpriseGoalList',mutation:false },
+  { id:'createOperatingGoal',method:'post',path:'/v2/workspaces/{workspaceId}/goals',body:'EnterpriseGoalCreate',response:'EnterpriseGoalView',mutation:true },
+  { id:'getOperatingGoal',method:'get',path:'/v2/goals/{goalId}',response:'EnterpriseGoalView',mutation:false },
+  { id:'getOperatingGoalControlState',method:'get',path:'/v2/goals/{goalId}/control-state',response:'EnterpriseGoalControlResult',mutation:false },
+  { id:'reviseOperatingGoal',method:'post',path:'/v2/goals/{goalId}/scope-revisions',body:'EnterpriseGoalRevise',response:'EnterpriseGoalView',mutation:true },
+  { id:'authorizeOperatingGoal',method:'post',path:'/v2/goals/{goalId}/authorizations',body:'EnterpriseGoalAuthorize',response:'EnterpriseGoalView',mutation:true },
+  { id:'commitOperatingPlan',method:'post',path:'/v2/goals/{goalId}/plans',body:'EnterpriseGoalPlanWrite',response:'EnterpriseGoalView',mutation:true },
+  { id:'requestOperatingPlan',method:'post',path:'/v2/goals/{goalId}/plan-proposals',body:'EnterpriseGoalPlanningRequest',response:'EnterpriseGoalView',mutation:true },
+  { id:'controlOperatingGoal',method:'post',path:'/v2/goals/{goalId}/commands',body:'EnterpriseGoalControl',response:'EnterpriseGoalControlResult',mutation:true },
+  { id:'getOperatingGoalReport',method:'get',path:'/v2/goals/{goalId}/reports/{attemptId}',response:'EnterpriseGoalReportView',mutation:false },
   { id:'getEnterpriseEvaluation',method:'get',path:'/v2/evaluations/{attemptId}',response:'EnterpriseEvaluationView',mutation:false },
   { id:'getOperatingState',method:'get',path:'/v2/workspaces/{workspaceId}/operating-state',response:'EnterpriseOperatingState',mutation:false },
   { id:'writeOperatingPolicy',method:'post',path:'/v2/workspaces/{workspaceId}/operating-policies',body:'EnterpriseOperatingPolicyWrite',response:'EnterpriseOperatingPolicyView',mutation:true },

@@ -105,6 +105,7 @@ export default defineConfig({
           { text: "持久动作与预算预留", link: "/enterprise-actions" },
           { text: "企业执行准入", link: "/enterprise-execution-admission" },
           { text: "来源事件与持续规则", link: "/enterprise-operating-events" },
+          { text: "动态计划与监督", link: "/enterprise-agent-coordination" },
           { text: "安全边界", link: "/security/overview" },
           { text: "日志脱敏", link: "/security/redaction-policy" },
           { text: "密钥扫描", link: "/security/secret-scanning" },

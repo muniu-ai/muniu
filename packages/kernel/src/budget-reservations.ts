@@ -174,3 +174,25 @@ export function closeBudgetAccount(tx: KernelTransaction, input: BudgetContext &
   const next: BudgetAccountV1 = { ...current, status: 'closed', streamVersion: current.streamVersion + 1, updatedAt: input.occurredAt };
   write(tx, 'budget.account', next, input.principalId, 'budget.account_closed'); return next;
 }
+
+/** The Host must authorize the exact amendment; existing usage and reservations are never reset. */
+export function amendBudgetAccount(tx: KernelTransaction, input: BudgetContext & {
+  readonly accountId: string; readonly expectedStreamVersion: number; readonly limit: BudgetAmountV1; readonly expiresAt: string;
+}): BudgetAccountV1 {
+  actor(tx, input); amount(input.limit); time(input.expiresAt);
+  const current = account(tx, input, input.accountId);
+  if (current.principalId !== input.principalId || current.limit.currency !== input.limit.currency) fail('BUDGET_SCOPE_MISMATCH');
+  if (current.streamVersion !== input.expectedStreamVersion) fail('BUDGET_ACCOUNT_VERSION_CONFLICT');
+  if (current.status !== 'active' || Date.parse(input.expiresAt) <= Date.parse(input.occurredAt)) fail('BUDGET_STATE_CONFLICT');
+  if (BigInt(input.limit.tokens) < BigInt(current.spentTokens) + BigInt(current.heldTokens)
+    || BigInt(input.limit.costMinorUnits) < BigInt(current.spentCostMinorUnits) + BigInt(current.heldCostMinorUnits)) fail('BUDGET_BELOW_COMMITTED');
+  if (current.parentAccountId) {
+    const parent = account(tx, input, current.parentAccountId);
+    if (parent.status !== 'active' || parent.overrun || parent.limit.currency !== input.limit.currency || input.limit.tokens > parent.limit.tokens
+      || BigInt(input.limit.costMinorUnits) > BigInt(parent.limit.costMinorUnits) || Date.parse(input.expiresAt) > Date.parse(parent.expiresAt)) fail('BUDGET_PARENT_INVALID');
+  }
+  const configurationDigest = sha256({ scope: current.scope, principalId: current.principalId, limit: input.limit, expiresAt: input.expiresAt, parentAccountId: current.parentAccountId });
+  const next: BudgetAccountV1 = { ...current, limit: structuredClone(input.limit), expiresAt: input.expiresAt, configurationDigest,
+    streamVersion: current.streamVersion + 1, updatedAt: input.occurredAt };
+  write(tx, 'budget.account', next, input.principalId, 'budget.account_amended'); return next;
+}

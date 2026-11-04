@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import assert from 'node:assert/strict';
+import { verifyEnterpriseGoals } from './lib/enterprise-goals-fixture.mjs';
 import { verifyEnterpriseOperating } from './lib/enterprise-operating-fixture.mjs';
 import {verifyEnterpriseAdmission} from './lib/enterprise-admission-fixture.mjs';
 import {randomBytes,randomUUID} from 'node:crypto';
@@ -68,8 +69,9 @@ try{
  const raw=await a.pool.query('select public_payload::text from mn_enterprise_v1.events');assert.doesNotMatch(JSON.stringify(raw.rows),/CONFIDENTIAL-input-ref|heldCostMinorUnits/);assert.deepEqual((await a.pool.query('select value from mn_v2.sentinel')).rows,[{value:'untouched'}]);
  assert.equal((await a.pool.query('select count(*)::int as count from fixture_provider.receipts where calls<>1')).rows[0].count,0);
  assert.equal((await a.pool.query("select count(*)::int as count from mn_enterprise_v1.outbox where topic='action.queued'")).rows[0].count,4);
- if(process.argv.includes('--with-enterprise-admission')||process.argv.includes('--with-enterprise-operating'))await verifyEnterpriseAdmission({store:a.store,cas:a.cas,key:config.key,providerUrl:config.providerUrl,registerCoordinator:(tenant,coordinator)=>coordinators.set(tenant,coordinator),pool:a.pool,rebuild:tenant=>a.kernelStore.rebuildProjections(tenant)});
- if(process.argv.includes('--with-enterprise-operating'))await verifyEnterpriseOperating({store:a.store,cas:a.cas,key:config.key,pool:a.pool,rebuild:tenant=>a.kernelStore.rebuildProjections(tenant),config,root,connect});
+ if(process.argv.includes('--with-enterprise-admission')||process.argv.includes('--with-enterprise-operating')||process.argv.includes('--with-enterprise-goals'))await verifyEnterpriseAdmission({store:a.store,cas:a.cas,key:config.key,providerUrl:config.providerUrl,registerCoordinator:(tenant,coordinator)=>coordinators.set(tenant,coordinator),pool:a.pool,rebuild:tenant=>a.kernelStore.rebuildProjections(tenant)});
+ if(process.argv.includes('--with-enterprise-operating')||process.argv.includes('--with-enterprise-goals'))await verifyEnterpriseOperating({store:a.store,cas:a.cas,key:config.key,pool:a.pool,rebuild:tenant=>a.kernelStore.rebuildProjections(tenant),config,root,connect});
+ if(process.argv.includes('--with-enterprise-goals'))await verifyEnterpriseGoals({store:a.store,cas:a.cas,key:config.key,pool:a.pool,rebuild:tenant=>a.kernelStore.rebuildProjections(tenant),config,root,connect});
  process.stdout.write('E3.1 PostgreSQL：双 Worker 竞争、事务派发、响应丢失、SIGKILL、重建、不重放、预算保留、核对去重和取消通过。\n');
 }finally{
  child?.kill('SIGKILL');if(server){server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}

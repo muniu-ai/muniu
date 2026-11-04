@@ -1,0 +1,290 @@
+{
+  "package": "E4.2",
+  "date": "2026-11-05",
+  "baseCommit": "6f02c83",
+  "branch": "codex/enterprise-e4-2",
+  "toolchain": {
+    "node": "22.19.0",
+    "npm": "11.10.1",
+    "typescript": "5.7.2"
+  },
+  "image": {
+    "stage": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e42-linux-bqoagq8l",
+    "image": "mn-e42-recheck:d74a5b860f50",
+    "sourceDigest": "d74a5b860f500076caebd3849229dbc351d8b4415b8ed0598e02713d0ec32d46",
+    "lockDigest": "9689c184c5c7c11fa4628713129699bd0254ccb0e226db7ba63047cc9b8fc632",
+    "baseImage": "mn-e41-recheck:a70077448745",
+    "externalLockMatchesBase": true,
+    "baseImageId": "sha256:b033137e74d5f780046fad0b06946e94287f165ff5ff713ffbc7ee16f9465899",
+    "imageId": "sha256:6d3d640ea78fbbdf4effd81cd3192dbd3538fbba1234a6309fc8ba96ab950528"
+  },
+  "checks": [
+    {
+      "name": "node-final",
+      "command": [
+        "npm",
+        "test"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 473.2,
+      "peakProcessTreeRSSMiB": 579.7,
+      "minimumHostFreePercent": 28,
+      "resourceStopped": false,
+      "tests": 1376,
+      "logSha256": "e4a2833ed6b23aa089a2ce1cf5b04482e7045daa62a407dd6fca9a6a7e1537b9",
+      "startedAt": "2026-11-04T19:14:49.700684+00:00",
+      "completedAt": "2026-11-04T19:22:42.900684+00:00",
+      "timingBasis": "gate log creation plus measured duration"
+    },
+    {
+      "name": "coordination",
+      "command": [
+        "npm",
+        "run",
+        "verify:agent-coordination"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 65.4,
+      "peakProcessTreeRSSMiB": 512.4,
+      "minimumHostFreePercent": 27,
+      "resourceStopped": false,
+      "tests": 228,
+      "logSha256": "3b64d8df3b373f685440c7f32f524a1b8f242b8366b9199f1587756bc538578e",
+      "startedAt": "2026-11-04T19:07:08.690505+00:00",
+      "completedAt": "2026-11-04T19:08:14.090505+00:00",
+      "timingBasis": "gate log creation plus measured duration"
+    },
+    {
+      "name": "integration-final",
+      "command": [
+        "sh",
+        "-ec",
+        "npm run build -w @mn/host && node node_modules/typescript/bin/tsc -p apps/host/tsconfig.test.json && node --test --test-concurrency=1 apps/host/dist-test/test/enterprise-*.test.js"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 40.9,
+      "peakProcessTreeRSSMiB": 242.8,
+      "minimumHostFreePercent": 27,
+      "resourceStopped": false,
+      "tests": 116,
+      "logSha256": "2e84d5421128a66945a1bc0af0c061640fe83f9150f2f1620c150307e42a31c5",
+      "startedAt": "2026-11-04T19:29:36.352338+00:00",
+      "completedAt": "2026-11-04T19:30:17.252338+00:00",
+      "timingBasis": "gate log creation plus measured duration"
+    },
+    {
+      "name": "typecheck",
+      "command": [
+        "npm",
+        "run",
+        "typecheck"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 50.4,
+      "peakProcessTreeRSSMiB": 471.2,
+      "minimumHostFreePercent": 28,
+      "resourceStopped": false,
+      "tests": 0,
+      "logSha256": "0919626c69efc73938f4291befbb930767b431a6acd3689de5ef27c70006cb87",
+      "startedAt": "2026-11-04T19:23:55.926845+00:00",
+      "completedAt": "2026-11-04T19:24:46.326845+00:00",
+      "timingBasis": "gate log creation plus measured duration"
+    },
+    {
+      "name": "desktop",
+      "command": [
+        "sh",
+        "-ec",
+        "npm run typecheck:desktop && npm run build:desktop && node scripts/build-host-sidecar.mjs"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 30.3,
+      "peakProcessTreeRSSMiB": 491.3,
+      "minimumHostFreePercent": 27,
+      "resourceStopped": false,
+      "tests": 0,
+      "logSha256": "9eb576c221d1f05e93100a6adddb25db9898e3698523cd6ac7fe2bf57d277f98",
+      "startedAt": "2026-11-04T19:24:46.374576+00:00",
+      "completedAt": "2026-11-04T19:25:16.674576+00:00",
+      "timingBasis": "gate log creation plus measured duration"
+    },
+    {
+      "name": "rust",
+      "command": [
+        "env",
+        "CARGO_TARGET_DIR=/Users/xiaomingwang/ChatGPT/muniu-enterprise-e1-1/apps/desktop-mac/src-tauri/target",
+        "cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "apps/desktop-mac/src-tauri/Cargo.toml"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 25.2,
+      "peakProcessTreeRSSMiB": 406.3,
+      "minimumHostFreePercent": 31,
+      "resourceStopped": false,
+      "tests": 13,
+      "logSha256": "10457b036c8f344b1c7f66523d072e556970e26810e9a07f5bc10e3e54f37930",
+      "startedAt": "2026-11-04T19:25:16.729197+00:00",
+      "completedAt": "2026-11-04T19:25:41.929197+00:00",
+      "timingBasis": "gate log creation plus measured duration"
+    },
+    {
+      "name": "policies",
+      "command": [
+        "sh",
+        "-ec",
+        "npm run verify:contracts && npm run verify:enterprise-fixture -- --static && npm run verify:licenses && npm audit --omit=dev && npm run verify:helm"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 5.0,
+      "peakProcessTreeRSSMiB": 0.2,
+      "minimumHostFreePercent": 34,
+      "resourceStopped": false,
+      "tests": 30,
+      "logSha256": "a6e125faa2684ad0345087a308dbc4867feb69edef27210700294170622f39e4",
+      "startedAt": "2026-11-04T19:25:42.004934+00:00",
+      "completedAt": "2026-11-04T19:25:47.004934+00:00",
+      "timingBasis": "gate log creation plus measured duration"
+    },
+    {
+      "name": "postgres-final",
+      "command": [
+        "npm",
+        "run",
+        "verify:agent-coordination-postgres"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 35.0,
+      "peakProcessTreeRSSMiB": 212.6,
+      "minimumHostFreePercent": 27,
+      "resourceStopped": false,
+      "tests": 0,
+      "logSha256": "e10b06f298317e69726a6bdc09bf503a83c34b41f51e850085cd6d800627ffcf",
+      "startedAt": "2026-11-04T19:37:31.259865+00:00",
+      "completedAt": "2026-11-04T19:38:06.259865+00:00",
+      "timingBasis": "gate log creation plus measured duration"
+    },
+    {
+      "name": "linux",
+      "command": [
+        "env",
+        "DOCKER_CONFIG=/tmp/muniu-e11-docker.WSFZXl",
+        "DOCKER_HOST=unix:///Users/xiaomingwang/.docker/run/docker.sock",
+        "/Applications/Docker.app/Contents/Resources/bin/docker",
+        "run",
+        "--rm",
+        "--pull=never",
+        "--name",
+        "mn-e42-linux-d74a5b860f50",
+        "--memory",
+        "512m",
+        "--cpus",
+        "0.75",
+        "--pids-limit",
+        "160",
+        "--network",
+        "none",
+        "--read-only",
+        "--tmpfs",
+        "/tmp:rw,size=128m,mode=1777",
+        "-e",
+        "NODE_OPTIONS=--max-old-space-size=256",
+        "--entrypoint",
+        "sh",
+        "sha256:6d3d640ea78fbbdf4effd81cd3192dbd3538fbba1234a6309fc8ba96ab950528",
+        "-ec",
+        "sha256sum -c e42-checksums.txt > /dev/null; node --test --test-concurrency=1 packages/kernel/dist-test/test/*.test.js packages/task-orchestration/dist-test/test/*.test.js packages/business-execution/dist-test/test/*.test.js apps/worker/dist-test/test/provider-action-worker.test.js plugins/business/dist-test/test/*.test.js packages/enterprise-services/dist-test/test/*.test.js packages/storage/dist-test/test/transaction-guard.test.js apps/host/dist-test/test/enterprise-*.test.js"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 43.3,
+      "peakProcessTreeRSSMiB": 12.7,
+      "minimumHostFreePercent": 27,
+      "resourceStopped": false,
+      "tests": 281,
+      "logSha256": "f68295525122f7257d090b6d10186bcf6d198f99795ea168c012f3f020aa3586",
+      "startedAt": "2026-11-04T19:31:17.663514+00:00",
+      "completedAt": "2026-11-04T19:32:00.963514+00:00",
+      "timingBasis": "gate log creation plus measured duration"
+    }
+  ],
+  "coverageNote": "完整 Node 1376 项通过；末次配置隔离与在途规划取代修复后，33 项工作专项、企业 Host 116 项、Linux 281 项及 PostgreSQL/部署复验通过。插件工作区检查包含在 npm test。",
+  "failedRun": {
+    "name": "node-full",
+    "reason": "旧契约断言将已实现工作接口视为不存在；已更新真实接口断言，并保留未实现知识接口不可用检查",
+    "logSha256": "a5594ea2f6cd94c6b5472b1de8d1a1b75ba059047e8580857c6c3ed3d14c0263"
+  },
+  "resourcePolicy": {
+    "productGatesSerial": true,
+    "testFileConcurrency": 1,
+    "nice": 10,
+    "nodeHeapMiB": 512,
+    "cargoBuildJobs": 1,
+    "stopBelowHostFreePercent": 18,
+    "memorySampling": "process-tree RSS and host free memory sampled during each gate; short processes may fall between samples",
+    "postgresContainer": {
+      "memoryMiB": 192,
+      "cpus": 0.5
+    },
+    "linuxContainer": {
+      "memoryMiB": 512,
+      "cpus": 0.75,
+      "nodeHeapMiB": 256
+    },
+    "gateRunnerSha256": "236755407ad022a152a23dc85cfee19aeeecacc647f85b47e2e2c4f9f0abcb73"
+  },
+  "deployment": {
+    "code": 0,
+    "signal": null,
+    "reason": null,
+    "cleanupCode": 0,
+    "originalServicesUnchanged": true,
+    "peakSampledContainerMiB": 586.5,
+    "minimumHostFreePercent": 27,
+    "logSha256": "b59f0e8dc3bb387dc9f3afea576793ecbd5bc50c0e7a987efccbee2bfe1d70e0",
+    "resourceLogSha256": "6b14bef4bfcfe6661d7e9fb47defb327e3506615fd67bc06f7b37ba043f2b002"
+  },
+  "originalServices": {
+    "count": 11,
+    "unchanged": true,
+    "stateSha256": "a0b5192f19dd87c3f65feb457167c46117909eeb99948253a69275c6278ee14e"
+  },
+  "boundaries": [
+    "默认工作能力为只读分析、复核和草稿；真实业务提供方由 E5 接入",
+    "成果验收、知识和流程库由 E4.3 衔接",
+    "真实模型质量与人员基线未运行",
+    "Kind 全平台、E7 容量和联合灾备、E8 试点未由本包验收",
+    "列表最近 100 项，完整历史翻页待后继界面工作包"
+  ],
+  "documentation": {
+    "readerReview": "工作授权与业务/执行批准边界已由独立读者复核",
+    "checks": {
+      "status": "passed",
+      "commands": [
+        "npm run docs:check",
+        "npm run docs:links",
+        "npm run docs:build",
+        "npm run verify:enterprise-acceptance-spec",
+        "git diff --check"
+      ],
+      "exitCode": 0
+    }
+  },
+  "targetedWorkCheck": {
+    "command": "node --test --test-concurrency=1 apps/host/dist-test/fast-enterprise-goals.test.mjs",
+    "tests": 33,
+    "exitCode": 0,
+    "logSha256": "94fbdc81887374e71d5833cebec0b9df3269a3d9c7d495d40c1a03f6390d49b2",
+    "subsetOf": [
+      "integration-final",
+      "linux"
+    ],
+    "reportedDurationSeconds": 3.76016775
+  },
+  "linuxResources": {
+    "peakSampledContainerMiB": 83.68,
+    "sampleCount": 11,
+    "sampleLogSha256": "c49b857ac629253db87ffde6401a648ad5307bddb1f4cadafed7378e32acdfac"
+  }
+}

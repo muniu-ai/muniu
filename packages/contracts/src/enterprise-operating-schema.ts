@@ -7,11 +7,12 @@ const object = (properties: Record<string, JsonObject>, optional: string[] = [])
 const list = (items: JsonObject, minItems = 0): JsonObject => ({ type: 'array', items, minItems, maxItems: 100, uniqueItems: true });
 const timestamp = { type: 'string', format: 'date-time' };
 const amount = object({ tokens: positive, costMinorUnits: { type: 'string', pattern: '^[1-9][0-9]{0,17}$' }, currency: { const: 'CNY' } });
-const sources = list(object({ reference: ref('BusinessObjectRef'), fields: list(text, 1) }), 1);
-const policy = { id: text, responsiblePrincipalId: text, sourceIds: list(text, 1), eventTypes: list(text, 1), sources, mode: { type: 'string', enum: ['observe', 'execute'] }, validUntil: timestamp, evaluation: amount, notification: { type: 'string', enum: ['none', 'source'] }, intervalMinutes: { type: 'integer', minimum: 1, maximum: 525600 } };
+const sources = list(ref('EnterpriseSourceScope'), 1);
+const policy = { id: text, responsiblePrincipalId: text, sourceIds: list(text, 1), eventTypes: list(text, 1), sources, mode: { type: 'string', enum: ['observe', 'execute'] }, validUntil: timestamp, evaluation: amount, notification: { type: 'string', enum: ['none', 'source'] }, work: ref('EnterpriseGoalSpec'), intervalMinutes: { type: 'integer', minimum: 1, maximum: 525600 } };
 export const ENTERPRISE_OPERATING_SCHEMAS: Readonly<Record<string, JsonObject>> = {
-  EnterpriseOperatingPolicyWrite: object({ expectedStreamVersion: count, ...policy }, ['intervalMinutes']),
-  EnterpriseOperatingPolicyView: object({ tenantId: text, workspaceId: text, streamVersion: positive, ...policy, status: { type: 'string', enum: ['awaiting_acceptance', 'active', 'paused', 'closed'] }, reasonCode: text }, ['intervalMinutes', 'reasonCode']),
+  EnterpriseSourceScope: object({ reference: ref('BusinessObjectRef'), fields: list(text, 1) }),
+  EnterpriseOperatingPolicyWrite: object({ expectedStreamVersion: count, ...policy }, ['intervalMinutes', 'work']),
+  EnterpriseOperatingPolicyView: object({ tenantId: text, workspaceId: text, streamVersion: positive, ...policy, status: { type: 'string', enum: ['awaiting_acceptance', 'active', 'paused', 'closed'] }, reasonCode: text }, ['intervalMinutes', 'reasonCode', 'work']),
   EnterpriseOperatingPolicyControl: object({ expectedStreamVersion: positive, command: { type: 'string', enum: ['accept', 'pause', 'close'] } }),
   EnterpriseEvaluationView: object({ id: text, tenantId: text, workspaceId: text, streamVersion: positive, batchId: text, mode: { type: 'string', enum: ['observe', 'execute'] }, status: { type: 'string', enum: ['queued', 'running', 'committed', 'completed', 'failed', 'cancelled', 'needs_reconciliation'] },
     costStatus: { type: 'string', enum: ['pending', 'known', 'unknown'] }, costNanoMinorUnits: { type: 'string', pattern: '^(0|[1-9][0-9]{0,29})$' }, reasonCode: text,
