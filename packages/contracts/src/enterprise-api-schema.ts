@@ -2,6 +2,14 @@
 import { ENTERPRISE_SCHEMAS } from './enterprise-schema.js';
 import type { JsonObject } from './json.js';
 export const ENTERPRISE_HTTP_OPERATIONS = [
+  { id:'getEnterpriseEvaluation',method:'get',path:'/v2/evaluations/{attemptId}',response:'EnterpriseEvaluationView',mutation:false },
+  { id:'getOperatingState',method:'get',path:'/v2/workspaces/{workspaceId}/operating-state',response:'EnterpriseOperatingState',mutation:false },
+  { id:'writeOperatingPolicy',method:'post',path:'/v2/workspaces/{workspaceId}/operating-policies',body:'EnterpriseOperatingPolicyWrite',response:'EnterpriseOperatingPolicyView',mutation:true },
+  { id:'controlOperatingPolicy',method:'post',path:'/v2/workspaces/{workspaceId}/operating-policies/{policyId}/commands',body:'EnterpriseOperatingPolicyControl',response:'EnterpriseOperatingPolicyView',mutation:true },
+  { id:'submitOperatingRequest',method:'post',path:'/v2/workspaces/{workspaceId}/operating-requests',body:'EnterpriseOperatingRequest',response:'EnterpriseOperatingBatchRef',mutation:true },
+  { id:'cancelOperatingBatch',method:'post',path:'/v2/workspaces/{workspaceId}/operating-batches/{batchId}/cancellations',body:'EnterpriseOperatingBatchControl',response:'EnterpriseOperatingBatchResult',mutation:true },
+  { id:'subscribeOperatingBatch',method:'post',path:'/v2/workspaces/{workspaceId}/operating-batches/{batchId}/subscriptions',body:'EnterpriseOperatingBatchControl',response:'EnterpriseOperatingSubscriptionRef',mutation:true },
+  { id:'getOperatingUpdates',method:'get',path:'/v2/workspaces/{workspaceId}/operating-batches/{batchId}/updates',response:'EnterpriseOperatingUpdates',mutation:false },
   { id:'getExecutionConfiguration',method:'get',path:'/v2/workspaces/{workspaceId}/execution-configuration',response:'EnterpriseExecutionConfiguration',mutation:false },
   { id:'configureExecutionSettings',method:'post',path:'/v2/workspaces/{workspaceId}/execution-settings',body:'EnterpriseExecutionSettingsWrite',response:'EnterpriseExecutionSettings',mutation:true },
   { id:'writeExecutionPolicy',method:'post',path:'/v2/workspaces/{workspaceId}/execution-policies',body:'EnterpriseExecutionPolicyWrite',response:'EnterpriseExecutionPolicyView',mutation:true },

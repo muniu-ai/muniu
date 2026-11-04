@@ -1,0 +1,271 @@
+{
+  "package": "E4.1",
+  "date": "2026-11-04",
+  "baseCommit": "5c2f1ce",
+  "branch": "codex/enterprise-e4-1",
+  "toolchain": {
+    "node": "22.19.0",
+    "npm": "11.10.1",
+    "typescript": "5.7.2"
+  },
+  "image": {
+    "stage": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e41-linux-b6340bk3",
+    "image": "mn-e41-recheck:a70077448745",
+    "sourceDigest": "a700774487456f43ed606828585ecfc8e0a5c467831f6d1e2306cca12d7e67bf",
+    "lockDigest": "9689c184c5c7c11fa4628713129699bd0254ccb0e226db7ba63047cc9b8fc632",
+    "baseImage": "mn-e32-recheck:74776e52099f",
+    "externalLockMatchesBase": true,
+    "baseImageId": "sha256:335216083f3e5c22948a6c6426bb77073c6c0d584ab53ccfeeca0185d4a70bb9",
+    "imageId": "sha256:b033137e74d5f780046fad0b06946e94287f165ff5ff713ffbc7ee16f9465899"
+  },
+  "checks": [
+    {
+      "name": "node-full",
+      "command": [
+        "npm",
+        "test"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 493.2,
+      "peakProcessTreeRSSMiB": 529.0,
+      "minimumHostFreePercent": 27,
+      "resourceStopped": false,
+      "tests": 1331,
+      "logSha256": "65dfbbc3d6a6f5116da350b5a1bb9ed8bc20826e9de63e74e386ebd2e6ffef74",
+      "startedAt": "2026-11-04T15:18:16.631575+00:00",
+      "completedAt": "2026-11-04T15:26:29.831575+00:00",
+      "timingBasis": "gate log creation plus measured gate duration"
+    },
+    {
+      "name": "node-final",
+      "command": [
+        "npm",
+        "test"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 462.9,
+      "peakProcessTreeRSSMiB": 548.6,
+      "minimumHostFreePercent": 27,
+      "resourceStopped": false,
+      "tests": 1333,
+      "logSha256": "f3efb3388933827c0fcf5b42a90bab0f488c400a701c038c2ab26561409b3198",
+      "startedAt": "2026-11-04T15:28:30.651395+00:00",
+      "completedAt": "2026-11-04T15:36:13.551395+00:00",
+      "timingBasis": "gate log creation plus measured gate duration"
+    },
+    {
+      "name": "focused-final",
+      "command": [
+        "npm",
+        "run",
+        "verify:enterprise-operating"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 35.2,
+      "peakProcessTreeRSSMiB": 523.4,
+      "minimumHostFreePercent": 28,
+      "resourceStopped": false,
+      "tests": 24,
+      "logSha256": "e93a7661958bcce8d5cb5f38768721763647c93256194e886a2639dae6adec38",
+      "startedAt": "2026-11-04T15:38:38.807023+00:00",
+      "completedAt": "2026-11-04T15:39:14.007023+00:00",
+      "timingBasis": "gate log creation plus measured gate duration"
+    },
+    {
+      "name": "typecheck",
+      "command": [
+        "npm",
+        "run",
+        "typecheck"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 55.4,
+      "peakProcessTreeRSSMiB": 509.3,
+      "minimumHostFreePercent": 28,
+      "resourceStopped": false,
+      "tests": 0,
+      "logSha256": "0919626c69efc73938f4291befbb930767b431a6acd3689de5ef27c70006cb87",
+      "startedAt": "2026-11-04T15:40:26.172813+00:00",
+      "completedAt": "2026-11-04T15:41:21.572814+00:00",
+      "timingBasis": "gate log creation plus measured gate duration"
+    },
+    {
+      "name": "desktop",
+      "command": [
+        "sh",
+        "-ec",
+        "npm run typecheck:desktop && npm run build:desktop && node scripts/build-host-sidecar.mjs"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 35.3,
+      "peakProcessTreeRSSMiB": 451.2,
+      "minimumHostFreePercent": 27,
+      "resourceStopped": false,
+      "tests": 0,
+      "logSha256": "71c69b20ca9f7b5ee0916c98f2db3064941f9e14f7ebc5a7644e81bc95ecbfca",
+      "startedAt": "2026-11-04T15:41:21.617127+00:00",
+      "completedAt": "2026-11-04T15:41:56.917127+00:00",
+      "timingBasis": "gate log creation plus measured gate duration"
+    },
+    {
+      "name": "rust",
+      "command": [
+        "env",
+        "CARGO_TARGET_DIR=/Users/xiaomingwang/ChatGPT/muniu-enterprise-e1-1/apps/desktop-mac/src-tauri/target",
+        "cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "apps/desktop-mac/src-tauri/Cargo.toml"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 25.2,
+      "peakProcessTreeRSSMiB": 389.8,
+      "minimumHostFreePercent": 27,
+      "resourceStopped": false,
+      "tests": 13,
+      "logSha256": "7e99d01db1e9f6e8ff29948ecfd7a2cd2a6880dcd02076b38244e499674c6305",
+      "startedAt": "2026-11-04T15:41:57.029953+00:00",
+      "completedAt": "2026-11-04T15:42:22.229954+00:00",
+      "timingBasis": "gate log creation plus measured gate duration"
+    },
+    {
+      "name": "policies",
+      "command": [
+        "sh",
+        "-ec",
+        "npm run verify:contracts && npm run verify:enterprise-fixture -- --static && npm run verify:licenses && npm audit --omit=dev && npm run verify:helm"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 10.1,
+      "peakProcessTreeRSSMiB": 85.7,
+      "minimumHostFreePercent": 27,
+      "resourceStopped": false,
+      "tests": 30,
+      "logSha256": "fc2df8d0cc89af484b16ef63651100513781983d2f80455bbd4f23ebf3f8ac9a",
+      "startedAt": "2026-11-04T15:42:22.312824+00:00",
+      "completedAt": "2026-11-04T15:42:32.412824+00:00",
+      "timingBasis": "gate log creation plus measured gate duration"
+    },
+    {
+      "name": "postgres-final",
+      "command": [
+        "npm",
+        "run",
+        "verify:enterprise-operating-postgres"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 20.5,
+      "peakProcessTreeRSSMiB": 199.5,
+      "minimumHostFreePercent": 27,
+      "resourceStopped": false,
+      "tests": 0,
+      "logSha256": "45f9e3877b1f6a04d02e3b61724aa8e5e92585b707701b8081f07af242f11e54",
+      "startedAt": "2026-11-04T15:49:22.883040+00:00",
+      "completedAt": "2026-11-04T15:49:43.383040+00:00",
+      "timingBasis": "gate log creation plus measured gate duration"
+    },
+    {
+      "name": "linux",
+      "command": [
+        "env",
+        "DOCKER_CONFIG=/tmp/muniu-e11-docker.WSFZXl",
+        "DOCKER_HOST=unix:///Users/xiaomingwang/.docker/run/docker.sock",
+        "/Applications/Docker.app/Contents/Resources/bin/docker",
+        "run",
+        "--rm",
+        "--pull=never",
+        "--name",
+        "mn-e41-linux-a70077448745",
+        "--memory",
+        "512m",
+        "--cpus",
+        "0.75",
+        "--pids-limit",
+        "160",
+        "--network",
+        "none",
+        "--read-only",
+        "--tmpfs",
+        "/tmp:rw,size=128m,mode=1777",
+        "-e",
+        "NODE_OPTIONS=--max-old-space-size=256",
+        "--entrypoint",
+        "sh",
+        "sha256:b033137e74d5f780046fad0b06946e94287f165ff5ff713ffbc7ee16f9465899",
+        "-ec",
+        "sha256sum -c e41-checksums.txt > /dev/null; node --test --test-concurrency=1 packages/kernel/dist-test/test/*.test.js packages/business-execution/dist-test/test/*.test.js apps/worker/dist-test/test/provider-action-worker.test.js plugins/business/dist-test/test/*.test.js packages/enterprise-services/dist-test/test/*.test.js packages/storage/dist-test/test/transaction-guard.test.js apps/host/dist-test/test/enterprise-*.test.js"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 26.9,
+      "peakProcessTreeRSSMiB": 14.4,
+      "minimumHostFreePercent": 27,
+      "resourceStopped": false,
+      "tests": 218,
+      "logSha256": "6b2f0581cdb2e70e0d5ee4975ee7a193c7e202dab9f995836a5537afdcd45982",
+      "startedAt": "2026-11-04T15:44:28.693880+00:00",
+      "completedAt": "2026-11-04T15:44:55.593880+00:00",
+      "timingBasis": "gate log creation plus measured gate duration"
+    }
+  ],
+  "coverageNote": "完整 Node 回归 1333 项通过；之后新增真实模型人民币计价准入及两项隐私/计价用例，执行全部 E4.1 专项 24 项、完整类型检查、Linux 218 项和 PostgreSQL/部署复验。插件工作区测试包含在 npm test 内。",
+  "deployment": {
+    "code": 0,
+    "signal": null,
+    "reason": null,
+    "cleanupCode": 0,
+    "originalServicesUnchanged": true,
+    "peakSampledContainerMiB": 544.34,
+    "minimumHostFreePercent": 27,
+    "logSha256": "7846092fe00c185905157cd4c92d988a2df748ba577740efcde20493701cbfeb",
+    "resourceLogSha256": "4f80d1af9a6c9c0eb415cdda0b34621f4d806de646aa93454d97b4ea37e08eb2"
+  },
+  "originalServices": {
+    "count": 11,
+    "unchanged": true,
+    "beforeSha256": "a0b5192f19dd87c3f65feb457167c46117909eeb99948253a69275c6278ee14e",
+    "afterSha256": "a0b5192f19dd87c3f65feb457167c46117909eeb99948253a69275c6278ee14e"
+  },
+  "boundaries": [
+    "Kind 全平台集群验收未在本包运行，保留 E7 整体验收",
+    "真实 OIDC、Sales、企业微信与模型质量未运行",
+    "未执行 E7 容量与联合灾备、E8 真实试点",
+    "观察模式不创建 Goal；执行候选的工作和计划由 E4.2 承接",
+    "状态列表每类最近 100 项，暂不支持翻页；评估结果支持按标识读取"
+  ],
+  "documentation": {
+    "readerReview": "配额配置、取消生效条件及历史列表限制经过独立读者复核",
+    "checks": {
+      "status": "passed",
+      "commands": [
+        "npm run docs:check",
+        "npm run docs:links",
+        "npm run docs:build",
+        "npm run verify:enterprise-acceptance-spec",
+        "git diff --check"
+      ],
+      "exitCode": 0
+    }
+  },
+  "resourcePolicy": {
+    "productGatesSerial": true,
+    "testFileConcurrency": 1,
+    "nice": 10,
+    "nodeHeapMiB": 512,
+    "cargoBuildJobs": 1,
+    "stopBelowHostFreePercent": 18,
+    "gateRunnerSha256": "44122b7dfa7895920e9723e7f7bfaeb2af6747a82a071ee5dfc9b5f526c4e172",
+    "postgresContainer": {
+      "memoryMiB": 192,
+      "cpus": 0.5,
+      "temporaryDataMiB": 256,
+      "networkBind": "127.0.0.1"
+    },
+    "postgresContainerEvidenceSource": "scripts/enterprise-actions-e2e.mjs",
+    "linuxContainer": {
+      "memoryMiB": 512,
+      "cpus": 0.75,
+      "nodeHeapMiB": 256
+    }
+  }
+}

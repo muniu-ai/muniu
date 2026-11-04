@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+import { ENTERPRISE_OPERATING_SCHEMAS } from './enterprise-operating-schema.js';
 import type { JsonObject } from './json.js';
 import { ENTERPRISE_BUSINESS_SCHEMAS } from './enterprise-business-schema.js';
 import { ENTERPRISE_OBJECT_TYPES } from './enterprise-object-types.js';
@@ -33,6 +34,7 @@ export const ENTERPRISE_SCHEMAS: Readonly<Record<string, JsonObject>> = {
   ...ENTERPRISE_BUSINESS_SCHEMAS,
   ...ENTERPRISE_ACCESS_SCHEMAS,
   ...ENTERPRISE_EXECUTION_SCHEMAS,
+  ...ENTERPRISE_OPERATING_SCHEMAS,
   BusinessObjectRef: object({ ...scope, objectType: enumeration(...ENTERPRISE_OBJECT_TYPES), objectId: text, streamVersion: version, digest }),
   ExternalObjectRef: object({ ...scope, provider: text, objectType: enumeration(...ENTERPRISE_OBJECT_TYPES), objectId: text,
     sourceVersion: text, digest, observedAt: timestamp, permissionRef: text }),

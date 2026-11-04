@@ -40,3 +40,7 @@ export type { EnterpriseOidcProvider } from "./enterprise-oidc.js";
 export * from "./enterprise-local.js";
 export * from './enterprise-execution-runtime.js';
 export * from './enterprise-execution-config.js';
+
+export * from './enterprise-operating.js';
+export * from './enterprise-evaluation.js';
+export * from './enterprise-model-config.js';

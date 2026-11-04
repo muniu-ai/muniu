@@ -2,6 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 import type * as Types from "./enterprise-types.js";
 export interface EnterpriseApiInputs {
+  readonly getEnterpriseEvaluation: { readonly path: { readonly attemptId: string; }; };
+  readonly getOperatingState: { readonly path: { readonly workspaceId: string; }; };
+  readonly writeOperatingPolicy: { readonly path: { readonly workspaceId: string; }; readonly body: Types.EnterpriseOperatingPolicyWrite; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
+  readonly controlOperatingPolicy: { readonly path: { readonly workspaceId: string; readonly policyId: string; }; readonly body: Types.EnterpriseOperatingPolicyControl; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
+  readonly submitOperatingRequest: { readonly path: { readonly workspaceId: string; }; readonly body: Types.EnterpriseOperatingRequest; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
+  readonly cancelOperatingBatch: { readonly path: { readonly workspaceId: string; readonly batchId: string; }; readonly body: Types.EnterpriseOperatingBatchControl; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
+  readonly subscribeOperatingBatch: { readonly path: { readonly workspaceId: string; readonly batchId: string; }; readonly body: Types.EnterpriseOperatingBatchControl; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
+  readonly getOperatingUpdates: { readonly path: { readonly workspaceId: string; readonly batchId: string; }; };
   readonly getExecutionConfiguration: { readonly path: { readonly workspaceId: string; }; };
   readonly configureExecutionSettings: { readonly path: { readonly workspaceId: string; }; readonly body: Types.EnterpriseExecutionSettingsWrite; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
   readonly writeExecutionPolicy: { readonly path: { readonly workspaceId: string; }; readonly body: Types.EnterpriseExecutionPolicyWrite; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
@@ -42,6 +50,14 @@ export interface EnterpriseApiInputs {
   readonly commandOrganizationMember: { readonly path: { readonly organizationId: string; readonly memberId: string; }; readonly body: Types.OrganizationMemberCommand; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
 }
 export interface EnterpriseApiOutputs {
+  readonly getEnterpriseEvaluation: Types.EnterpriseEvaluationView;
+  readonly getOperatingState: Types.EnterpriseOperatingState;
+  readonly writeOperatingPolicy: Types.EnterpriseOperatingPolicyView;
+  readonly controlOperatingPolicy: Types.EnterpriseOperatingPolicyView;
+  readonly submitOperatingRequest: Types.EnterpriseOperatingBatchRef;
+  readonly cancelOperatingBatch: Types.EnterpriseOperatingBatchResult;
+  readonly subscribeOperatingBatch: Types.EnterpriseOperatingSubscriptionRef;
+  readonly getOperatingUpdates: Types.EnterpriseOperatingUpdates;
   readonly getExecutionConfiguration: Types.EnterpriseExecutionConfiguration;
   readonly configureExecutionSettings: Types.EnterpriseExecutionSettings;
   readonly writeExecutionPolicy: Types.EnterpriseExecutionPolicyView;

@@ -16,8 +16,13 @@ test('新入口使用独立状态标识，拒绝非空旧目录，重启保持�
     providers: { tenant: { issuer: 'https://issuer.test/', clientId: 'fixture' } },
     organizations: [{ tenantId: 'tenant', name: '合成企业', issuer: 'https://issuer.test/', maxMembers: 200,
       administrator: { id: 'admin', subject: 'admin-subject', displayName: '管理员' } }] };
-  const host = await startEnterpriseLocalHost(config);
+  const host = await startEnterpriseLocalHost(config); t.after(() => host.close());
   assert.ok((host as any).executionRuntime, '企业入口必须装配执行准入服务');
+  assert.ok(host.operating, '企业入口必须装配事件接收服务');
+  assert.ok(host.evaluation, '企业入口必须装配持久评估服务');
+  const workspace = await host.identity.createWorkspace({ tenantId: 'tenant', principalId: 'admin', sessionEpoch: 1 }, 'operating-workspace', { name: '持续经营', mode: 'builtin' });
+  await host.runOperatingCycle();
+  assert.equal((await host.operating.inspect({ tenantId: 'tenant', principalId: 'admin', sessionEpoch: 1 }, workspace.id)).sources.length, 2);
   await (host as any).executionRuntime.bridge.store.transact('tenant',(tx:any)=>assert.equal(tx.protectedFactStorage,true));
   assert.equal((await host.dispatch(new Request('http://127.0.0.1:7319/v2/health'))).status, 200);
   await host.close();

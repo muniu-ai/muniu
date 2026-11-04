@@ -52,6 +52,6 @@ export async function fixture(t: test.TestContext, runtime = false, memoryObject
   };
   const proof=async(type:string,id:string,person='sales')=>service.recordEvidence({actor:actor(person),actorKind:'human',workspaceId:workspace.id,idempotencyKey:'proof-'+(++sequence),subject:(await get(type,id,person)).reference,attestation:'合成事实已核对。',additionalFieldClasses:[]});
   const order=async()=>{await base();await command({type:'quote.approve',id:'quote',expectedStreamVersion:1},'manager');const quote=await command({type:'quote.record_acceptance',id:'quote',expectedStreamVersion:2,evidence:await proof('quote_version','quote')},'manager');await command({type:'contract.create',id:'contract',quote:quote.reference,title:'合同'});const contract=await command({type:'contract.activate',id:'contract',expectedStreamVersion:1,evidence:await proof('contract','contract')},'manager');await command({type:'order.create',id:'order',contract:contract.reference,lines:[{quoteLineId:'line-1',quantity:3}]});return command({type:'order.activate',id:'order',expectedStreamVersion:1},'manager');};
-  return { store, cas, repository, permissions, identity, now, actor, admin, workspace, service, command, get, base, proof, order,
+  return { store, cas, keyProvider, repository, permissions, identity, now, actor, admin, workspace, service, command, get, base, proof, order,
     newService: () => new EnterpriseBusinessService({ repository: createEnterpriseEventRepository({ store, cas, keyProvider, allowExecutionEvents:runtime }), now }), advance: (value: string) => { clock = value; } };
 }

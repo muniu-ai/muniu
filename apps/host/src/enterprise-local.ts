@@ -1,4 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
+import { EnterpriseEvaluationRuntime } from './enterprise-evaluation.js';
+import { AgentOsWorker } from '@mn/worker';
+import { reduceIdentityEvents } from '@mn/enterprise-services';
+import { EnterpriseOperatingService } from './enterprise-operating.js';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join, resolve, isAbsolute } from 'node:path';
@@ -23,7 +27,9 @@ async function hmacKey(account: string, existing: boolean): Promise<Buffer> {
   if (key.length !== 32) throw new Error('ENTERPRISE_KEY_INVALID');
   return key;
 }
-export interface StartEnterpriseLocalOptions extends Omit<EnterpriseHostOptions, 'repository' | 'executionRuntime'> {
+export interface StartEnterpriseLocalOptions extends Omit<EnterpriseHostOptions, 'repository' | 'executionRuntime' | 'operating' | 'evaluation'> {
+  readonly operatingBackground?: boolean;
+  readonly evaluationOptions?: Omit<ConstructorParameters<typeof EnterpriseEvaluationRuntime>[0], 'operating' | 'protection'>;
   readonly executionProviders?: Pick<ConstructorParameters<typeof EnterpriseExecutionRuntime>[0], 'resolveProvider' | 'usageForReceipt'>;
   readonly stateRoot?: string;
   readonly host?: string;
@@ -69,7 +75,9 @@ export async function startEnterpriseLocalHost(options: StartEnterpriseLocalOpti
     const executionRuntime = new EnterpriseExecutionRuntime({store,repository,now:options.now,
       resolveProvider:options.executionProviders?.resolveProvider??(async()=>{throw new EnterpriseError('PROVIDER_NOT_CONFIGURED',409);}),
       usageForReceipt:options.executionProviders?.usageForReceipt??(()=>{throw new EnterpriseError('USAGE_METER_UNCONFIGURED',503);})});
-    host = createEnterpriseHost({ ...options, repository, executionRuntime });
+    const operating = new EnterpriseOperatingService({ store, repository, now: options.now });
+    const evaluation = new EnterpriseEvaluationRuntime({ operating, protection: { cas, keyProvider: keys.keyProvider }, modelFor: options.evaluationOptions?.modelFor ?? (() => undefined), secretStore: options.evaluationOptions?.secretStore ?? { async read() { throw new EnterpriseError('MODEL_CREDENTIAL_UNAVAILABLE', 503); } }, ...options.evaluationOptions });
+    host = createEnterpriseHost({ ...options, repository, executionRuntime, operating, evaluation });
     for (const organization of options.organizations) {
       if (options.providers[organization.tenantId]?.issuer !== organization.issuer) throw new Error('OIDC_PROVISIONING_ISSUER_MISMATCH');
       await host.identity.provision(organization);
@@ -77,9 +85,32 @@ export async function startEnterpriseLocalHost(options: StartEnterpriseLocalOpti
     for (const quota of options.platformQuotas ?? []) await host.quotas.provision(quota.tenantId, quota.idempotencyKey, quota.expectedStreamVersion, quota.limits, quota.capacityEvidenceDigest);
     const address = await host.listen({ host: options.host ?? '127.0.0.1', port: options.port ?? 7319 });
     const activeHost = host, activeStore = store;
-    let closed = false;
-    return { ...host, address, stateRoot: root, async close() {
-      if (closed) return; closed = true;
+    let closed = false, cycle: Promise<void> | undefined;
+    const stop = new AbortController();
+    const worker = new AgentOsWorker({ id: 'enterprise-local-' + marker.instanceId, store: evaluation.workerStore(activeStore), now: () => new Date(options.now?.() ?? new Date().toISOString()),
+      lock: { engineLockDigest: 'in-process', expectedEngineLockDigest: 'in-process', pluginLockDigest: 'in-process', expectedPluginLockDigest: 'in-process' }, handlers: { 'enterprise.evaluation': evaluation.workerHandler() }, kinds: ['enterprise.evaluation'] });
+    const runOperatingCycle = () => {
+      if (closed) return Promise.resolve();
+      if (cycle) return cycle;
+      cycle = (async () => {
+        const tenants = options.organizations.map(o => o.tenantId);
+        for (const tenant of tenants) {
+          const identity = reduceIdentityEvents(await repository.read(tenant));
+          for (const workspace of identity.workspaces.values()) {
+            await operating.initializeWorkspace(tenant, workspace.id);
+            await operating.ingestBusinessChanges(tenant, workspace.id);
+            await operating.tick(tenant, workspace.id);
+          }
+        }
+        if (!closed) { await evaluation.dispatchFair(tenants); await worker.pollOnce(stop.signal); }
+      })().finally(() => { cycle = undefined; });
+      return cycle;
+    };
+    let operatingError: string | undefined;
+    const timer = options.operatingBackground ? setInterval(() => { void runOperatingCycle().then(() => { operatingError = undefined; }, () => { operatingError = 'OPERATING_CYCLE_FAILED'; }); }, 5000) : undefined;
+    timer?.unref();
+    return { ...host, operating, evaluation, runOperatingCycle, operatingHealth: () => ({ ready: !operatingError, ...(operatingError ? { code: operatingError } : {}) }), address, stateRoot: root, async close() {
+      if (closed) return; closed = true; if (timer) clearInterval(timer); stop.abort(); await cycle?.catch(() => {});
       try { await activeHost.close(); } finally { try { await activeStore.close(); } finally { lock.release(); } }
     } };
   } catch (error) {

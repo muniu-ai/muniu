@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
+import { dispatchEnterpriseOperating } from './enterprise-operating-api.js';
+import type { EnterpriseEvaluationRuntime } from './enterprise-evaluation.js';
+import type { EnterpriseOperatingService } from './enterprise-operating.js';
 import { KernelError } from '@mn/kernel';
 import { EnterpriseExecutionConfigurationService } from './enterprise-execution-config.js';
 import type { EnterpriseExecutionRuntime } from './enterprise-execution-runtime.js';
@@ -14,6 +17,8 @@ import { dispatchEnterpriseAccess } from './enterprise-access-api.js';
 import { createEnterpriseOidc, type EnterpriseOidcProvider } from './enterprise-oidc.js';
 
 export interface EnterpriseHostOptions {
+  readonly operating?: EnterpriseOperatingService;
+  readonly evaluation?: EnterpriseEvaluationRuntime;
   readonly executionRuntime?: EnterpriseExecutionRuntime;
   readonly repository: EnterpriseRepository;
   readonly origin: string;
@@ -147,6 +152,8 @@ export function createEnterpriseHost(options: EnterpriseHostOptions) {
       if (businessResult.handled) return reply(businessResult.value, 200, traceId, op.response);
       const executionResult = await dispatchEnterpriseExecution({operationId:op.id,params,input,actor:current.actor,key,configuration:executionConfiguration,runtime:options.executionRuntime});
       if(executionResult.handled)return reply(executionResult.value,200,traceId,op.response);
+      const operatingResult = await dispatchEnterpriseOperating({ operationId: op.id, params, input, actor: current.actor, key, operating: options.operating, evaluation: options.evaluation });
+      if (operatingResult.handled) return reply(operatingResult.value, 200, traceId, op.response);
       let data: unknown;
       switch (op.id) {
         case 'enterpriseSession': data = { tenantId: current.actor.tenantId, principalId: current.member.id, displayName: current.member.displayName,
@@ -180,7 +187,7 @@ export function createEnterpriseHost(options: EnterpriseHostOptions) {
         retryable: code === 'STREAM_VERSION_CONFLICT' || code === 'CONCURRENT_COMMAND_RETRY' || code === 'SERVICE_UNAVAILABLE' }), { status, headers: h });
     }
   };
-  return { identity, permissions, quotas, executionConfiguration, executionRuntime:options.executionRuntime, dispatch,
+  return { identity, permissions, quotas, executionConfiguration, executionRuntime:options.executionRuntime, operating: options.operating, dispatch,
     async listen(input: { host?: string; port: number }) {
       if (server) throw new Error('Host 已启动');
       server = createServer({ requestTimeout: 30000, headersTimeout: 10000, maxHeaderSize: 16384 }, async (incoming, outgoing) => {

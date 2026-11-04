@@ -1,0 +1,33 @@
+// SPDX-License-Identifier: Apache-2.0
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { fixture } from './fixtures/business.js';
+import { createTestOidcIssuer } from './fixtures/enterprise-oidc-issuer.js';
+import { EnterpriseOperatingService } from '../src/enterprise-operating.js';
+import { createEnterpriseHost } from '../src/enterprise-host.js';
+test('经营规则和人工请求共用已认证 Host 契约，写入校验 CSRF、幂等与对象版本', async t => {
+  const issuer = await createTestOidcIssuer(); t.after(() => issuer.close());
+  const f = await fixture(t, true, false, issuer.issuer), base = await f.base(), origin = 'https://operating.example.test';
+  const operating = new EnterpriseOperatingService({ store: f.store, repository: f.repository, now: f.now });
+  const host = createEnterpriseHost({ repository: f.repository, origin, profile: 'development', providers: { tenant: { issuer: issuer.issuer, clientId: 'muniu-fixture' } }, now: f.now, operating } as any); t.after(() => host.close());
+  const start = await host.dispatch(new Request(origin + '/v2/auth/login?organizationId=tenant'));
+  const callback = await host.dispatch(new Request(issuer.callback(start.headers.get('location')!, 'sales'), { headers: { cookie: start.headers.getSetCookie()[0]!.split(';')[0]! } }));
+  assert.equal(callback.status, 303);
+  const cookie = callback.headers.getSetCookie().find(v => v.startsWith('__Host-mn-enterprise-session='))!.split(';')[0]!;
+  const session = await host.dispatch(new Request(origin + '/v2/auth/session', { headers: { cookie } })), csrf = (await session.json() as any).data.csrfToken;
+  const prefix = '/v2/workspaces/' + f.workspace.id;
+  const input = { sources: [{ reference: base.opportunity.reference, fields: ['title'] }], message: '检查已授权的商机', evaluation: { tokens: 10, costMinorUnits: '10', currency: 'CNY' }, validUntil: '2026-12-01T00:00:00.000Z' };
+  const call = (path: string, body?: unknown, key = 'request', csrfToken = csrf) => host.dispatch(new Request(origin + path, { method: body === undefined ? 'GET' : 'POST', headers: { origin, cookie, 'content-type': 'application/json', 'x-csrf-token': csrfToken, 'idempotency-key': key }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }));
+  assert.equal((await call(prefix + '/operating-requests', input, '')).status, 400);
+  assert.equal((await call(prefix + '/operating-requests', input, 'request', 'wrong')).status, 403);
+  const created = await call(prefix + '/operating-requests', input); assert.equal(created.status, 200);
+  const value = (await created.json() as any).data;
+  assert.deepEqual((await (await call(prefix + '/operating-requests', input)).json() as any).data, value);
+  assert.equal((await call(prefix + '/operating-requests', { ...input, message: '不同请求' })).status, 409);
+  assert.equal((await call(prefix + '/operating-batches/' + encodeURIComponent(value.batchId) + '/cancellations', { expectedStreamVersion: 2 }, 'bad-version')).status, 409);
+  assert.equal((await call(prefix + '/operating-batches/' + encodeURIComponent(value.batchId) + '/cancellations', { expectedStreamVersion: 1 }, 'cancel')).status, 200);
+  const state = (await (await call(prefix + '/operating-state')).json() as any).data;
+  assert.equal(state.batches[0].status, 'cancelled');
+  await f.permissions.revoke(f.admin, 'http-revoke', 'role', 'sales-own', 1);
+  assert.equal((await call(prefix + '/operating-requests', input, 'after-revoke')).status, 403);
+});
