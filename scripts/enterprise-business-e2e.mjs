@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+import { verifyFulfillment } from './lib/enterprise-fulfillment-fixture.mjs';
 import { waitForFixturePort } from './lib/fixture-network.mjs';
 import assert from 'node:assert/strict';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -20,7 +21,7 @@ const docker = async (...args) => (await execute('docker', args, { maxBuffer: 10
 let container; const pools = [];
 try {
   container = await docker('run', '--detach', '--name', name, '--label', 'com.muniu.fixture=enterprise-business',
-    '--memory', '512m', '--cpus', '1', '--tmpfs', '/var/lib/postgresql/data:rw,size=256m',
+    '--memory', '192m', '--cpus', '0.5', '--tmpfs', '/var/lib/postgresql/data:rw,size=256m',
     '-p', '127.0.0.1::5432', '-e', 'POSTGRES_USER=mn', '-e', 'POSTGRES_PASSWORD=synthetic-only', '-e', 'POSTGRES_DB=enterprise_fixture', 'postgres:16-alpine');
   const address = await waitForFixturePort(() => docker('port', container, '5432/tcp'));
   assert.match(address, /^127\.0\.0\.1:\d+$/u);
@@ -68,6 +69,7 @@ try {
   const restarted=await make(makePool());
   const orders=await restarted.business.list({...actor,principalId:'manager'},workspace.id,'order');
   assert.equal(orders.filter(order=>order.values.status==='active').reduce((sum,order)=>sum+order.values.totalMinor,0),30000);
+  await verifyFulfillment({a,b:restarted,actor,workspace,command,order:orders.find(order=>order.values.status==='active')});
   const original=await restarted.business.get({...actor,principalId:'sales'},workspace.id,'quote_version','quote',1);
   assert.deepEqual(original,prepared);
   const raw=await firstPool.query('select public_payload::text, protected_payload_ref from mn_enterprise_v1.events');

@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 import type * as Types from "./enterprise-types.js";
 export interface EnterpriseApiInputs {
+  readonly getBusinessBalance: { readonly path: { readonly workspaceId: string; readonly orderId: string; readonly asOfDate: string; }; };
+  readonly getBusinessProgress: { readonly path: { readonly workspaceId: string; readonly projectId: string; }; };
+  readonly getBusinessCosts: { readonly path: { readonly workspaceId: string; readonly projectId: string; }; };
   readonly getBusinessApproval: { readonly path: { readonly workspaceId: string; readonly approvalId: string; }; };
   readonly executeBusinessCommand: { readonly path: { readonly workspaceId: string; }; readonly body: Types.EnterpriseBusinessCommand; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
   readonly listBusinessObjects: { readonly path: { readonly workspaceId: string; readonly objectType: string; }; };
@@ -29,6 +32,9 @@ export interface EnterpriseApiInputs {
   readonly commandOrganizationMember: { readonly path: { readonly organizationId: string; readonly memberId: string; }; readonly body: Types.OrganizationMemberCommand; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
 }
 export interface EnterpriseApiOutputs {
+  readonly getBusinessBalance: Types.EnterpriseOrderBalance;
+  readonly getBusinessProgress: Types.EnterpriseProjectProgress;
+  readonly getBusinessCosts: Types.EnterpriseProjectCosts;
   readonly getBusinessApproval: Types.BusinessApproval;
   readonly executeBusinessCommand: Types.EnterpriseBusinessObjectView;
   readonly listBusinessObjects: Types.EnterpriseBusinessObjectList;

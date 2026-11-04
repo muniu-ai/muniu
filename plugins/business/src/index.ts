@@ -3,3 +3,4 @@ export * from './model.js';
 export * from './state.js';
 export * from './commands.js';
 export * from './access.js';
+export { orderFinancials, projectProgress, projectCosts, businessDate } from './fulfillment-queries.js';

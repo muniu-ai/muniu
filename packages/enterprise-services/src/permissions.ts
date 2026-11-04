@@ -36,7 +36,9 @@ function roleOperations(role: BusinessRole, type: string): readonly ObjectOperat
   if (role === 'sales' || role === 'sales_manager') {
     if (type === 'service_version') return role === 'sales_manager' ? WRITE : READ;
     if (['customer', 'contact', 'opportunity'].includes(type)) return [...WRITE, 'execution_approve'];
-    if (['quote_version', 'contract', 'order'].includes(type)) return role === 'sales_manager' ? APPROVE : WRITE;
+    if (['quote_version', 'contract', 'order', 'change_request'].includes(type)) return role === 'sales_manager' ? APPROVE : WRITE;
+    if (['operating_objective','metric_definition','business_review'].includes(type)) return role === 'sales_manager' ? WRITE : READ;
+    if (['project','milestone','delivery_version','customer_acceptance','adjustment'].includes(type)) return READ;
     if (['service_version', 'payment_schedule', 'receipt', 'refund', ...EVIDENCE].includes(type)) return READ;
   }
   if (role === 'project_owner') {
@@ -45,8 +47,10 @@ function roleOperations(role: BusinessRole, type: string): readonly ObjectOperat
     if (['order', ...EVIDENCE].includes(type)) return READ;
   }
   if (role === 'finance') {
-    if (['receipt', 'refund', 'adjustment'].includes(type)) return APPROVE;
-    if (['payment_schedule', 'expense'].includes(type)) return WRITE;
+    if (['receipt', 'refund', 'adjustment','payment_schedule','expense'].includes(type)) return APPROVE;
+    if(type==='project') return ['read','business_approve'];
+    if(['milestone','delivery_version','customer_acceptance','change_request'].includes(type)) return READ;
+    if(['business_review','operating_objective','metric_definition'].includes(type)) return WRITE;
     if (['order', 'contract', 'operating_objective', 'metric_definition', ...EVIDENCE].includes(type)) return READ;
   }
   return [];

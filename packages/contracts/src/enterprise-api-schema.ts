@@ -2,6 +2,9 @@
 import { ENTERPRISE_SCHEMAS } from './enterprise-schema.js';
 import type { JsonObject } from './json.js';
 export const ENTERPRISE_HTTP_OPERATIONS = [
+  { id:'getBusinessBalance',method:'get',path:'/v2/workspaces/{workspaceId}/business-balances/{orderId}/{asOfDate}',response:'EnterpriseOrderBalance',mutation:false },
+  { id:'getBusinessProgress',method:'get',path:'/v2/workspaces/{workspaceId}/business-progress/{projectId}',response:'EnterpriseProjectProgress',mutation:false },
+  { id:'getBusinessCosts',method:'get',path:'/v2/workspaces/{workspaceId}/business-costs/{projectId}',response:'EnterpriseProjectCosts',mutation:false },
   { id: 'getBusinessApproval', method: 'get', path: '/v2/workspaces/{workspaceId}/business-approvals/{approvalId}', response: 'BusinessApproval', mutation: false },
   { id: 'executeBusinessCommand', method: 'post', path: '/v2/workspaces/{workspaceId}/business/commands', body: 'EnterpriseBusinessCommand', response: 'EnterpriseBusinessObjectView', mutation: true },
   { id: 'listBusinessObjects', method: 'get', path: '/v2/workspaces/{workspaceId}/business/{objectType}', response: 'EnterpriseBusinessObjectList', mutation: false },

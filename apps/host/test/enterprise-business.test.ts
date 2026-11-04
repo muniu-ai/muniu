@@ -1,55 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import assert from 'node:assert/strict';
-import { randomBytes } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import test from 'node:test';
-import { EnterpriseIdentityService, EnterprisePermissionService, type EnterpriseActor } from '@mn/enterprise-services';
-import { FileCas, InMemoryKeyProvider, SqliteStorage } from '@mn/storage';
-import type { BusinessCommand } from '@mn/plugin-business';
-import { createEnterpriseEventRepository } from '../src/enterprise-event-repository.js';
-import { EnterpriseBusinessService } from '../src/enterprise-business.js';
-async function fixture(t: test.TestContext) {
-  const root = await mkdtemp(join(tmpdir(), 'mn-enterprise-business-'));
-  const store = new SqliteStorage({ databaseFile: join(root, 'state.sqlite'), hmacKey: randomBytes(32) });
-  t.after(async () => { await store.close(); await rm(root, { recursive: true, force: true }); });
-  let clock = '2026-11-02T01:00:00.000Z'; const now = () => clock;
-  const cas = new FileCas({ rootDir: join(root, 'cas') }), keyProvider = new InMemoryKeyProvider(randomBytes(32));
-  const repository = createEnterpriseEventRepository({ store, cas, keyProvider });
-  const identity = new EnterpriseIdentityService({ repository, now }), permissions = new EnterprisePermissionService({ repository, now });
-  await identity.provision({ tenantId: 'tenant', name: '合成企业', issuer: 'https://issuer.test/', maxMembers: 20,
-    administrator: { id: 'admin', subject: 'admin', displayName: '管理员' } });
-  const admin = { tenantId: 'tenant', principalId: 'admin', sessionEpoch: 1 };
-  const workspace = await identity.createWorkspace(admin, 'workspace', { name: '业务主体', mode: 'builtin' });
-  for (const id of ['sales', 'manager', 'viewer']) {
-    const invitation = await identity.invite(admin, 'invite-'+id, { id, subject: id, displayName: id, organizationAdmin: false });
-    await identity.acceptInvitation({ ...admin, principalId: id }, 'accept-'+id, id, 1, invitation.token);
-  }
-  for (const [id, role, fields, scope, operations] of [
-    ['sales-own', 'sales', ['public','price','contact'], { kind: 'owned' }, ['read','draft','write']],
-    ['sales-catalog', 'sales', ['public','price'], { kind: 'objects', objects: [{ objectType: 'service_version', objectId: 'service' }] }, ['read']],
-    ['manager', 'sales_manager', ['public','price','contact'], { kind: 'workspace' }, ['read','write','business_approve']],
-    ['viewer', 'sales', ['public'], { kind: 'workspace' }, ['read']],
-  ] as const) await permissions.grantRole(admin, 'grant-'+id, { id, workspaceId: workspace.id, principalId: id.startsWith('sales-') ? 'sales' : id,
-    role, fieldClasses: fields, scope, operations, expiresAt: '2027-01-01T00:00:00.000Z' });
-  const actor = (principalId: string): EnterpriseActor => ({ ...admin, principalId });
-  const service = new EnterpriseBusinessService({ repository, now });
-  let sequence = 0;
-  const command = (command: BusinessCommand, principalId = 'sales', key = 'command-'+(++sequence)) => service.execute({ actor: actor(principalId), actorKind: 'human', workspaceId: workspace.id, idempotencyKey: key, command });
-  const get = (type: string, id: string, principalId = 'sales') => service.get(actor(principalId), workspace.id, type, id);
-  const base = async () => {
-    const customer = await command({ type: 'customer.create', id: 'customer', name: '机密合成客户' });
-    const opportunity = await command({ type: 'opportunity.create', id: 'opportunity', title: '需求', customer: customer.reference });
-    const catalog = await command({ type: 'service.publish', id: 'service', serviceCode: 'consulting', title: '咨询', unit: '次', unitPriceMinor: 10000,
-      scope: '需求评估', acceptanceCriteria: ['报告'], validFrom: now(), validUntil: '2027-01-01T00:00:00.000Z' }, 'manager');
-    const quote = await command({ type: 'quote.prepare', id: 'quote', opportunity: opportunity.reference,
-      lines: [{ service: catalog.reference, quantity: 3 }], validUntil: '2026-12-01T00:00:00.000Z' });
-    return { customer, opportunity, catalog, quote };
-  };
-  return { store, cas, repository, permissions, actor, admin, workspace, service, command, get, base,
-    newService: () => new EnterpriseBusinessService({ repository: createEnterpriseEventRepository({ store, cas, keyProvider }), now }), advance: (value: string) => { clock = value; } };
-}
+import { fixture } from './fixtures/business.js';
 test('企业业务写入在持久事务中检查对象与字段，管理员不自动取得业务读取权', async t => {
   const f = await fixture(t); const { quote } = await f.base();
   assert.equal(quote.values.totalMinor, 30000);

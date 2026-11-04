@@ -6,6 +6,9 @@ export async function dispatchEnterpriseBusiness(options: { operationId: string;
   const { operationId, params, actor, input, key, business } = options, workspaceId = params.workspaceId!;
   let value: unknown;
   switch(operationId) {
+    case 'getBusinessBalance': value=await business.summary(actor,workspaceId,'balance',params.orderId!,params.asOfDate!);break;
+    case 'getBusinessProgress': value=await business.summary(actor,workspaceId,'progress',params.projectId!);break;
+    case 'getBusinessCosts': value=await business.summary(actor,workspaceId,'costs',params.projectId!);break;
     case 'getBusinessApproval': value = await business.getApproval(actor,workspaceId,params.approvalId!); break;
     case 'executeBusinessCommand': value = await business.execute({ actor, actorKind:'human', workspaceId, idempotencyKey:key!, command:input as EnterpriseContractTypes['EnterpriseBusinessCommand'] }); break;
     case 'listBusinessObjects': value = await business.list(actor,workspaceId,params.objectType!); break;

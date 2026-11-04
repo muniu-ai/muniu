@@ -95,7 +95,7 @@
     "verify:agent-os-p5-ui": "npm run test:delivery-expansion-views && node --test apps/desktop-mac/scripts/test/delivery-expansion-flow.test.mjs && node apps/desktop-mac/scripts/verify-delivery-expansion-ui.mjs",
     "verify:enterprise-access": "npm run build && npm run test -w @mn/enterprise-services && npm run test -w @mn/storage && tsc -p apps/host/tsconfig.test.json && node --test --test-concurrency=2 apps/host/dist-test/test/enterprise-browser.test.js apps/host/dist-test/test/enterprise-event-repository.test.js apps/host/dist-test/test/enterprise-local.test.js",
     "verify:enterprise-access-postgres": "npm run build && node scripts/enterprise-access-e2e.mjs",
-    "verify:business-domain": "npm run build && npm run test -w @mn/plugin-business && tsc -p apps/host/tsconfig.test.json && node --test --test-concurrency=1 apps/host/dist-test/test/enterprise-business.test.js apps/host/dist-test/test/enterprise-business-http.test.js",
+    "verify:business-domain": "npm run build && npm run test -w @mn/plugin-business && tsc -p apps/host/tsconfig.test.json && node --test --test-concurrency=1 apps/host/dist-test/test/enterprise-business.test.js apps/host/dist-test/test/enterprise-business-http.test.js apps/host/dist-test/test/enterprise-fulfillment.test.js",
     "verify:business-postgres": "node scripts/enterprise-business-e2e.mjs"
   },
   "devDependencies": {

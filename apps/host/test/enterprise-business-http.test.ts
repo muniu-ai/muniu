@@ -20,14 +20,14 @@ async function fixture(t: test.TestContext) {
   await host.identity.provision({ tenantId:'tenant',name:'合成企业',issuer:issuer.issuer,maxMembers:20,administrator:{id:'admin',subject:'admin',displayName:'管理员'} });
   const admin = { tenantId:'tenant',principalId:'admin',sessionEpoch:1 };
   const workspace = await host.identity.createWorkspace(admin,'workspace',{name:'业务',mode:'builtin'});
-  for (const id of ['sales','manager','reader']) {
+  for (const id of ['sales','manager','reader','project','reviewer','finance-a','finance-b']) {
     const invited = await host.identity.invite(admin,'invite-'+id,{id,subject:id,displayName:id,organizationAdmin:false});
     await host.identity.acceptInvitation({...admin,principalId:id},'accept-'+id,id,1,invited.token);
-    await host.permissions.grantRole(admin,'role-'+id,{id:'role-'+id,workspaceId:workspace.id,principalId:id,role:id==='manager'?'sales_manager':'sales',scope:{kind:'workspace'},
-      operations:id==='reader'?['read']:['read','write','business_approve'],fieldClasses:id==='reader'?['public']:['public','price','contact'],expiresAt:new Date(Date.now()+86400000).toISOString()});
+    await host.permissions.grantRole(admin,'role-'+id,{id:'role-'+id,workspaceId:workspace.id,principalId:id,role:id.startsWith('finance')?'finance':['project','reviewer'].includes(id)?'project_owner':id==='manager'?'sales_manager':'sales',scope:{kind:'workspace'},
+      operations:id==='reader'?['read']:['read','write','business_approve'],fieldClasses:['reader','project','reviewer'].includes(id)?['public']:id.startsWith('finance')?['public','price','cost']:['public','price','contact'],expiresAt:new Date(Date.now()+86400000).toISOString()});
   }
   const browsers = new Map<string,{cookie:string;csrf:string}>();
-  for(const id of ['admin','sales','manager','reader']) {
+  for(const id of ['admin','sales','manager','reader','project','reviewer','finance-a','finance-b']) {
     const start = await host.dispatch(new Request(origin+'/v2/auth/login?organizationId=tenant'));
     const loginCookie = start.headers.getSetCookie()[0]!.split(';')[0]!;
     const callback = await host.dispatch(new Request(issuer.callback(start.headers.get('location')!,id),{headers:{cookie:loginCookie}}));
@@ -68,6 +68,21 @@ test('浏览器业务链完成报价、客户接受、合同和订单，重启�
   await command({type:'order.create',id:'order',contract:signed.reference,lines:[{quoteLineId:'line-1',quantity:3}]});
   const order=await command({type:'order.activate',id:'order',expectedStreamVersion:1},'manager');
   assert.equal(order.values.status,'active');assert.equal(order.values.totalMinor,30000);
+  const project=await command({type:'project.create',id:'project',order:order.reference,title:'交付项目'},'project');
+  const milestone=await command({type:'milestone.create',id:'milestone',project:project.reference,title:'第一期',dueDate:'2026-12-01',lines:[{lineId:'line-1',quantity:3}]},'project');
+  await command({type:'delivery.report',id:'delivery',milestone:milestone.reference,summary:'两项成果',lines:[{lineId:'line-1',quantity:2}]},'project');
+  const delivery=await command({type:'delivery.receive',id:'delivery',expectedStreamVersion:1},'project');
+  const acceptance=await command({type:'acceptance.prepare',id:'acceptance',delivery:delivery.reference,lines:[{lineId:'line-1',quantity:1}]},'project');
+  const attest=(subject:unknown,person:string)=>f.ok(prefix+'/business-evidence',person,{subject,attestation:'合成确认事实',additionalFieldClasses:[]});
+  await command({type:'acceptance.confirm',id:'acceptance',expectedStreamVersion:1,evidence:await attest(acceptance.reference,'reviewer')},'reviewer');
+  const schedule=await command({type:'payment_schedule.create',id:'schedule',order:order.reference,amountMinor:30000,dueDate:'2026-01-01'},'finance-a');
+  const scheduleActive=await command({type:'payment_schedule.confirm',id:'schedule',expectedStreamVersion:1,evidence:await attest(schedule.reference,'finance-b')},'finance-b');
+  const date=new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Shanghai'}).format(new Date());
+  const receipt=await command({type:'receipt.prepare',id:'receipt',order:order.reference,amountMinor:10000,businessDate:date,allocations:[{schedule:scheduleActive.reference,amountMinor:10000}]},'finance-a');
+  await command({type:'receipt.confirm',id:'receipt',expectedStreamVersion:1,evidence:await attest(receipt.reference,'finance-b')},'finance-b');
+  const balance=await f.ok(prefix+'/business-balances/order/'+date,'finance-b');assert.equal(balance.values.outstandingMinor,20000);
+  assert.equal((await f.request(prefix+'/business-balances/order/'+date,'project')).status,403);
+  const progress=await f.ok(prefix+'/business-progress/project','project');assert.equal(progress.values.lines[0].accepted,1);assert.equal(progress.values.lines[0].remaining,2);
   const deliveryScope=await f.ok(prefix+'/business/order/order','reader');
   assert.equal(deliveryScope.values.scopeLines[0].scope,'评估需求');
   assert.doesNotMatch(JSON.stringify(deliveryScope.values.scopeLines),/unitPriceMinor|totalMinor/);

@@ -2,7 +2,7 @@
 import { randomBytes } from 'node:crypto';
 import { canonicalJson, parseEnterpriseContract, type BusinessObjectRef, type EvidenceRef, type EnterpriseContractTypes, type JsonObject } from '@mn/contracts';
 import { BUSINESS_FIELD_CLASSES, BusinessDomainError, businessDigest, businessObjectKey, decideBusinessCommand, reduceBusinessEvents,
-  type BusinessCommand, type BusinessCommandContext, type BusinessEvent, type BusinessObject, type BusinessObjectType, type BusinessState } from '@mn/plugin-business';
+  orderFinancials, projectProgress, projectCosts, type BusinessCommand, type BusinessCommandContext, type BusinessEvent, type BusinessObject, type BusinessObjectType, type BusinessState } from '@mn/plugin-business';
 import { EnterpriseError, opaqueHash, reduceAccessEvents, reduceIdentityEvents, requireActor, resolveObjectAccess, assertBusinessDecisionAccess,
   type EnterpriseActor, type EnterpriseRecord, type EnterpriseRepository, type FieldClass, type ObjectAccessDescriptor } from '@mn/enterprise-services';
 type ObjectView = EnterpriseContractTypes['EnterpriseBusinessObjectView'];
@@ -25,7 +25,8 @@ function descriptor(object: BusinessObject): ObjectAccessDescriptor {
   return { ...object.reference, fieldClasses,
     ...(typeof object.value.ownerPrincipalId === 'string' ? { ownerPrincipalId: object.value.ownerPrincipalId } : {}),
     ...(typeof object.value.departmentId === 'string' ? { departmentId: object.value.departmentId } : {}),
-    ...(object.reference.objectType === 'order' ? { orderId: object.reference.objectId } : {}),
+    ...(object.reference.objectType === 'order' ? { orderId: object.reference.objectId } : object.value.order ? {orderId:(object.value.order as unknown as BusinessObjectRef).objectId} : {}),
+    ...(object.reference.objectType === 'project' ? { projectId: object.reference.objectId } : object.value.project ? {projectId:(object.value.project as unknown as BusinessObjectRef).objectId} : {}),
   };
 }
 function evidenceRecords(records: readonly EnterpriseRecord[], workspaceId: string): Map<string, StoredEvidence> {
@@ -72,7 +73,21 @@ export class EnterpriseBusinessService {
   }
   private view(records: readonly EnterpriseRecord[], actor: EnterpriseActor, current: BusinessObject, value = current): ObjectView {
     const classes = resolveObjectAccess(records, actor, descriptor(current), 'read', this.now()), fields = descriptor(value).fieldClasses;
-    return { reference: value.reference, values: Object.fromEntries(Object.entries(value.value).filter(([field]) => Object.hasOwn(fields, field) && classes.has(fields[field]!))) };
+    const values = Object.fromEntries(Object.entries(value.value).filter(([field]) => Object.hasOwn(fields, field) && classes.has(fields[field]!)));
+    if(value.reference.objectType==='business_review'&&value.value.purpose==='operating_review') {
+      const state=reduceBusinessEvents(facts(records,actor.tenantId,value.reference.workspaceId));
+      for(const [sources,metrics,classification] of [['sourceRefs','deliveryMetrics','public'],['financialSources','financialMetrics','price'],['costSources','costMetrics','cost']] as const) {
+        try {
+          for(const ref of value.value[sources] as unknown as readonly BusinessObjectRef[] ?? []) {
+            const object=this.object(state,ref.objectType,ref.objectId),mapping=descriptor(object).fieldClasses;
+            this.allow(records,actor,object,'read',Object.keys(object.value).filter(field=>mapping[field]==='public'||mapping[field]===classification||classification==='cost'&&mapping[field]==='price'));
+          }
+        } catch(error) { if(!(error instanceof EnterpriseError)||!['OBJECT_ACCESS_DENIED','FIELD_ACCESS_DENIED'].includes(error.code))throw error;
+          delete values[sources];delete values[metrics];if(classification==='price')delete values.objectiveResult;
+        }
+      }
+    }
+    return {reference:value.reference,values};
   }
   private historical(events: readonly BusinessEvent[], reference: BusinessObjectRef): BusinessObject {
     const history = events.filter(event => event.objectType === reference.objectType && event.objectId === reference.objectId && event.expectedStreamVersion < reference.streamVersion);
@@ -87,6 +102,12 @@ export class EnterpriseBusinessService {
     const current = this.object(state, subject.objectType, subject.objectId);
     const readable = resolveObjectAccess(records, actor, descriptor(current), 'read', this.now());
     if (proof.requiredClasses.some(field => !readable.has(field))) throw new EnterpriseError('FIELD_ACCESS_DENIED');
+  }
+  private allowEvidence(records: readonly EnterpriseRecord[], actor: EnterpriseActor, subject: BusinessObject): void {
+    try { this.allow(records,actor,subject,'write',[]); } catch(error) {
+      if(!(error instanceof EnterpriseError)||error.code!=='OBJECT_ACCESS_DENIED') throw error;
+      this.allow(records,actor,subject,'business_approve',[]);
+    }
   }
   private record(type: string, aggregateType: string, id: string, version: number, actor: EnterpriseActor, payload: unknown): EnterpriseRecord {
     return { type, aggregateType, aggregateId: id, expectedStreamVersion: version, actorId: actor.principalId, occurredAt: this.now(), payload: json(payload) };
@@ -108,7 +129,7 @@ export class EnterpriseBusinessService {
           if (prior.payload.requestDigest !== requestDigest) throw new EnterpriseError('IDEMPOTENCY_KEY_REUSED', 409);
           const ref = prior.payload.reference as unknown as BusinessObjectRef;
           const current = this.object(state, ref.objectType, ref.objectId);
-          const formal = ['quote.approve','quote.record_acceptance','contract.activate','order.activate'].includes(command.type);
+          const formal = ['quote.approve','quote.record_acceptance','contract.activate','order.activate','acceptance.confirm','payment_schedule.confirm','receipt.confirm','refund.confirm','adjustment.confirm','expense.confirm','project.costs.confirm','change_request.approve'].includes(command.type);
           this.allow(records, actor, current, formal ? 'business_approve' : 'write', []);
           return { events: [], value: ref };
         }
@@ -136,6 +157,18 @@ export class EnterpriseBusinessService {
     if (!Number.isSafeInteger(version) || version < 1 || version > object.reference.streamVersion) throw new EnterpriseError('OBJECT_VERSION_NOT_FOUND', 404);
     const old = this.object(reduceBusinessEvents(history.filter(event => event.objectType === type && event.objectId === id && event.expectedStreamVersion < version)), type, id);
     return this.view(records, actor, object, old);
+  }
+  async summary(actor:EnterpriseActor,workspaceId:string,kind:'balance'|'progress'|'costs',id:string,asOfDate?:string):Promise<ObjectView> {
+    const records=await this.options.repository.read(actor.tenantId);this.bound(records,actor,workspaceId);
+    const state=reduceBusinessEvents(facts(records,actor.tenantId,workspaceId));const object=this.object(state,kind==='balance'?'order':'project',id);
+    const types=kind==='balance'?['order','payment_schedule','receipt','refund','adjustment']:kind==='progress'?['project','milestone','delivery_version','customer_acceptance']:['order','project','expense','business_review'];
+    const orderId=object.reference.objectType==='order'?id:(object.value.order as unknown as BusinessObjectRef).objectId;
+    const scope=[...state.objects.values()].filter(value=>types.includes(value.reference.objectType)&&(value.reference.objectType==='order'?value.reference.objectId===orderId:(value.value.order as unknown as BusinessObjectRef|undefined)?.objectId===orderId));
+    for(const value of scope){const classes=descriptor(value).fieldClasses;this.allow(records,actor,value,'read',Object.keys(value.value).filter(field=>classes[field]==='public'||kind==='balance'&&classes[field]==='price'||kind==='costs'&&['price','cost'].includes(classes[field]!)));}
+    try {
+      const values=kind==='balance'?orderFinancials(state,id,asOfDate!):kind==='progress'?projectProgress(state,id):projectCosts(state,id);
+      return {reference:object.reference,values:json(values)};
+    } catch(error){if(error instanceof BusinessDomainError)throw new EnterpriseError(error.code,error.status);throw error;}
   }
   async getApproval(actor: EnterpriseActor, workspaceId: string, id: string): Promise<EnterpriseContractTypes['BusinessApproval']> {
     const records = await this.options.repository.read(actor.tenantId); this.bound(records, actor, workspaceId);
@@ -169,7 +202,7 @@ export class EnterpriseBusinessService {
       const state = reduceBusinessEvents(facts(records, actor.tenantId, workspaceId));
       const subject = this.object(state, parsed.subject.objectType, parsed.subject.objectId);
       const validate = (replay?: StoredEvidence) => {
-        this.allow(records, actor, subject, 'write', []);
+        this.allowEvidence(records, actor, subject);
         if (!replay && canonicalJson(subject.reference) !== canonicalJson(parsed.subject)) throw new EnterpriseError('SOURCE_VERSION_CONFLICT', 409);
         const classes = resolveObjectAccess(records, actor, descriptor(subject), 'read', this.now());
         const required = replay?.requiredClasses ?? [...new Set([...Object.entries(descriptor(subject).fieldClasses).filter(([field]) => Object.hasOwn(subject.value, field)).map(([, classification]) => classification), ...parsed.additionalFieldClasses])];
@@ -208,7 +241,7 @@ export class EnterpriseBusinessService {
       const proof = evidenceRecords(records, workspaceId).get(id);
       if (!proof) throw new EnterpriseError('EVIDENCE_NOT_FOUND', 404);
       const subject = this.object(reduceBusinessEvents(facts(records, actor.tenantId, workspaceId)), proof.subject.objectType, proof.subject.objectId);
-      const validate = () => { this.allow(records, actor, subject, 'write', []); };
+      const validate = () => { this.allowEvidence(records, actor, subject); };
       validate();
       const prior = records.find(record => record.type === 'enterprise.business_evidence.withdrawal_recorded' && record.aggregateId === commandId);
       if (prior) { if (prior.payload.requestDigest !== requestDigest) throw new EnterpriseError('IDEMPOTENCY_KEY_REUSED', 409); return { events: [], value: prior.payload.result as unknown as { id: string; streamVersion: number } }; }

@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
+import { ENTERPRISE_BUSINESS_QUERY_SCHEMAS } from './enterprise-business-query-schema.js';
+import { ENTERPRISE_FULFILLMENT_COMMANDS } from './enterprise-fulfillment-schema.js';
 import type { JsonObject } from './json.js';
 const text = { type: 'string', minLength: 1, maxLength: 200, pattern: '^(?=.*\\S)[^\\u0000-\\u001f\\u007f]+$' };
 const identifier = { ...text, pattern: '^(?!\\.{1,2}$)(?=.*\\S)[^\\u0000-\\u001f\\u007f]+$' };
@@ -13,6 +15,7 @@ const command = (type: string, properties: Record<string, JsonObject>, optional:
 const update = { expectedStreamVersion: positive };
 const lines = (items: JsonObject) => ({ type: 'array', items, minItems: 1, maxItems: 100 });
 export const ENTERPRISE_BUSINESS_SCHEMAS: Readonly<Record<string, JsonObject>> = {
+  ...ENTERPRISE_BUSINESS_QUERY_SCHEMAS,
   EnterpriseBusinessEvidenceWithdraw: object({ expectedStreamVersion: positive }),
   EnterpriseBusinessEvidenceWithdrawn: object({ id: text, streamVersion: positive }),
   EnterpriseBusinessEvidenceCreate: object({ subject: ref('BusinessObjectRef'), attestation: detail,
@@ -20,6 +23,7 @@ export const ENTERPRISE_BUSINESS_SCHEMAS: Readonly<Record<string, JsonObject>> =
   EnterpriseBusinessEvidenceView: object({ reference: ref('EvidenceRef'), subject: ref('BusinessObjectRef'), attestation: detail,
     requiredClasses: { type: 'array', items: { type: 'string', enum: ['public', 'price', 'cost', 'contact'] } }, recordedBy: text, recordedAt: timestamp, streamVersion: positive }),
   EnterpriseBusinessCommand: { oneOf: [
+    ...ENTERPRISE_FULFILLMENT_COMMANDS,
     command('customer.create', { name: text, departmentId: text }, ['departmentId']),
     command('customer.rename', { ...update, name: text }),
     command('contact.create', { customer: ref('BusinessObjectRef'), name: text, email: text, phone: text }, ['email', 'phone']),

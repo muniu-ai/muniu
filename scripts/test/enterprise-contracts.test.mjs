@@ -47,3 +47,11 @@ test('目标接口不进入当前服务的 OpenAPI，五端口不含任意执行
     if (operation.kind === 'business_mutation') assert.equal(operation.idempotencyRequired, true);
   }
 });
+
+test('E2.2 查询响应固定余额、进度与成本字段，不容纳额外机密字段',()=>{
+  const reference=examples.BusinessObjectRef.valid;
+  const values={costsComplete:false,confirmedCostMinor:0,marginMinor:null,marginBasis:'order_value_minus_confirmed_cost'};
+  assert.deepEqual(parse('EnterpriseProjectCosts',{reference,values}),{reference,values});
+  assert.throws(()=>parse('EnterpriseProjectCosts',{reference,values:{...values,secret:'protected'}}));
+  assert.throws(()=>parse('EnterpriseProjectCosts',{reference,values:{...values,confirmedCostMinor:0.1}}));
+});

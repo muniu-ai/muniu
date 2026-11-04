@@ -3,6 +3,252 @@ info:
   title: Muniu Enterprise API
   version: 0.2.0
 paths:
+  /v2/workspaces/{workspaceId}/business-balances/{orderId}/{asOfDate}:
+    get:
+      operationId: getBusinessBalance
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: path
+          name: orderId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: path
+          name: asOfDate
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EnterpriseOrderBalance"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+  /v2/workspaces/{workspaceId}/business-progress/{projectId}:
+    get:
+      operationId: getBusinessProgress
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: path
+          name: projectId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EnterpriseProjectProgress"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+  /v2/workspaces/{workspaceId}/business-costs/{projectId}:
+    get:
+      operationId: getBusinessCosts
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: path
+          name: projectId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EnterpriseProjectCosts"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
   /v2/workspaces/{workspaceId}/business-approvals/{approvalId}:
     get:
       operationId: getBusinessApproval
@@ -2401,11 +2647,138 @@ components:
         - traceId
         - retryable
         - fieldIssues
+    EnterpriseOrderBalance:
+      type: object
+      properties:
+        reference: &a7
+          $ref: "#/components/schemas/BusinessObjectRef"
+        values:
+          type: object
+          properties:
+            orderId: &a6
+              type: string
+            totalMinor: &a5
+              type: integer
+              minimum: 0
+              maximum: 9007199254740991
+            grossReceivedMinor: *a5
+            refundedMinor: *a5
+            reversedMinor: *a5
+            netReceivedMinor: *a5
+            allocatedMinor: *a5
+            unallocatedMinor: *a5
+            writtenOffMinor: *a5
+            outstandingMinor: *a5
+            dueMinor: *a5
+            periods:
+              type: array
+              items:
+                type: object
+                properties:
+                  id: *a6
+                  dueDate:
+                    type: string
+                    format: date
+                  amountMinor: *a5
+                  allocatedMinor: *a5
+                  writtenOffMinor: *a5
+                  outstandingMinor: *a5
+                required:
+                  - id
+                  - dueDate
+                  - amountMinor
+                  - allocatedMinor
+                  - writtenOffMinor
+                  - outstandingMinor
+                additionalProperties: false
+          required:
+            - orderId
+            - totalMinor
+            - grossReceivedMinor
+            - refundedMinor
+            - reversedMinor
+            - netReceivedMinor
+            - allocatedMinor
+            - unallocatedMinor
+            - writtenOffMinor
+            - outstandingMinor
+            - dueMinor
+            - periods
+          additionalProperties: false
+      required:
+        - reference
+        - values
+      additionalProperties: false
+    EnterpriseProjectProgress:
+      type: object
+      properties:
+        reference: *a7
+        values:
+          type: object
+          properties:
+            project: *a7
+            status: *a6
+            lines:
+              type: array
+              items:
+                type: object
+                properties:
+                  lineId: *a6
+                  promised: *a5
+                  delivered: *a5
+                  internallyReceived: *a5
+                  accepted: *a5
+                  remaining: *a5
+                required:
+                  - lineId
+                  - promised
+                  - delivered
+                  - internallyReceived
+                  - accepted
+                  - remaining
+                additionalProperties: false
+          required:
+            - project
+            - status
+            - lines
+          additionalProperties: false
+      required:
+        - reference
+        - values
+      additionalProperties: false
+    EnterpriseProjectCosts:
+      type: object
+      properties:
+        reference: *a7
+        values:
+          type: object
+          properties:
+            costsComplete:
+              type: boolean
+            confirmedCostMinor: *a5
+            marginMinor:
+              oneOf:
+                - type: integer
+                  minimum: -9007199254740991
+                  maximum: 9007199254740991
+                - const: null
+            marginBasis:
+              const: order_value_minus_confirmed_cost
+          required:
+            - costsComplete
+            - confirmedCostMinor
+            - marginMinor
+            - marginBasis
+          additionalProperties: false
+      required:
+        - reference
+        - values
+      additionalProperties: false
     EnterpriseBusinessEvidenceWithdraw:
       type: object
       additionalProperties: false
       properties:
-        expectedStreamVersion: &a5
+        expectedStreamVersion: &a8
           type: integer
           minimum: 1
           maximum: 9007199254740991
@@ -2415,12 +2788,12 @@ components:
       type: object
       additionalProperties: false
       properties:
-        id: &a7
+        id: &a10
           type: string
           minLength: 1
           maxLength: 200
           pattern: ^(?=.*\S)[^\u0000-\u001f\u007f]+$
-        streamVersion: *a5
+        streamVersion: *a8
       required:
         - id
         - streamVersion
@@ -2430,7 +2803,7 @@ components:
       properties:
         subject:
           $ref: "#/components/schemas/BusinessObjectRef"
-        attestation: &a6
+        attestation: &a9
           type: string
           minLength: 1
           maxLength: 4000
@@ -2457,7 +2830,7 @@ components:
           $ref: "#/components/schemas/EvidenceRef"
         subject:
           $ref: "#/components/schemas/BusinessObjectRef"
-        attestation: *a6
+        attestation: *a9
         requiredClasses:
           type: array
           items:
@@ -2467,11 +2840,11 @@ components:
               - price
               - cost
               - contact
-        recordedBy: *a7
-        recordedAt: &a9
+        recordedBy: *a10
+        recordedAt: &a21
           type: string
           format: date-time
-        streamVersion: *a5
+        streamVersion: *a8
       required:
         - reference
         - subject
@@ -2483,17 +2856,610 @@ components:
     EnterpriseBusinessCommand:
       oneOf:
         - type: object
-          additionalProperties: false
           properties:
             type:
-              const: customer.create
-            id: &a8
+              const: project.create
+            id: &a11
               type: string
               minLength: 1
               maxLength: 200
               pattern: ^(?!\.{1,2}$)(?=.*\S)[^\u0000-\u001f\u007f]+$
-            name: *a7
-            departmentId: *a7
+            order:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            title: &a12
+              type: string
+              minLength: 1
+              maxLength: 200
+              pattern: ^(?=.*\S)[^\u0000-\u001f\u007f]+$
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - order
+            - title
+        - type: object
+          properties:
+            type:
+              const: milestone.create
+            id: *a11
+            project:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            title: *a12
+            dueDate: &a15
+              type: string
+              format: date
+            lines: &a13
+              type: array
+              items: &a19
+                type: object
+                properties:
+                  lineId: *a12
+                  quantity: &a14
+                    type: integer
+                    minimum: 1
+                    maximum: 9007199254740991
+                additionalProperties: false
+                required:
+                  - lineId
+                  - quantity
+              minItems: 1
+              maxItems: 100
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - project
+            - title
+            - dueDate
+            - lines
+        - type: object
+          properties:
+            type:
+              const: delivery.report
+            id: *a11
+            milestone:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            summary: &a18
+              type: string
+              minLength: 1
+              maxLength: 4000
+              pattern: \S
+            lines: *a13
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - milestone
+            - summary
+            - lines
+        - type: object
+          properties:
+            type:
+              const: delivery.receive
+            id: *a11
+            expectedStreamVersion: *a14
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - expectedStreamVersion
+        - type: object
+          properties:
+            type:
+              const: acceptance.prepare
+            id: *a11
+            delivery:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            lines: *a13
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - delivery
+            - lines
+        - type: object
+          properties:
+            type:
+              const: acceptance.confirm
+            id: *a11
+            expectedStreamVersion: *a14
+            evidence: &a16
+              $ref: "#/components/schemas/EvidenceRef"
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - expectedStreamVersion
+            - evidence
+        - type: object
+          properties:
+            type:
+              const: payment_schedule.create
+            id: *a11
+            order:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            amountMinor: *a14
+            dueDate: *a15
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - order
+            - amountMinor
+            - dueDate
+        - type: object
+          properties:
+            type:
+              const: payment_schedule.confirm
+            id: *a11
+            expectedStreamVersion: *a14
+            evidence: *a16
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - expectedStreamVersion
+            - evidence
+        - type: object
+          properties:
+            type:
+              const: receipt.prepare
+            id: *a11
+            order:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            amountMinor: *a14
+            businessDate: *a15
+            allocations: &a17
+              type: array
+              items:
+                type: object
+                properties:
+                  schedule:
+                    $ref: "#/components/schemas/BusinessObjectRef"
+                  amountMinor: *a14
+                additionalProperties: false
+                required:
+                  - schedule
+                  - amountMinor
+              minItems: 0
+              maxItems: 100
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - order
+            - amountMinor
+            - businessDate
+            - allocations
+        - type: object
+          properties:
+            type:
+              const: receipt.confirm
+            id: *a11
+            expectedStreamVersion: *a14
+            evidence: *a16
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - expectedStreamVersion
+            - evidence
+        - type: object
+          properties:
+            type:
+              const: receipt.cancel
+            id: *a11
+            expectedStreamVersion: *a14
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - expectedStreamVersion
+        - type: object
+          properties:
+            type:
+              const: refund.prepare
+            id: *a11
+            receipt:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            amountMinor: *a14
+            businessDate: *a15
+            releasedAllocations: *a17
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - receipt
+            - amountMinor
+            - businessDate
+            - releasedAllocations
+        - type: object
+          properties:
+            type:
+              const: refund.confirm
+            id: *a11
+            expectedStreamVersion: *a14
+            evidence: *a16
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - expectedStreamVersion
+            - evidence
+        - type: object
+          properties:
+            type:
+              const: refund.cancel
+            id: *a11
+            expectedStreamVersion: *a14
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - expectedStreamVersion
+        - type: object
+          properties:
+            type:
+              const: adjustment.prepare
+            id: *a11
+            kind:
+              const: write_off
+            order:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            schedule:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            amountMinor: *a14
+            businessDate: *a15
+            reason: *a18
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - kind
+            - order
+            - schedule
+            - amountMinor
+            - businessDate
+            - reason
+        - type: object
+          properties:
+            type:
+              const: adjustment.prepare
+            id: *a11
+            kind:
+              const: receipt_reversal
+            receipt:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            amountMinor: *a14
+            businessDate: *a15
+            reason: *a18
+            releasedAllocations: *a17
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - kind
+            - receipt
+            - amountMinor
+            - businessDate
+            - reason
+            - releasedAllocations
+        - type: object
+          properties:
+            type:
+              const: adjustment.prepare
+            id: *a11
+            kind:
+              const: schedule_revision
+            schedule:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            proposedAmountMinor: *a14
+            proposedDueDate: *a15
+            businessDate: *a15
+            reason: *a18
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - kind
+            - schedule
+            - proposedAmountMinor
+            - proposedDueDate
+            - businessDate
+            - reason
+        - type: object
+          properties:
+            type:
+              const: adjustment.prepare
+            id: *a11
+            kind:
+              const: receipt_allocation
+            receipt:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            schedule:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            amountMinor: *a14
+            businessDate: *a15
+            reason: *a18
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - kind
+            - receipt
+            - schedule
+            - amountMinor
+            - businessDate
+            - reason
+        - type: object
+          properties:
+            type:
+              const: adjustment.confirm
+            id: *a11
+            expectedStreamVersion: *a14
+            evidence: *a16
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - expectedStreamVersion
+            - evidence
+        - type: object
+          properties:
+            type:
+              const: adjustment.cancel
+            id: *a11
+            expectedStreamVersion: *a14
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - expectedStreamVersion
+        - type: object
+          properties:
+            type:
+              const: expense.prepare
+            id: *a11
+            project:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            amountMinor: *a14
+            businessDate: *a15
+            description: *a18
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - project
+            - amountMinor
+            - businessDate
+            - description
+        - type: object
+          properties:
+            type:
+              const: expense.confirm
+            id: *a11
+            expectedStreamVersion: *a14
+            evidence: *a16
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - expectedStreamVersion
+            - evidence
+        - type: object
+          properties:
+            type:
+              const: expense.cancel
+            id: *a11
+            expectedStreamVersion: *a14
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - expectedStreamVersion
+        - type: object
+          properties:
+            type:
+              const: project.costs.confirm
+            id: *a11
+            expectedStreamVersion: *a14
+            evidence: *a16
+            expenseRefs:
+              type: array
+              items:
+                $ref: "#/components/schemas/BusinessObjectRef"
+              minItems: 0
+              maxItems: 100
+            zeroCost:
+              type: boolean
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - expectedStreamVersion
+            - evidence
+            - expenseRefs
+            - zeroCost
+        - type: object
+          properties:
+            type:
+              const: metric.publish
+            id: *a11
+            metric:
+              type: string
+              enum:
+                - net_received
+                - outstanding
+                - confirmed_cost
+            title: *a12
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - metric
+            - title
+        - type: object
+          properties:
+            type:
+              const: objective.create
+            id: *a11
+            order:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            metric:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            periodStart: *a15
+            periodEnd: *a15
+            targetMinor:
+              type: integer
+              minimum: 0
+              maximum: 9007199254740991
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - order
+            - metric
+            - periodStart
+            - periodEnd
+            - targetMinor
+        - type: object
+          properties:
+            type:
+              const: business_review.snapshot
+            id: *a11
+            order:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            periodStart: *a15
+            periodEnd: *a15
+            includeCosts:
+              type: boolean
+            objective:
+              $ref: "#/components/schemas/BusinessObjectRef"
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - order
+            - periodStart
+            - periodEnd
+            - includeCosts
+        - type: object
+          properties:
+            type:
+              const: change_request.prepare
+            id: *a11
+            project:
+              $ref: "#/components/schemas/BusinessObjectRef"
+            description: *a18
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - project
+            - description
+        - type: object
+          properties:
+            type:
+              const: change_request.price
+            id: *a11
+            expectedStreamVersion: *a14
+            lines:
+              type: array
+              items:
+                oneOf:
+                  - type: object
+                    properties:
+                      service:
+                        $ref: "#/components/schemas/BusinessObjectRef"
+                      quantity: *a14
+                    additionalProperties: false
+                    required:
+                      - service
+                      - quantity
+                  - type: object
+                    properties:
+                      orderLineId: *a12
+                      quantity: *a14
+                    additionalProperties: false
+                    required:
+                      - orderLineId
+                      - quantity
+              minItems: 1
+              maxItems: 100
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - expectedStreamVersion
+            - lines
+        - type: object
+          properties:
+            type:
+              const: change_request.approve
+            id: *a11
+            expectedStreamVersion: *a14
+            evidence: *a16
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - expectedStreamVersion
+            - evidence
+        - type: object
+          properties:
+            type:
+              const: change_request.cancel
+            id: *a11
+            expectedStreamVersion: *a14
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - expectedStreamVersion
+        - type: object
+          properties:
+            type:
+              const: change_request.project_confirm
+            id: *a11
+            expectedStreamVersion: *a14
+            milestones:
+              type: array
+              items:
+                type: object
+                properties:
+                  milestone:
+                    $ref: "#/components/schemas/BusinessObjectRef"
+                  expectedStreamVersion: *a14
+                  lines:
+                    type: array
+                    items: *a19
+                    minItems: 0
+                    maxItems: 100
+                additionalProperties: false
+                required:
+                  - milestone
+                  - expectedStreamVersion
+                  - lines
+              minItems: 0
+              maxItems: 100
+          additionalProperties: false
+          required:
+            - type
+            - id
+            - expectedStreamVersion
+            - milestones
+        - type: object
+          additionalProperties: false
+          properties:
+            type:
+              const: customer.create
+            id: &a20
+              type: string
+              minLength: 1
+              maxLength: 200
+              pattern: ^(?!\.{1,2}$)(?=.*\S)[^\u0000-\u001f\u007f]+$
+            name: *a10
+            departmentId: *a10
           required:
             - type
             - id
@@ -2503,9 +3469,9 @@ components:
           properties:
             type:
               const: customer.rename
-            id: *a8
-            expectedStreamVersion: *a5
-            name: *a7
+            id: *a20
+            expectedStreamVersion: *a8
+            name: *a10
           required:
             - type
             - id
@@ -2516,12 +3482,12 @@ components:
           properties:
             type:
               const: contact.create
-            id: *a8
+            id: *a20
             customer:
               $ref: "#/components/schemas/BusinessObjectRef"
-            name: *a7
-            email: *a7
-            phone: *a7
+            name: *a10
+            email: *a10
+            phone: *a10
           required:
             - type
             - id
@@ -2532,11 +3498,11 @@ components:
           properties:
             type:
               const: contact.update
-            id: *a8
-            expectedStreamVersion: *a5
-            name: *a7
-            email: *a7
-            phone: *a7
+            id: *a20
+            expectedStreamVersion: *a8
+            name: *a10
+            email: *a10
+            phone: *a10
           required:
             - type
             - id
@@ -2547,10 +3513,10 @@ components:
           properties:
             type:
               const: opportunity.create
-            id: *a8
+            id: *a20
             customer:
               $ref: "#/components/schemas/BusinessObjectRef"
-            title: *a7
+            title: *a10
           required:
             - type
             - id
@@ -2561,11 +3527,11 @@ components:
           properties:
             type:
               const: opportunity.update
-            id: *a8
-            expectedStreamVersion: *a5
+            id: *a20
+            expectedStreamVersion: *a8
             customer:
               $ref: "#/components/schemas/BusinessObjectRef"
-            title: *a7
+            title: *a10
           required:
             - type
             - id
@@ -2577,25 +3543,25 @@ components:
           properties:
             type:
               const: service.publish
-            id: *a8
-            serviceCode: *a7
-            title: *a7
-            unit: *a7
-            unitPriceMinor: *a5
-            scope: *a6
+            id: *a20
+            serviceCode: *a10
+            title: *a10
+            unit: *a10
+            unitPriceMinor: *a8
+            scope: *a9
             acceptanceCriteria:
               type: array
-              items: *a6
+              items: *a9
               minItems: 1
               maxItems: 100
-            validFrom: *a9
-            validUntil: *a9
+            validFrom: *a21
+            validUntil: *a21
             supersedes:
               type: object
               additionalProperties: false
               properties:
-                id: *a7
-                expectedStreamVersion: *a5
+                id: *a10
+                expectedStreamVersion: *a8
               required:
                 - id
                 - expectedStreamVersion
@@ -2615,7 +3581,7 @@ components:
           properties:
             type:
               const: quote.prepare
-            id: *a8
+            id: *a20
             opportunity:
               $ref: "#/components/schemas/BusinessObjectRef"
             lines:
@@ -2626,13 +3592,13 @@ components:
                 properties:
                   service:
                     $ref: "#/components/schemas/BusinessObjectRef"
-                  quantity: *a5
+                  quantity: *a8
                 required:
                   - service
                   - quantity
               minItems: 1
               maxItems: 100
-            validUntil: *a9
+            validUntil: *a21
           required:
             - type
             - id
@@ -2644,8 +3610,8 @@ components:
           properties:
             type:
               const: quote.approve
-            id: *a8
-            expectedStreamVersion: *a5
+            id: *a20
+            expectedStreamVersion: *a8
           required:
             - type
             - id
@@ -2655,8 +3621,8 @@ components:
           properties:
             type:
               const: quote.record_acceptance
-            id: *a8
-            expectedStreamVersion: *a5
+            id: *a20
+            expectedStreamVersion: *a8
             evidence:
               $ref: "#/components/schemas/EvidenceRef"
           required:
@@ -2669,10 +3635,10 @@ components:
           properties:
             type:
               const: contract.create
-            id: *a8
+            id: *a20
             quote:
               $ref: "#/components/schemas/BusinessObjectRef"
-            title: *a7
+            title: *a10
           required:
             - type
             - id
@@ -2683,8 +3649,8 @@ components:
           properties:
             type:
               const: contract.activate
-            id: *a8
-            expectedStreamVersion: *a5
+            id: *a20
+            expectedStreamVersion: *a8
             evidence:
               $ref: "#/components/schemas/EvidenceRef"
           required:
@@ -2697,7 +3663,7 @@ components:
           properties:
             type:
               const: order.create
-            id: *a8
+            id: *a20
             contract:
               $ref: "#/components/schemas/BusinessObjectRef"
             lines:
@@ -2706,8 +3672,8 @@ components:
                 type: object
                 additionalProperties: false
                 properties:
-                  quoteLineId: *a7
-                  quantity: *a5
+                  quoteLineId: *a10
+                  quantity: *a8
                 required:
                   - quoteLineId
                   - quantity
@@ -2723,8 +3689,8 @@ components:
           properties:
             type:
               const: order.activate
-            id: *a8
-            expectedStreamVersion: *a5
+            id: *a20
+            expectedStreamVersion: *a8
           required:
             - type
             - id
@@ -2749,53 +3715,53 @@ components:
       type: object
       additionalProperties: false
       properties:
-        parallelNodes: &a11
+        parallelNodes: &a23
           type: integer
           minimum: 0
           maximum: 9007199254740991
-        totalNodes: &a12
+        totalNodes: &a24
           type: integer
           minimum: 0
           maximum: 9007199254740991
-        totalAttempts: &a13
+        totalAttempts: &a25
           type: integer
           minimum: 0
           maximum: 9007199254740991
-        automaticReplans: &a14
+        automaticReplans: &a26
           type: integer
           minimum: 0
           maximum: 9007199254740991
-        tenantRunningNodes: &a15
+        tenantRunningNodes: &a27
           type: integer
           minimum: 0
           maximum: 9007199254740991
-        tokens: &a16
+        tokens: &a28
           type: integer
           minimum: 0
           maximum: 9007199254740991
-        evaluationDailyTokens: &a17
+        evaluationDailyTokens: &a29
           type: integer
           minimum: 0
           maximum: 9007199254740991
-        singleEvaluationTokens: &a18
+        singleEvaluationTokens: &a30
           type: integer
           minimum: 0
           maximum: 9007199254740991
-        costMinorUnits: &a19
+        costMinorUnits: &a31
           type: string
           pattern: ^(0|[1-9][0-9]{0,17})$
-        evaluationDailyCostMinorUnits: &a20
+        evaluationDailyCostMinorUnits: &a32
           type: string
           pattern: ^(0|[1-9][0-9]{0,17})$
-        singleEvaluationCostMinorUnits: &a21
+        singleEvaluationCostMinorUnits: &a33
           type: string
           pattern: ^(0|[1-9][0-9]{0,17})$
-        currency: &a22
+        currency: &a34
           const: CNY
-        validFrom: &a10
+        validFrom: &a22
           type: string
           format: date-time
-        expiresAt: *a10
+        expiresAt: *a22
         expectedStreamVersion:
           type: integer
           minimum: 0
@@ -2820,30 +3786,30 @@ components:
       type: object
       additionalProperties: false
       properties:
-        parallelNodes: *a11
-        totalNodes: *a12
-        totalAttempts: *a13
-        automaticReplans: *a14
-        tenantRunningNodes: *a15
-        tokens: *a16
-        evaluationDailyTokens: *a17
-        singleEvaluationTokens: *a18
-        costMinorUnits: *a19
-        evaluationDailyCostMinorUnits: *a20
-        singleEvaluationCostMinorUnits: *a21
-        currency: *a22
-        validFrom: *a10
-        expiresAt: *a10
-        tenantId: &a23
+        parallelNodes: *a23
+        totalNodes: *a24
+        totalAttempts: *a25
+        automaticReplans: *a26
+        tenantRunningNodes: *a27
+        tokens: *a28
+        evaluationDailyTokens: *a29
+        singleEvaluationTokens: *a30
+        costMinorUnits: *a31
+        evaluationDailyCostMinorUnits: *a32
+        singleEvaluationCostMinorUnits: *a33
+        currency: *a34
+        validFrom: *a22
+        expiresAt: *a22
+        tenantId: &a35
           type: string
           minLength: 1
           maxLength: 200
-        workspaceId: *a23
-        streamVersion: &a24
+        workspaceId: *a35
+        streamVersion: &a36
           type: integer
           minimum: 1
           maximum: 9007199254740991
-        capacityEvidenceDigest: *a23
+        capacityEvidenceDigest: *a35
       required:
         - parallelNodes
         - totalNodes
@@ -2897,7 +3863,7 @@ components:
           properties:
             kind:
               const: department
-            departmentId: *a23
+            departmentId: *a35
           required:
             - kind
             - departmentId
@@ -2912,7 +3878,7 @@ components:
                 type: object
                 additionalProperties: false
                 properties:
-                  objectType: &a28
+                  objectType: &a40
                     type: string
                     enum:
                       - operating_objective
@@ -2940,7 +3906,7 @@ components:
                       - evidence_ref
                       - decision_record
                       - memory_entry
-                  objectId: *a23
+                  objectId: *a35
                 required:
                   - objectType
                   - objectId
@@ -2954,21 +3920,21 @@ components:
       type: object
       additionalProperties: false
       properties:
-        name: *a23
-        parentId: *a23
+        name: *a35
+        parentId: *a35
       required:
         - name
     EnterpriseDepartmentView:
       type: object
       additionalProperties: false
       properties:
-        id: *a23
-        tenantId: *a23
-        workspaceId: *a23
-        streamVersion: *a24
-        revokedAt: *a10
-        name: *a23
-        parentId: *a23
+        id: *a35
+        tenantId: *a35
+        workspaceId: *a35
+        streamVersion: *a36
+        revokedAt: *a22
+        name: *a35
+        parentId: *a35
       required:
         - id
         - tenantId
@@ -2979,8 +3945,8 @@ components:
       type: object
       additionalProperties: false
       properties:
-        principalId: *a23
-        operations: &a25
+        principalId: *a35
+        operations: &a37
           type: array
           items:
             type: string
@@ -2993,7 +3959,7 @@ components:
               - audit
           minItems: 1
           uniqueItems: true
-        fieldClasses: &a26
+        fieldClasses: &a38
           type: array
           items:
             type: string
@@ -3004,8 +3970,8 @@ components:
               - contact
           minItems: 1
           uniqueItems: true
-        expiresAt: *a10
-        role: &a27
+        expiresAt: *a22
+        role: &a39
           type: string
           enum:
             - sales
@@ -3026,16 +3992,16 @@ components:
       type: object
       additionalProperties: false
       properties:
-        id: *a23
-        tenantId: *a23
-        workspaceId: *a23
-        streamVersion: *a24
-        revokedAt: *a10
-        principalId: *a23
-        operations: *a25
-        fieldClasses: *a26
-        expiresAt: *a10
-        role: *a27
+        id: *a35
+        tenantId: *a35
+        workspaceId: *a35
+        streamVersion: *a36
+        revokedAt: *a22
+        principalId: *a35
+        operations: *a37
+        fieldClasses: *a38
+        expiresAt: *a22
+        role: *a39
         scope:
           $ref: "#/components/schemas/BusinessAccessScope"
       required:
@@ -3053,12 +4019,12 @@ components:
       type: object
       additionalProperties: false
       properties:
-        principalId: *a23
-        operations: *a25
-        fieldClasses: *a26
-        expiresAt: *a10
-        objectType: *a28
-        objectId: *a23
+        principalId: *a35
+        operations: *a37
+        fieldClasses: *a38
+        expiresAt: *a22
+        objectType: *a40
+        objectId: *a35
       required:
         - principalId
         - operations
@@ -3070,17 +4036,17 @@ components:
       type: object
       additionalProperties: false
       properties:
-        id: *a23
-        tenantId: *a23
-        workspaceId: *a23
-        streamVersion: *a24
-        revokedAt: *a10
-        principalId: *a23
-        operations: *a25
-        fieldClasses: *a26
-        expiresAt: *a10
-        objectType: *a28
-        objectId: *a23
+        id: *a35
+        tenantId: *a35
+        workspaceId: *a35
+        streamVersion: *a36
+        revokedAt: *a22
+        principalId: *a35
+        operations: *a37
+        fieldClasses: *a38
+        expiresAt: *a22
+        objectType: *a40
+        objectId: *a35
       required:
         - id
         - tenantId
@@ -3096,7 +4062,7 @@ components:
       type: object
       additionalProperties: false
       properties:
-        expectedStreamVersion: *a24
+        expectedStreamVersion: *a36
       required:
         - expectedStreamVersion
     EnterpriseAccessConfiguration:
@@ -3123,10 +4089,10 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: &a29
+        tenantId: &a41
           type: string
           minLength: 1
-        workspaceId: *a29
+        workspaceId: *a41
         objectType:
           type: string
           enum:
@@ -3155,12 +4121,12 @@ components:
             - evidence_ref
             - decision_record
             - memory_entry
-        objectId: *a29
-        streamVersion: &a31
+        objectId: *a41
+        streamVersion: &a43
           type: integer
           minimum: 1
           maximum: 9007199254740991
-        digest: &a30
+        digest: &a42
           type: string
           pattern: ^[0-9a-f]{64}$
       required:
@@ -3174,9 +4140,9 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a29
-        workspaceId: *a29
-        provider: *a29
+        tenantId: *a41
+        workspaceId: *a41
+        provider: *a41
         objectType:
           type: string
           enum:
@@ -3205,13 +4171,13 @@ components:
             - evidence_ref
             - decision_record
             - memory_entry
-        objectId: *a29
-        sourceVersion: *a29
-        digest: *a30
-        observedAt: &a33
+        objectId: *a41
+        sourceVersion: *a41
+        digest: *a42
+        observedAt: &a45
           type: string
           format: date-time
-        permissionRef: *a29
+        permissionRef: *a41
       required:
         - tenantId
         - workspaceId
@@ -3226,10 +4192,10 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a29
-        workspaceId: *a29
-        id: *a29
-        streamVersion: *a31
+        tenantId: *a41
+        workspaceId: *a41
+        id: *a41
+        streamVersion: *a43
         mode:
           type: string
           enum:
@@ -3269,10 +4235,10 @@ components:
                   - evidence_ref
                   - decision_record
                   - memory_entry
-              provider: *a29
+              provider: *a41
               allowedActions:
                 type: array
-                items: &a34
+                items: &a46
                   type: string
                   enum:
                     - create_followup_task
@@ -3308,19 +4274,19 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a29
-        workspaceId: *a29
-        id: *a29
-        streamVersion: *a31
-        periodStart: &a32
+        tenantId: *a41
+        workspaceId: *a41
+        id: *a41
+        streamVersion: *a43
+        periodStart: &a44
           type: string
           format: date
-        periodEnd: *a32
+        periodEnd: *a44
         metricDefinition:
           $ref: "#/components/schemas/BusinessObjectRef"
         targetValue:
           type: number
-        responsiblePrincipalId: *a29
+        responsiblePrincipalId: *a41
         sourceRefs:
           type: array
           items:
@@ -3341,12 +4307,12 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a29
-        workspaceId: *a29
-        id: *a29
-        streamVersion: *a31
-        responsiblePrincipalId: *a29
-        authorityRevisionId: *a29
+        tenantId: *a41
+        workspaceId: *a41
+        id: *a41
+        streamVersion: *a43
+        responsiblePrincipalId: *a41
+        authorityRevisionId: *a41
         mode:
           type: string
           enum:
@@ -3360,23 +4326,23 @@ components:
             - closed
         sourceScopes:
           type: array
-          items: *a29
+          items: *a41
           minItems: 1
         triggerTypes:
           type: array
-          items: *a29
+          items: *a41
           minItems: 1
         objectRefs:
           type: array
           items:
             $ref: "#/components/schemas/BusinessObjectRef"
           minItems: 0
-        validUntil: *a33
+        validUntil: *a45
         budget:
           $ref: "#/components/schemas/EnterpriseExecutionBudget"
         evaluationBudget:
           $ref: "#/components/schemas/EvaluationBudget"
-        notificationPolicyVersion: *a29
+        notificationPolicyVersion: *a41
       required:
         - tenantId
         - workspaceId
@@ -3397,10 +4363,10 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a29
-        workspaceId: *a29
-        id: *a29
-        streamVersion: *a31
+        tenantId: *a41
+        workspaceId: *a41
+        id: *a41
+        streamVersion: *a43
         source:
           type: string
           enum:
@@ -3410,14 +4376,14 @@ components:
             - business
             - sales
             - timer
-        sourceInstanceId: *a29
-        sourceEventId: *a29
-        sourceEventType: *a29
-        deduplicationKey: *a29
-        senderPrincipalId: *a29
-        sourceOccurredAt: *a33
-        receivedAt: *a33
-        protectedPayloadRef: *a29
+        sourceInstanceId: *a41
+        sourceEventId: *a41
+        sourceEventType: *a41
+        deduplicationKey: *a41
+        senderPrincipalId: *a41
+        sourceOccurredAt: *a45
+        receivedAt: *a45
+        protectedPayloadRef: *a41
         status:
           type: string
           enum:
@@ -3425,7 +4391,7 @@ components:
             - quarantined
             - unevaluated
             - evaluated
-        policyId: *a29
+        policyId: *a41
       required:
         - tenantId
         - workspaceId
@@ -3444,12 +4410,12 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a29
-        workspaceId: *a29
-        id: *a29
-        authorityId: *a29
-        revision: *a31
-        responsiblePrincipalId: *a29
+        tenantId: *a41
+        workspaceId: *a41
+        id: *a41
+        authorityId: *a41
+        revision: *a43
+        responsiblePrincipalId: *a41
         objectRefs:
           type: array
           items:
@@ -3457,25 +4423,25 @@ components:
           minItems: 0
         capabilityIds:
           type: array
-          items: *a29
+          items: *a41
           minItems: 1
         modelBindingIds:
           type: array
-          items: *a29
+          items: *a41
           minItems: 0
         allowedFields:
           type: array
-          items: *a29
+          items: *a41
           minItems: 0
         allowedDestinations:
           type: array
-          items: *a29
+          items: *a41
           minItems: 0
-        policyVersion: *a29
+        policyVersion: *a41
         budget:
           $ref: "#/components/schemas/EnterpriseExecutionBudget"
-        validUntil: *a33
-        commitmentDigest: *a30
+        validUntil: *a45
+        commitmentDigest: *a42
       required:
         - tenantId
         - workspaceId
@@ -3496,13 +4462,13 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a29
-        workspaceId: *a29
-        id: *a29
-        goalId: *a29
-        revision: *a31
-        authorityRevisionId: *a29
-        reason: *a29
+        tenantId: *a41
+        workspaceId: *a41
+        id: *a41
+        goalId: *a41
+        revision: *a43
+        authorityRevisionId: *a41
+        reason: *a41
         nodes:
           type: array
           items:
@@ -3517,9 +4483,9 @@ components:
           $ref: "#/components/schemas/EnterpriseExecutionBudget"
         acceptanceCriteria:
           type: array
-          items: *a29
+          items: *a41
           minItems: 1
-        createdAt: *a33
+        createdAt: *a45
       required:
         - tenantId
         - workspaceId
@@ -3537,15 +4503,15 @@ components:
       type: object
       additionalProperties: false
       properties:
-        id: *a29
+        id: *a41
         dependsOn:
           type: array
-          items: *a29
+          items: *a41
           minItems: 0
           uniqueItems: true
-        capabilityId: *a29
-        capabilityVersion: *a29
-        modelBindingId: *a29
+        capabilityId: *a41
+        capabilityVersion: *a41
+        modelBindingId: *a41
         inputRefs:
           type: array
           items:
@@ -3555,7 +4521,7 @@ components:
           $ref: "#/components/schemas/EnterpriseExecutionBudget"
         acceptanceCriteria:
           type: array
-          items: *a29
+          items: *a41
           minItems: 1
         effect:
           type: string
@@ -3577,32 +4543,32 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a29
-        workspaceId: *a29
-        id: *a29
-        streamVersion: *a31
-        operationKey: *a29
-        goalId: *a29
-        nodeId: *a29
-        attemptId: *a29
-        generation: &a35
+        tenantId: *a41
+        workspaceId: *a41
+        id: *a41
+        streamVersion: *a43
+        operationKey: *a41
+        goalId: *a41
+        nodeId: *a41
+        attemptId: *a41
+        generation: &a47
           type: integer
           minimum: 0
           maximum: 9007199254740991
-        provider: *a29
-        action: *a34
+        provider: *a41
+        action: *a46
         target:
           oneOf:
             - $ref: "#/components/schemas/BusinessObjectRef"
             - $ref: "#/components/schemas/ExternalObjectRef"
-        authorityRevisionId: *a29
-        providerBindingVersion: *a31
-        preparedInputRef: *a29
-        inputDigest: *a30
-        businessApprovalRef: *a29
-        executionApprovalRef: *a29
-        reservationId: *a29
-        expiresAt: *a33
+        authorityRevisionId: *a41
+        providerBindingVersion: *a43
+        preparedInputRef: *a41
+        inputDigest: *a42
+        businessApprovalRef: *a41
+        executionApprovalRef: *a41
+        reservationId: *a41
+        expiresAt: *a45
         status:
           type: string
           enum:
@@ -3636,13 +4602,13 @@ components:
         - type: object
           additionalProperties: false
           properties:
-            tenantId: *a29
-            workspaceId: *a29
-            id: *a29
-            operationKey: *a29
-            actionDigest: *a30
-            provider: *a29
-            receivedAt: *a33
+            tenantId: *a41
+            workspaceId: *a41
+            id: *a41
+            operationKey: *a41
+            actionDigest: *a42
+            provider: *a41
+            receivedAt: *a45
             status:
               const: succeeded
             evidenceRefs:
@@ -3650,7 +4616,7 @@ components:
               items:
                 $ref: "#/components/schemas/EvidenceRef"
               minItems: 1
-            completedAt: *a33
+            completedAt: *a45
           required:
             - tenantId
             - workspaceId
@@ -3665,13 +4631,13 @@ components:
         - type: object
           additionalProperties: false
           properties:
-            tenantId: *a29
-            workspaceId: *a29
-            id: *a29
-            operationKey: *a29
-            actionDigest: *a30
-            provider: *a29
-            receivedAt: *a33
+            tenantId: *a41
+            workspaceId: *a41
+            id: *a41
+            operationKey: *a41
+            actionDigest: *a42
+            provider: *a41
+            receivedAt: *a45
             status:
               type: string
               enum:
@@ -3689,16 +4655,16 @@ components:
         - type: object
           additionalProperties: false
           properties:
-            tenantId: *a29
-            workspaceId: *a29
-            id: *a29
-            operationKey: *a29
-            actionDigest: *a30
-            provider: *a29
-            receivedAt: *a33
+            tenantId: *a41
+            workspaceId: *a41
+            id: *a41
+            operationKey: *a41
+            actionDigest: *a42
+            provider: *a41
+            receivedAt: *a45
             status:
               const: not_executed
-            reasonCode: *a29
+            reasonCode: *a41
           required:
             - tenantId
             - workspaceId
@@ -3713,10 +4679,10 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a29
-        workspaceId: *a29
-        id: *a29
-        streamVersion: *a31
+        tenantId: *a41
+        workspaceId: *a41
+        id: *a41
+        streamVersion: *a43
         kind:
           type: string
           enum:
@@ -3724,18 +4690,18 @@ components:
             - question
             - conflict
             - reconciliation
-        subjectRef: *a29
-        subjectVersion: *a31
+        subjectRef: *a41
+        subjectVersion: *a43
         assignedPrincipalIds:
           type: array
-          items: *a29
+          items: *a41
           minItems: 1
         status:
           type: string
           enum:
             - open
             - resolved
-        createdAt: *a33
+        createdAt: *a45
       required:
         - tenantId
         - workspaceId
@@ -3751,9 +4717,9 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a29
-        workspaceId: *a29
-        id: *a29
+        tenantId: *a41
+        workspaceId: *a41
+        id: *a41
         sourceKind:
           type: string
           enum:
@@ -3761,29 +4727,29 @@ components:
             - business_fact
             - human_decision
             - candidate_experience
-        protectedContentRef: *a29
-        sourceVersion: *a29
-        digest: *a30
-        permissionRef: *a29
+        protectedContentRef: *a41
+        sourceVersion: *a41
+        digest: *a42
+        permissionRef: *a41
         locator:
           oneOf:
             - type: object
               additionalProperties: false
               properties:
-                page: *a31
+                page: *a43
               required:
                 - page
             - type: object
               additionalProperties: false
               properties:
-                paragraph: *a29
+                paragraph: *a41
               required:
                 - paragraph
             - type: object
               additionalProperties: false
               properties:
-                sheet: *a29
-                cell: *a29
+                sheet: *a41
+                cell: *a41
               required:
                 - sheet
                 - cell
@@ -3801,11 +4767,11 @@ components:
       type: object
       additionalProperties: false
       properties:
-        maxTokens: *a35
-        maxCostMinor: *a35
+        maxTokens: *a47
+        maxCostMinor: *a47
         currency:
           const: CNY
-        deadline: *a33
+        deadline: *a45
       required:
         - maxTokens
         - maxCostMinor
@@ -3815,9 +4781,9 @@ components:
       type: object
       additionalProperties: false
       properties:
-        dailyCostMinor: *a35
-        perAttemptCostMinor: *a35
-        maxTokensPerAttempt: *a35
+        dailyCostMinor: *a47
+        perAttemptCostMinor: *a47
+        maxTokensPerAttempt: *a47
       required:
         - dailyCostMinor
         - perAttemptCostMinor
@@ -3826,13 +4792,13 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a29
-        workspaceId: *a29
-        id: *a29
-        streamVersion: *a31
-        principalId: *a29
-        issuer: *a29
-        subject: *a29
+        tenantId: *a41
+        workspaceId: *a41
+        id: *a41
+        streamVersion: *a43
+        principalId: *a41
+        issuer: *a41
+        subject: *a41
         status:
           type: string
           enum:
@@ -3842,7 +4808,7 @@ components:
             - removed
         departmentIds:
           type: array
-          items: *a29
+          items: *a41
           minItems: 0
       required:
         - tenantId
@@ -3858,11 +4824,11 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a29
-        workspaceId: *a29
-        id: *a29
-        streamVersion: *a31
-        principalId: *a29
+        tenantId: *a41
+        workspaceId: *a41
+        id: *a41
+        streamVersion: *a43
+        principalId: *a41
         objectRef:
           $ref: "#/components/schemas/BusinessObjectRef"
         actions:
@@ -3879,13 +4845,13 @@ components:
           minItems: 1
         readableFields:
           type: array
-          items: *a29
+          items: *a41
           minItems: 0
         writableFields:
           type: array
-          items: *a29
+          items: *a41
           minItems: 0
-        validUntil: *a33
+        validUntil: *a45
       required:
         - tenantId
         - workspaceId
@@ -3901,21 +4867,21 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a29
-        workspaceId: *a29
-        id: *a29
-        streamVersion: *a31
+        tenantId: *a41
+        workspaceId: *a41
+        id: *a41
+        streamVersion: *a43
         subjectRef:
           $ref: "#/components/schemas/BusinessObjectRef"
-        actionDigest: *a30
-        preparedByPrincipalId: *a29
-        approvedByPrincipalId: *a29
+        actionDigest: *a42
+        preparedByPrincipalId: *a41
+        approvedByPrincipalId: *a41
         decision:
           type: string
           enum:
             - approve
             - reject
-        decidedAt: *a33
+        decidedAt: *a45
       required:
         - tenantId
         - workspaceId
@@ -3931,20 +4897,20 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a29
-        workspaceId: *a29
-        id: *a29
-        streamVersion: *a31
-        authorityRevisionId: *a29
-        actionIntentId: *a29
-        actionDigest: *a30
-        approvedByPrincipalId: *a29
+        tenantId: *a41
+        workspaceId: *a41
+        id: *a41
+        streamVersion: *a43
+        authorityRevisionId: *a41
+        actionIntentId: *a41
+        actionDigest: *a42
+        approvedByPrincipalId: *a41
         decision:
           type: string
           enum:
             - approve_once
             - deny
-        validUntil: *a33
+        validUntil: *a45
       required:
         - tenantId
         - workspaceId
@@ -3960,11 +4926,11 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a29
-        workspaceId: *a29
-        id: *a29
-        streamVersion: *a31
-        responsiblePrincipalId: *a29
+        tenantId: *a41
+        workspaceId: *a41
+        id: *a41
+        streamVersion: *a43
+        responsiblePrincipalId: *a41
         status:
           type: string
           enum:
@@ -3980,15 +4946,15 @@ components:
             - cancelled
         objectiveRef:
           $ref: "#/components/schemas/BusinessObjectRef"
-        activePlanRevisionId: *a29
-        authorityRevisionId: *a29
+        activePlanRevisionId: *a41
+        authorityRevisionId: *a41
         requiredArtifactIds:
           type: array
-          items: *a29
+          items: *a41
           minItems: 0
         acceptanceCriteria:
           type: array
-          items: *a29
+          items: *a41
           minItems: 1
         budget:
           $ref: "#/components/schemas/EnterpriseExecutionBudget"
