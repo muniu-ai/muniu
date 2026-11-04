@@ -1,0 +1,63 @@
+// SPDX-License-Identifier: Apache-2.0
+import assert from 'node:assert/strict';
+import { InMemoryKeyProvider } from '@mn/storage';
+import { AgentOsWorker } from '@mn/worker';
+import { EnterpriseIdentityService, EnterprisePermissionService, EnterpriseQuotaService } from '@mn/enterprise-services';
+import { createEnterpriseEventRepository } from '../../apps/host/dist/enterprise-event-repository.js';
+import { EnterpriseBusinessService } from '../../apps/host/dist/enterprise-business.js';
+import { EnterpriseOperatingService } from '../../apps/host/dist/enterprise-operating.js';
+import { EnterpriseGoalService } from '../../apps/host/dist/enterprise-goals.js';
+import { EnterpriseTaskRuntime } from '../../apps/host/dist/enterprise-task-runtime.js';
+import { EnterpriseKnowledgeService } from '../../apps/host/dist/enterprise-knowledge.js';
+import { EnterpriseArtifactService } from '../../apps/host/dist/enterprise-artifacts.js';
+import { EnterpriseExperienceService } from '../../apps/host/dist/enterprise-experience.js';
+import { EnterpriseWorkflowService } from '../../apps/host/dist/enterprise-workflows.js';
+export async function verifyEnterpriseKnowledge({ store, cas, key, pool, rebuild, connect }) {
+  const tenantId = 'enterprise-knowledge', now = () => new Date().toISOString(), expiresAt = new Date(Date.now() + 86400000).toISOString(), deadline = new Date(Date.now() + 3600000).toISOString();
+  const keyProvider = new InMemoryKeyProvider(Buffer.from(key, 'hex')), protection = { cas, keyProvider };
+  const assemble = selected => {
+    const repository = createEnterpriseEventRepository({ store: selected, ...protection, allowExecutionEvents: true }), operating = new EnterpriseOperatingService({ store: selected, repository, now });
+    const knowledge = new EnterpriseKnowledgeService({ operating, protection }), goals = new EnterpriseGoalService({ operating, modelsFor: () => [{ id: 'model', version: 1, providerId: 'openai', modelId: 'fixture', mode: 'test_fixture', secretRef: 'fixture://enterprise/model' }] });
+    const artifacts = new EnterpriseArtifactService({ goals, knowledge }), experiences = new EnterpriseExperienceService({ artifacts, knowledge }), workflows = new EnterpriseWorkflowService({ operating });
+    return { repository, operating, knowledge, goals, artifacts, experiences, workflows };
+  };
+  let f = assemble(store);
+  const identity = new EnterpriseIdentityService({ repository: f.repository, now }), permissions = new EnterprisePermissionService({ repository: f.repository, now }), quotas = new EnterpriseQuotaService({ repository: f.repository, now }), business = new EnterpriseBusinessService({ repository: f.repository, now });
+  await identity.provision({ tenantId, name: '合成知识企业', issuer: 'https://issuer.test/', maxMembers: 2, administrator: { id: 'admin', subject: 'admin', displayName: '管理员' } });
+  const actor = { tenantId, principalId: 'admin', sessionEpoch: 1 }, workspace = await identity.createWorkspace(actor, 'workspace', { name: '知识验收', mode: 'builtin' });
+  await permissions.grantRole(actor, 'role', { id: 'business', workspaceId: workspace.id, principalId: actor.principalId, role: 'sales_manager', scope: { kind: 'workspace' }, operations: ['read', 'write'], fieldClasses: ['public'], expiresAt });
+  const customer = await business.execute({ actor, actorKind: 'human', workspaceId: workspace.id, idempotencyKey: 'customer', command: { type: 'customer.create', id: 'customer', name: 'CONFIDENTIAL-knowledge-customer' } });
+  const limits = { parallelNodes: 6, totalNodes: 32, totalAttempts: 64, automaticReplans: 3, tenantRunningNodes: 20, tokens: 2000, costMinorUnits: '200', currency: 'CNY', evaluationDailyTokens: 100, evaluationDailyCostMinorUnits: '20', singleEvaluationTokens: 10, singleEvaluationCostMinorUnits: '2', validFrom: new Date(Date.now() - 10000).toISOString(), expiresAt };
+  await quotas.provision(tenantId, 'platform', 0, limits); await quotas.configure(actor, 'quota', workspace.id, 0, limits);
+  const input = { documentId: 'requirements', expectedStreamVersion: 0, title: 'CONFIDENTIAL-knowledge-title', fileName: 'requirements.md', mediaType: 'text/markdown', contentBase64: Buffer.from('CONFIDENTIAL-knowledge-body\n\n需求需独立核对。').toString('base64'), bindings: [{ reference: customer.reference, fields: ['name'] }], classification: ['public'], visibility: 'private' };
+  const other = assemble((await connect()).store);
+  const [material, replay] = await Promise.all([f.knowledge.importDocument(actor, workspace.id, 'import', input), other.knowledge.importDocument(actor, workspace.id, 'import', input)]);
+  assert.deepEqual(replay.reference, material.reference);
+  const definition = (await f.workflows.list(actor, workspace.id)).builtins[0], published = await f.workflows.publish(actor, workspace.id, 0, definition, 'publish');
+  await f.workflows.select(actor, workspace.id, definition.flowId, published.streamVersion, published.versions[0], 'enable');
+  const spec = { title: '知识核查', message: '引用原始资料', workflow: published.versions[0], sources: [{ reference: material.reference, fields: ['text'] }], acceptanceCriteria: definition.acceptanceCriteria, budget: { maxTokens: 100, maxCostMinor: 10, currency: 'CNY', deadline }, capabilityIds: ['business.analyze'], modelBindingIds: ['model'] };
+  let goal = await f.goals.create(actor, workspace.id, 'goal', spec); goal = await f.goals.authorize(actor, goal.id, goal.streamVersion, goal.scopeDigest, 'authorize');
+  goal = await f.goals.plan(actor, goal.id, goal.streamVersion, 'plan', { reason: '核对资料', nodes: [{ id: 'analysis', dependsOn: [], capabilityId: 'business.analyze', capabilityVersion: '1', modelBindingId: 'model', inputRefs: [material.reference], budget: { ...spec.budget, maxTokens: 10, maxCostMinor: 1 }, acceptanceCriteria: spec.acceptanceCriteria, effect: 'read' }] });
+  const runtime = new EnterpriseTaskRuntime({ goals: f.goals, protection, secretStore: { async read() { return 'synthetic-only'; } }, quote: async () => ({ inputTokenLimit: 4, maxOutputTokens: 6, rates: { id: 'fixture-rate', currency: 'CNY', inputNanoMinorUnitsPerToken: '100000000', cachedInputNanoMinorUnitsPerToken: '100000000', outputNanoMinorUnitsPerToken: '100000000' } }), invoke: async ({ request }) => {
+    const context = JSON.parse(request.messages.at(-1).content), citations = context.sources.flatMap(s => s.fields.citations), sources = context.sources.map(s => s.reference);
+    assert.equal(context.workflow.flowId, definition.flowId);
+    return { text: JSON.stringify({ status: 'complete', summary: '候选核对结果', findings: [{ text: '需求待人员核对', sources, citations }], acceptance: spec.acceptanceCriteria.map(criterion => ({ criterion, status: 'satisfied', sources, citations })), unknown: [] }), toolCalls: [], usage: { inputTokens: 2, cachedInputTokens: 0, outputTokens: 1 } };
+  } });
+  const worker = new AgentOsWorker({ id: 'knowledge-worker', tenantId, store: runtime.workerStore(store), now: () => new Date(now()), lock: { engineLockDigest: 'fixture', expectedEngineLockDigest: 'fixture', pluginLockDigest: 'fixture', expectedPluginLockDigest: 'fixture' }, handlers: { 'enterprise.task': runtime.workerHandler() } });
+  assert.equal((await worker.pollOnce()).status, 'completed'); goal = await f.goals.get(actor, goal.id);
+  let artifact = await f.artifacts.freeze(actor, goal.id, goal.attempts[0].id, 'freeze'); artifact = await f.artifacts.accept(actor, artifact.id, artifact.streamVersion, goal.streamVersion, spec.acceptanceCriteria, '独立核对了合成资料', 'accept');
+  const experience = await f.experiences.propose(actor, artifact.id, 'propose', { id: 'lesson', title: '核对步骤', text: '每次保留原始定位。' });
+  assert.equal((await f.knowledge.search(actor, workspace.id, '每次保留')).hits.length, 0);
+  await f.experiences.enable(actor, experience.id, experience.streamVersion, experience.reference.digest, 'enable-experience');
+  assert.equal((await f.knowledge.search(actor, workspace.id, '每次保留')).hits.length, 1);
+  const state = await f.goals.get(actor, goal.id); await rebuild(tenantId); f = assemble(store);
+  assert.deepEqual(await f.goals.get(actor, goal.id), state); assert.deepEqual(await f.knowledge.get(actor, material.reference), material);
+  assert.equal((await f.artifacts.get(actor, artifact.id)).status, 'accepted'); assert.equal((await f.knowledge.search(actor, workspace.id, '每次保留')).hits.length, 1);
+  await f.knowledge.withdraw(actor, workspace.id, input.documentId, 1, 'withdraw'); await rebuild(tenantId); f = assemble(store);
+  await assert.rejects(f.knowledge.get(actor, material.reference), { code: 'KNOWLEDGE_SOURCE_WITHDRAWN' });
+  await assert.rejects(f.knowledge.get(actor, experience.reference), { code: 'KNOWLEDGE_SOURCE_WITHDRAWN' });
+  assert.equal((await f.knowledge.search(actor, workspace.id, '每次保留')).hits.length, 0);
+  const raw = await pool.query('select public_payload::text from mn_enterprise_v1.events where tenant_id=$1', [tenantId]);
+  assert.doesNotMatch(JSON.stringify(raw.rows), /CONFIDENTIAL|每次保留|permissionRef|protectedPayloadRef/);
+  process.stdout.write('E4.3 PostgreSQL：双连接导入幂等、原生 Worker 引用、成果验收、经验启用、流程绑定、保护日志、投影重建与来源撤回通过。\n');
+}

@@ -2,7 +2,7 @@
 import { businessObjectKey, reduceBusinessEvents } from '@mn/plugin-business';
 import { enterpriseBusinessFacts } from './enterprise-business.js';
 import { randomBytes } from 'node:crypto';
-import { parseEnterpriseContract, type BusinessObjectRef, type EnterpriseContractTypes } from '@mn/contracts';
+import { parseEnterpriseContract, type BusinessObjectRef, type EnterpriseContractTypes, type JsonObject } from '@mn/contracts';
 import { appendKernelEvent, sha256, type KernelStore, type KernelTransaction } from '@mn/kernel';
 import { EnterpriseError, reduceIdentityEvents, requireActor, type EnterpriseActor } from '@mn/enterprise-services';
 import type { EnterpriseEventRepository } from './enterprise-event-repository.js';
@@ -24,10 +24,35 @@ const objectKey = (r: BusinessObjectRef) => sha256([r.tenantId, r.workspaceId, r
 const policyKey = (workspaceId: string, id: string) => sha256([workspaceId, id]);
 const text = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0 && value.length <= 200 && !/[\u0000-\u001f\u007f]/u.test(value);
 const view = (p: OperatingPolicy): PolicyView => { const { salt: _salt, relations: _relations, acceptedEpoch: _epoch, permissionDigest: _digest, ...result } = p; return result; };
+export interface EnterpriseSourceAdapter {
+  readonly objectTypes: readonly BusinessObjectRef['objectType'][];
+  current(tx: KernelTransaction, reference: BusinessObjectRef): BusinessObjectRef;
+  assertRead(tx: KernelTransaction, actor: EnterpriseActor, reference: BusinessObjectRef, fields: readonly string[]): void;
+  read(actor: EnterpriseActor, reference: BusinessObjectRef, fields: readonly string[], query: string, maxBytes: number): Promise<JsonObject>;
+}
 export class EnterpriseOperatingService {
+  private readonly sourceAdapters = new Map<string, EnterpriseSourceAdapter>();
   readonly bridge: EnterpriseKernelBridge;
   readonly now: () => string;
   constructor(readonly options: { store: KernelStore; repository: EnterpriseEventRepository; now?: () => string }) { this.bridge = new EnterpriseKernelBridge(options); this.now = options.now ?? (() => new Date().toISOString()); }
+  registerSources(adapter: EnterpriseSourceAdapter): void {
+    for (const type of adapter.objectTypes) { if (this.sourceAdapters.has(type)) throw new EnterpriseError('SOURCE_ADAPTER_EXISTS', 503); this.sourceAdapters.set(type, adapter); }
+  }
+  sourceReference(tx: KernelTransaction, reference: BusinessObjectRef, exact = false): BusinessObjectRef {
+    if (reference.tenantId !== this.bridge.snapshot(tx).tenantId) throw new EnterpriseError('OBJECT_SCOPE_MISMATCH');
+    const adapter = this.sourceAdapters.get(reference.objectType);
+    return adapter ? adapter.current(tx, reference) : executionBusinessObject(this.bridge.snapshot(tx).records, reference, exact).reference;
+  }
+  sourceRelation(tx: KernelTransaction, reference: BusinessObjectRef, salt: string): string {
+    const adapter = this.sourceAdapters.get(reference.objectType);
+    return adapter ? sha256([salt, adapter.current(tx, reference)]) : executionRelationDigest(executionBusinessObject(this.bridge.snapshot(tx).records, reference, false), salt);
+  }
+  async readSource(actor: EnterpriseActor, reference: BusinessObjectRef, fields: readonly string[], query = '', maxBytes = 65536): Promise<JsonObject> {
+    const adapter = this.sourceAdapters.get(reference.objectType);
+    if (adapter) return adapter.read(actor, reference, fields, query, maxBytes);
+    return this.bridge.store.transact(actor.tenantId, tx => { this.sources(tx, actor, reference.workspaceId, [{ reference, fields }], true);
+      const object = executionBusinessObject(this.bridge.snapshot(tx).records, reference); return JSON.parse(JSON.stringify(Object.fromEntries(fields.map(field => [field, object.value[field]])))) as JsonObject; });
+  }
   record<T extends Versioned>(tx: KernelTransaction, namespace: string, value: T, actorId: string, type: string): T {
     tx.putProjection(namespace, namespace === OPERATING.policy ? policyKey(value.workspaceId, value.id) : value.id, value);
     appendKernelEvent(tx, { tenantId: value.tenantId, aggregateType: namespace, aggregateId: namespace === OPERATING.policy ? policyKey(value.workspaceId, value.id) : value.id, expectedStreamVersion: value.streamVersion - 1, type, actorId, generation: 0, correlationId: value.id, publicPayload: { workspaceId: value.workspaceId } });
@@ -46,7 +71,9 @@ export class EnterpriseOperatingService {
     const records = this.bridge.snapshot(tx).records;
     for (const source of sources) {
       if (source.reference.tenantId !== actor.tenantId || source.reference.workspaceId !== workspaceId) throw new EnterpriseError('OBJECT_SCOPE_MISMATCH');
-      executionObjectAccess(records, actor, executionBusinessObject(records, source.reference, exact), 'read', source.fields, this.now());
+      const adapter = this.sourceAdapters.get(source.reference.objectType);
+      if (adapter) { adapter.current(tx, source.reference); adapter.assertRead(tx, actor, source.reference, source.fields); }
+      else executionObjectAccess(records, actor, executionBusinessObject(records, source.reference, exact), 'read', source.fields, this.now());
     }
   }
   currentPolicy(tx: KernelTransaction, policy: OperatingPolicy): EnterpriseActor {
@@ -55,7 +82,7 @@ export class EnterpriseOperatingService {
     this.sources(tx, owner, policy.workspaceId, policy.sources);
     const records = this.bridge.snapshot(tx).records;
     if (policy.permissionDigest !== executionPermissionDigest(records, owner.principalId, policy.workspaceId)
-      || policy.sources.some((s, i) => executionRelationDigest(executionBusinessObject(records, s.reference, false), policy.salt) !== policy.relations[i])) throw new EnterpriseError('POLICY_AUTHORITY_CHANGED', 409);
+      || policy.sources.some((s, i) => this.sourceRelation(tx, s.reference, policy.salt) !== policy.relations[i])) throw new EnterpriseError('POLICY_AUTHORITY_CHANGED', 409);
     return owner;
   }
   private change<T>(tx: KernelTransaction, actor: EnterpriseActor, workspaceId: string, key: string, request: unknown, work: () => T): T {
@@ -119,12 +146,12 @@ export class EnterpriseOperatingService {
           if (Date.parse(input.validUntil) <= Date.parse(this.now())) throw new EnterpriseError('POLICY_EXPIRED', 409);
           if (input.work && (sha256(input.work.sources) !== sha256(input.sources) || Date.parse(input.work.budget.deadline) > Date.parse(input.validUntil))) throw new EnterpriseError('POLICY_WORK_SCOPE_INVALID', 409);
           for (const id of input.sourceIds) if (tx.getProjection<SourceState>(OPERATING.source, id)?.workspaceId !== workspaceId) throw new EnterpriseError('SOURCE_UNAVAILABLE', 409);
-          for (const s of input.sources) { if (s.reference.tenantId !== actor.tenantId || s.reference.workspaceId !== workspaceId) throw new EnterpriseError('OBJECT_SCOPE_MISMATCH'); executionBusinessObject(this.bridge.snapshot(tx).records, s.reference); }
+          for (const s of input.sources) { if (s.reference.tenantId !== actor.tenantId || s.reference.workspaceId !== workspaceId) throw new EnterpriseError('OBJECT_SCOPE_MISMATCH'); this.sourceReference(tx, s.reference, true); }
         };
         this.guard(tx, validate);
         const { expectedStreamVersion, ...fields } = input;
         const value: OperatingPolicy = { ...fields, tenantId: actor.tenantId, workspaceId, streamVersion: expectedStreamVersion + 1, status: 'awaiting_acceptance', salt,
-          relations: input.sources.map(s => executionRelationDigest(executionBusinessObject(this.bridge.snapshot(tx).records, s.reference), salt)) };
+          relations: input.sources.map(s => this.sourceRelation(tx, s.reference, salt)) };
         this.record(tx, OPERATING.policy, value, actor.principalId, 'operating.policy_defined');
         return view(value);
       });
@@ -268,7 +295,7 @@ export class EnterpriseOperatingService {
           const period = Math.floor(minute / policy.intervalMinutes!), id = policyKey(workspaceId, policy.id + ':' + policy.streamVersion);
           const prior = tx.getProjection<Versioned & { period: number; digest: string }>('operating.timer', id);
           if (prior && prior.period >= period) continue;
-          const refs = policy.sources.map(s => executionBusinessObject(this.bridge.snapshot(tx).records, s.reference, false).reference), digest = sha256(refs);
+          const refs = policy.sources.map(s => this.sourceReference(tx, s.reference)), digest = sha256(refs);
           if (prior?.digest !== digest) this.route(tx, source, [{ id: id + ':' + period, type: 'timer.due', objectRefs: refs, origin: 'external' }], policy.id);
           this.record(tx, 'operating.timer', { id, tenantId, workspaceId, streamVersion: (prior?.streamVersion ?? 0) + 1, period, digest }, 'enterprise-system:timer', 'operating.timer_checked');
         }

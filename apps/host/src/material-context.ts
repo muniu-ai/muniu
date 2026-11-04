@@ -13,7 +13,7 @@ function terms(query: string): readonly string[] {
 }
 
 /** Retrieval operates only on already-authorized extraction blocks and never changes their text or locators. */
-export function selectMaterialBlocks(blocks: AssetExtractionV2['blocks'], query: string, maxBytes: number): AssetExtractionV2['blocks'] {
+export function selectMaterialBlocks<T extends { readonly text: string }>(blocks: readonly T[], query: string, maxBytes: number): readonly T[] {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 2) throw new KernelError('CONTEXT_MATERIAL_LIMIT', '没有可用的资料空间', '缩小资料范围或减少必要上下文');
   if (Buffer.byteLength(JSON.stringify(blocks)) <= maxBytes) return blocks;
   const keywords = terms(query);

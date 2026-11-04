@@ -165,3 +165,5 @@ E3.1 的动作、预算与 Worker 检查入口为 `npm run verify:enterprise-act
 企业来源与持续规则由 E4.1 维护，执行 `npm run verify:enterprise-operating` 与 `npm run verify:enterprise-operating-postgres`。前者检查本地与合成行为；后者创建隔离 PostgreSQL，串行复验 E3 协议及 E4 的持久评估。使用说明见[来源事件与持续规则](enterprise-operating-events.md)。
 
 动态计划与监督由 E4.2 维护，执行 `npm run verify:agent-coordination` 和 `npm run verify:agent-coordination-postgres`。后者包含 E3/E4.1 故障断言，按[资源约束](verification/enterprise-e4-2-2026-11-05.md)串行运行。
+
+知识、成果与流程由 E4.3 维护，执行 `npm run verify:enterprise-knowledge`。离线评测使用 `npm run verify:operating-evaluation -- --evidence <记录文件>`；`--self-test` 仅验计分逻辑，不能计为真实模型质量通过。记录与限制见[知识、成果与流程](enterprise-knowledge-workflows.md)。

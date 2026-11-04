@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { checkedEnterpriseModel } from './enterprise-models.js';
 import { randomBytes } from 'node:crypto';
+import { resolveEnterpriseWorkflow } from './enterprise-workflows.js';
 import { parseEnterpriseContract, type BudgetAccountV1, type BudgetReservationV1, type Job, type Approval, type EnterpriseContractTypes, type Execution, type ExecutionAuthority, type PlanRevision, type TaskNode } from '@mn/contracts';
 import { AgentOsKernel, appendKernelEvent, releaseBudget, assertAuthorityAttenuation, computeExecutionAuthorityCommitment, amendBudgetAccount, createBudgetAccount, reserveBudget, sha256, type KernelJobLeaseAssertion, type KernelTransaction } from '@mn/kernel';
 import { EnterpriseError, assertModelQuota, type EnterpriseActor } from '@mn/enterprise-services';
@@ -87,6 +88,13 @@ export class EnterpriseGoalService {
     let available = false; try { checkedEnterpriseModel(model); available = true; } catch { /* Unmetered models cannot be selected. */ }
     const { secretRef: _secret, ...view } = model; return { ...view, available };
   }
+  sourceManifest(tx: KernelTransaction, actor: EnterpriseActor, goalId: string, attemptId: string): { title: string; workspaceId: string; bindings: Spec['sources'] } {
+    const goal = this.require(tx, goalId), attempt = tx.getProjection<EnterpriseTaskAttempt>(ENTERPRISE_ATTEMPT, attemptId);
+    if (!attempt || attempt.goalId !== goalId || goal.owner.principalId !== actor.principalId || attempt.status !== 'completed' || attempt.kind !== 'task') throw new EnterpriseError('REPORT_NOT_ACCEPTABLE', 409);
+    const scope = tx.getProjection<GoalScope>(ENTERPRISE_GOAL_SCOPE, attempt.scopeId);
+    if (!scope || !this.attemptReadable(tx, attempt, actor)) throw new EnterpriseError('OBJECT_ACCESS_DENIED');
+    return { title: scope.template.spec.title, workspaceId: goal.workspaceId, bindings: scope.template.spec.sources.map(source => ({ ...source, reference: attempt.node.inputRefs.find(ref => ref.objectType === source.reference.objectType && ref.objectId === source.reference.objectId) ?? source.reference })) };
+  }
   async result(actor: EnterpriseActor, goalId: string, attemptId: string): Promise<EnterpriseContractTypes['EnterpriseGoalReportView']> {
     return this.operating.bridge.store.transact(actor.tenantId, tx => {
       const goal = this.require(tx, goalId), attempt = tx.getProjection<EnterpriseTaskAttempt>(ENTERPRISE_ATTEMPT, attemptId), result = tx.getProjection<{ createdAt: string; report?: unknown; suggestion?: unknown; diagnostic?: unknown }>('enterprise-work.result', attemptId);
@@ -133,7 +141,7 @@ export class EnterpriseGoalService {
     });
   }
   private createRecord(tx: KernelTransaction, actor: EnterpriseActor, workspaceId: string, key: string, spec: Spec, salt: string, initialEvaluation?: EnterpriseContractTypes['EnterpriseInitialEvaluation']): EnterpriseGoalRecord {
-        this.guard(tx, () => { this.operating.sources(tx, actor, workspaceId, spec.sources, true); if (Date.parse(spec.budget.deadline) <= Date.parse(this.now())) throw new EnterpriseError('GOAL_EXPIRED', 409); });
+        this.guard(tx, () => { this.operating.sources(tx, actor, workspaceId, spec.sources, true); resolveEnterpriseWorkflow(tx, workspaceId, spec, true); if (Date.parse(spec.budget.deadline) <= Date.parse(this.now())) throw new EnterpriseError('GOAL_EXPIRED', 409); });
         if (spec.capabilityIds.some(id => !this.capabilities.some(c => c.id === id))) throw new EnterpriseError('CAPABILITY_UNAVAILABLE', 409);
         const models = structuredClone(this.options.modelsFor(actor.tenantId, workspaceId).filter(m => spec.modelBindingIds.includes(m.id)));
         const owner = { tenantId: actor.tenantId, principalId: actor.principalId, sessionEpoch: actor.sessionEpoch }, id = 'goal:' + sha256([actor.tenantId, actor.principalId, workspaceId, key]);
@@ -152,7 +160,7 @@ export class EnterpriseGoalService {
     this.operating.sources(tx, scope.template.owner, goal.workspaceId, scope.template.spec.sources);
     const records = this.operating.bridge.snapshot(tx).records;
     if (scope.template.permissionDigest !== executionPermissionDigest(records, goal.owner.principalId, goal.workspaceId)
-      || scope.template.spec.sources.some((s, i) => executionRelationDigest(executionBusinessObject(records, s.reference, false), scope.template.salt) !== scope.template.relations[i])) throw new EnterpriseError('GOAL_AUTHORIZATION_CHANGED', 409);
+      || scope.template.spec.sources.some((s, i) => this.operating.sourceRelation(tx, s.reference, scope.template.salt) !== scope.template.relations[i])) throw new EnterpriseError('GOAL_AUTHORIZATION_CHANGED', 409);
     this.quota(tx, goal); return scope;
   }
   async revise(actor: EnterpriseActor, id: string, expected: number, key: string, raw: Spec): Promise<View> {
@@ -160,7 +168,7 @@ export class EnterpriseGoalService {
     return this.operating.bridge.store.transact(actor.tenantId, tx => {
       const goal = this.require(tx, id);
       if (goal.owner.principalId !== actor.principalId) throw new EnterpriseError('GOAL_NOT_FOUND', 404);
-      this.guard(tx, () => { this.operating.actor(tx, actor, goal.workspaceId); this.operating.sources(tx, actor, goal.workspaceId, spec.sources, true); });
+      this.guard(tx, () => { this.operating.actor(tx, actor, goal.workspaceId); this.operating.sources(tx, actor, goal.workspaceId, spec.sources, true); resolveEnterpriseWorkflow(tx, goal.workspaceId, spec, true); });
       return this.change(tx, actor, goal.workspaceId, key, ['revise', id, expected, spec], () => {
         if (goal.streamVersion !== expected) throw new EnterpriseError('STREAM_VERSION_CONFLICT', 409);
         const attempts = this.attempts(tx, id);
@@ -187,11 +195,11 @@ export class EnterpriseGoalService {
         if (goal.scopeDigest !== digest) throw new EnterpriseError('GOAL_SCOPE_CONFLICT', 409);
         if (goal.status !== 'awaiting_authorization' || goal.authorityRevisionId) throw new EnterpriseError('GOAL_ALREADY_AUTHORIZED', 409);
         const owner = { tenantId: actor.tenantId, principalId: actor.principalId, sessionEpoch: actor.sessionEpoch };
-        const check = () => { this.operating.sources(tx, actor, goal.workspaceId, goal.spec.sources, true); this.quota(tx, { ...goal, owner }); const current = this.options.modelsFor(actor.tenantId, goal.workspaceId);
+        const check = () => { resolveEnterpriseWorkflow(tx, goal.workspaceId, goal.spec, true); this.operating.sources(tx, actor, goal.workspaceId, goal.spec.sources, true); this.quota(tx, { ...goal, owner }); const current = this.options.modelsFor(actor.tenantId, goal.workspaceId);
           goal.models.forEach(checkedEnterpriseModel);
           if (goal.models.length !== goal.spec.modelBindingIds.length || goal.models.some(m => !current.some(n => sha256(n) === sha256(m)))) throw new EnterpriseError('MODEL_BINDING_CHANGED', 409); };
         this.guard(tx, check);
-        const records = this.operating.bridge.snapshot(tx).records, template = { ...(goal.policyOrigin ? { policyOrigin: goal.policyOrigin } : {}), ...(goal.initialEvaluation ? { initialEvaluation: goal.initialEvaluation } : {}), owner, spec: goal.spec, models: goal.models, salt: goal.salt, permissionDigest: executionPermissionDigest(records, actor.principalId, goal.workspaceId), relations: goal.spec.sources.map(s => executionRelationDigest(executionBusinessObject(records, s.reference), goal.salt)) };
+        const records = this.operating.bridge.snapshot(tx).records, template = { ...(goal.policyOrigin ? { policyOrigin: goal.policyOrigin } : {}), ...(goal.initialEvaluation ? { initialEvaluation: goal.initialEvaluation } : {}), owner, spec: goal.spec, models: goal.models, salt: goal.salt, permissionDigest: executionPermissionDigest(records, actor.principalId, goal.workspaceId), relations: goal.spec.sources.map(s => this.operating.sourceRelation(tx, s.reference, goal.salt)) };
         const scopeId = 'goal-scope:' + sha256([goal.id, goal.streamVersion]), scopeDigest = sha256(template);
         const context = { tenantId: actor.tenantId, workspaceId: goal.workspaceId, occurredAt: this.now() };
         const root = createBudgetAccount(tx, { ...context, principalId: enterpriseBudgetPrincipal(goal.workspaceId), scope: { namespace: 'enterprise.workspace_budget', resourceId: goal.workspaceId }, limit: { tokens: Number.MAX_SAFE_INTEGER, costMinorUnits: '9'.repeat(30), currency: 'CNY' }, expiresAt: '9999-12-31T23:59:59.999Z' });
@@ -221,7 +229,7 @@ export class EnterpriseGoalService {
   private context(tx: KernelTransaction, goal: EnterpriseGoalRecord, automatic: boolean): EnterprisePlanContext {
     const quota = this.quota(tx, goal), account = tx.getProjection<BudgetAccountV1>('budget.account', goal.accountId!)!, records = this.operating.bridge.snapshot(tx).records;
     const controls = this.attempts(tx, goal.id).filter(a => a.kind !== 'task'), held = controls.map(a => tx.getProjection<BudgetReservationV1>('budget.reservation', a.reservationId)!).filter(r => ['reserved', 'committed', 'unknown'].includes(r.status));
-    return { tenantId: goal.tenantId, workspaceId: goal.workspaceId, goalId: goal.id, authorityRevisionId: goal.authorityRevisionId!, inputRefs: goal.spec.sources.map(s => executionBusinessObject(records, s.reference, false).reference), budget: goal.spec.budget, acceptanceCriteria: goal.spec.acceptanceCriteria,
+    return { tenantId: goal.tenantId, workspaceId: goal.workspaceId, goalId: goal.id, authorityRevisionId: goal.authorityRevisionId!, inputRefs: goal.spec.sources.map(s => this.operating.sourceReference(tx, s.reference)), budget: goal.spec.budget, acceptanceCriteria: goal.spec.acceptanceCriteria,
       capabilities: this.capabilities.filter(c => goal.spec.capabilityIds.includes(c.id)), modelBindingIds: this.availableModels(goal).map(m => m.id), now: this.now(), limits: quota,
       history: tx.listProjections<PlanRevision>(ENTERPRISE_PLAN).filter(p => p.goalId === goal.id), attempts: this.attempts(tx, goal.id).filter(a => a.kind === 'task').map(a => ({ ...a, activeScope: a.scopeId === goal.scopeId })), otherAttempts: controls.length, otherNodes: new Set(controls.map(a => a.node.id)).size, automaticReplans: Math.max(0, goal.automaticReplans - (automatic && goal.planningAttemptId && goal.planRevision > 0 ? 1 : 0)), spent: { tokens: account.spentTokens + (goal.initialEvaluation?.tokens ?? 0) + held.reduce((sum, r) => sum + r.amount.tokens, 0), costMinorUnits: (BigInt(account.spentCostMinorUnits) + BigInt(goal.initialEvaluation?.costMinorUnits ?? '0') + held.reduce((sum, r) => sum + BigInt(r.amount.costMinorUnits), 0n)).toString() }, automatic };
   }

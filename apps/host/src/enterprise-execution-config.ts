@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { canonicalJson, parseEnterpriseContract, type BusinessObjectRef, type EnterpriseContractTypes, type JsonObject, type ProviderBinding } from '@mn/contracts';
 import { BusinessDomainError, businessDigest, businessObjectKey, reduceBusinessEvents, type BusinessObject } from '@mn/plugin-business';
 import { EnterpriseError, reduceIdentityEvents, requireActor, resolveObjectAccess, reduceAccessEvents, type EnterpriseActor, type EnterpriseRecord, type EnterpriseRepository } from '@mn/enterprise-services';
-import { enterpriseBusinessFacts, businessAccessDescriptor } from './enterprise-business.js';
+import { enterpriseBusinessFacts, businessAccessDescriptor, assertBusinessSourceClosure } from './enterprise-business.js';
 type Settings = EnterpriseContractTypes['EnterpriseExecutionSettings'];
 type PolicyView = EnterpriseContractTypes['EnterpriseExecutionPolicyView'];
 export interface EnterpriseExecutionPolicy extends PolicyView {
@@ -47,6 +47,7 @@ export function executionObjectAccess(records: readonly EnterpriseRecord[], acto
     const descriptor = businessAccessDescriptor(object), allowed = resolveObjectAccess(records, actor, descriptor, operation, now);
     if (fields.some(field => !descriptor.fieldClasses[field] || !allowed.has(descriptor.fieldClasses[field]!)))
         throw new EnterpriseError('FIELD_ACCESS_DENIED');
+    assertBusinessSourceClosure(records, actor, object, fields, now);
     if (operation !== 'read') {
         const readable = resolveObjectAccess(records, actor, descriptor, 'read', now);
         if (fields.some(field => !readable.has(descriptor.fieldClasses[field]!)))

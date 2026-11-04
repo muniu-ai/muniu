@@ -27,3 +27,11 @@ test('企业 OpenAPI 公布已实现入口，认证回调不要求业务幂等�
   assert.equal(document.paths['/v2/goals/{goalId}/authorizations'].post.parameters.find((p: any) => p.name === 'Idempotency-Key').required, true);
   assert.equal(document.paths['/v2/knowledge/search'], undefined);
 });
+test('只读 POST 仍要求 CSRF，但不冒充业务写入或要求幂等键', () => {
+  const input = { path: { workspaceId: 'w' }, body: { query: '需求' }, headers: { 'X-CSRF-Token': 'csrf' } };
+  assert.equal(enterpriseRequest('searchEnterpriseKnowledge', input).method, 'POST');
+  assert.throws(() => enterpriseRequest('searchEnterpriseKnowledge', { ...input, headers: {} } as never));
+  const parameters = (createEnterpriseOpenApiDocument() as any).paths['/v2/workspaces/{workspaceId}/knowledge/search'].post.parameters;
+  assert.equal(parameters.some((p: any) => p.name === 'X-CSRF-Token'), true);
+  assert.equal(parameters.some((p: any) => p.name === 'Idempotency-Key'), false);
+});

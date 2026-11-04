@@ -19,7 +19,7 @@ export async function generateEnterpriseTypes({ check = false } = {}) {
   const { ENTERPRISE_HTTP_OPERATIONS: operations } = await import(`data:text/javascript;base64,${Buffer.from(apiBundle.outputFiles[0].contents).toString('base64')}`);
   const inputs = operations.map(op => {
     const names = [...op.path.matchAll(/\{([^}]+)\}/gu)].map(match => match[1]);
-    return `  readonly ${op.id}: { ${names.length ? `readonly path: { ${names.map(name => `readonly ${name}: string;`).join(' ')} };` : 'readonly path?: Record<string, never>;'}${op.body ? ` readonly body: Types.${op.body};` : ''}${op.mutation ? ' readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; };' : ''} };`;
+    return `  readonly ${op.id}: { ${names.length ? `readonly path: { ${names.map(name => `readonly ${name}: string;`).join(' ')} };` : 'readonly path?: Record<string, never>;'}${op.body ? ` readonly body: Types.${op.body};` : ''}${op.mutation ? ' readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; };' : op.method === 'post' ? ' readonly headers: { readonly "X-CSRF-Token": string; };' : ''} };`;
   });
   const apiContent = '// Generated from enterprise-api-schema.ts. Do not edit.\n// SPDX-License-Identifier: Apache-2.0\nimport type * as Types from "./enterprise-types.js";\n'
     + `export interface EnterpriseApiInputs {\n${inputs.join('\n')}\n}\nexport interface EnterpriseApiOutputs {\n`

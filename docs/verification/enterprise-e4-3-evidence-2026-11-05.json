@@ -1,0 +1,788 @@
+{
+  "package": "E4.3",
+  "date": "2026-11-05",
+  "baseCommit": "484566b",
+  "branch": "codex/enterprise-e4-3",
+  "scope": "local_engineering_and_synthetic_acceptance",
+  "toolchain": {
+    "node": "22.19.0",
+    "npm": "11.10.1",
+    "typescript": "5.7.2"
+  },
+  "image": {
+    "stage": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e43-linux-g7rndpl5",
+    "image": "mn-e43-recheck:00ab63e655a4",
+    "sourceDigest": "00ab63e655a4f22e046a511ace224ec6e4f5fd31afede766ced3b7fd5b60e26e",
+    "lockDigest": "9689c184c5c7c11fa4628713129699bd0254ccb0e226db7ba63047cc9b8fc632",
+    "baseImage": "mn-e42-recheck:d74a5b860f50",
+    "externalLockMatchesBase": true,
+    "baseImageId": "sha256:6d3d640ea78fbbdf4effd81cd3192dbd3538fbba1234a6309fc8ba96ab950528",
+    "imageId": "sha256:2fdb957035edfa2fcb9483c3f2478b792352f16d8db10ca29af07612a83c90b7"
+  },
+  "checks": [
+    {
+      "name": "node-tests",
+      "command": [
+        "npm",
+        "test"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 520.9,
+      "peakProcessTreeRSSMiB": 522.6,
+      "minimumHostFreePercent": 27,
+      "resourceStopped": false,
+      "tests": 1402,
+      "logSha256": "a7d89bea1f23e3e9ca442ea2df62de25781a45d31e4272bdc41c4fb6ffe4dd1c",
+      "completedAt": "2026-11-04T20:33:21.712444+00:00",
+      "startedAt": "2026-11-04T20:24:40.812444+00:00",
+      "timingBasis": "gate summary modification time minus monitored duration"
+    },
+    {
+      "name": "knowledge",
+      "command": [
+        "npm",
+        "run",
+        "verify:enterprise-knowledge"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 40.2,
+      "peakProcessTreeRSSMiB": 492.7,
+      "minimumHostFreePercent": 27,
+      "resourceStopped": false,
+      "tests": 27,
+      "logSha256": "932c2c1476775bb6d1e735ee152c80d2a10a6984ab6fe350075727884e270d29",
+      "completedAt": "2026-11-04T20:53:55.969149+00:00",
+      "startedAt": "2026-11-04T20:53:15.769149+00:00",
+      "timingBasis": "gate summary modification time minus monitored duration"
+    },
+    {
+      "name": "knowledge-final",
+      "command": [
+        "npm",
+        "run",
+        "verify:enterprise-knowledge"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 45.5,
+      "peakProcessTreeRSSMiB": 560.5,
+      "minimumHostFreePercent": 28,
+      "resourceStopped": false,
+      "tests": 43,
+      "logSha256": "546f94733d289ebc648e1e884900924ac0ca08837b10accc70732938eaeac586",
+      "completedAt": "2026-11-04T21:52:32.522071+00:00",
+      "startedAt": "2026-11-04T21:51:47.022071+00:00",
+      "timingBasis": "gate summary modification time minus monitored duration"
+    },
+    {
+      "name": "plugins",
+      "command": [
+        "npm",
+        "run",
+        "verify:plugins"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 402.8,
+      "peakProcessTreeRSSMiB": 438.3,
+      "minimumHostFreePercent": 28,
+      "resourceStopped": false,
+      "tests": 673,
+      "logSha256": "42a3d9afa09d309e18da6cc531663ed1a6b27762f238833f985fa7786302d260",
+      "completedAt": "2026-11-04T21:03:57.231762+00:00",
+      "startedAt": "2026-11-04T20:57:14.431762+00:00",
+      "timingBasis": "gate summary modification time minus monitored duration"
+    },
+    {
+      "name": "typecheck",
+      "command": [
+        "npm",
+        "run",
+        "typecheck"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 66.7,
+      "peakProcessTreeRSSMiB": 537.3,
+      "minimumHostFreePercent": 27,
+      "resourceStopped": false,
+      "logSha256": "0919626c69efc73938f4291befbb930767b431a6acd3689de5ef27c70006cb87",
+      "completedAt": "2026-11-04T20:39:12.670364+00:00",
+      "startedAt": "2026-11-04T20:38:05.970364+00:00",
+      "timingBasis": "gate summary modification time minus monitored duration"
+    },
+    {
+      "name": "desktop-types",
+      "command": [
+        "npm",
+        "run",
+        "typecheck:desktop"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 5.1,
+      "peakProcessTreeRSSMiB": 0.0,
+      "minimumHostFreePercent": 28,
+      "resourceStopped": false,
+      "logSha256": "08c3af819ec047ace6fa8caa60498f942a5ccef772eb47880e32d46a8cd8a8eb",
+      "completedAt": "2026-11-04T20:40:10.602621+00:00",
+      "startedAt": "2026-11-04T20:40:05.502621+00:00",
+      "timingBasis": "gate summary modification time minus monitored duration"
+    },
+    {
+      "name": "desktop-build",
+      "command": [
+        "npm",
+        "run",
+        "build:desktop"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 10.1,
+      "peakProcessTreeRSSMiB": 135.5,
+      "minimumHostFreePercent": 29,
+      "resourceStopped": false,
+      "logSha256": "cfa39c62f4de2734840f8ec589b41dc4103cd3cc270a69b2b5ac9c5c7a4872a1",
+      "completedAt": "2026-11-04T20:40:55.967251+00:00",
+      "startedAt": "2026-11-04T20:40:45.867251+00:00",
+      "timingBasis": "gate summary modification time minus monitored duration"
+    },
+    {
+      "name": "sidecar",
+      "command": [
+        "npm",
+        "run",
+        "build:host-sidecar"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 55.4,
+      "peakProcessTreeRSSMiB": 573.2,
+      "minimumHostFreePercent": 27,
+      "resourceStopped": false,
+      "logSha256": "d24d61d7c1b0e1f8923253e4271371ea86f4b9e2404f837db2ddbb13ecbad063",
+      "completedAt": "2026-11-04T20:42:30.598233+00:00",
+      "startedAt": "2026-11-04T20:41:35.198233+00:00",
+      "timingBasis": "gate summary modification time minus monitored duration"
+    },
+    {
+      "name": "rust",
+      "command": [
+        "env",
+        "CARGO_TARGET_DIR=/Users/xiaomingwang/ChatGPT/muniu-enterprise-e1-1/apps/desktop-mac/src-tauri/target",
+        "cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "apps/desktop-mac/src-tauri/Cargo.toml"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 25.9,
+      "peakProcessTreeRSSMiB": 298.3,
+      "minimumHostFreePercent": 27,
+      "resourceStopped": false,
+      "rustTests": 13,
+      "logSha256": "a01029a51f8204e96e65c5b4432b6b8ea25aaed022d2f8fe38014f606fa92668",
+      "completedAt": "2026-11-04T20:43:10.956918+00:00",
+      "startedAt": "2026-11-04T20:42:45.056918+00:00",
+      "timingBasis": "gate summary modification time minus monitored duration"
+    },
+    {
+      "name": "final-types-shell",
+      "command": [
+        "sh",
+        "-ec",
+        "npm run test -w @mn/contracts && npm run build -w @mn/host && npm run typecheck -w @mn/host && npm run typecheck:desktop && node scripts/build-host-sidecar.mjs && CARGO_TARGET_DIR=/Users/xiaomingwang/ChatGPT/muniu-enterprise-e1-1/apps/desktop-mac/src-tauri/target cargo test --locked --manifest-path apps/desktop-mac/src-tauri/Cargo.toml"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 50.3,
+      "peakProcessTreeRSSMiB": 366.5,
+      "minimumHostFreePercent": 27,
+      "resourceStopped": false,
+      "tests": 36,
+      "rustTests": 13,
+      "logSha256": "db7a348406cc6b65fc32ce92177e0fca1ffd892cbfbd66d68f7186505382a62c",
+      "completedAt": "2026-11-04T21:11:28.593659+00:00",
+      "startedAt": "2026-11-04T21:10:38.293659+00:00",
+      "timingBasis": "gate summary modification time minus monitored duration"
+    },
+    {
+      "name": "export-build-shell",
+      "command": [
+        "sh",
+        "-ec",
+        "npm run build -w @mn/host && npm run typecheck -w @mn/host && npm run typecheck:desktop && node scripts/build-host-sidecar.mjs && CARGO_TARGET_DIR=/Users/xiaomingwang/ChatGPT/muniu-enterprise-e1-1/apps/desktop-mac/src-tauri/target cargo test --locked --manifest-path apps/desktop-mac/src-tauri/Cargo.toml"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 45.7,
+      "peakProcessTreeRSSMiB": 455.7,
+      "minimumHostFreePercent": 27,
+      "resourceStopped": false,
+      "rustTests": 13,
+      "logSha256": "45937cea199e07532eba6bad19e84c3355fea37fedafda5b391fd3129e4eddde",
+      "completedAt": "2026-11-04T21:32:16.670463+00:00",
+      "startedAt": "2026-11-04T21:31:30.970463+00:00",
+      "timingBasis": "gate summary modification time minus monitored duration"
+    },
+    {
+      "name": "policies",
+      "command": [
+        "sh",
+        "-ec",
+        "npm run verify:contracts && npm run verify:enterprise-fixture -- --static && npm run verify:oss-baseline && npm run test:oss-policy && npm run verify:licenses && npm run verify:release && npm audit --omit=dev && npm run verify:helm"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 10.1,
+      "peakProcessTreeRSSMiB": 130.4,
+      "minimumHostFreePercent": 28,
+      "resourceStopped": false,
+      "tests": 57,
+      "logSha256": "41afe6dc0ff08fd336a2d60bdf67244d575c68a5e570cb1280b919ee2e4b97b7",
+      "completedAt": "2026-11-04T20:55:15.930490+00:00",
+      "startedAt": "2026-11-04T20:55:05.830490+00:00",
+      "timingBasis": "gate summary modification time minus monitored duration"
+    },
+    {
+      "name": "policies-final",
+      "command": [
+        "sh",
+        "-ec",
+        "npm run verify:contracts && npm run test:boundaries && npm run verify:oss-baseline && npm run test:oss-policy && npm run verify:licenses && npm run verify:release && npm audit --omit=dev && npm run verify:helm"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 10.1,
+      "peakProcessTreeRSSMiB": 30.9,
+      "minimumHostFreePercent": 28,
+      "resourceStopped": false,
+      "tests": 185,
+      "logSha256": "67b37aa200018e72ec663c4e9c2f9aed250c23d3bac0e433369a4fcd55f4349e",
+      "completedAt": "2026-11-04T21:49:37.996802+00:00",
+      "startedAt": "2026-11-04T21:49:27.896802+00:00",
+      "timingBasis": "gate summary modification time minus monitored duration"
+    },
+    {
+      "name": "postgres-final",
+      "command": [
+        "npm",
+        "run",
+        "verify:enterprise-knowledge-postgres"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 32.4,
+      "peakProcessTreeRSSMiB": 246.0,
+      "minimumHostFreePercent": 27,
+      "resourceStopped": false,
+      "logSha256": "4698f757b803332cdef786d70bf524713b3c9c85137a4d9ab7dc53f1a62e9957",
+      "completedAt": "2026-11-04T21:12:32.903435+00:00",
+      "startedAt": "2026-11-04T21:12:00.503435+00:00",
+      "timingBasis": "gate summary modification time minus monitored duration",
+      "containerSamples": [
+        {
+          "BlockIO": "32.8kB / 0B",
+          "CPUPerc": "53.69%",
+          "Container": "mn-enterprise-actions-2a54f41b-3eef-4881-b53b-4251fff3354a",
+          "ID": "115a3c1a5f60",
+          "MemPerc": "1.45%",
+          "MemUsage": "2.793MiB / 192MiB",
+          "Name": "mn-enterprise-actions-2a54f41b-3eef-4881-b53b-4251fff3354a",
+          "NetIO": "690B / 84B",
+          "PIDs": "3"
+        },
+        {
+          "BlockIO": "2.45MB / 0B",
+          "CPUPerc": "49.79%",
+          "Container": "mn-enterprise-actions-2a54f41b-3eef-4881-b53b-4251fff3354a",
+          "ID": "115a3c1a5f60",
+          "MemPerc": "13.40%",
+          "MemUsage": "25.73MiB / 192MiB",
+          "Name": "mn-enterprise-actions-2a54f41b-3eef-4881-b53b-4251fff3354a",
+          "NetIO": "1.17kB / 126B",
+          "PIDs": "3"
+        },
+        {
+          "BlockIO": "2.7MB / 8.19kB",
+          "CPUPerc": "36.37%",
+          "Container": "mn-enterprise-actions-2a54f41b-3eef-4881-b53b-4251fff3354a",
+          "ID": "115a3c1a5f60",
+          "MemPerc": "35.39%",
+          "MemUsage": "67.96MiB / 192MiB",
+          "Name": "mn-enterprise-actions-2a54f41b-3eef-4881-b53b-4251fff3354a",
+          "NetIO": "1.89kB / 1.08kB",
+          "PIDs": "7"
+        },
+        {
+          "BlockIO": "2.7MB / 8.19kB",
+          "CPUPerc": "6.54%",
+          "Container": "mn-enterprise-actions-2a54f41b-3eef-4881-b53b-4251fff3354a",
+          "ID": "115a3c1a5f60",
+          "MemPerc": "42.53%",
+          "MemUsage": "81.65MiB / 192MiB",
+          "Name": "mn-enterprise-actions-2a54f41b-3eef-4881-b53b-4251fff3354a",
+          "NetIO": "1.28MB / 2.04MB",
+          "PIDs": "12"
+        },
+        {
+          "BlockIO": "2.7MB / 8.19kB",
+          "CPUPerc": "9.08%",
+          "Container": "mn-enterprise-actions-2a54f41b-3eef-4881-b53b-4251fff3354a",
+          "ID": "115a3c1a5f60",
+          "MemPerc": "43.68%",
+          "MemUsage": "83.86MiB / 192MiB",
+          "Name": "mn-enterprise-actions-2a54f41b-3eef-4881-b53b-4251fff3354a",
+          "NetIO": "2.77MB / 6.73MB",
+          "PIDs": "12"
+        },
+        {
+          "BlockIO": "2.7MB / 8.19kB",
+          "CPUPerc": "14.93%",
+          "Container": "mn-enterprise-actions-2a54f41b-3eef-4881-b53b-4251fff3354a",
+          "ID": "115a3c1a5f60",
+          "MemPerc": "44.12%",
+          "MemUsage": "84.72MiB / 192MiB",
+          "Name": "mn-enterprise-actions-2a54f41b-3eef-4881-b53b-4251fff3354a",
+          "NetIO": "3.98MB / 13.5MB",
+          "PIDs": "12"
+        },
+        {
+          "BlockIO": "2.7MB / 8.19kB",
+          "CPUPerc": "8.03%",
+          "Container": "mn-enterprise-actions-2a54f41b-3eef-4881-b53b-4251fff3354a",
+          "ID": "115a3c1a5f60",
+          "MemPerc": "42.89%",
+          "MemUsage": "82.34MiB / 192MiB",
+          "Name": "mn-enterprise-actions-2a54f41b-3eef-4881-b53b-4251fff3354a",
+          "NetIO": "5.5MB / 23.9MB",
+          "PIDs": "10"
+        },
+        {
+          "BlockIO": "2.7MB / 8.19kB",
+          "CPUPerc": "10.36%",
+          "Container": "mn-enterprise-actions-2a54f41b-3eef-4881-b53b-4251fff3354a",
+          "ID": "115a3c1a5f60",
+          "MemPerc": "46.69%",
+          "MemUsage": "89.64MiB / 192MiB",
+          "Name": "mn-enterprise-actions-2a54f41b-3eef-4881-b53b-4251fff3354a",
+          "NetIO": "6.88MB / 36.7MB",
+          "PIDs": "13"
+        }
+      ]
+    },
+    {
+      "name": "linux-release",
+      "command": [
+        "env",
+        "DOCKER_CONFIG=/tmp/muniu-e11-docker.WSFZXl",
+        "DOCKER_HOST=unix:///Users/xiaomingwang/.docker/run/docker.sock",
+        "/Applications/Docker.app/Contents/Resources/bin/docker",
+        "run",
+        "--rm",
+        "--pull=never",
+        "--name",
+        "mn-e43-linux-00ab63e655a4",
+        "--memory",
+        "512m",
+        "--cpus",
+        "0.75",
+        "--pids-limit",
+        "160",
+        "--network",
+        "none",
+        "--read-only",
+        "--tmpfs",
+        "/tmp:rw,size=128m,mode=1777",
+        "-e",
+        "NODE_OPTIONS=--max-old-space-size=256",
+        "--entrypoint",
+        "sh",
+        "sha256:2fdb957035edfa2fcb9483c3f2478b792352f16d8db10ca29af07612a83c90b7",
+        "-ec",
+        "sha256sum -c e43-checksums.txt > /dev/null && node --test --test-concurrency=1 packages/kernel/dist-test/test/*.test.js packages/task-orchestration/dist-test/test/*.test.js packages/business-execution/dist-test/test/*.test.js apps/worker/dist-test/test/provider-action-worker.test.js plugins/business/dist-test/test/*.test.js packages/enterprise-services/dist-test/test/*.test.js packages/storage/dist-test/test/transaction-guard.test.js apps/host/dist-test/test/enterprise-*.test.js apps/host/dist-test/test/goal-export*.test.js scripts/test/operating-evaluation.test.mjs"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 74.4,
+      "peakProcessTreeRSSMiB": 13.4,
+      "minimumHostFreePercent": 28,
+      "resourceStopped": false,
+      "tests": 331,
+      "logSha256": "6881c6635423294eca8e05d4beaf63af022c5192dc6489b4b036684d83eb08a4",
+      "completedAt": "2026-11-04T21:38:52.741482+00:00",
+      "startedAt": "2026-11-04T21:37:38.341482+00:00",
+      "timingBasis": "gate summary modification time minus monitored duration",
+      "containerSamples": [
+        {
+          "BlockIO": "0B / 0B",
+          "CPUPerc": "77.36%",
+          "Container": "mn-e43-linux-00ab63e655a4",
+          "ID": "03d8a7515f21",
+          "MemPerc": "13.21%",
+          "MemUsage": "67.62MiB / 512MiB",
+          "Name": "mn-e43-linux-00ab63e655a4",
+          "NetIO": "0B / 0B",
+          "PIDs": "18"
+        },
+        {
+          "BlockIO": "0B / 0B",
+          "CPUPerc": "74.44%",
+          "Container": "mn-e43-linux-00ab63e655a4",
+          "ID": "03d8a7515f21",
+          "MemPerc": "9.84%",
+          "MemUsage": "50.38MiB / 512MiB",
+          "Name": "mn-e43-linux-00ab63e655a4",
+          "NetIO": "0B / 0B",
+          "PIDs": "18"
+        },
+        {
+          "BlockIO": "0B / 0B",
+          "CPUPerc": "78.47%",
+          "Container": "mn-e43-linux-00ab63e655a4",
+          "ID": "03d8a7515f21",
+          "MemPerc": "14.17%",
+          "MemUsage": "72.57MiB / 512MiB",
+          "Name": "mn-e43-linux-00ab63e655a4",
+          "NetIO": "0B / 0B",
+          "PIDs": "18"
+        },
+        {
+          "BlockIO": "0B / 0B",
+          "CPUPerc": "32.53%",
+          "Container": "mn-e43-linux-00ab63e655a4",
+          "ID": "03d8a7515f21",
+          "MemPerc": "15.43%",
+          "MemUsage": "78.99MiB / 512MiB",
+          "Name": "mn-e43-linux-00ab63e655a4",
+          "NetIO": "0B / 0B",
+          "PIDs": "18"
+        },
+        {
+          "BlockIO": "0B / 0B",
+          "CPUPerc": "75.95%",
+          "Container": "mn-e43-linux-00ab63e655a4",
+          "ID": "03d8a7515f21",
+          "MemPerc": "12.65%",
+          "MemUsage": "64.79MiB / 512MiB",
+          "Name": "mn-e43-linux-00ab63e655a4",
+          "NetIO": "0B / 0B",
+          "PIDs": "18"
+        },
+        {
+          "BlockIO": "0B / 0B",
+          "CPUPerc": "74.23%",
+          "Container": "mn-e43-linux-00ab63e655a4",
+          "ID": "03d8a7515f21",
+          "MemPerc": "15.51%",
+          "MemUsage": "79.42MiB / 512MiB",
+          "Name": "mn-e43-linux-00ab63e655a4",
+          "NetIO": "0B / 0B",
+          "PIDs": "18"
+        },
+        {
+          "BlockIO": "0B / 0B",
+          "CPUPerc": "77.94%",
+          "Container": "mn-e43-linux-00ab63e655a4",
+          "ID": "03d8a7515f21",
+          "MemPerc": "11.24%",
+          "MemUsage": "57.56MiB / 512MiB",
+          "Name": "mn-e43-linux-00ab63e655a4",
+          "NetIO": "0B / 0B",
+          "PIDs": "18"
+        },
+        {
+          "BlockIO": "0B / 0B",
+          "CPUPerc": "73.77%",
+          "Container": "mn-e43-linux-00ab63e655a4",
+          "ID": "03d8a7515f21",
+          "MemPerc": "13.28%",
+          "MemUsage": "67.98MiB / 512MiB",
+          "Name": "mn-e43-linux-00ab63e655a4",
+          "NetIO": "0B / 0B",
+          "PIDs": "18"
+        },
+        {
+          "BlockIO": "0B / 0B",
+          "CPUPerc": "74.29%",
+          "Container": "mn-e43-linux-00ab63e655a4",
+          "ID": "03d8a7515f21",
+          "MemPerc": "14.36%",
+          "MemUsage": "73.51MiB / 512MiB",
+          "Name": "mn-e43-linux-00ab63e655a4",
+          "NetIO": "0B / 0B",
+          "PIDs": "18"
+        },
+        {
+          "BlockIO": "0B / 0B",
+          "CPUPerc": "76.22%",
+          "Container": "mn-e43-linux-00ab63e655a4",
+          "ID": "03d8a7515f21",
+          "MemPerc": "10.00%",
+          "MemUsage": "51.18MiB / 512MiB",
+          "Name": "mn-e43-linux-00ab63e655a4",
+          "NetIO": "0B / 0B",
+          "PIDs": "25"
+        },
+        {
+          "BlockIO": "24.9MB / 0B",
+          "CPUPerc": "77.16%",
+          "Container": "mn-e43-linux-00ab63e655a4",
+          "ID": "03d8a7515f21",
+          "MemPerc": "16.72%",
+          "MemUsage": "85.59MiB / 512MiB",
+          "Name": "mn-e43-linux-00ab63e655a4",
+          "NetIO": "0B / 0B",
+          "PIDs": "29"
+        },
+        {
+          "BlockIO": "24.9MB / 0B",
+          "CPUPerc": "74.27%",
+          "Container": "mn-e43-linux-00ab63e655a4",
+          "ID": "03d8a7515f21",
+          "MemPerc": "25.34%",
+          "MemUsage": "129.7MiB / 512MiB",
+          "Name": "mn-e43-linux-00ab63e655a4",
+          "NetIO": "0B / 0B",
+          "PIDs": "29"
+        },
+        {
+          "BlockIO": "24.9MB / 0B",
+          "CPUPerc": "77.98%",
+          "Container": "mn-e43-linux-00ab63e655a4",
+          "ID": "03d8a7515f21",
+          "MemPerc": "26.17%",
+          "MemUsage": "134MiB / 512MiB",
+          "Name": "mn-e43-linux-00ab63e655a4",
+          "NetIO": "0B / 0B",
+          "PIDs": "40"
+        },
+        {
+          "BlockIO": "24.9MB / 0B",
+          "CPUPerc": "74.53%",
+          "Container": "mn-e43-linux-00ab63e655a4",
+          "ID": "03d8a7515f21",
+          "MemPerc": "31.12%",
+          "MemUsage": "159.3MiB / 512MiB",
+          "Name": "mn-e43-linux-00ab63e655a4",
+          "NetIO": "0B / 0B",
+          "PIDs": "40"
+        },
+        {
+          "BlockIO": "24.9MB / 0B",
+          "CPUPerc": "75.60%",
+          "Container": "mn-e43-linux-00ab63e655a4",
+          "ID": "03d8a7515f21",
+          "MemPerc": "32.28%",
+          "MemUsage": "165.3MiB / 512MiB",
+          "Name": "mn-e43-linux-00ab63e655a4",
+          "NetIO": "0B / 0B",
+          "PIDs": "40"
+        },
+        {
+          "BlockIO": "24.9MB / 0B",
+          "CPUPerc": "78.97%",
+          "Container": "mn-e43-linux-00ab63e655a4",
+          "ID": "03d8a7515f21",
+          "MemPerc": "30.98%",
+          "MemUsage": "158.6MiB / 512MiB",
+          "Name": "mn-e43-linux-00ab63e655a4",
+          "NetIO": "0B / 0B",
+          "PIDs": "40"
+        },
+        {
+          "BlockIO": "24.9MB / 0B",
+          "CPUPerc": "74.13%",
+          "Container": "mn-e43-linux-00ab63e655a4",
+          "ID": "03d8a7515f21",
+          "MemPerc": "18.54%",
+          "MemUsage": "94.95MiB / 512MiB",
+          "Name": "mn-e43-linux-00ab63e655a4",
+          "NetIO": "0B / 0B",
+          "PIDs": "28"
+        },
+        {
+          "BlockIO": "24.9MB / 0B",
+          "CPUPerc": "74.82%",
+          "Container": "mn-e43-linux-00ab63e655a4",
+          "ID": "03d8a7515f21",
+          "MemPerc": "6.13%",
+          "MemUsage": "31.37MiB / 512MiB",
+          "Name": "mn-e43-linux-00ab63e655a4",
+          "NetIO": "0B / 0B",
+          "PIDs": "13"
+        },
+        {
+          "BlockIO": "24.9MB / 0B",
+          "CPUPerc": "76.50%",
+          "Container": "mn-e43-linux-00ab63e655a4",
+          "ID": "03d8a7515f21",
+          "MemPerc": "6.92%",
+          "MemUsage": "35.44MiB / 512MiB",
+          "Name": "mn-e43-linux-00ab63e655a4",
+          "NetIO": "0B / 0B",
+          "PIDs": "13"
+        }
+      ]
+    },
+    {
+      "name": "linux-export-repeat",
+      "command": [
+        "sh",
+        "-ec",
+        "DOCKER_CONFIG=/tmp/muniu-e11-docker.WSFZXl DOCKER_HOST=unix:///Users/xiaomingwang/.docker/run/docker.sock /Applications/Docker.app/Contents/Resources/bin/docker run --rm -i --pull=never --name mn-e43-linux-export-repeat --memory 512m --cpus 0.75 --pids-limit 128 --network none --read-only --entrypoint node sha256:2fdb957035edfa2fcb9483c3f2478b792352f16d8db10ca29af07612a83c90b7 --max-old-space-size=256 - < /tmp/muniu-e43-export-repeat.cjs"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 9.7,
+      "peakProcessTreeRSSMiB": 14.9,
+      "minimumHostFreePercent": 28,
+      "resourceStopped": false,
+      "logSha256": "a4823e9748098f8a3a5153b3043689476dd98038a8cac930c2ef6caebc86c19a",
+      "completedAt": "2026-11-04T21:40:52.193483+00:00",
+      "startedAt": "2026-11-04T21:40:42.493483+00:00",
+      "timingBasis": "gate summary modification time minus monitored duration",
+      "containerSamples": [
+        {
+          "BlockIO": "0B / 0B",
+          "CPUPerc": "73.89%",
+          "Container": "mn-e43-linux-export-repeat",
+          "ID": "43f5ac518f0d",
+          "MemPerc": "7.44%",
+          "MemUsage": "38.07MiB / 512MiB",
+          "Name": "mn-e43-linux-export-repeat",
+          "NetIO": "0B / 0B",
+          "PIDs": "18"
+        }
+      ]
+    },
+    {
+      "name": "docs",
+      "command": [
+        "sh",
+        "-ec",
+        "npm run docs:generate && npm run docs:check && npm run docs:links && npm run docs:build && python3 /Users/xiaomingwang/.codex/skills/chinese-skill/scripts/chinese_lint.py docs/enterprise-knowledge-workflows.md docs/verification/enterprise-e4-3-2026-11-05.md docs/status.md docs/enterprise-acceptance/README.md && git diff --check"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 10.1,
+      "peakProcessTreeRSSMiB": 493.0,
+      "minimumHostFreePercent": 29,
+      "resourceStopped": false,
+      "logSha256": "08758f8392b636e1cb6873bfd02be891cc0654ce0c937b43826ecb28047dcb2b",
+      "completedAt": "2026-11-04T21:58:31.231945+00:00",
+      "startedAt": "2026-11-04T21:58:21.131945+00:00",
+      "timingBasis": "gate summary modification time minus monitored duration"
+    },
+    {
+      "name": "docs-final",
+      "command": [
+        "sh",
+        "-ec",
+        "npm run docs:check && npm run docs:links && npm run docs:build && python3 /Users/xiaomingwang/.codex/skills/chinese-skill/scripts/chinese_lint.py docs/enterprise-knowledge-workflows.md docs/verification/enterprise-e4-3-2026-11-05.md docs/status.md docs/enterprise-acceptance/README.md && git diff --check && git diff --cached --check"
+      ],
+      "exitCode": 0,
+      "elapsedSeconds": 5.0,
+      "peakProcessTreeRSSMiB": 0.3,
+      "minimumHostFreePercent": 30,
+      "resourceStopped": false,
+      "logSha256": "5a6672df542f210f04acc1b73518e946337fd06b816734c640fa1131275d143d",
+      "completedAt": "2026-11-04T22:00:23.338748+00:00",
+      "startedAt": "2026-11-04T22:00:18.338748+00:00",
+      "timingBasis": "gate summary modification time minus monitored duration"
+    },
+    {
+      "name": "integration-final",
+      "command": [
+        "sh",
+        "-ec",
+        "node --test --test-concurrency=1 apps/host/dist-test/test/enterprise-*.test.js"
+      ],
+      "exitCode": 0,
+      "tests": 143,
+      "logSha256": "66e123ef892996d67fa585ed9db2d731943dae717a968ea3a22bec4b2584eb1c",
+      "resourceSampling": "not separately sampled"
+    },
+    {
+      "name": "evaluation-final",
+      "command": [
+        "node",
+        "scripts/verify-operating-evaluation.mjs",
+        "--self-test"
+      ],
+      "exitCode": 0,
+      "tests": 7,
+      "logSha256": "4f9239738d08ffe135b34ab5bb2434cb9cc055023e73928d2c893944f778f7ce",
+      "resourceSampling": "not separately sampled"
+    },
+    {
+      "name": "export-resource-green",
+      "command": [
+        "node",
+        "--test",
+        "--test-concurrency=1",
+        "apps/host/dist-test/test/enterprise-export-resources.test.js",
+        "apps/host/dist-test/test/goal-export-renderer.test.js",
+        "apps/host/dist-test/test/goal-exports-host.test.js",
+        "apps/host/dist-test/test/goal-exports.test.js",
+        "apps/host/dist-test/test/enterprise-knowledge.test.js",
+        "apps/host/dist-test/test/enterprise-artifacts.test.js"
+      ],
+      "exitCode": 0,
+      "tests": 32,
+      "logSha256": "b7aa9c020a72c50d831de15fd970109d5f9301903dea950159a08aab369d6ace",
+      "resourceSampling": "not separately sampled"
+    }
+  ],
+  "composition": {
+    "result": {
+      "code": 0,
+      "signal": null,
+      "reason": null,
+      "cleanupCode": 0,
+      "originalServicesUnchanged": true
+    },
+    "originalServiceCount": 11,
+    "minimumHostFreePercent": 28,
+    "peakSameSampleContainerSumMiB": 586.59,
+    "files": {
+      "verification.log": "9203b90ed92e5623eb5bae1d47022c15f45a946047e3d75de5b572ffa2e2508b",
+      "resources.jsonl": "828fb995275d0056a595a2e95830d1cf7244983e6990e1ad0d24f782a0cc1fee",
+      "result.json": "f5a72ee998ed707c6e88732b6489f86b707bc5983be6ffe96e4978057e3ff8e0",
+      "cleanup.log": "f0389cd0fe12632065d977eb6950cc84ad3844f4ec8cfcb16ef70cd922c65398",
+      "original-services-before.json": "96b793ac4e45b0bac515b07ec1f145fc139602c2612be3cca78a96c42b4c2043",
+      "original-services-after.json": "96b793ac4e45b0bac515b07ec1f145fc139602c2612be3cca78a96c42b4c2043"
+    }
+  },
+  "verificationNotes": [
+    "The full Node run of 1402 tests preceded additional edge cases and readable artifact/source-reference changes. Later enterprise Host143, contracts/types/shell, PostgreSQL, and final Linux checks cover the affected implementation.",
+    "verify:plugins passed673 before the final artifact presentation/source-reference change; affected enterprise tests were rerun afterward.",
+    "Initial Linux image passed308 product tests but lacked two frozen baseline files for the evaluation test. Both files were added unchanged; the later image passed315 tests.",
+    "A later Linux run reproduced EXPORT_ISOLATION_UNAVAILABLE while VmRSS disappeared before exit notification. A separate native probe observed zero statm address-space fields. The guard now accepts only verified zero address space or confirmed exit; live/unverifiable processes still fail closed. Export formats and final Linux were rechecked.",
+    "The seven evaluation checks use synthetic evidence records only and do not execute180 live model task runs or establish human baseline/quality scores.",
+    "The PostgreSQL knowledge scenario uses encrypted FileCAS and an in-memory wrapping-key provider. The separate composition test rechecks real S3/Vault ports; this does not establish full new-API production-topology acceptance."
+  ],
+  "unrun": [
+    "real enterprise OIDC issuer",
+    "real Sales environment and dual-system business acceptance",
+    "real WeCom tenant and device integration",
+    "live model quality/cost evaluation and independent human baseline",
+    "Kind full-platform verification",
+    "E7 reference capacity and joint disaster-recovery exercise",
+    "E8 pilots, observation period and production deployment"
+  ],
+  "earlierFailures": [
+    {
+      "name": "linux-initial",
+      "logSha256": "20365414eef86dae989ae3587b3223d632e20eafcefd0f40d580e357f3475e1b",
+      "resolved": true
+    },
+    {
+      "name": "linux-before-resources",
+      "logSha256": "84296fbf89acce52e27ac49bc8addfca60a17fb08d7c288fce4883d6498bfa14",
+      "resolved": true
+    },
+    {
+      "name": "export-race-statm",
+      "logSha256": "27fb908c782b6cbe645417102bc2dd2954560f39b248acc44c75fdd9cc0057e4",
+      "resolved": true
+    },
+    {
+      "name": "artifact-readable-red",
+      "logSha256": "c4e6188400ea9a5692a6943442b4c2a331c110d6b33ecb54787917fa2ecfff07",
+      "resolved": true
+    },
+    {
+      "name": "source-links-red",
+      "logSha256": "a4bef668e4cc4a07e75809717631c1cd09822116ec421ce25b5c338dca82ff16",
+      "resolved": true
+    }
+  ]
+}

@@ -2,6 +2,26 @@
 // SPDX-License-Identifier: Apache-2.0
 import type * as Types from "./enterprise-types.js";
 export interface EnterpriseApiInputs {
+  readonly snapshotEnterpriseBusinessFact: { readonly path: { readonly workspaceId: string; }; readonly body: Types.EnterpriseSourceScope; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
+  readonly materializeEnterpriseDecision: { readonly path?: Record<string, never>; readonly body: Types.EnterpriseArtifactDecisionMaterial; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
+  readonly listEnterpriseWorkflows: { readonly path: { readonly workspaceId: string; }; };
+  readonly publishEnterpriseWorkflow: { readonly path: { readonly workspaceId: string; }; readonly body: Types.EnterpriseWorkflowPublish; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
+  readonly readEnterpriseWorkflow: { readonly path: { readonly workspaceId: string; }; readonly body: Types.EnterpriseWorkflowRef; readonly headers: { readonly "X-CSRF-Token": string; }; };
+  readonly selectEnterpriseWorkflow: { readonly path: { readonly workspaceId: string; readonly flowId: string; }; readonly body: Types.EnterpriseWorkflowSelect; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
+  readonly importEnterpriseDocument: { readonly path: { readonly workspaceId: string; }; readonly body: Types.EnterpriseDocumentImport; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
+  readonly readEnterpriseKnowledge: { readonly path: { readonly workspaceId: string; }; readonly body: Types.BusinessObjectRef; readonly headers: { readonly "X-CSRF-Token": string; }; };
+  readonly searchEnterpriseKnowledge: { readonly path: { readonly workspaceId: string; }; readonly body: Types.EnterpriseKnowledgeSearch; readonly headers: { readonly "X-CSRF-Token": string; }; };
+  readonly citeEnterpriseKnowledge: { readonly path: { readonly workspaceId: string; }; readonly body: Types.EvidenceRef; readonly headers: { readonly "X-CSRF-Token": string; }; };
+  readonly exportEnterpriseKnowledge: { readonly path: { readonly workspaceId: string; }; readonly body: Types.EnterpriseKnowledgeExport; readonly headers: { readonly "X-CSRF-Token": string; }; };
+  readonly shareEnterpriseKnowledge: { readonly path: { readonly workspaceId: string; }; readonly body: Types.EnterpriseKnowledgeShare; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
+  readonly getEnterpriseDocumentControl: { readonly path: { readonly workspaceId: string; readonly documentId: string; }; };
+  readonly withdrawEnterpriseDocument: { readonly path: { readonly workspaceId: string; readonly documentId: string; }; readonly body: Types.EnterpriseKnowledgeControl; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
+  readonly freezeEnterpriseArtifact: { readonly path?: Record<string, never>; readonly body: Types.EnterpriseArtifactFreeze; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
+  readonly getEnterpriseArtifact: { readonly path: { readonly artifactId: string; }; };
+  readonly acceptEnterpriseArtifact: { readonly path: { readonly artifactId: string; }; readonly body: Types.EnterpriseArtifactAccept; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
+  readonly proposeEnterpriseExperience: { readonly path: { readonly artifactId: string; }; readonly body: Types.EnterpriseExperienceProposal; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
+  readonly getEnterpriseExperience: { readonly path: { readonly experienceId: string; }; };
+  readonly decideEnterpriseExperience: { readonly path: { readonly experienceId: string; }; readonly body: Types.EnterpriseExperienceDecision; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
   readonly adoptOperatingEvaluation: { readonly path: { readonly workspaceId: string; }; readonly body: Types.EnterpriseGoalAdopt; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
   readonly getGoalConfiguration: { readonly path: { readonly workspaceId: string; }; };
   readonly listOperatingGoals: { readonly path: { readonly workspaceId: string; }; };
@@ -62,6 +82,26 @@ export interface EnterpriseApiInputs {
   readonly commandOrganizationMember: { readonly path: { readonly organizationId: string; readonly memberId: string; }; readonly body: Types.OrganizationMemberCommand; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
 }
 export interface EnterpriseApiOutputs {
+  readonly snapshotEnterpriseBusinessFact: Types.EnterpriseKnowledgeView;
+  readonly materializeEnterpriseDecision: Types.EnterpriseKnowledgeView;
+  readonly listEnterpriseWorkflows: Types.EnterpriseWorkflowCatalog;
+  readonly publishEnterpriseWorkflow: Types.EnterpriseWorkflowState;
+  readonly readEnterpriseWorkflow: Types.EnterpriseWorkflowVersion;
+  readonly selectEnterpriseWorkflow: Types.EnterpriseWorkflowState;
+  readonly importEnterpriseDocument: Types.EnterpriseKnowledgeView;
+  readonly readEnterpriseKnowledge: Types.EnterpriseKnowledgeView;
+  readonly searchEnterpriseKnowledge: Types.EnterpriseKnowledgeSearchResult;
+  readonly citeEnterpriseKnowledge: Types.EnterpriseKnowledgeCitation;
+  readonly exportEnterpriseKnowledge: Types.EnterpriseKnowledgeExportResult;
+  readonly shareEnterpriseKnowledge: Types.EnterpriseKnowledgeSharing;
+  readonly getEnterpriseDocumentControl: Types.EnterpriseKnowledgeDocumentState;
+  readonly withdrawEnterpriseDocument: Types.EnterpriseKnowledgeDocumentState;
+  readonly freezeEnterpriseArtifact: Types.EnterpriseArtifactView;
+  readonly getEnterpriseArtifact: Types.EnterpriseArtifactView;
+  readonly acceptEnterpriseArtifact: Types.EnterpriseArtifactView;
+  readonly proposeEnterpriseExperience: Types.EnterpriseExperienceView;
+  readonly getEnterpriseExperience: Types.EnterpriseExperienceView;
+  readonly decideEnterpriseExperience: Types.EnterpriseExperienceView;
   readonly adoptOperatingEvaluation: Types.EnterpriseGoalView;
   readonly getGoalConfiguration: Types.EnterpriseGoalConfiguration;
   readonly listOperatingGoals: Types.EnterpriseGoalList;

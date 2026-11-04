@@ -1,6 +1,6 @@
 # 能力与验证状态
 
-2026-11-04：E3.1 合入 E1/E2 基线并通过当前工程与合成数据复验，见[E3.1 基线复验](verification/enterprise-e3-1-review-2026-11-04.md)。E3.2 企业执行准入也已通过本地工程与合成数据验收，见[E3.2 验收记录](verification/enterprise-e3-2-2026-11-04.md)。E4.1 来源事件、持续规则与持久评估通过本地工程和合成数据验收，见[E4.1 验收记录](verification/enterprise-e4-1-2026-11-04.md)。E4.2 动态计划与监督通过本地工程和合成数据验收，见[E4.2 验收记录](verification/enterprise-e4-2-2026-11-05.md)。下一包为 E4.3。
+2026-11-05：E3.1 合入 E1/E2 基线并通过当前工程与合成数据复验，见[E3.1 基线复验](verification/enterprise-e3-1-review-2026-11-04.md)。E3.2 企业执行准入也已通过本地工程与合成数据验收，见[E3.2 验收记录](verification/enterprise-e3-2-2026-11-04.md)。E4.1 来源事件、持续规则与持久评估通过本地工程和合成数据验收，见[E4.1 验收记录](verification/enterprise-e4-1-2026-11-04.md)。E4.2 动态计划与监督通过本地工程和合成数据验收，见[E4.2 验收记录](verification/enterprise-e4-2-2026-11-05.md)。E4.3 知识、成果与流程通过本地工程和合成数据验收，见[E4.3 验收记录](verification/enterprise-e4-3-2026-11-05.md)；真实离线质量与试点仍未验收。下一包为 E5.1。
 
 2026-11-03 更新：E1 权限与部署入口缺口已补修，聚焦检查、完整容器复验及新命名空间复验通过，E1 工程与合成数据出口关闭，恢复 E2 实施。2026-11-04：E2.1 工程与合成数据出口通过，见[E2.1 验收记录](verification/enterprise-e2-1-2026-11-04.md)；E2.2 内置模式工程与合成数据出口通过，见[E2.2 验收记录](verification/enterprise-e2-2-2026-11-04.md)。E2 的本地实现已完成，Sales 双模式、E7 整体验收和 E8 试点仍待后续工作包。见[E1 复核记录](verification/enterprise-e1-review-2026-11-03.md)。
 

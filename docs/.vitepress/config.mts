@@ -106,6 +106,7 @@ export default defineConfig({
           { text: "企业执行准入", link: "/enterprise-execution-admission" },
           { text: "来源事件与持续规则", link: "/enterprise-operating-events" },
           { text: "动态计划与监督", link: "/enterprise-agent-coordination" },
+          { text: "知识、成果与流程", link: "/enterprise-knowledge-workflows" },
           { text: "安全边界", link: "/security/overview" },
           { text: "日志脱敏", link: "/security/redaction-policy" },
           { text: "密钥扫描", link: "/security/secret-scanning" },

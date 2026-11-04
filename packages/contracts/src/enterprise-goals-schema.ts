@@ -7,10 +7,10 @@ const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
 const object = (properties: Record<string, JsonObject>, optional: string[] = []): JsonObject => ({ type: 'object', properties, required: Object.keys(properties).filter(k => !optional.includes(k)), additionalProperties: false });
 const list = (items: JsonObject, minItems = 0): JsonObject => ({ type: 'array', items, minItems, uniqueItems: true });
 const digest = { type: 'string', pattern: '^[a-f0-9]{64}$' }, timestamp = { type: 'string', format: 'date-time' };
-const spec = { title: text, message: longText, sources: list(ref('EnterpriseSourceScope'), 1), acceptanceCriteria: list(text, 1), budget: ref('EnterpriseExecutionBudget'), capabilityIds: list(text, 1), modelBindingIds: list(text, 1) };
+const spec = { workflow: ref('EnterpriseWorkflowRef'), title: text, message: longText, sources: list(ref('EnterpriseSourceScope'), 1), acceptanceCriteria: list(text, 1), budget: ref('EnterpriseExecutionBudget'), capabilityIds: list(text, 1), modelBindingIds: list(text, 1) };
 export const ENTERPRISE_GOAL_SCHEMAS: Readonly<Record<string, JsonObject>> = {
   EnterpriseInitialEvaluation: object({ id: text, tokens: count, costMinorUnits: { type: 'string', pattern: '^(0|[1-9][0-9]{0,29})$' }, costNanoMinorUnits: { type: 'string', pattern: '^(0|[1-9][0-9]{0,29})$' } }),
-  EnterpriseGoalAdopt: object({ evaluationId: text, ...spec }),
+  EnterpriseGoalAdopt: object({ evaluationId: text, ...spec }, ['workflow']),
   EnterpriseGoalList: object({ goals: { type: 'array', items: ref('EnterpriseGoalView'), maxItems: 100 }, hasMore: { type: 'boolean' } }),
   EnterpriseWorkModelView: object({ id: text, version: positive, providerId: text, modelId: text, mode: { type: 'string', enum: ['live', 'test_fixture'] }, available: { type: 'boolean' } }),
   EnterpriseGoalConfiguration: object({ capabilities: list(object({ id: text, version: text, effect: { type: 'string', enum: ['read', 'draft', 'internal_write', 'formal_action'] }, modelRequired: { type: 'boolean' } })), models: list(ref('EnterpriseWorkModelView')) }),
@@ -19,11 +19,11 @@ export const ENTERPRISE_GOAL_SCHEMAS: Readonly<Record<string, JsonObject>> = {
   EnterprisePlanSuggestion: object({ reason: text, nodes: list(object({ id: text, dependsOn: list(text), capabilityId: text, capabilityVersion: text, modelBindingId: text, sourceIds: list({ type: 'string', pattern: '^s[0-9]+$' }), budget: ref('EnterpriseExecutionBudget'), acceptanceCriteria: list(text, 1), effect: { type: 'string', enum: ['read', 'draft', 'internal_write', 'formal_action'] } }, ['modelBindingId'])) }),
   EnterpriseGoalPlanningRequest: object({ expectedStreamVersion: positive, modelBindingId: text }, ['modelBindingId']),
   EnterpriseTaskReport: object({ status: { type: 'string', enum: ['complete', 'needs_information', 'blocked'] }, summary: { type: 'string', minLength: 1, maxLength: 4000 },
-    findings: list(object({ text: { type: 'string', minLength: 1, maxLength: 4000 }, sources: list(ref('BusinessObjectRef'), 1) })),
-    acceptance: list(object({ criterion: text, status: { type: 'string', enum: ['satisfied', 'missing', 'unknown'] }, sources: list(ref('BusinessObjectRef')) })), unknown: list(text), decomposition: ref('EnterprisePlanSuggestion') }, ['decomposition']),
-  EnterpriseGoalSpec: object(spec),
-  EnterpriseGoalRevise: object({ expectedStreamVersion: positive, ...spec }),
-  EnterpriseGoalCreate: object(spec),
+    findings: list(object({ text: { type: 'string', minLength: 1, maxLength: 4000 }, sources: list(ref('BusinessObjectRef'), 1), citations: list(ref('EvidenceRef')) }, ['citations'])),
+    acceptance: list(object({ criterion: text, status: { type: 'string', enum: ['satisfied', 'missing', 'unknown'] }, sources: list(ref('BusinessObjectRef')), citations: list(ref('EvidenceRef')) }, ['citations'])), unknown: list(text), decomposition: ref('EnterprisePlanSuggestion') }, ['decomposition']),
+  EnterpriseGoalSpec: object(spec, ['workflow']),
+  EnterpriseGoalRevise: object({ expectedStreamVersion: positive, ...spec }, ['workflow']),
+  EnterpriseGoalCreate: object(spec, ['workflow']),
   EnterpriseGoalAuthorize: object({ expectedStreamVersion: positive, scopeDigest: digest }),
   EnterpriseGoalPlanWrite: object({ expectedStreamVersion: positive, reason: text, nodes: list(ref('TaskNode'), 1) }),
   EnterpriseGoalControlResult: object({ goalId: text, streamVersion: positive, status: ref('EnterpriseGoalStatus'), paused: { type: 'boolean' }, cancelRequested: { type: 'boolean' } }),

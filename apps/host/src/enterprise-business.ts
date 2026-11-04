@@ -44,6 +44,20 @@ function evidenceRecords(records: readonly EnterpriseRecord[], workspaceId: stri
   }
   return result;
 }
+/** Derived review fields retain the current permissions of every underlying business fact. */
+export function assertBusinessSourceClosure(records: readonly EnterpriseRecord[], actor: EnterpriseActor, object: BusinessObject, fields: readonly string[], now: string): void {
+  if (object.reference.objectType !== 'business_review' || object.value.purpose !== 'operating_review') return;
+  const state = reduceBusinessEvents(facts(records, actor.tenantId, object.reference.workspaceId));
+  for (const [sources, metrics, classification] of [['sourceRefs', 'deliveryMetrics', 'public'], ['financialSources', 'financialMetrics', 'price'], ['costSources', 'costMetrics', 'cost']] as const) {
+    if (!fields.some(field => field === sources || field === metrics || (classification === 'price' && field === 'objectiveResult'))) continue;
+    for (const reference of object.value[sources] as unknown as readonly BusinessObjectRef[] ?? []) {
+      const original = state.objects.get(businessObjectKey(reference.objectType, reference.objectId));
+      if (!original) throw new EnterpriseError('OBJECT_NOT_FOUND', 404);
+      const mapping = descriptor(original), allowed = resolveObjectAccess(records, actor, mapping, 'read', now);
+      for (const field of Object.keys(original.value)) if ((mapping.fieldClasses[field] === 'public' || mapping.fieldClasses[field] === classification || (classification === 'cost' && mapping.fieldClasses[field] === 'price')) && !allowed.has(mapping.fieldClasses[field]!)) throw new EnterpriseError('FIELD_ACCESS_DENIED');
+    }
+  }
+}
 export class EnterpriseBusinessService {
   private readonly now: () => string;
   constructor(readonly options: { repository: EnterpriseRepository; now?: () => string }) { this.now = options.now ?? (() => new Date().toISOString()); }

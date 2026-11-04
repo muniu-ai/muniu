@@ -8,10 +8,11 @@ export function enterpriseRequest<K extends EnterpriseOperationId>(id: K, input:
   const operation = ENTERPRISE_HTTP_OPERATIONS.find(item => item.id === id);
   if (!operation) throw new Error('企业 API 操作不存在');
   if ('body' in operation) parseEnterpriseContract(operation.body, (input as { body?: unknown }).body);
-  if (operation.mutation) {
+  if (operation.method === 'post') {
     const headers = (input as { headers?: Record<string, unknown> }).headers;
-    if (!headers || ['Idempotency-Key', 'X-CSRF-Token'].some(name => typeof headers[name] !== 'string' || !(headers[name] as string).trim())
-      || Object.keys(headers).some(name => !['Idempotency-Key', 'X-CSRF-Token'].includes(name))) throw new Error('企业 API 写入头无效');
+    const required = operation.mutation ? ['Idempotency-Key', 'X-CSRF-Token'] : ['X-CSRF-Token'];
+    if (!headers || required.some(name => typeof headers[name] !== 'string' || !(headers[name] as string).trim())
+      || Object.keys(headers).some(name => !required.includes(name))) throw new Error('企业 API 写入头无效');
   }
   const params = (input.path ?? {}) as Readonly<Record<string,string>>;
   const path = operation.path.replace(/\{([^}]+)\}/gu, (_match, key: string) => {

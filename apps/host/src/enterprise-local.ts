@@ -1,4 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
+import { EnterpriseWorkflowService } from './enterprise-workflows.js';
+import { EnterpriseKnowledgeService } from './enterprise-knowledge.js';
+import { EnterpriseArtifactService } from './enterprise-artifacts.js';
+import { EnterpriseExperienceService } from './enterprise-experience.js';
 import { EnterpriseGoalService } from './enterprise-goals.js';
 import { EnterpriseTaskRuntime } from './enterprise-task-runtime.js';
 import type { EvaluationModel } from './enterprise-evaluation.js';
@@ -82,7 +86,10 @@ export async function startEnterpriseLocalHost(options: StartEnterpriseLocalOpti
     const evaluation = new EnterpriseEvaluationRuntime({ operating, protection: { cas, keyProvider: keys.keyProvider }, modelFor: options.evaluationOptions?.modelFor ?? (() => undefined), secretStore: options.evaluationOptions?.secretStore ?? { async read() { throw new EnterpriseError('MODEL_CREDENTIAL_UNAVAILABLE', 503); } }, ...options.evaluationOptions });
     const goals = new EnterpriseGoalService({ operating, modelsFor: options.evaluationOptions?.modelsFor ?? ((tenant, workspace) => { const model = options.evaluationOptions?.modelFor(tenant, workspace); return model ? [model] : []; }) });
     const taskRuntime = new EnterpriseTaskRuntime({ goals, protection: { cas, keyProvider: keys.keyProvider }, secretStore: evaluation.options.secretStore, invoke: options.evaluationOptions?.invoke, quote: options.evaluationOptions?.quote });
-    host = createEnterpriseHost({ ...options, repository, executionRuntime, operating, evaluation, goals });
+    const workflows = new EnterpriseWorkflowService({ operating });
+    const knowledge = new EnterpriseKnowledgeService({ operating, protection: { cas, keyProvider: keys.keyProvider } });
+    const artifacts = new EnterpriseArtifactService({ goals, knowledge }), experiences = new EnterpriseExperienceService({ artifacts, knowledge });
+    host = createEnterpriseHost({ ...options, repository, executionRuntime, operating, evaluation, goals, workflows, knowledge, artifacts, experiences });
     for (const organization of options.organizations) {
       if (options.providers[organization.tenantId]?.issuer !== organization.issuer) throw new Error('OIDC_PROVISIONING_ISSUER_MISMATCH');
       await host.identity.provision(organization);
@@ -115,7 +122,7 @@ export async function startEnterpriseLocalHost(options: StartEnterpriseLocalOpti
     let operatingError: string | undefined;
     const timer = options.operatingBackground ? setInterval(() => { void runOperatingCycle().then(() => { operatingError = undefined; }, () => { operatingError = 'OPERATING_CYCLE_FAILED'; }); }, 5000) : undefined;
     timer?.unref();
-    return { ...host, operating, evaluation, goals, taskRuntime, runOperatingCycle, operatingHealth: () => ({ ready: !operatingError, ...(operatingError ? { code: operatingError } : {}) }), address, stateRoot: root, async close() {
+    return { ...host, operating, evaluation, goals, workflows, knowledge, artifacts, experiences, taskRuntime, runOperatingCycle, operatingHealth: () => ({ ready: !operatingError, ...(operatingError ? { code: operatingError } : {}) }), address, stateRoot: root, async close() {
       if (closed) return; closed = true; if (timer) clearInterval(timer); stop.abort(); await cycle?.catch(() => {});
       try { await activeHost.close(); } finally { try { await activeStore.close(); } finally { lock.release(); } }
     } };

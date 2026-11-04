@@ -30,7 +30,7 @@ interface AccessState { identity: IdentityState; departments: Map<string, Depart
 const READ: readonly ObjectOperation[] = ['read'];
 const WRITE: readonly ObjectOperation[] = ['read', 'draft', 'write'];
 const APPROVE: readonly ObjectOperation[] = [...WRITE, 'business_approve', 'execution_approve'];
-const EVIDENCE = ['artifact_version', 'evidence_ref', 'decision_record', 'business_review'];
+const EVIDENCE = ['memory_entry', 'artifact_version', 'evidence_ref', 'decision_record', 'business_review'];
 function roleOperations(role: BusinessRole, type: string): readonly ObjectOperation[] {
   if (role === 'auditor') return EVIDENCE.includes(type) ? ['read', 'audit'] : [];
   if (role === 'sales' || role === 'sales_manager') {

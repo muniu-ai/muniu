@@ -54,3 +54,4 @@ CLI 帮助、API 路由表、OpenAPI 和内置插件目录由源码生成。改�
 [来源事件与持续规则](enterprise-operating-events.md)说明入站接收、责任接受、观察评估、预算与新入口配置。
 
 [动态计划与监督](enterprise-agent-coordination.md)说明工作授权、任务图、模型选择和持久费用。
+[知识、成果与流程](enterprise-knowledge-workflows.md)说明来源保护、引用、成果验收、经验启用和不可变流程版本。

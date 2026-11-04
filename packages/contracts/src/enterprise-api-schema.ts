@@ -2,6 +2,26 @@
 import { ENTERPRISE_SCHEMAS } from './enterprise-schema.js';
 import type { JsonObject } from './json.js';
 export const ENTERPRISE_HTTP_OPERATIONS = [
+  { id: 'snapshotEnterpriseBusinessFact', method: 'post', path: '/v2/workspaces/{workspaceId}/knowledge/business-snapshots', body: 'EnterpriseSourceScope', response: 'EnterpriseKnowledgeView', mutation: true },
+  { id: 'materializeEnterpriseDecision', method: 'post', path: '/v2/artifacts/decision-materials', body: 'EnterpriseArtifactDecisionMaterial', response: 'EnterpriseKnowledgeView', mutation: true },
+  { id: 'listEnterpriseWorkflows', method: 'get', path: '/v2/workspaces/{workspaceId}/workflows', response: 'EnterpriseWorkflowCatalog', mutation: false },
+  { id: 'publishEnterpriseWorkflow', method: 'post', path: '/v2/workspaces/{workspaceId}/workflows/versions', body: 'EnterpriseWorkflowPublish', response: 'EnterpriseWorkflowState', mutation: true },
+  { id: 'readEnterpriseWorkflow', method: 'post', path: '/v2/workspaces/{workspaceId}/workflows/reads', body: 'EnterpriseWorkflowRef', response: 'EnterpriseWorkflowVersion', mutation: false },
+  { id: 'selectEnterpriseWorkflow', method: 'post', path: '/v2/workspaces/{workspaceId}/workflows/{flowId}/selections', body: 'EnterpriseWorkflowSelect', response: 'EnterpriseWorkflowState', mutation: true },
+  { id: 'importEnterpriseDocument', method: 'post', path: '/v2/workspaces/{workspaceId}/knowledge', body: 'EnterpriseDocumentImport', response: 'EnterpriseKnowledgeView', mutation: true },
+  { id: 'readEnterpriseKnowledge', method: 'post', path: '/v2/workspaces/{workspaceId}/knowledge/reads', body: 'BusinessObjectRef', response: 'EnterpriseKnowledgeView', mutation: false },
+  { id: 'searchEnterpriseKnowledge', method: 'post', path: '/v2/workspaces/{workspaceId}/knowledge/search', body: 'EnterpriseKnowledgeSearch', response: 'EnterpriseKnowledgeSearchResult', mutation: false },
+  { id: 'citeEnterpriseKnowledge', method: 'post', path: '/v2/workspaces/{workspaceId}/knowledge/citations', body: 'EvidenceRef', response: 'EnterpriseKnowledgeCitation', mutation: false },
+  { id: 'exportEnterpriseKnowledge', method: 'post', path: '/v2/workspaces/{workspaceId}/knowledge/exports', body: 'EnterpriseKnowledgeExport', response: 'EnterpriseKnowledgeExportResult', mutation: false },
+  { id: 'shareEnterpriseKnowledge', method: 'post', path: '/v2/workspaces/{workspaceId}/knowledge/sharing', body: 'EnterpriseKnowledgeShare', response: 'EnterpriseKnowledgeSharing', mutation: true },
+  { id: 'getEnterpriseDocumentControl', method: 'get', path: '/v2/workspaces/{workspaceId}/knowledge/documents/{documentId}', response: 'EnterpriseKnowledgeDocumentState', mutation: false },
+  { id: 'withdrawEnterpriseDocument', method: 'post', path: '/v2/workspaces/{workspaceId}/knowledge/documents/{documentId}/withdrawals', body: 'EnterpriseKnowledgeControl', response: 'EnterpriseKnowledgeDocumentState', mutation: true },
+  { id: 'freezeEnterpriseArtifact', method: 'post', path: '/v2/artifacts', body: 'EnterpriseArtifactFreeze', response: 'EnterpriseArtifactView', mutation: true },
+  { id: 'getEnterpriseArtifact', method: 'get', path: '/v2/artifacts/{artifactId}', response: 'EnterpriseArtifactView', mutation: false },
+  { id: 'acceptEnterpriseArtifact', method: 'post', path: '/v2/artifacts/{artifactId}/acceptances', body: 'EnterpriseArtifactAccept', response: 'EnterpriseArtifactView', mutation: true },
+  { id: 'proposeEnterpriseExperience', method: 'post', path: '/v2/artifacts/{artifactId}/experiences', body: 'EnterpriseExperienceProposal', response: 'EnterpriseExperienceView', mutation: true },
+  { id: 'getEnterpriseExperience', method: 'get', path: '/v2/experiences/{experienceId}', response: 'EnterpriseExperienceView', mutation: false },
+  { id: 'decideEnterpriseExperience', method: 'post', path: '/v2/experiences/{experienceId}/decisions', body: 'EnterpriseExperienceDecision', response: 'EnterpriseExperienceView', mutation: true },
   { id:'adoptOperatingEvaluation',method:'post',path:'/v2/workspaces/{workspaceId}/goal-adoptions',body:'EnterpriseGoalAdopt',response:'EnterpriseGoalView',mutation:true },
   { id:'getGoalConfiguration',method:'get',path:'/v2/workspaces/{workspaceId}/goal-configuration',response:'EnterpriseGoalConfiguration',mutation:false },
   { id:'listOperatingGoals',method:'get',path:'/v2/workspaces/{workspaceId}/goals',response:'EnterpriseGoalList',mutation:false },
@@ -66,7 +86,7 @@ export function createEnterpriseOpenApiDocument(): JsonObject {
   const failure = (description: string): JsonObject => ({ description, content: { 'application/json': { schema: { $ref: '#/components/schemas/EnterpriseApiError' } } } });
   for (const op of ENTERPRISE_HTTP_OPERATIONS) {
     const parameters: JsonObject[] = [...op.path.matchAll(/\{([^}]+)\}/gu)].map(match => ({ in: 'path', name: match[1]!, required: true, schema: { type: 'string', minLength: 1 } }));
-    if (op.mutation) for (const name of ['Idempotency-Key', 'X-CSRF-Token']) parameters.push({ in: 'header', name, required: true, schema: { type: 'string', minLength: 1 } });
+    if (op.method === 'post') for (const name of op.mutation ? ['Idempotency-Key', 'X-CSRF-Token'] : ['X-CSRF-Token']) parameters.push({ in: 'header', name, required: true, schema: { type: 'string', minLength: 1 } });
     const status = op.id === 'createEnterpriseWorkspace' || op.id === 'inviteOrganizationMember' ? '201' : '200';
     paths[op.path] ??= {};
     paths[op.path]![op.method] = { operationId: op.id, parameters,
@@ -74,7 +94,7 @@ export function createEnterpriseOpenApiDocument(): JsonObject {
       responses: { [status]: { description: '成功', content: { 'application/json': { schema: { type: 'object', additionalProperties: false,
         required: ['data', 'traceId'], properties: { data: { $ref: `#/components/schemas/${op.response}` }, traceId: { type: 'string' } } } } } },
         '400': failure('请求格式无效'), '401': failure('登录或会话无效'), '403': failure('当前权限或跨站防护拒绝'),
-        '404': failure('当前作用域不存在该对象'), '409': failure('版本或幂等键冲突'), '413': failure('请求过大'), '415': failure('正文类型无效'), '503': failure('服务不可用') } };
+        '404': failure('当前作用域不存在该对象'), '409': failure('版本或幂等键冲突'), '410': failure('资料已撤回或内容不可用'), '413': failure('请求过大'), '415': failure('正文类型无效'), '503': failure('服务不可用') } };
   }
   paths['/v2/auth/login'] = { get: { operationId: 'enterpriseLogin', parameters: [
     { name: 'organizationId', in: 'query', required: true, schema: { type: 'string' } },

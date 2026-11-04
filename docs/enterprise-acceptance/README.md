@@ -45,7 +45,7 @@ node --test scripts/test/enterprise-acceptance-spec.test.mjs
 
 ## CI 与后续工作包
 
-当前 Node CI 执行规格检查，`test:boundaries` 同时运行校验器测试。`ciGroups` 记录后续分组，`gates` 记录原方案要求的 12 个新命令及负责包。这些字段保留 E0.2 冻结时的未实施状态，不回填后续结果。`verify:business-domain` 已由 E2 接入真实领域、持久权限和 HTTP 断言；当前结果见[E2.2 验收记录](../verification/enterprise-e2-2-2026-11-04.md)。`verify:enterprise-operating` 与 `verify:enterprise-operating-postgres` 由 E4.1 提供；后者包含 E3 故障断言并接入 Node CI，结果见[E4.1 验收记录](../verification/enterprise-e4-1-2026-11-04.md)。`verify:agent-coordination` 已由 E4.2 接入动态计划、预算及持久执行断言；PostgreSQL 变体在同一命令中复验 E3/E4.1 并接入 CI，见[E4.2 验收记录](../verification/enterprise-e4-2-2026-11-05.md)。其他门禁按各负责工作包登记，没有添加空脚本或成功占位任务。
+当前 Node CI 执行规格检查，`test:boundaries` 同时运行校验器测试。`ciGroups` 记录后续分组，`gates` 记录原方案要求的 12 个新命令及负责包。这些字段保留 E0.2 冻结时的未实施状态，不回填后续结果。`verify:business-domain` 已由 E2 接入真实领域、持久权限和 HTTP 断言；当前结果见[E2.2 验收记录](../verification/enterprise-e2-2-2026-11-04.md)。`verify:enterprise-operating` 与 `verify:enterprise-operating-postgres` 由 E4.1 提供；后者包含 E3 故障断言并接入 Node CI，结果见[E4.1 验收记录](../verification/enterprise-e4-1-2026-11-04.md)。`verify:agent-coordination` 已由 E4.2 接入动态计划、预算及持久执行断言；PostgreSQL 变体在同一命令中复验 E3/E4.1 并接入 CI，见[E4.2 验收记录](../verification/enterprise-e4-2-2026-11-05.md)。E4.3 提供知识、成果和流程断言，当前 CI 的 `verify:enterprise-knowledge-postgres` 同时复验 E3/E4.1/E4.2。`verify:operating-evaluation` 校验冻结记录、原始日志与计分；`--self-test` 只验证合成记录，不能作为真实模型质量成绩。说明见[知识、成果与流程](../enterprise-knowledge-workflows.md)。其他门禁按各负责工作包登记，没有添加空脚本或成功占位任务。
 
 真实运行条件逐项记录在 `executionPrerequisites`。人员、模型配置及试点企业尚未绑定；测试 OIDC、Sales 部署、企业微信测试企业、容量及联合恢复环境尚未核验。每项列明受影响门禁；“尚未核验”不表示相应资源一定不存在。后续包须记录真实就绪证据，不能据现有代码推断环境已具备。
 
