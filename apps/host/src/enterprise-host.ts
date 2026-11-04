@@ -4,6 +4,8 @@ import { createServer, type Server } from 'node:http';
 import { ENTERPRISE_HTTP_OPERATIONS, createEnterpriseOpenApiDocument } from '@mn/contracts';
 import { parseEnterpriseContract, canonicalJson, type EnterpriseContractTypes } from '@mn/contracts';
 import { BrowserAuthService, EnterpriseError, EnterpriseIdentityService, EnterprisePermissionService, EnterpriseQuotaService, equalOpaque, opaqueHash, type EnterpriseRepository } from '@mn/enterprise-services';
+import { EnterpriseBusinessService } from './enterprise-business.js';
+import { dispatchEnterpriseBusiness } from './enterprise-business-api.js';
 import { dispatchEnterpriseAccess } from './enterprise-access-api.js';
 import { createEnterpriseOidc, type EnterpriseOidcProvider } from './enterprise-oidc.js';
 
@@ -29,6 +31,7 @@ function cookieValue(request: Request, name: string): string | undefined {
   if (found.length > 1) throw new EnterpriseError('AUTHENTICATION_REQUIRED', 401);
   return found[0]?.slice(name.length + 1);
 }
+const requestBodyLimit = (path: string) => /^\/v2\/workspaces\/[^/]+\/business\/commands$/u.test(path) ? 262144 : 16384;
 async function body(request: Request): Promise<unknown> {
   if (request.headers.get('content-type')?.split(';')[0]?.trim() !== 'application/json') throw new EnterpriseError('INVALID_CONTENT_TYPE', 415);
   const reader = request.body?.getReader(); if (!reader) throw new EnterpriseError('INVALID_BODY', 400);
@@ -37,7 +40,7 @@ async function body(request: Request): Promise<unknown> {
     while (true) {
       const result = await reader.read(); if (result.done) break;
       size += result.value.byteLength;
-      if (size > 16384) { await reader.cancel(); throw new EnterpriseError('REQUEST_TOO_LARGE', 413); }
+      if (size > requestBodyLimit(new URL(request.url).pathname)) { await reader.cancel(); throw new EnterpriseError('REQUEST_TOO_LARGE', 413); }
       chunks.push(result.value);
     }
     return JSON.parse(Buffer.concat(chunks).toString('utf8'));
@@ -59,6 +62,7 @@ export function createEnterpriseHost(options: EnterpriseHostOptions) {
   const loginName = secure ? '__Host-mn-enterprise-login' : 'mn-enterprise-dev-login';
   const cookie = (name: string, value: string, age: number) => `${name}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${age}${secure ? '; Secure' : ''}`;
   const identity = new EnterpriseIdentityService(options), auth = new BrowserAuthService(options), permissions = new EnterprisePermissionService(options), quotas = new EnterpriseQuotaService(options);
+  const business = new EnterpriseBusinessService(options);
   const oidc = createEnterpriseOidc({ providers: options.providers, redirectUri: `${options.origin}/v2/auth/callback`, development: options.profile === 'development' });
   const headers = () => new Headers({ 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff' });
   const reply = (data: unknown, status: number, traceId: string, schema?: keyof EnterpriseContractTypes) => {
@@ -133,6 +137,8 @@ export function createEnterpriseHost(options: EnterpriseHostOptions) {
       const input = 'body' in op ? parse(op.body, await body(request)) : undefined;
       const access = await dispatchEnterpriseAccess({ operationId: op.id, params, input, actor: current.actor, key, permissions, quotas });
       if (access.handled) return reply(access.value, 200, traceId, op.response);
+      const businessResult = await dispatchEnterpriseBusiness({ operationId: op.id, params, input, actor: current.actor, key, business });
+      if (businessResult.handled) return reply(businessResult.value, 200, traceId, op.response);
       let data: unknown;
       switch (op.id) {
         case 'enterpriseSession': data = { tenantId: current.actor.tenantId, principalId: current.member.id, displayName: current.member.displayName,
@@ -172,7 +178,7 @@ export function createEnterpriseHost(options: EnterpriseHostOptions) {
       server = createServer({ requestTimeout: 30000, headersTimeout: 10000, maxHeaderSize: 16384 }, async (incoming, outgoing) => {
         try {
           let size = 0; const chunks: Buffer[] = [];
-          for await (const chunk of incoming) { size += chunk.length; if (size > 16384) { outgoing.writeHead(413).end(); return; } chunks.push(Buffer.from(chunk)); }
+          for await (const chunk of incoming) { size += chunk.length; if (size > requestBodyLimit(new URL(incoming.url ?? '/', options.origin).pathname)) { outgoing.writeHead(413).end(); return; } chunks.push(Buffer.from(chunk)); }
           const h = new Headers(); for (const [name, value] of Object.entries(incoming.headers)) if (value !== undefined) h.set(name, Array.isArray(value) ? value.join(', ') : value);
           const request = new Request(new URL(incoming.url ?? '/', options.origin), { method: incoming.method, headers: h,
             ...(!['GET', 'HEAD'].includes(incoming.method ?? 'GET') ? { body: Buffer.concat(chunks) } : {}) });

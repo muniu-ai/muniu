@@ -29,6 +29,7 @@ test("0.2 只保留目标工作区", () => {
     "packages/agent-runtime",
     "packages/plugin-sdk",
     "packages/storage",
+    "plugins/business",
     "plugins/opc",
     "plugins/coding",
     "plugins/runner-claude-cli",
@@ -83,7 +84,7 @@ test("0.2 只保留目标工作区", () => {
 test("内核不得导入产品插件", () => {
   for (const file of filesUnder(join(root, "packages/kernel", "src"))) {
     const source = readFileSync(file, "utf8");
-    assert.doesNotMatch(source, /(?:from|import\()\s*["'][^"']*(?:plugins\/|@mn\/plugin-opc|@mn\/plugin-coding)/, relative(root, file));
+    assert.doesNotMatch(source, /(?:from|import\()\s*["'][^"']*(?:plugins\/|@mn\/plugin-opc|@mn\/plugin-business|@mn\/plugin-coding)/, relative(root, file));
   }
 });
 

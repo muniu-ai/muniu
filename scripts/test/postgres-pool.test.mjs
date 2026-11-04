@@ -25,3 +25,18 @@ test("Host and Worker cannot disable the transaction timeout required for owner 
     assert.equal(pool.options.idle_in_transaction_session_timeout, 20000);
   }
 });
+
+test('checked-out PostgreSQL client errors do not crash the process or retry the transaction', async () => {
+  class Pool extends EventEmitter {}
+  const logs=[],pool=createPostgresPool({}, {Pool,log:line=>logs.push(line)}),client=new EventEmitter();
+  const failure=new Error('private-password');let queries=0;
+  client.query=async()=>{queries++;throw failure;};
+  pool.emit('connect',client);pool.emit('connect',client);
+  assert.doesNotThrow(()=>client.emit('error',failure));
+  await assert.rejects(client.query('commit'),error=>error===failure);
+  assert.equal(queries,1);
+  assert.equal(client.listenerCount('error'),1);
+  pool.emit('error',failure,client);
+  assert.equal(logs.length,1);
+  assert.doesNotMatch(logs[0],/private-password/);
+});

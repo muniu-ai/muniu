@@ -2,6 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 import type * as Types from "./enterprise-types.js";
 export interface EnterpriseApiInputs {
+  readonly getBusinessApproval: { readonly path: { readonly workspaceId: string; readonly approvalId: string; }; };
+  readonly executeBusinessCommand: { readonly path: { readonly workspaceId: string; }; readonly body: Types.EnterpriseBusinessCommand; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
+  readonly listBusinessObjects: { readonly path: { readonly workspaceId: string; readonly objectType: string; }; };
+  readonly getBusinessObject: { readonly path: { readonly workspaceId: string; readonly objectType: string; readonly objectId: string; }; };
+  readonly getBusinessObjectVersion: { readonly path: { readonly workspaceId: string; readonly objectType: string; readonly objectId: string; readonly streamVersion: string; }; };
+  readonly recordBusinessEvidence: { readonly path: { readonly workspaceId: string; }; readonly body: Types.EnterpriseBusinessEvidenceCreate; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
+  readonly getBusinessEvidence: { readonly path: { readonly workspaceId: string; readonly evidenceId: string; }; };
+  readonly withdrawBusinessEvidence: { readonly path: { readonly workspaceId: string; readonly evidenceId: string; }; readonly body: Types.EnterpriseBusinessEvidenceWithdraw; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
   readonly getQuotaConfiguration: { readonly path: { readonly workspaceId: string; }; };
   readonly configureWorkspaceQuota: { readonly path: { readonly workspaceId: string; }; readonly body: Types.EnterpriseQuotaConfigure; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
   readonly getAccessConfiguration: { readonly path: { readonly workspaceId: string; }; };
@@ -21,6 +29,14 @@ export interface EnterpriseApiInputs {
   readonly commandOrganizationMember: { readonly path: { readonly organizationId: string; readonly memberId: string; }; readonly body: Types.OrganizationMemberCommand; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
 }
 export interface EnterpriseApiOutputs {
+  readonly getBusinessApproval: Types.BusinessApproval;
+  readonly executeBusinessCommand: Types.EnterpriseBusinessObjectView;
+  readonly listBusinessObjects: Types.EnterpriseBusinessObjectList;
+  readonly getBusinessObject: Types.EnterpriseBusinessObjectView;
+  readonly getBusinessObjectVersion: Types.EnterpriseBusinessObjectView;
+  readonly recordBusinessEvidence: Types.EvidenceRef;
+  readonly getBusinessEvidence: Types.EnterpriseBusinessEvidenceView;
+  readonly withdrawBusinessEvidence: Types.EnterpriseBusinessEvidenceWithdrawn;
   readonly getQuotaConfiguration: Types.EnterpriseQuotaConfiguration;
   readonly configureWorkspaceQuota: Types.EnterpriseQuotaView;
   readonly getAccessConfiguration: Types.EnterpriseAccessConfiguration;

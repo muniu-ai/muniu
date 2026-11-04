@@ -101,6 +101,7 @@ jobs:
       - run: docker compose -f docker-compose.enterprise.yml config --quiet
       - run: npm run verify:enterprise-fixture
       - run: npm run verify:enterprise-access-postgres
+      - run: npm run verify:business-postgres
 
   kubernetes-sandbox:
     name: Kind enterprise failover and Pod boundary

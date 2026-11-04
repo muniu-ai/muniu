@@ -105,3 +105,13 @@ test('批准操作的字段类别不代替读取许可，审批前必须能读�
     scope: { kind: 'workspace' }, operations: ['read'], fieldClasses: ['public'], expiresAt: '2027-01-01T00:00:00.000Z' });
   await assert.rejects(f.permissions.assertBusinessDecision(f.actor('manager'), f.ref('quote_version', 'quote'), 'sales-a'), { code: 'FIELD_ACCESS_DENIED' });
 });
+
+test('服务价格版本由获准销售经理维护，销售只能读取获准价格字段', async () => {
+  const f = await fixture();
+  await f.grant('manager', 'sales_manager', { kind: 'workspace' }, ['public', 'price']);
+  await f.grant('sales-a', 'sales', { kind: 'workspace' }, ['public', 'price']);
+  const service = { ...f.ref('service_version', 'service-v1'), fieldClasses: { title: 'public' as const, unitPriceMinor: 'price' as const } };
+  await f.permissions.assertAccess(f.actor('sales-a'), service, 'read', ['unitPriceMinor']);
+  await assert.rejects(f.permissions.assertAccess(f.actor('sales-a'), service, 'write', ['unitPriceMinor']), { code: 'OBJECT_ACCESS_DENIED' });
+  await f.permissions.assertAccess(f.actor('manager'), service, 'write', ['unitPriceMinor']);
+});

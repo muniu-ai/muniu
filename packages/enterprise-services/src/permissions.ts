@@ -34,6 +34,7 @@ const EVIDENCE = ['artifact_version', 'evidence_ref', 'decision_record', 'busine
 function roleOperations(role: BusinessRole, type: string): readonly ObjectOperation[] {
   if (role === 'auditor') return EVIDENCE.includes(type) ? ['read', 'audit'] : [];
   if (role === 'sales' || role === 'sales_manager') {
+    if (type === 'service_version') return role === 'sales_manager' ? WRITE : READ;
     if (['customer', 'contact', 'opportunity'].includes(type)) return [...WRITE, 'execution_approve'];
     if (['quote_version', 'contract', 'order'].includes(type)) return role === 'sales_manager' ? APPROVE : WRITE;
     if (['service_version', 'payment_schedule', 'receipt', 'refund', ...EVIDENCE].includes(type)) return READ;

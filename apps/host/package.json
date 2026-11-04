@@ -42,7 +42,8 @@
     "fontkit": "2.0.4",
     "yazl": "3.3.1",
     "@mn/enterprise-services": "0.2.0",
-    "openid-client": "6.8.8"
+    "openid-client": "6.8.8",
+    "@mn/plugin-business": "0.2.0"
   },
   "devDependencies": {
     "@types/yauzl": "3.4.0",

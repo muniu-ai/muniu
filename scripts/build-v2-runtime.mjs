@@ -25,6 +25,7 @@ const buildOrder = [
   "packages/task-orchestration",
   "packages/plugin-sdk",
   "packages/agent-runtime",
+  "plugins/business",
   "plugins/opc",
   "plugins/coding",
   "plugins/runner-claude-cli",

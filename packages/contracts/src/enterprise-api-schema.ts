@@ -2,6 +2,14 @@
 import { ENTERPRISE_SCHEMAS } from './enterprise-schema.js';
 import type { JsonObject } from './json.js';
 export const ENTERPRISE_HTTP_OPERATIONS = [
+  { id: 'getBusinessApproval', method: 'get', path: '/v2/workspaces/{workspaceId}/business-approvals/{approvalId}', response: 'BusinessApproval', mutation: false },
+  { id: 'executeBusinessCommand', method: 'post', path: '/v2/workspaces/{workspaceId}/business/commands', body: 'EnterpriseBusinessCommand', response: 'EnterpriseBusinessObjectView', mutation: true },
+  { id: 'listBusinessObjects', method: 'get', path: '/v2/workspaces/{workspaceId}/business/{objectType}', response: 'EnterpriseBusinessObjectList', mutation: false },
+  { id: 'getBusinessObject', method: 'get', path: '/v2/workspaces/{workspaceId}/business/{objectType}/{objectId}', response: 'EnterpriseBusinessObjectView', mutation: false },
+  { id: 'getBusinessObjectVersion', method: 'get', path: '/v2/workspaces/{workspaceId}/business/{objectType}/{objectId}/versions/{streamVersion}', response: 'EnterpriseBusinessObjectView', mutation: false },
+  { id: 'recordBusinessEvidence', method: 'post', path: '/v2/workspaces/{workspaceId}/business-evidence', body: 'EnterpriseBusinessEvidenceCreate', response: 'EvidenceRef', mutation: true },
+  { id: 'getBusinessEvidence', method: 'get', path: '/v2/workspaces/{workspaceId}/business-evidence/{evidenceId}', response: 'EnterpriseBusinessEvidenceView', mutation: false },
+  { id: 'withdrawBusinessEvidence', method: 'post', path: '/v2/workspaces/{workspaceId}/business-evidence/{evidenceId}/withdrawals', body: 'EnterpriseBusinessEvidenceWithdraw', response: 'EnterpriseBusinessEvidenceWithdrawn', mutation: true },
   { id: 'getQuotaConfiguration', method: 'get', path: '/v2/workspaces/{workspaceId}/quota', response: 'EnterpriseQuotaConfiguration', mutation: false },
   { id: 'configureWorkspaceQuota', method: 'post', path: '/v2/workspaces/{workspaceId}/quota', body: 'EnterpriseQuotaConfigure', response: 'EnterpriseQuotaView', mutation: true },
   { id: 'getAccessConfiguration', method: 'get', path: '/v2/workspaces/{workspaceId}/access', response: 'EnterpriseAccessConfiguration', mutation: false },

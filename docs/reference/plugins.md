@@ -14,6 +14,7 @@
 
 | 插件 ID | 包 | 版本 | 类型 | 启用方式 |
 | --- | --- | --- | --- | --- |
+| `business` | `@mn/plugin-business` | `0.2.0` | 产品插件 | 随应用提供，按工作区启用 |
 | `coding` | `@mn/plugin-coding` | `0.2.0` | 产品插件 | 随应用提供，按工作区启用 |
 | `opc` | `@mn/plugin-opc` | `0.2.0` | 产品插件 | 随应用提供，按工作区启用 |
 | `runner-claude-cli` | `@mn/runner-claude-cli` | `0.2.0` | Runner Adapter | 可选，必须显式选择 |

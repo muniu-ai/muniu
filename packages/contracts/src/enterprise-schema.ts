@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import type { JsonObject } from './json.js';
+import { ENTERPRISE_BUSINESS_SCHEMAS } from './enterprise-business-schema.js';
 import { ENTERPRISE_OBJECT_TYPES } from './enterprise-object-types.js';
 export { ENTERPRISE_OBJECT_TYPES } from './enterprise-object-types.js';
 import { ENTERPRISE_ACCESS_SCHEMAS } from './enterprise-access-schema.js';
@@ -28,6 +29,7 @@ const receiptBase = { ...scope, id: text, operationKey: text, actionDigest: dige
 /** E0 design contracts; publishing a schema does not mount a Host route or grant authority. */
 export const ENTERPRISE_SCHEMAS: Readonly<Record<string, JsonObject>> = {
   ...ENTERPRISE_IDENTITY_SCHEMAS,
+  ...ENTERPRISE_BUSINESS_SCHEMAS,
   ...ENTERPRISE_ACCESS_SCHEMAS,
   BusinessObjectRef: object({ ...scope, objectType: enumeration(...ENTERPRISE_OBJECT_TYPES), objectId: text, streamVersion: version, digest }),
   ExternalObjectRef: object({ ...scope, provider: text, objectType: enumeration(...ENTERPRISE_OBJECT_TYPES), objectId: text,

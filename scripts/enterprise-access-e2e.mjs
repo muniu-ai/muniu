@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+import { waitForFixturePort } from './lib/fixture-network.mjs';
 import assert from 'node:assert/strict';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
@@ -20,7 +21,7 @@ try {
   container = await docker('run', '--detach', '--name', name, '--label', 'com.muniu.fixture=enterprise-access',
     '--memory', '512m', '--cpus', '1', '--tmpfs', '/var/lib/postgresql/data:rw,size=256m',
     '-p', '127.0.0.1::5432', '-e', 'POSTGRES_USER=mn', '-e', 'POSTGRES_PASSWORD=synthetic-only', '-e', 'POSTGRES_DB=enterprise_fixture', 'postgres:16-alpine');
-  const address = await docker('port', container, '5432/tcp');
+  const address = await waitForFixturePort(() => docker('port', container, '5432/tcp'));
   assert.match(address, /^127\.0\.0\.1:\d+$/u);
   const connectionString = `postgres://mn:synthetic-only@${address}/enterprise_fixture`;
   const makePool = () => { const pool = createPostgresPool({ connectionString, max: 2 }); pools.push(pool); return pool; };
