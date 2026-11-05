@@ -1,0 +1,456 @@
+{
+  "package": "E2.2 payment period timeline follow-up",
+  "status": "engineering_and_synthetic_passed",
+  "date": "2026-11-05",
+  "baseline": "9fec9c3",
+  "implementationCommit": "835e92f87e302632e9a1b542ae149afc0da7fa24",
+  "verificationCommit": "9b9bdafe22951173645356d3cbad5a7bdfb6289d",
+  "ci": {
+    "conclusion": "success",
+    "createdAt": "2026-11-05T09:28:29Z",
+    "databaseId": 42002662438,
+    "headSha": "9b9bdafe22951173645356d3cbad5a7bdfb6289d",
+    "jobs": [
+      {
+        "completedAt": "2026-11-05T09:46:47Z",
+        "conclusion": "success",
+        "databaseId": 127161501889,
+        "name": "Serial provider and enterprise dependency verification",
+        "startedAt": "2026-11-05T09:28:31Z",
+        "status": "completed",
+        "steps": [
+          {
+            "completedAt": "2026-11-05T09:28:33Z",
+            "conclusion": "success",
+            "name": "Set up job",
+            "number": 1,
+            "startedAt": "2026-11-05T09:28:32Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T09:28:35Z",
+            "conclusion": "success",
+            "name": "Run actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd",
+            "number": 2,
+            "startedAt": "2026-11-05T09:28:33Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T09:28:40Z",
+            "conclusion": "success",
+            "name": "Run actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e",
+            "number": 3,
+            "startedAt": "2026-11-05T09:28:35Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T09:28:42Z",
+            "conclusion": "success",
+            "name": "Install the pinned npm version",
+            "number": 4,
+            "startedAt": "2026-11-05T09:28:40Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T09:28:42Z",
+            "conclusion": "success",
+            "name": "Keep Node test files serial",
+            "number": 5,
+            "startedAt": "2026-11-05T09:28:42Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T09:28:45Z",
+            "conclusion": "success",
+            "name": "Record the exact checkout and available resources",
+            "number": 6,
+            "startedAt": "2026-11-05T09:28:42Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T09:28:52Z",
+            "conclusion": "success",
+            "name": "Run npm ci",
+            "number": 7,
+            "startedAt": "2026-11-05T09:28:45Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T09:28:52Z",
+            "conclusion": "success",
+            "name": "Run npm run verify:contracts",
+            "number": 8,
+            "startedAt": "2026-11-05T09:28:52Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T09:30:09Z",
+            "conclusion": "success",
+            "name": "Verify PDF process limits before the full suite",
+            "number": 9,
+            "startedAt": "2026-11-05T09:28:52Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T09:37:44Z",
+            "conclusion": "success",
+            "name": "Verify all Node suites serially",
+            "number": 10,
+            "startedAt": "2026-11-05T09:30:09Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T09:39:40Z",
+            "conclusion": "success",
+            "name": "Run npm run typecheck",
+            "number": 11,
+            "startedAt": "2026-11-05T09:37:44Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T09:39:42Z",
+            "conclusion": "success",
+            "name": "Prepare the PostgreSQL verification image",
+            "number": 12,
+            "startedAt": "2026-11-05T09:39:40Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T09:39:48Z",
+            "conclusion": "success",
+            "name": "Verify payment period history with real PostgreSQL",
+            "number": 13,
+            "startedAt": "2026-11-05T09:39:42Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T09:41:10Z",
+            "conclusion": "success",
+            "name": "Run npm run verify:provider-contracts",
+            "number": 14,
+            "startedAt": "2026-11-05T09:39:48Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T09:41:30Z",
+            "conclusion": "success",
+            "name": "Run npm run verify:provider-contracts-postgres",
+            "number": 15,
+            "startedAt": "2026-11-05T09:41:10Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T09:46:35Z",
+            "conclusion": "success",
+            "name": "Verify real PostgreSQL, S3, Vault and two Host/Worker instances",
+            "number": 16,
+            "startedAt": "2026-11-05T09:41:30Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T09:46:35Z",
+            "conclusion": "success",
+            "name": "Collect fixture diagnostics and remove only this Compose project",
+            "number": 17,
+            "startedAt": "2026-11-05T09:46:35Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T09:46:45Z",
+            "conclusion": "success",
+            "name": "Confirm generated sources are unchanged",
+            "number": 18,
+            "startedAt": "2026-11-05T09:46:35Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T09:46:45Z",
+            "conclusion": "success",
+            "name": "Post Run actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e",
+            "number": 35,
+            "startedAt": "2026-11-05T09:46:45Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T09:46:45Z",
+            "conclusion": "success",
+            "name": "Post Run actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd",
+            "number": 36,
+            "startedAt": "2026-11-05T09:46:45Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T09:46:45Z",
+            "conclusion": "success",
+            "name": "Complete job",
+            "number": 37,
+            "startedAt": "2026-11-05T09:46:45Z",
+            "status": "completed"
+          }
+        ],
+        "url": "https://github.com/muniu-ai/muniu/actions/runs/42002662438/job/127161501889"
+      }
+    ],
+    "status": "completed",
+    "updatedAt": "2026-11-05T09:46:47Z",
+    "url": "https://github.com/muniu-ai/muniu/actions/runs/42002662438"
+  },
+  "ciLogSha256": "80d2d57024eb6015fc17ebfe99f67b6762c8bdcb5e37acc2dd28569d96f4a154",
+  "localChecks": [
+    {
+      "name": "install",
+      "command": [
+        "npm",
+        "ci",
+        "--offline",
+        "--ignore-scripts"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 5.0,
+      "peakProcessTreeRSSMiB": 0.0,
+      "minimumHostFreePercent": 27,
+      "log": "/tmp/muniu-e22-timeline-install.log",
+      "containerSamples": [],
+      "logSha256": "fc16ce5eee97861d8bceae86b275c8edfb7928da7f652664ae0005e3154e2377"
+    },
+    {
+      "name": "regression-red",
+      "command": [
+        "npm",
+        "run",
+        "test",
+        "-w",
+        "@mn/plugin-business"
+      ],
+      "exitCode": 1,
+      "resourceStopped": false,
+      "elapsedSeconds": 5.0,
+      "peakProcessTreeRSSMiB": 1.0,
+      "minimumHostFreePercent": 28,
+      "log": "/tmp/muniu-e22-timeline-regression-red.log",
+      "containerSamples": [],
+      "logSha256": "69f3e0876f441b5474909bef041ed738ba3b2737cebfb5678ad70ff8332923c7"
+    },
+    {
+      "name": "regression-green",
+      "command": [
+        "sh",
+        "-c",
+        "npm run generate:contracts && npm run build -w @mn/contracts && npm run test -w @mn/plugin-business"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 5.0,
+      "peakProcessTreeRSSMiB": 0.2,
+      "minimumHostFreePercent": 27,
+      "log": "/tmp/muniu-e22-timeline-regression-green.log",
+      "containerSamples": [],
+      "logSha256": "358dbb455493ed02ee8561a280b7fb0c52a5bb9bca0b05c2a67b4f7d50f92e9c"
+    },
+    {
+      "name": "full-node",
+      "command": [
+        "npm",
+        "test"
+      ],
+      "exitCode": -15,
+      "resourceStopped": true,
+      "elapsedSeconds": 398.9,
+      "peakProcessTreeRSSMiB": 362.0,
+      "minimumHostFreePercent": 16,
+      "log": "/tmp/muniu-e22-timeline-full-node.log",
+      "containerSamples": [],
+      "logSha256": "7cd0b290e2adc17df12f4236a764aea4fc359a056fbe4a8dc6eaa0dbb80a7299"
+    },
+    {
+      "name": "host-node-resume",
+      "command": [
+        "node",
+        "--test",
+        "--test-concurrency=1",
+        "apps/host/dist-test/test/**/*.test.js"
+      ],
+      "exitCode": 1,
+      "resourceStopped": true,
+      "elapsedSeconds": 360.9,
+      "peakProcessTreeRSSMiB": 220.9,
+      "minimumHostFreePercent": 17,
+      "log": "/tmp/muniu-e22-timeline-host-node-resume.log",
+      "containerSamples": [],
+      "logSha256": "73f164dc8dd10a87f3f21cfda6570a656a9813cdb69ea7368417c6e2ed483885"
+    },
+    {
+      "name": "cli-node",
+      "command": [
+        "npm",
+        "run",
+        "test",
+        "-w",
+        "@mn/cli"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 10.1,
+      "peakProcessTreeRSSMiB": 228.5,
+      "minimumHostFreePercent": 26,
+      "log": "/tmp/muniu-e22-timeline-cli-node.log",
+      "containerSamples": [],
+      "logSha256": "81e29da4590332f1dcdaa20c3a89c4e198e227d5dedff02460f98ef7c286bccd"
+    },
+    {
+      "name": "desktop",
+      "command": [
+        "sh",
+        "-c",
+        "npm run typecheck:desktop && npm run build:desktop"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 15.1,
+      "peakProcessTreeRSSMiB": 345.0,
+      "minimumHostFreePercent": 26,
+      "log": "/tmp/muniu-e22-timeline-desktop.log",
+      "containerSamples": [],
+      "logSha256": "12bab2e4f47cad8574c9c469a5be99a64f5ca24814c37fd914b372112b767477"
+    },
+    {
+      "name": "sidecar",
+      "command": [
+        "node",
+        "scripts/build-host-sidecar.mjs"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 35.3,
+      "peakProcessTreeRSSMiB": 253.2,
+      "minimumHostFreePercent": 26,
+      "log": "/tmp/muniu-e22-timeline-sidecar.log",
+      "containerSamples": [],
+      "logSha256": "f230450603b230882789db20dbe115f47c9bb549433293dc709d0129905e4039"
+    },
+    {
+      "name": "rust",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "apps/desktop-mac/src-tauri/Cargo.toml",
+        "--config",
+        "profile.dev.package.muniu-desktop.debug=0",
+        "--config",
+        "profile.dev.package.muniu-desktop.codegen-units=1"
+      ],
+      "exitCode": 101,
+      "resourceStopped": false,
+      "elapsedSeconds": 10.1,
+      "peakProcessTreeRSSMiB": 115.0,
+      "minimumHostFreePercent": 27,
+      "log": "/tmp/muniu-e22-timeline-rust.log",
+      "containerSamples": [],
+      "logSha256": "a45e241620a5d65a13b113db1340e337c7709d7eca38ae3dca02acaf8211db99"
+    },
+    {
+      "name": "rust-final",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "apps/desktop-mac/src-tauri/Cargo.toml",
+        "--config",
+        "profile.dev.package.muniu-desktop.debug=0",
+        "--config",
+        "profile.dev.package.muniu-desktop.codegen-units=1"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 15.3,
+      "peakProcessTreeRSSMiB": 440.2,
+      "minimumHostFreePercent": 26,
+      "log": "/tmp/muniu-e22-timeline-rust-final.log",
+      "containerSamples": [],
+      "logSha256": "b1f7440a8062a3c4b380427a00bd5e07f387569ba8212d2448c06b2b7f56fe4b"
+    },
+    {
+      "name": "docs",
+      "command": [
+        "sh",
+        "-c",
+        "npm run docs:generate && npm run docs:check && npm run docs:links && npm run docs:build && git diff --check"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 15.1,
+      "peakProcessTreeRSSMiB": 351.2,
+      "minimumHostFreePercent": 27,
+      "log": "/tmp/muniu-e22-timeline-docs.log",
+      "containerSamples": [],
+      "logSha256": "d6758a09f1e19286f4a1a04c37e3db9a11c53d733ff6574ca27122ef08700b40"
+    },
+    {
+      "name": "checkpoint-checks",
+      "command": [
+        "sh",
+        "-c",
+        "node --check scripts/enterprise-business-e2e.mjs && node --test --test-concurrency=1 scripts/test/enterprise-actions-cleanup.test.mjs && npm run verify:contracts && npm run docs:check && npm run docs:links && npm audit --omit=dev && git diff --check"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 5.1,
+      "peakProcessTreeRSSMiB": 0.3,
+      "minimumHostFreePercent": 26,
+      "log": "/tmp/muniu-e22-timeline-checkpoint-checks.log",
+      "containerSamples": [],
+      "logSha256": "a35e89e434793e73ac68cade5bc819be4bf705a818aee6c604593aff1141848f"
+    },
+    {
+      "name": "ci-runner-wrapper",
+      "command": [
+        "python3",
+        "/tmp/muniu-e22-ci-runner-probe.py"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 5.0,
+      "peakProcessTreeRSSMiB": 0.7,
+      "minimumHostFreePercent": 26,
+      "log": "/tmp/muniu-e22-timeline-ci-runner-wrapper.log",
+      "containerSamples": [],
+      "logSha256": "44186e9383e9a54616a7734b2cae03715ae1992a9876d585e8da24ee1d88301a"
+    },
+    {
+      "name": "mac-platform-remainder",
+      "command": [
+        "sh",
+        "-c",
+        "node node_modules/typescript/bin/tsc -p apps/host/tsconfig.test.json && node --test --test-concurrency=1 --test-name-pattern=\"代码团队经过真实沙箱\" apps/host/dist-test/test/team-coding.test.js"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 20.1,
+      "peakProcessTreeRSSMiB": 417.7,
+      "minimumHostFreePercent": 29,
+      "log": "/tmp/muniu-e22-timeline-mac-platform-remainder.log",
+      "containerSamples": [],
+      "logSha256": "33ecb410e76ac0e4877327dc370d6621940aacc350a40f812976080039b04e20"
+    }
+  ],
+  "includedDependency": "E4.3 PDF exit and empty-memory-context follow-up",
+  "scopeLimits": [
+    "No production deployment",
+    "No real enterprise identity or pilot acceptance",
+    "No paid model calls"
+  ],
+  "preservedExistingContainers": 11,
+  "ciNode": {
+    "discovered": 1472,
+    "passed": 1427,
+    "failed": 0,
+    "skippedPlatformSpecific": 45,
+    "coveredByPriorLocalChecks": 44,
+    "remainingLocalCases": 0,
+    "coveredByLocalChecks": 45
+  }
+}
