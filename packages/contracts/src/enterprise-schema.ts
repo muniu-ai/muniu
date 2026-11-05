@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+import { ENTERPRISE_PROVIDER_SCHEMAS } from './enterprise-providers-schema.js';
 import { ENTERPRISE_WORKFLOW_SCHEMAS } from './enterprise-workflows-schema.js';
 import { ENTERPRISE_ARTIFACT_SCHEMAS } from './enterprise-artifacts-schema.js';
 import { ENTERPRISE_KNOWLEDGE_SCHEMAS } from './enterprise-knowledge-schema.js';
@@ -45,6 +46,7 @@ export const ENTERPRISE_SCHEMAS: Readonly<Record<string, JsonObject>> = {
   ...ENTERPRISE_KNOWLEDGE_SCHEMAS,
   ...ENTERPRISE_ARTIFACT_SCHEMAS,
   ...ENTERPRISE_WORKFLOW_SCHEMAS,
+  ...ENTERPRISE_PROVIDER_SCHEMAS,
   EnterpriseGoalStatus: { type: 'string', enum: [...ENTERPRISE_GOAL_STATES] },
   BusinessObjectRef: object({ ...scope, objectType: enumeration(...ENTERPRISE_OBJECT_TYPES), objectId: text, streamVersion: version, digest }),
   ExternalObjectRef: object({ ...scope, provider: text, objectType: enumeration(...ENTERPRISE_OBJECT_TYPES), objectId: text,

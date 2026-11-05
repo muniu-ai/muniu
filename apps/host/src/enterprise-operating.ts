@@ -117,7 +117,7 @@ export class EnterpriseOperatingService {
       const events: OperatingSourceEvent[] = [];
       for (const fact of changed) {
         const object = state.objects.get(businessObjectKey(fact.objectType, fact.objectId));
-        if (object) events.push({ id: sha256([fact.objectType, fact.objectId, fact.expectedStreamVersion + 1]), type: 'business.changed', objectRefs: [object.reference], origin: 'external' });
+        if (object) events.push({ id: sha256([fact.objectType, fact.objectId, fact.expectedStreamVersion + 1]), type: 'business.changed', objectRefs: [object.reference], origin: fact.causation ? 'muniu' : 'external' });
       }
       this.route(tx, source, events);
       this.record(tx, OPERATING.cursor, { ...cursor, streamVersion: cursor.streamVersion + 1, cursor: String(end) }, 'enterprise-system:router', 'operating.cursor_advanced');

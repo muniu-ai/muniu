@@ -1,0 +1,1042 @@
+{
+  "package": "E5.1",
+  "date": "2026-11-05",
+  "baseCommit": "860905a986cae9e257576e2ad52acadce72d7d73",
+  "branch": "codex/enterprise-e5-1",
+  "status": "local_engineering_and_synthetic_passed",
+  "scope": "local_engineering_and_synthetic_acceptance",
+  "toolchain": {
+    "node": "22.19.0",
+    "npm": "11.10.1",
+    "typescript": "5.7.2"
+  },
+  "image": {
+    "stage": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e51-linux-en8rvs2u",
+    "image": "mn-e51-recheck:60799b809cc7",
+    "sourceDigest": "60799b809cc70dfbb3cebe77c6798911644e7b23d8b0e01c4e979cf64ad97dee",
+    "lockDigest": "9689c184c5c7c11fa4628713129699bd0254ccb0e226db7ba63047cc9b8fc632",
+    "baseImage": "mn-e43-recheck:00ab63e655a4",
+    "externalLockMatchesBase": true,
+    "baseImageId": "sha256:2fdb957035edfa2fcb9483c3f2478b792352f16d8db10ca29af07612a83c90b7",
+    "imageId": "sha256:d6e03e66f7a09536affde4ce77f4ae974dc150a779c2dca2a17424c22371d36c"
+  },
+  "checks": [
+    {
+      "name": "audit",
+      "command": [
+        "npm",
+        "audit",
+        "--omit=dev"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 5.1,
+      "peakProcessTreeRSSMiB": 0.9,
+      "minimumHostFreePercent": 27,
+      "status": "passed",
+      "logSha256": "6d8c5c8f3d7684adb070417bd608d01ae90aa3dc26a65af03ffda4955f38d9a3",
+      "completedAt": "2026-11-05T00:42:32.586593+00:00"
+    },
+    {
+      "name": "bundle-candidate",
+      "command": [
+        "node",
+        "/Users/xiaomingwang/ChatGPT/muniu-enterprise-provider-contracts/e5-1-737b773/verify.mjs"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 5.2,
+      "peakProcessTreeRSSMiB": 0.0,
+      "minimumHostFreePercent": 30,
+      "status": "passed",
+      "logSha256": "9fa02a7872fbadc2667e34d063ce4d0c1d81646bb88ee1f52416a4d94b250af3",
+      "completedAt": "2026-11-05T01:35:01.650309+00:00"
+    },
+    {
+      "name": "bundle-tools",
+      "command": [
+        "node",
+        "--test",
+        "--test-concurrency=1",
+        "scripts/test/provider-contract-suite.test.mjs"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 5.1,
+      "peakProcessTreeRSSMiB": 1.0,
+      "minimumHostFreePercent": 28,
+      "status": "passed",
+      "logSha256": "d53aebf0362d6ece91f85e116142887e6153f97071dff02891f12194390d7169",
+      "tests": 14,
+      "failedTests": 0,
+      "completedAt": "2026-11-05T00:26:08.310759+00:00"
+    },
+    {
+      "name": "chinese",
+      "command": [
+        "python3",
+        "/Users/xiaomingwang/.codex/skills/chinese-skill/scripts/chinese_lint.py",
+        "docs/enterprise-builtin-provider.md",
+        "docs/enterprise-provider-contracts.md",
+        "docs/adr/0016-provider-preparation.md",
+        "docs/verification/enterprise-e5-1-2026-11-05.md"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 5.0,
+      "peakProcessTreeRSSMiB": 0.5,
+      "minimumHostFreePercent": 32,
+      "status": "passed",
+      "logSha256": "30bcdbe807ea7ce0a6a27d0b74315e0379b0ee96250d51dcbec484fd198e4038",
+      "completedAt": "2026-11-05T01:28:38.693981+00:00"
+    },
+    {
+      "name": "ci",
+      "command": [
+        "npm",
+        "ci"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 10.1,
+      "peakProcessTreeRSSMiB": 229.2,
+      "minimumHostFreePercent": 29,
+      "status": "passed",
+      "logSha256": "cc97281a18d8865a51bcf8e9aefc6cedd4896d118a52287304d158f92b9ea3cd",
+      "completedAt": "2026-11-04T22:05:32.631197+00:00"
+    },
+    {
+      "name": "cleanup-green",
+      "command": [
+        "node",
+        "--test",
+        "--test-concurrency=1",
+        "scripts/test/enterprise-actions-cleanup.test.mjs"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 5.1,
+      "peakProcessTreeRSSMiB": 0.0,
+      "minimumHostFreePercent": 28,
+      "status": "passed",
+      "logSha256": "b277a04de96bcf1444f3d4e5934d0a9f91c4a37c20493ab52f6211ed614e1144",
+      "tests": 3,
+      "failedTests": 0,
+      "completedAt": "2026-11-05T00:38:10.680297+00:00"
+    },
+    {
+      "name": "cleanup-red",
+      "command": [
+        "node",
+        "--test",
+        "--test-concurrency=1",
+        "scripts/test/enterprise-actions-cleanup.test.mjs"
+      ],
+      "exitCode": 1,
+      "resourceStopped": false,
+      "elapsedSeconds": 5.0,
+      "peakProcessTreeRSSMiB": 0.0,
+      "minimumHostFreePercent": 27,
+      "status": "expected_tdd_failure",
+      "logSha256": "d0ebdeb1d7629ee2c49e6d827d08327fe786375bde329dacb830041c4edec603",
+      "tests": 1,
+      "failedTests": 1,
+      "completedAt": "2026-11-05T00:33:59.675918+00:00"
+    },
+    {
+      "name": "compose-low",
+      "command": [
+        "node",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e51-linux-en8rvs2u/compose-low/run.cjs"
+      ],
+      "exitCode": 1,
+      "resourceStopped": true,
+      "elapsedSeconds": 193.5,
+      "peakProcessTreeRSSMiB": 104.1,
+      "minimumHostFreePercent": 16,
+      "status": "resource_interrupted",
+      "logSha256": "e1b568b31792d91be1906a0ebe22c245541613a2dee30a8a4b50f50ba74b694b",
+      "completedAt": "2026-11-05T00:54:38.311623+00:00"
+    },
+    {
+      "name": "compose",
+      "command": [
+        "node",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e51-linux-en8rvs2u/compose/run.cjs"
+      ],
+      "exitCode": 1,
+      "resourceStopped": true,
+      "elapsedSeconds": 75.6,
+      "peakProcessTreeRSSMiB": 112.6,
+      "minimumHostFreePercent": 16,
+      "status": "resource_interrupted",
+      "logSha256": "e1b568b31792d91be1906a0ebe22c245541613a2dee30a8a4b50f50ba74b694b",
+      "completedAt": "2026-11-05T00:49:42.207577+00:00"
+    },
+    {
+      "name": "contracts-docs",
+      "command": [
+        "node",
+        "scripts/generate-docs.mjs"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 5.0,
+      "peakProcessTreeRSSMiB": 0.3,
+      "minimumHostFreePercent": 27,
+      "status": "passed",
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "completedAt": "2026-11-05T00:35:07.059601+00:00"
+    },
+    {
+      "name": "desktop-build",
+      "command": [
+        "npm",
+        "run",
+        "build:desktop"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 10.1,
+      "peakProcessTreeRSSMiB": 376.1,
+      "minimumHostFreePercent": 27,
+      "status": "passed",
+      "logSha256": "91529dc20284001d8d32f3213818107c6bcd445fdc21afe6e39b232f32919274",
+      "completedAt": "2026-11-05T00:29:43.521416+00:00"
+    },
+    {
+      "name": "desktop-typecheck",
+      "command": [
+        "npm",
+        "run",
+        "typecheck:desktop"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 10.3,
+      "peakProcessTreeRSSMiB": 348.3,
+      "minimumHostFreePercent": 27,
+      "status": "passed",
+      "logSha256": "08c3af819ec047ace6fa8caa60498f942a5ccef772eb47880e32d46a8cd8a8eb",
+      "completedAt": "2026-11-05T00:29:18.152820+00:00"
+    },
+    {
+      "name": "docs-build",
+      "command": [
+        "npm",
+        "run",
+        "docs:build"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 5.0,
+      "peakProcessTreeRSSMiB": 0.0,
+      "minimumHostFreePercent": 29,
+      "status": "passed",
+      "logSha256": "dda1851d0d2c2271d931e4f98cbac07230e0c5db45ff7d7253117f6933631ed2",
+      "completedAt": "2026-11-05T01:28:33.615381+00:00"
+    },
+    {
+      "name": "docs-check",
+      "command": [
+        "npm",
+        "run",
+        "docs:check"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 5.1,
+      "peakProcessTreeRSSMiB": 0.8,
+      "minimumHostFreePercent": 30,
+      "status": "passed",
+      "logSha256": "1cad105851539948620be4f0cb14a832de6bbd7a4fcbd42d985862c3caa32580",
+      "completedAt": "2026-11-05T01:28:23.387558+00:00"
+    },
+    {
+      "name": "docs-final",
+      "command": [
+        "sh",
+        "-c",
+        "npm run docs:check && npm run docs:links && npm run docs:build"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 5.0,
+      "peakProcessTreeRSSMiB": 0.2,
+      "minimumHostFreePercent": 29,
+      "status": "passed",
+      "logSha256": "1e863f195ba6b2fea780a402a94a829a06079ead22c41238d7d93c04e966e830",
+      "completedAt": "2026-11-05T01:31:19.640536+00:00"
+    },
+    {
+      "name": "docs-generate-final",
+      "command": [
+        "npm",
+        "run",
+        "docs:generate"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 5.0,
+      "peakProcessTreeRSSMiB": 0.0,
+      "minimumHostFreePercent": 29,
+      "status": "passed",
+      "logSha256": "7e29d2b58cce24cb4f485b621d3b8ca89b1ef458c91fe74aaabc6e8df4f067f7",
+      "completedAt": "2026-11-05T01:28:18.198580+00:00"
+    },
+    {
+      "name": "docs-links",
+      "command": [
+        "npm",
+        "run",
+        "docs:links"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 5.0,
+      "peakProcessTreeRSSMiB": 0.2,
+      "minimumHostFreePercent": 29,
+      "status": "passed",
+      "logSha256": "fd72b3436493c97179b8b0f0d51a02d34c6653e931e58fce54c79ac6c8584086",
+      "completedAt": "2026-11-05T01:28:28.508126+00:00"
+    },
+    {
+      "name": "export-candidate",
+      "command": [
+        "node",
+        "scripts/export-provider-contracts.mjs",
+        "--out",
+        "/Users/xiaomingwang/ChatGPT/muniu-enterprise-provider-contracts/e5-1-737b773"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 5.0,
+      "peakProcessTreeRSSMiB": 0.2,
+      "minimumHostFreePercent": 28,
+      "status": "passed",
+      "logSha256": "a51f4ebe08c8fd7e81fb4ed241b15399a3df36452a6b846b84ea1090c1e278da",
+      "completedAt": "2026-11-05T01:34:35.061072+00:00"
+    },
+    {
+      "name": "focused",
+      "command": [
+        "sh",
+        "-ec",
+        "npm run test -w @mn/business-execution && npm run test -w @mn/plugin-business && npm run test -w @mn/enterprise-services && node node_modules/typescript/bin/tsc -p apps/host/tsconfig.test.json --incremental --tsBuildInfoFile /tmp/muniu-e51-host-tests.tsbuildinfo && node --test --test-concurrency=1 apps/host/dist-test/test/enterprise-builtin*.test.js apps/host/dist-test/test/enterprise-provider*.test.js apps/host/dist-test/test/enterprise-execution*.test.js apps/host/dist-test/test/enterprise-operating*.test.js apps/host/dist-test/test/enterprise-local.test.js && node --test --test-concurrency=1 scripts/test/provider-contract-suite.test.mjs"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 41.1,
+      "peakProcessTreeRSSMiB": 197.8,
+      "minimumHostFreePercent": 28,
+      "status": "passed",
+      "logSha256": "e4364d2ba37ee2bf3b732fcd515be594c94625ef1ef2c30b5bd4b0cbf92aa353",
+      "tests": 155,
+      "failedTests": 0,
+      "completedAt": "2026-11-05T00:04:28.288632+00:00"
+    },
+    {
+      "name": "helm",
+      "command": [
+        "npm",
+        "run",
+        "verify:helm"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 5.1,
+      "peakProcessTreeRSSMiB": 1.0,
+      "minimumHostFreePercent": 27,
+      "status": "passed",
+      "logSha256": "3eb6da204b6d45dfc04a2af9fa798ef3b5e6deec81d4c475afbd42bac0023edc",
+      "tests": 4,
+      "failedTests": 0,
+      "completedAt": "2026-11-05T00:42:37.774602+00:00"
+    },
+    {
+      "name": "host-final",
+      "command": [
+        "npm",
+        "run",
+        "build",
+        "-w",
+        "@mn/host"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 5.1,
+      "peakProcessTreeRSSMiB": 0.4,
+      "minimumHostFreePercent": 27,
+      "status": "passed",
+      "logSha256": "353269e167fe4f5bb53c9f6aa7bca80f97fb690b6f9573f534a6230abbcb9e20",
+      "completedAt": "2026-11-05T00:44:43.275159+00:00"
+    },
+    {
+      "name": "image",
+      "command": [
+        "/Applications/Docker.app/Contents/Resources/bin/docker",
+        "build",
+        "--pull=false",
+        "-t",
+        "mn-e51-recheck:60799b809cc7",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e51-linux-en8rvs2u"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 15.2,
+      "peakProcessTreeRSSMiB": 13.4,
+      "minimumHostFreePercent": 27,
+      "status": "passed",
+      "logSha256": "cad347c328198b494977421bf8a70f66947519d6549daa56623c8b2ab0797a6e",
+      "completedAt": "2026-11-05T00:46:19.267547+00:00"
+    },
+    {
+      "name": "licenses",
+      "command": [
+        "npm",
+        "run",
+        "verify:licenses"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 5.1,
+      "peakProcessTreeRSSMiB": 1.0,
+      "minimumHostFreePercent": 27,
+      "status": "passed",
+      "logSha256": "f820975b7f1579c14004d5de663bcb458e1d5952b690c5934d6b48e97ac5f07d",
+      "completedAt": "2026-11-05T00:42:27.325389+00:00"
+    },
+    {
+      "name": "linux",
+      "command": [
+        "/Applications/Docker.app/Contents/Resources/bin/docker",
+        "run",
+        "--rm",
+        "--pull=never",
+        "--name",
+        "mn-e51-linux-60799b809cc7",
+        "--memory",
+        "512m",
+        "--memory-swap",
+        "512m",
+        "--cpus",
+        "0.75",
+        "--pids-limit",
+        "160",
+        "--network",
+        "none",
+        "--read-only",
+        "--tmpfs",
+        "/tmp:rw,size=128m,mode=1777",
+        "-e",
+        "NODE_OPTIONS=--max-old-space-size=192",
+        "--entrypoint",
+        "sh",
+        "sha256:d6e03e66f7a09536affde4ce77f4ae974dc150a779c2dca2a17424c22371d36c",
+        "-ec",
+        "sha256sum -c e51-checksums.txt > /dev/null && node --test --test-concurrency=1 packages/kernel/dist-test/test/*.test.js packages/task-orchestration/dist-test/test/*.test.js packages/business-execution/dist-test/test/*.test.js apps/worker/dist-test/test/provider-action-worker.test.js plugins/business/dist-test/test/*.test.js packages/enterprise-services/dist-test/test/*.test.js packages/storage/dist-test/test/transaction-guard.test.js apps/host/dist-test/test/enterprise-*.test.js scripts/test/operating-evaluation.test.mjs scripts/test/enterprise-actions-cleanup.test.mjs"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 85.4,
+      "peakProcessTreeRSSMiB": 13.3,
+      "minimumHostFreePercent": 27,
+      "status": "passed",
+      "logSha256": "ac2d27a7d043a0ae32ef7ff7e2c5512d9ed3a8de404dfb44b17bcfd75c273b5b",
+      "tests": 363,
+      "failedTests": 0,
+      "containerSamplePeakMiB": 86.42,
+      "containerSampleCount": 23,
+      "completedAt": "2026-11-05T00:48:00.538550+00:00"
+    },
+    {
+      "name": "node-final",
+      "command": [
+        "npm",
+        "test"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 580.0,
+      "peakProcessTreeRSSMiB": 470.8,
+      "minimumHostFreePercent": 26,
+      "status": "passed",
+      "logSha256": "a39cccddc2aef839be36afcae0060b083fb2f376cc3a976e93d7ba8c080c7a8d",
+      "tests": 1462,
+      "failedTests": 0,
+      "completedAt": "2026-11-05T01:05:30.081725+00:00"
+    },
+    {
+      "name": "node-tests",
+      "command": [
+        "npm",
+        "test"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 644.6,
+      "peakProcessTreeRSSMiB": 595.7,
+      "minimumHostFreePercent": 22,
+      "status": "passed",
+      "logSha256": "77b305d51235fd094dab439b466d2db966520533842dde913d86c6d7bcf6931b",
+      "tests": 1461,
+      "failedTests": 0,
+      "completedAt": "2026-11-05T00:19:37.796726+00:00"
+    },
+    {
+      "name": "oss-baseline",
+      "command": [
+        "npm",
+        "run",
+        "verify:oss-baseline"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 5.0,
+      "peakProcessTreeRSSMiB": 0.0,
+      "minimumHostFreePercent": 26,
+      "status": "passed",
+      "logSha256": "8ac9a81f12f6d0628dcc5888a578e12ff03e15ea39e2718c951f6e19511bce4a",
+      "completedAt": "2026-11-05T00:41:43.897130+00:00"
+    },
+    {
+      "name": "plugins-final",
+      "command": [
+        "npm",
+        "run",
+        "verify:plugins"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 418.2,
+      "peakProcessTreeRSSMiB": 435.8,
+      "minimumHostFreePercent": 28,
+      "status": "passed",
+      "logSha256": "d1a677cf65032d3c4135346759660ac59104d7eaa542531a3c65aa833b5451e5",
+      "tests": 718,
+      "failedTests": 0,
+      "completedAt": "2026-11-05T01:18:39.077312+00:00"
+    },
+    {
+      "name": "policy",
+      "command": [
+        "npm",
+        "run",
+        "test:oss-policy"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 5.1,
+      "peakProcessTreeRSSMiB": 0.2,
+      "minimumHostFreePercent": 26,
+      "status": "passed",
+      "logSha256": "ae9efdd5d9388a4cba8aa6657fce922d5dcc5406fcc6f0920caedcc8a4f7e5f0",
+      "tests": 27,
+      "failedTests": 0,
+      "completedAt": "2026-11-05T00:42:16.864219+00:00"
+    },
+    {
+      "name": "postgres-final",
+      "command": [
+        "node",
+        "scripts/enterprise-actions-e2e.mjs",
+        "--with-enterprise-provider"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 52.3,
+      "peakProcessTreeRSSMiB": 161.2,
+      "minimumHostFreePercent": 26,
+      "status": "passed",
+      "logSha256": "d13bddcbe6164bcb5aa4d905cc2d28be69a7d4598ac2e35b4c09744f00893d71",
+      "containerSamplePeakMiB": 82.96,
+      "containerSampleCount": 14,
+      "completedAt": "2026-11-05T00:45:47.069419+00:00"
+    },
+    {
+      "name": "postgres-provider-low",
+      "command": [
+        "node",
+        "scripts/enterprise-actions-e2e.mjs",
+        "--with-enterprise-provider"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 137.5,
+      "peakProcessTreeRSSMiB": 109.3,
+      "minimumHostFreePercent": 26,
+      "status": "passed",
+      "logSha256": "d82f5d8c67d08d13c5df7d3b251670ad1650997ec0e563f8bfd491f41ca356a2",
+      "containerSamplePeakMiB": 86.17,
+      "containerSampleCount": 31,
+      "completedAt": "2026-11-05T00:40:53.690283+00:00"
+    },
+    {
+      "name": "postgres-provider",
+      "command": [
+        "npm",
+        "run",
+        "verify:provider-contracts-postgres"
+      ],
+      "exitCode": -15,
+      "resourceStopped": true,
+      "elapsedSeconds": 85.6,
+      "peakProcessTreeRSSMiB": 156.7,
+      "minimumHostFreePercent": 17,
+      "status": "resource_interrupted",
+      "logSha256": "369f289f5d632bad9535e8c20d356427c3fbe108d2033479b5a28cb1a2e5cc70",
+      "containerSamplePeakMiB": 69.76,
+      "containerSampleCount": 14,
+      "completedAt": "2026-11-05T00:22:04.932111+00:00"
+    },
+    {
+      "name": "provider-contracts",
+      "command": [
+        "npm",
+        "run",
+        "verify:provider-contracts"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 153.5,
+      "peakProcessTreeRSSMiB": 439.6,
+      "minimumHostFreePercent": 18,
+      "status": "passed",
+      "logSha256": "2744850a64f3183c79b6f6f0cd23833627e28e9e3f88cb5b790e75278da62622",
+      "tests": 52,
+      "failedTests": 0,
+      "completedAt": "2026-11-05T00:37:59.644387+00:00"
+    },
+    {
+      "name": "provider-final",
+      "command": [
+        "npm",
+        "run",
+        "verify:provider-contracts"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 61.6,
+      "peakProcessTreeRSSMiB": 436.9,
+      "minimumHostFreePercent": 28,
+      "status": "passed",
+      "logSha256": "509c97fe7bc48758f656316edf5c73cfdb762d627ca0442fd10ab791c8006541",
+      "tests": 56,
+      "failedTests": 0,
+      "completedAt": "2026-11-05T01:22:49.620963+00:00"
+    },
+    {
+      "name": "release-contract",
+      "command": [
+        "npm",
+        "run",
+        "test:release-contract"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 5.0,
+      "peakProcessTreeRSSMiB": 0.0,
+      "minimumHostFreePercent": 26,
+      "status": "passed",
+      "logSha256": "1bea8ea20435041916b894ab3e94570139a4e69f396e2833198eac12ce6cd114",
+      "tests": 3,
+      "failedTests": 0,
+      "completedAt": "2026-11-05T00:42:22.031100+00:00"
+    },
+    {
+      "name": "replay-inner-green",
+      "command": [
+        "sh",
+        "-c",
+        "node node_modules/typescript/bin/tsc -p apps/host/tsconfig.test.json --incremental --tsBuildInfoFile /tmp/muniu-e51-host-tests.tsbuildinfo && node --test --test-concurrency=1 apps/host/dist-test/test/enterprise-builtin-actions.test.js apps/host/dist-test/test/enterprise-provider-contract.test.js apps/host/dist-test/test/enterprise-providers-http.test.js"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 20.1,
+      "peakProcessTreeRSSMiB": 130.6,
+      "minimumHostFreePercent": 26,
+      "status": "passed",
+      "logSha256": "37b9b1fcb61b6fc65f003336c7cafef831980e80a2bcb9a7963f8a7b186617e7",
+      "tests": 31,
+      "failedTests": 0,
+      "completedAt": "2026-11-05T00:44:07.677969+00:00"
+    },
+    {
+      "name": "replay-inner-red",
+      "command": [
+        "sh",
+        "-c",
+        "node node_modules/typescript/bin/tsc -p apps/host/tsconfig.test.json --incremental --tsBuildInfoFile /tmp/muniu-e51-host-tests.tsbuildinfo && node --test --test-concurrency=1 --test-name-pattern=内层 apps/host/dist-test/test/enterprise-builtin-actions.test.js"
+      ],
+      "exitCode": 1,
+      "resourceStopped": false,
+      "elapsedSeconds": 5.0,
+      "peakProcessTreeRSSMiB": 1.0,
+      "minimumHostFreePercent": 27,
+      "status": "expected_tdd_failure",
+      "logSha256": "cb66dcc057dc60b6bb31afdf5a85b0c88974503a9664ce26b5a34ee812ce3ff0",
+      "tests": 1,
+      "failedTests": 1,
+      "completedAt": "2026-11-05T00:43:08.069520+00:00"
+    },
+    {
+      "name": "rust-final",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "apps/desktop-mac/src-tauri/Cargo.toml",
+        "--config",
+        "profile.dev.package.muniu-desktop.debug=0",
+        "--config",
+        "profile.dev.package.muniu-desktop.codegen-units=1"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 10.1,
+      "peakProcessTreeRSSMiB": 281.7,
+      "minimumHostFreePercent": 37,
+      "status": "passed",
+      "logSha256": "8094d9773fce7b015648d1cbd3a346915dd7846acafd5e2faff29dfbc2f58f12",
+      "completedAt": "2026-11-05T01:23:55.768794+00:00"
+    },
+    {
+      "name": "rust-low",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "apps/desktop-mac/src-tauri/Cargo.toml",
+        "--config",
+        "profile.dev.package.muniu-desktop.debug=0",
+        "--config",
+        "profile.dev.package.muniu-desktop.codegen-units=1"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 25.4,
+      "peakProcessTreeRSSMiB": 432.4,
+      "minimumHostFreePercent": 27,
+      "status": "passed",
+      "logSha256": "9374fb31b2186b6a5841786537dbe3f5fed51f6f5607e28005df05645eeebe2b",
+      "completedAt": "2026-11-05T00:34:54.674623+00:00"
+    },
+    {
+      "name": "rust",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "apps/desktop-mac/src-tauri/Cargo.toml"
+      ],
+      "exitCode": -15,
+      "resourceStopped": true,
+      "elapsedSeconds": 10.3,
+      "peakProcessTreeRSSMiB": 76.9,
+      "minimumHostFreePercent": 15,
+      "status": "resource_interrupted",
+      "logSha256": "94045629bb848d447de7259e7763bf8e5bc45635539484d2abf97a60722e5587",
+      "completedAt": "2026-11-05T00:33:14.862954+00:00"
+    },
+    {
+      "name": "sidecar-final",
+      "command": [
+        "npm",
+        "run",
+        "build:host-sidecar",
+        "--",
+        "--smoke"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 55.9,
+      "peakProcessTreeRSSMiB": 436.9,
+      "minimumHostFreePercent": 29,
+      "status": "passed",
+      "logSha256": "e560cc5764bca59db6258156110af71ee8fdbcb3f9b64b054309e8cdb2734251",
+      "completedAt": "2026-11-05T01:23:45.612343+00:00"
+    },
+    {
+      "name": "sidecar",
+      "command": [
+        "npm",
+        "run",
+        "build:host-sidecar",
+        "--",
+        "--smoke"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 171.5,
+      "peakProcessTreeRSSMiB": 556.5,
+      "minimumHostFreePercent": 24,
+      "status": "passed",
+      "logSha256": "a27732475884262e3e97d87db3fcf029ec8ef6b9ada263fc58a3af0e3143c173",
+      "completedAt": "2026-11-05T00:32:43.844087+00:00"
+    },
+    {
+      "name": "static-enterprise",
+      "command": [
+        "npm",
+        "run",
+        "verify:enterprise-fixture",
+        "--",
+        "--static"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 5.0,
+      "peakProcessTreeRSSMiB": 0.2,
+      "minimumHostFreePercent": 26,
+      "status": "passed",
+      "logSha256": "b472472deadf7190f9e9111743fe0cd42d3ebc695c9243f27a5525e80ba8bb00",
+      "tests": 26,
+      "failedTests": 0,
+      "completedAt": "2026-11-05T00:42:42.894327+00:00"
+    },
+    {
+      "name": "typecheck-low",
+      "command": [
+        "npm",
+        "run",
+        "typecheck"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 101.4,
+      "peakProcessTreeRSSMiB": 532.1,
+      "minimumHostFreePercent": 26,
+      "status": "passed",
+      "logSha256": "0919626c69efc73938f4291befbb930767b431a6acd3689de5ef27c70006cb87",
+      "completedAt": "2026-11-05T00:28:56.677368+00:00"
+    },
+    {
+      "name": "typecheck",
+      "command": [
+        "npm",
+        "run",
+        "typecheck"
+      ],
+      "exitCode": -15,
+      "resourceStopped": true,
+      "elapsedSeconds": 15.2,
+      "peakProcessTreeRSSMiB": 501.2,
+      "minimumHostFreePercent": 16,
+      "status": "resource_interrupted",
+      "logSha256": "50978f129ce2d03ece3a4912202efe9cf3f9aa88dd903d6f004231749e7e39e4",
+      "completedAt": "2026-11-05T00:26:48.861327+00:00"
+    }
+  ],
+  "compositionAttempts": [
+    {
+      "code": null,
+      "signal": "SIGTERM",
+      "reason": "SIGTERM",
+      "cleanupCode": 0,
+      "originalServicesUnchanged": true,
+      "name": "compose",
+      "overridesSha256": "0de232f2eb563f4828bcb506438e169a507e3d5c0d8e59b8816969c8cc2079a7",
+      "logSha256": "a39dffde9edd000b5e18dfc6e24811dd4760d7aa16db778292f5b59e5502747f",
+      "resourceLogSha256": "6f243fec07dd7a0a332b55bd47e4883889511c7dc20d23732d28c632415c2ae6"
+    },
+    {
+      "code": null,
+      "signal": "SIGTERM",
+      "reason": "SIGTERM",
+      "cleanupCode": 0,
+      "originalServicesUnchanged": true,
+      "name": "compose-low",
+      "overridesSha256": "3afda7c74099c30309de2b999c116ab75ef9343371753c5ae2a4cf0597c7f106",
+      "logSha256": "1b85cdae4fabe1d41aff86c540b6a35584e67ff17f5732217ee9d889767ed22c",
+      "resourceLogSha256": "a12e9ad155074ffb4e5a7a765bc048661d5de9a082742cc08f883b985c85434f"
+    }
+  ],
+  "resourcePolicy": {
+    "serialValidation": true,
+    "hostMemoryFreeAbortPercent": 18,
+    "nodeHeapCurrentMiB": 384,
+    "postgresTestNodeHeapMiB": 192,
+    "postgresContainerMiB": 192,
+    "linuxContainerMiB": 512,
+    "sampleLimit": "Periodic RSS and container samples may miss short-lived peaks; not a capacity result."
+  },
+  "pending": [
+    "Kind full-platform verification in E7",
+    "Sales implementation and dual-mode acceptance in E5.2",
+    "real OIDC, WeCom, human evaluation baseline and E8 pilots"
+  ],
+  "deepseekValidationAuthorization": {
+    "limitMinorUnits": "5000",
+    "currency": "CNY",
+    "scope": "connectivity_and_small_sample_validation",
+    "paidCallsStarted": 0,
+    "supersedesEarlierLimitMinorUnits": "2000"
+  },
+  "implementationCommit": "737b77343cdd26e72eca09a8b0ee6e1bf006e4bc",
+  "remoteVerification": {
+    "databaseId": 41953938972,
+    "headSha": "c75ee7c2df2aea5f42573bf3f63e5bf624039264",
+    "headBranch": "codex/enterprise-e5-1-ci",
+    "status": "completed",
+    "conclusion": "success",
+    "url": "https://github.com/muniu-ai/muniu/actions/runs/41953938972",
+    "createdAt": "2026-11-05T02:14:57Z",
+    "startedAt": "2026-11-05T02:14:57Z",
+    "updatedAt": "2026-11-05T02:20:56Z",
+    "jobs": [
+      {
+        "completedAt": "2026-11-05T02:20:55Z",
+        "conclusion": "success",
+        "databaseId": 127004187230,
+        "name": "Serial provider and enterprise dependency verification",
+        "startedAt": "2026-11-05T02:15:00Z",
+        "status": "completed",
+        "steps": [
+          {
+            "completedAt": "2026-11-05T02:15:01Z",
+            "conclusion": "success",
+            "name": "Set up job",
+            "number": 1,
+            "startedAt": "2026-11-05T02:15:01Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T02:15:04Z",
+            "conclusion": "success",
+            "name": "Run actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd",
+            "number": 2,
+            "startedAt": "2026-11-05T02:15:01Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T02:15:09Z",
+            "conclusion": "success",
+            "name": "Run actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e",
+            "number": 3,
+            "startedAt": "2026-11-05T02:15:04Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T02:15:12Z",
+            "conclusion": "success",
+            "name": "Install the pinned npm version",
+            "number": 4,
+            "startedAt": "2026-11-05T02:15:09Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T02:15:12Z",
+            "conclusion": "success",
+            "name": "Keep Node test files serial",
+            "number": 5,
+            "startedAt": "2026-11-05T02:15:12Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T02:15:12Z",
+            "conclusion": "success",
+            "name": "Record the exact checkout and available resources",
+            "number": 6,
+            "startedAt": "2026-11-05T02:15:12Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T02:15:18Z",
+            "conclusion": "success",
+            "name": "Run npm ci",
+            "number": 7,
+            "startedAt": "2026-11-05T02:15:12Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T02:15:18Z",
+            "conclusion": "success",
+            "name": "Run npm run verify:contracts",
+            "number": 8,
+            "startedAt": "2026-11-05T02:15:18Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T02:16:14Z",
+            "conclusion": "success",
+            "name": "Run npm run verify:provider-contracts",
+            "number": 9,
+            "startedAt": "2026-11-05T02:15:18Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T02:16:32Z",
+            "conclusion": "success",
+            "name": "Run npm run verify:provider-contracts-postgres",
+            "number": 10,
+            "startedAt": "2026-11-05T02:16:14Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T02:20:49Z",
+            "conclusion": "success",
+            "name": "Verify real PostgreSQL, S3, Vault and two Host/Worker instances",
+            "number": 11,
+            "startedAt": "2026-11-05T02:16:32Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T02:20:49Z",
+            "conclusion": "success",
+            "name": "Collect fixture diagnostics and remove only this Compose project",
+            "number": 12,
+            "startedAt": "2026-11-05T02:20:49Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T02:20:49Z",
+            "conclusion": "success",
+            "name": "Confirm generated sources are unchanged",
+            "number": 13,
+            "startedAt": "2026-11-05T02:20:49Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T02:20:53Z",
+            "conclusion": "success",
+            "name": "Post Run actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e",
+            "number": 25,
+            "startedAt": "2026-11-05T02:20:49Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T02:20:53Z",
+            "conclusion": "success",
+            "name": "Post Run actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd",
+            "number": 26,
+            "startedAt": "2026-11-05T02:20:53Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T02:20:53Z",
+            "conclusion": "success",
+            "name": "Complete job",
+            "number": 27,
+            "startedAt": "2026-11-05T02:20:53Z",
+            "status": "completed"
+          }
+        ],
+        "url": "https://github.com/muniu-ai/muniu/actions/runs/41953938972/job/127004187230"
+      }
+    ],
+    "logSha256": "462b9dd74c35e688389f69f977278a675da98d1f684e024c1d8ae1578a71c3b4",
+    "implementationDifferences": [
+      ".github/workflows/enterprise-e51-verification.yml"
+    ],
+    "reportedMemoryTotalMiB": 15983,
+    "scope": "provider contracts, PostgreSQL E3/E4/E5.1 faults, full PostgreSQL/S3/Vault two Host/Worker composition"
+  },
+  "contractBundle": {
+    "sourceCommit": "737b77343cdd26e72eca09a8b0ee6e1bf006e4bc",
+    "manifestSha256": "95293c3d39823138e4ba284a70603893a78d682c013211c94fd49040df971885",
+    "acceptedForE52Integration": true
+  }
+}

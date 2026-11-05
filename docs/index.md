@@ -56,3 +56,5 @@ CLI 帮助、API 路由表、OpenAPI 和内置插件目录由源码生成。改�
 
 [动态计划与监督](enterprise-agent-coordination.md)说明工作授权、任务图、模型选择和持久费用。
 [知识、成果与流程](enterprise-knowledge-workflows.md)说明来源保护、引用、成果验收、经验启用和不可变流程版本。
+[提供方契约套件](enterprise-provider-contracts.md)说明内置与 Sales 共用断言、冻结包和真实实现接入。
+[内置业务提供方](enterprise-builtin-provider.md)说明对象归属、动作准备、Host 接口与回执核对。

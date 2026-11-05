@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-import type { ActionIntent, ActionReceipt, BusinessObjectRef, ExternalObjectRef, ProviderBinding } from '@mn/contracts';
+import type { ActionIntent, ActionReceipt, BusinessObjectRef, ExternalObjectRef, EnterpriseContractTypes, ProviderBinding } from '@mn/contracts';
 
 /** Supplied by the trusted Host/connector adapter; these fields do not themselves grant access. */
 export interface BusinessProviderContext {
@@ -7,14 +7,13 @@ export interface BusinessProviderContext {
   readonly workspaceId: string;
   readonly principalId: string;
   readonly authorityRevisionId?: string;
+  readonly principalSessionEpoch?: number;
+  readonly executionLease?: { readonly jobId: string; readonly workerId: string; readonly fencingToken: number };
   readonly signal: AbortSignal;
 }
 export type ProviderObjectReference = BusinessObjectRef | ExternalObjectRef;
-export interface ProviderSnapshot {
-  readonly objectRef: ProviderObjectReference;
-  readonly protectedContentRef: string;
-  readonly observedAt: string;
-}
+export type ProviderSnapshot = EnterpriseContractTypes['EnterpriseProviderSnapshot'];
+export type ProviderActionPreparation = EnterpriseContractTypes['EnterpriseProviderActionPreparation'];
 export type ProviderResult<T> = { readonly status: 'supported'; readonly value: T }
   | { readonly status: 'not_supported'; readonly capability: 'readSnapshot' | 'listChanges' | 'prepareAction' | 'executeAction' | 'getReceipt' };
 
@@ -24,13 +23,9 @@ export interface BusinessProviderContribution {
   readonly version: string;
   readonly binding: ProviderBinding;
   readSnapshot(reference: ProviderObjectReference, context: BusinessProviderContext): Promise<ProviderResult<ProviderSnapshot>>;
-  listChanges(cursor: string | null, context: BusinessProviderContext): Promise<ProviderResult<{
-    readonly changes: readonly { readonly sourceEventId: string; readonly sourceEventType: string; readonly sourceOccurredAt: string; readonly snapshot: ProviderSnapshot }[];
-    readonly nextCursor: string;
-  }>>;
-  prepareAction(intent: ActionIntent, context: BusinessProviderContext): Promise<ProviderResult<{
-    readonly preparedInputRef: string; readonly inputDigest: string; readonly target: ProviderObjectReference; readonly expiresAt: string;
-  }>>;
+  listChanges(cursor: string | null, context: BusinessProviderContext): Promise<ProviderResult<EnterpriseContractTypes['EnterpriseProviderChanges']>>;
+  /** Preparation fixes input before an execution authority, reservation or execution approval exists. */
+  prepareAction(request: ProviderActionPreparation, context: BusinessProviderContext): Promise<ProviderResult<EnterpriseContractTypes['EnterpriseProviderPreparedAction']>>;
   executeAction(intent: ActionIntent & { readonly status: 'committed' }, context: BusinessProviderContext): Promise<ProviderResult<ActionReceipt>>;
   getReceipt(operationKey: string, context: BusinessProviderContext): Promise<ProviderResult<ActionReceipt>>;
 }

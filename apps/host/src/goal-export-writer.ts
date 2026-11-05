@@ -11,7 +11,7 @@ import PDFDocument from 'pdfkit';
 const xml=(s:string)=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&apos;');
 const declaration='<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
 const rels=(target:string,type:string)=>declaration+`<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/${type}" Target="${target}"/></Relationships>`;
-function lines(doc:GoalExportDocument):string[]{return [doc.title,`来源：${doc.sourceLabel}`,`成果接收：${doc.accepted?'已接收':'尚未接收'}`,`导出时间：${doc.createdAt}`,'',...doc.text.replace(/\r\n?/g,'\n').split('\n')];}
+function lines(doc:GoalExportDocument):string[]{return [doc.title,`来源：${doc.sourceLabel}`,doc.statusLabel??(`成果接收：${doc.accepted?'已接收':'尚未接收'}`),`导出时间：${doc.createdAt}`,'',...doc.text.replace(/\r\n?/g,'\n').split('\n')];}
 async function zip(entries:Record<string,string>):Promise<Uint8Array>{
  const archive=new ZipFile();const chunks:Buffer[]=[];let count=0;
  const result=new Promise<Uint8Array>((resolve,reject)=>{archive.outputStream.on('data',(chunk:Buffer)=>{count+=chunk.length;if(count>EXPORT_MAX_BYTES){(archive.outputStream as Readable).destroy(new GoalExportError('EXPORT_LIMIT','导出文件超过大小限制'));return;}chunks.push(chunk);});archive.outputStream.once('error',reject);archive.outputStream.once('end',()=>resolve(Buffer.concat(chunks)));});

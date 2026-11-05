@@ -23,7 +23,7 @@ export function operatingRuntime({ store, cas, key, now = () => new Date().toISO
   const worker = id => new AgentOsWorker({ id, store: runtime.workerStore(store), tenantId: 'enterprise-operating', now: () => new Date(now()), lock: { engineLockDigest: 'fixture', expectedEngineLockDigest: 'fixture', pluginLockDigest: 'fixture', expectedPluginLockDigest: 'fixture' }, handlers: { 'enterprise.evaluation': runtime.workerHandler() } });
   return { repository, operating, runtime, worker };
 }
-export async function verifyEnterpriseOperating({ store, cas, key, pool, rebuild, config, root, connect }) {
+export async function verifyEnterpriseOperating({ store, cas, key, pool, rebuild, config, root, connect, registerChild }) {
   const tenantId = 'enterprise-operating'; let offset = 0, lose = false, hook, child;
   const now = () => new Date(Date.now() + offset).toISOString(), expiresAt = new Date(Date.now() + 86400000).toISOString();
   await pool.query('create table fixture_provider.model_calls(execution_id text primary key, calls integer not null)');
@@ -75,6 +75,7 @@ export async function verifyEnterpriseOperating({ store, cas, key, pool, rebuild
     await manual('crash'); const crash = await f.runtime.dispatch(tenantId);
     const file = join(root, 'evaluation-child.json'); await writeFile(file, JSON.stringify({ ...config, modelUrl }), { mode: 0o600 });
     child = fork(new URL('../enterprise-operating-child.mjs', import.meta.url), [file], { env: { ...process.env, NODE_OPTIONS: '--max-old-space-size=128' }, stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
+    registerChild?.(child);
     await new Promise((resolve, reject) => { const timer = setTimeout(() => reject(new Error('EVALUATION_CHILD_TIMEOUT')), 20000); child.once('message', value => { clearTimeout(timer); assert.equal(value.status, 'committed'); resolve(); }); child.once('error', reject); child.once('exit', () => { clearTimeout(timer); reject(new Error('EVALUATION_CHILD_EXITED')); }); });
     const closed = new Promise(resolve => child.once('exit', resolve)); child.kill('SIGKILL'); await closed; child = undefined;
     offset = 31000; const connection = await connect({ offset });

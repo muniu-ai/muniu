@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import type { BusinessObjectRef, EnterpriseContractTypes, EvidenceRef, JsonObject } from '@mn/contracts';
 export type BusinessCommand = EnterpriseContractTypes['EnterpriseBusinessCommand'];
-export type BusinessObjectType = 'customer' | 'contact' | 'opportunity' | 'service_version' | 'quote_version' | 'contract' | 'order' | 'customer_acceptance' | 'project' | 'milestone' | 'delivery_version' | 'payment_schedule' | 'receipt' | 'refund' | 'adjustment' | 'expense' | 'business_review' | 'change_request' | 'metric_definition' | 'operating_objective';
+export type BusinessObjectType = 'customer' | 'contact' | 'opportunity' | 'followup_task' | 'service_version' | 'quote_version' | 'contract' | 'order' | 'customer_acceptance' | 'project' | 'milestone' | 'delivery_version' | 'payment_schedule' | 'receipt' | 'refund' | 'adjustment' | 'expense' | 'business_review' | 'change_request' | 'metric_definition' | 'operating_objective';
 export interface BusinessEvent {
     readonly tenantId: string;
     readonly workspaceId: string;
@@ -12,6 +12,7 @@ export interface BusinessEvent {
     readonly actorId: string;
     readonly occurredAt: string;
     readonly revisionSalt: string;
+    readonly causation?: { readonly operationKey: string; readonly goalId: string };
     readonly payload: JsonObject;
 }
 export interface BusinessObject {

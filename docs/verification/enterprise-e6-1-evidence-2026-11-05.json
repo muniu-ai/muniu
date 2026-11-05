@@ -337,5 +337,61 @@
     "Real enterprise identity federation",
     "E6.2 agent and Sales UI",
     "E7 evaluation and E8 pilot"
+  ],
+  "integrationBase": "8750b47",
+  "integrationChecks": [
+    {
+      "name": "integrated-focused",
+      "command": [
+        "sh",
+        "-c",
+        "npm run build && npm run test:web-unit && npm run build:web && node node_modules/typescript/bin/tsc -p apps/host/tsconfig.test.json && node --test --test-concurrency=1 apps/host/dist-test/test/enterprise-business-capabilities-http.test.js apps/host/dist-test/test/enterprise-web-host.test.js apps/host/dist-test/test/enterprise-provider-receipt-race.test.js"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 50.3,
+      "peakProcessTreeRSSMiB": 369.4,
+      "minimumHostFreePercent": 27,
+      "log": "/tmp/muniu-e61-integrated-focused.log",
+      "containerSamples": [],
+      "logSha256": "4b72bdce3763b75b0057c0ae8d92a98cb75cedab92ae01e284b1f26979f1667f",
+      "scopeNote": "实际执行 UI 44 项与两个新增 Host 文件共16项；命令中误写的receipt-race文件不存在，不计覆盖，提供方回归另以实际5个文件22项验证。"
+    },
+    {
+      "name": "integrated-providers",
+      "command": [
+        "node",
+        "--test",
+        "--test-concurrency=1",
+        "apps/host/dist-test/test/enterprise-builtin-provider.test.js",
+        "apps/host/dist-test/test/enterprise-builtin-actions.test.js",
+        "apps/host/dist-test/test/enterprise-provider-service.test.js",
+        "apps/host/dist-test/test/enterprise-provider-commit.test.js",
+        "apps/host/dist-test/test/enterprise-providers-http.test.js"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 10.1,
+      "peakProcessTreeRSSMiB": 214.0,
+      "minimumHostFreePercent": 26,
+      "log": "/tmp/muniu-e61-integrated-providers.log",
+      "containerSamples": [],
+      "logSha256": "bfbdff652c11aedc6c3c30221b049b1c0072425623a1002799513ba6fecad90a"
+    },
+    {
+      "name": "integrated-browser-suite",
+      "command": [
+        "node",
+        "apps/web/scripts/verify-enterprise-web-suite.mjs"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 80.8,
+      "peakProcessTreeRSSMiB": 526.8,
+      "minimumHostFreePercent": 26,
+      "log": "/tmp/muniu-e61-integrated-browser-suite.log",
+      "containerSamples": [],
+      "logSha256": "b70611e48554f6cacf9b497c2ffe6bd040ac4abd62d7a670250df66ba5c95d0c"
+    }
   ]
 }

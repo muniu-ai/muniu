@@ -37,7 +37,7 @@ export function createProviderActionWorkerHandler(options: {
       committed = true;
       const response = await provider.executeAction({ ...actionIntentView(action), status: 'committed' }, {
         tenantId: job.tenantId, workspaceId: action.workspaceId, principalId: execution.initiatedBy,
-        authorityRevisionId: action.authorityRevisionId, signal: context.signal,
+        authorityRevisionId: action.authorityRevisionId, executionLease: { jobId: job.id, workerId: context.workerId, fencingToken: context.fencingToken }, signal: context.signal,
       });
       if (response.status !== 'supported') throw new UnknownExternalSideEffectError(action.executionId);
       const receipt = parseEnterpriseContract('ActionReceipt', response.value);

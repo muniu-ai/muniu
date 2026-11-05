@@ -171,3 +171,4 @@ E3.1 的动作、预算与 Worker 检查入口为 `npm run verify:enterprise-act
 E6.1 的公共登录白名单、对象能力、完整命令预检、静态目录配置与合成浏览器夹具见[企业经营工作台](enterprise-web.md)。对象能力只表示权限上限，具体业务批准仍须核对职责分离。共享 UI 与 Web 使用 `@mn/contracts/enterprise-client` 的浏览器安全入口，不复制角色或金额规则。
 
 Web 定向检查为 `npm run typecheck:web`、`npm run build:web`、`npm run test:web-unit` 和 `npm run verify:web-ui`。最后一项运行真实 Host、合成 OIDC 与浏览器全套场景，内部保持串行；测试所需 Chromium 版本由锁定的 Playwright 配套清单决定。工程检查与合成身份不能替代真实企业登录及试点验收。
+E5.1 的对象归属、Host 接口、报价批准和回执核对见[内置业务提供方](enterprise-builtin-provider.md)。聚焦检查为 `npm run verify:provider-contracts`；完成构建后单独执行 `npm run verify:provider-contracts-postgres`，使用隔离 PostgreSQL 复验。两项保持串行。Sales 共用断言及冻结包的导出、接收要求见[提供方契约套件](enterprise-provider-contracts.md)，其工具自测不能替代 Sales 真实实现验收。

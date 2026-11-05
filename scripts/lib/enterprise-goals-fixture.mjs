@@ -24,7 +24,7 @@ export function goalsRuntime({ store, cas, key, modelUrl, now = () => new Date()
   const worker = id => new AgentOsWorker({ id, store: runtime.workerStore(store), tenantId: 'enterprise-goals', now: () => new Date(now()), lock: { engineLockDigest: 'fixture', expectedEngineLockDigest: 'fixture', pluginLockDigest: 'fixture', expectedPluginLockDigest: 'fixture' }, handlers: { 'enterprise.task': runtime.workerHandler() } });
   return { repository, operating, goals, runtime, worker };
 }
-export async function verifyEnterpriseGoals({ store, cas, key, pool, rebuild, config, root, connect }) {
+export async function verifyEnterpriseGoals({ store, cas, key, pool, rebuild, config, root, connect, registerChild }) {
   const tenantId = 'enterprise-goals'; let offset = 0, child, hook;
   const now = () => new Date(Date.now() + offset).toISOString(), deadline = new Date(Date.now() + 3600000).toISOString(), expiresAt = new Date(Date.now() + 86400000).toISOString();
   await pool.query('create table fixture_provider.goal_model_calls(execution_id text primary key, calls integer not null)');
@@ -72,6 +72,7 @@ export async function verifyEnterpriseGoals({ store, cas, key, pool, rebuild, co
     let crash = await authorize('crash'); crash = await f.goals.plan(actor, crash.id, crash.streamVersion, 'crash-plan', { reason: '已提交调用后崩溃', nodes: [node('crash')] });
     const file = join(root, 'goals-child.json'); await writeFile(file, JSON.stringify({ ...config, modelUrl }), { mode: 0o600 });
     child = fork(new URL('../enterprise-goals-child.mjs', import.meta.url), [file], { env: { ...process.env, NODE_OPTIONS: '--max-old-space-size=128' }, stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
+    registerChild?.(child);
     await new Promise((resolve, reject) => { const timer = setTimeout(() => reject(new Error('GOAL_CHILD_TIMEOUT')), 20000); child.once('message', value => { clearTimeout(timer); assert.equal(value.status, 'committed'); resolve(); }); child.once('error', reject); child.once('exit', () => { clearTimeout(timer); reject(new Error('GOAL_CHILD_EXITED')); }); });
     const closed = new Promise(resolve => child.once('exit', resolve)); child.kill('SIGKILL'); await closed; child = undefined;
     offset = 31000; const connection = await connect({ offset });

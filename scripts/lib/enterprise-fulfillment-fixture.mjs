@@ -51,6 +51,17 @@ export async function verifyFulfillment({a,b,actor,workspace,command,order}) {
  assert.equal((await b.business.summary(act('finance-b'),workspace.id,'balance',id,date)).values.outstandingMinor,18000);
  assert.equal((await b.business.summary(act('finance-b'),workspace.id,'costs','project')).values.marginMinor,null);
  assert.deepEqual(await b.business.get(act('finance-b'),workspace.id,'business_review','review'),review);
+ const previousDate=new Date(Date.parse(date+'T00:00:00.000Z')-86400000).toISOString().slice(0,10);
+ const historical=(await b.business.summary(act('finance-b'),workspace.id,'balance',id,previousDate)).values;
+ const originalPeriod=await get('payment_schedule','first');
+ await run({type:'adjustment.prepare',id:'reschedule',kind:'schedule_revision',schedule:originalPeriod.reference,proposedAmountMinor:9000,proposedDueDate:date,businessDate:date,reason:'重新安排分期'},'finance-a');
+ await run({type:'adjustment.confirm',id:'reschedule',expectedStreamVersion:1,evidence:await proof('adjustment','reschedule','finance-b')},'finance-b');
+ const currentOrder=await get('order',id);
+ await run({type:'payment_schedule.create',id:'remaining-period',order:currentOrder.reference,amountMinor:1000,dueDate:date},'finance-a');
+ await run({type:'payment_schedule.confirm',id:'remaining-period',expectedStreamVersion:1,evidence:await proof('payment_schedule','remaining-period','finance-b')},'finance-b');
+ assert.deepEqual((await b.business.summary(act('finance-b'),workspace.id,'balance',id,previousDate)).values,historical);
+ assert.equal((await b.business.get(act('finance-b'),workspace.id,'payment_schedule','remaining-period')).values.businessDate,date);
+ assert.deepEqual(await b.business.get(act('finance-b'),workspace.id,'payment_schedule','first',originalPeriod.reference.streamVersion),originalPeriod);
  await a.permissions.revoke(actor,'revoke-project','role','role-project',1);await assert.rejects(a.business.summary(act('project'),workspace.id,'progress','project'),{code:'OBJECT_ACCESS_DENIED'});
- process.stdout.write('E2.2 PostgreSQL：部分交付、客户验收、分期、退款、冲销、减免、成本、固定复盘、并发超额拒绝、范围变更及撤权通过。\n');
+ process.stdout.write('E2.2 PostgreSQL：部分交付、客户验收、分期发生日期、退款、冲销、减免、成本、固定复盘、并发超额拒绝、范围变更及撤权通过。\n');
 }

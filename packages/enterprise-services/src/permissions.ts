@@ -35,7 +35,7 @@ function roleOperations(role: BusinessRole, type: string): readonly ObjectOperat
   if (role === 'auditor') return EVIDENCE.includes(type) ? ['read', 'audit'] : [];
   if (role === 'sales' || role === 'sales_manager') {
     if (type === 'service_version') return role === 'sales_manager' ? WRITE : READ;
-    if (['customer', 'contact', 'opportunity'].includes(type)) return [...WRITE, 'execution_approve'];
+    if (['customer', 'contact', 'opportunity', 'followup_task'].includes(type)) return [...WRITE, 'execution_approve'];
     if (['quote_version', 'contract', 'order', 'change_request'].includes(type)) return role === 'sales_manager' ? APPROVE : WRITE;
     if (['operating_objective','metric_definition','business_review'].includes(type)) return role === 'sales_manager' ? WRITE : READ;
     if (['project','milestone','delivery_version','customer_acceptance','adjustment'].includes(type)) return READ;

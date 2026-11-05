@@ -112,7 +112,9 @@
     "typecheck:web": "npm run build -w @mn/contracts && npm run build -w @mn/product-ui && npm run typecheck -w @mn/web",
     "build:web": "npm run build -w @mn/contracts && npm run build -w @mn/product-ui && npm run build -w @mn/web",
     "test:web-unit": "npm run build -w @mn/contracts && npm run test -w @mn/product-ui",
-    "verify:web-ui": "npm run build && npm run test:web-unit && npm run build:web && tsc -p apps/host/tsconfig.test.json && node apps/web/scripts/verify-enterprise-web-suite.mjs"
+    "verify:web-ui": "npm run build && npm run test:web-unit && npm run build:web && tsc -p apps/host/tsconfig.test.json && node apps/web/scripts/verify-enterprise-web-suite.mjs",
+    "verify:provider-contracts": "npm run build && tsc -p apps/host/tsconfig.test.json && node --test --test-concurrency=1 apps/host/dist-test/test/enterprise-provider-contract.test.js apps/host/dist-test/test/enterprise-builtin*.test.js apps/host/dist-test/test/enterprise-provider-service.test.js apps/host/dist-test/test/enterprise-providers-http.test.js apps/host/dist-test/test/enterprise-provider-commit.test.js && node --test --test-concurrency=1 scripts/test/provider-contract-suite.test.mjs scripts/test/enterprise-actions-cleanup.test.mjs",
+    "verify:provider-contracts-postgres": "node scripts/enterprise-actions-e2e.mjs --with-enterprise-provider"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",

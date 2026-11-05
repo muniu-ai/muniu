@@ -2,12 +2,13 @@
 import { randomUUID, createHash } from 'node:crypto';
 import { canonicalJson, type JsonValue } from '@mn/contracts';
 import type { KernelStore, KernelTransaction } from '@mn/kernel';
-import { EnterpriseError, type EnterpriseRecord, type EnterpriseRepository } from '@mn/enterprise-services';
+import { EnterpriseError, type EnterpriseRecord, type EnterpriseChange, type EnterpriseRepository } from '@mn/enterprise-services';
 import { EnvelopeCipher, type ContentAddressedStorage, type EncryptedEnvelopeV1, type KeyProvider } from '@mn/storage';
 interface Snapshot { records: EnterpriseRecord[]; position: number; revision: number; }
 export interface EnterpriseSnapshot { readonly tenantId: string; readonly records: readonly EnterpriseRecord[]; readonly position: number; readonly revision: number; }
 export interface EnterpriseEventRepository extends EnterpriseRepository {
   readonly acceptsExecutionEvents: boolean;
+  transact<T>(tenantId: string, work: (records: readonly EnterpriseRecord[]) => EnterpriseChange<T>, assertNativeBeforeCommit?: (tx: KernelTransaction) => void): Promise<T>;
   readSnapshot(tenantId: string): Promise<EnterpriseSnapshot>;
   assertSnapshot(tenantId: string, tx: KernelTransaction, snapshot: EnterpriseSnapshot): void;
   readCurrent<T extends JsonValue>(tenantId: string, project: (records: readonly EnterpriseRecord[]) => T): Promise<T>;
@@ -103,7 +104,7 @@ export function createEnterpriseEventRepository(options: { store: KernelStore; c
       throw new EnterpriseError('CONCURRENT_READ_RETRY', 409);
     },
     async read(tenantId) { return serial(tenantId, async () => structuredClone((await load(tenantId)).records)); },
-    async transact(tenantId, work) {
+    async transact(tenantId, work, assertNativeBeforeCommit) {
       return serial(tenantId, async () => {
         for (let attempt = 0; attempt < 8; attempt++) {
           const snapshot = await load(tenantId);
@@ -131,9 +132,17 @@ export function createEnterpriseEventRepository(options: { store: KernelStore; c
                   throw new EnterpriseError('COMMIT_GUARD_INVALID', 503);
                 }
               }
+                if (assertNativeBeforeCommit) {
+                  if (assertNativeBeforeCommit.constructor.name === 'AsyncFunction') throw new EnterpriseError('COMMIT_GUARD_INVALID', 503);
+                  const nativeResult: unknown = assertNativeBeforeCommit(tx);
+                  if (nativeResult !== undefined) {
+                    if (nativeResult instanceof Promise) void nativeResult.catch(() => {});
+                    throw new EnterpriseError('COMMIT_GUARD_INVALID', 503);
+                  }
+                }
               };
               validate();
-              if (change.assertBeforeCommit) {
+              if (change.assertBeforeCommit || assertNativeBeforeCommit) {
                 if(!tx.beforeCommit) throw new EnterpriseError('COMMIT_GUARD_UNAVAILABLE',503);
                 tx.beforeCommit(validate);
               }
