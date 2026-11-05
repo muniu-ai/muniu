@@ -79,6 +79,11 @@ jobs:
           helm version --short
       - run: npm ci
       - run: npm run verify:contracts
+      - name: Verify PDF process limits before the full suite
+        run: |
+          npm run build
+          node node_modules/typescript/bin/tsc -p apps/host/tsconfig.test.json
+          node --test --test-concurrency=1 apps/host/dist-test/test/document-pdf-process-status.test.js apps/host/dist-test/test/document-extraction.test.js
       - name: Verify all Node suites serially
         run: npm test
       - run: npm run typecheck
