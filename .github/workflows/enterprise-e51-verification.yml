@@ -1,0 +1,88 @@
+name: enterprise-e51-verification
+
+on:
+  push:
+    branches: [codex/enterprise-e5-1-ci]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: enterprise-e51-verification
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: 22.19.0
+  NPM_VERSION: 11.10.1
+  NODE_OPTIONS: --max-old-space-size=512
+  NPM_CONFIG_REGISTRY: https://registry.npmjs.org
+  COMPOSE_PROJECT_NAME: mn-e51-ci-${{ github.run_id }}-${{ github.run_attempt }}
+  COMPOSE_PARALLEL_LIMIT: '1'
+
+jobs:
+  synthetic-enterprise:
+    name: Serial provider and enterprise dependency verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Install the pinned npm version
+        run: npm install --global npm@${NPM_VERSION}
+      - name: Keep Node test files serial
+        shell: bash
+        run: |
+          echo "MN_VERIFY_NODE=$(command -v node)" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/enterprise-serial/bin"
+          cat > "$RUNNER_TEMP/enterprise-serial/bin/node" <<'PY'
+          #!/usr/bin/env python3
+          import os, sys
+          args = sys.argv[1:]
+          if '--test' in args:
+              filtered = []
+              skip = False
+              for arg in args:
+                  if skip:
+                      skip = False
+                      continue
+                  if arg == '--test-concurrency':
+                      skip = True
+                  elif not arg.startswith('--test-concurrency='):
+                      filtered.append(arg)
+              args = filtered
+              args.insert(args.index('--test') + 1, '--test-concurrency=1')
+          real = os.environ['MN_VERIFY_NODE']
+          os.execv(real, [real, *args])
+          PY
+          chmod 700 "$RUNNER_TEMP/enterprise-serial/bin/node"
+          echo "$RUNNER_TEMP/enterprise-serial/bin" >> "$GITHUB_PATH"
+      - name: Record the exact checkout and available resources
+        run: |
+          git rev-parse HEAD
+          node --version
+          npm --version
+          free -m
+          nproc
+          docker version
+          docker compose version
+          helm version --short
+      - run: npm ci
+      - run: npm run verify:contracts
+      - run: npm run verify:provider-contracts
+      - run: npm run verify:provider-contracts-postgres
+      - name: Verify real PostgreSQL, S3, Vault and two Host/Worker instances
+        run: npm run verify:enterprise-fixture
+      - name: Collect fixture diagnostics and remove only this Compose project
+        if: always()
+        shell: bash
+        run: |
+          docker compose -f docker-compose.enterprise.yml logs --no-color --tail 100
+          docker compose -f docker-compose.enterprise.yml down --volumes --remove-orphans
+      - name: Confirm generated sources are unchanged
+        run: git diff --exit-code
