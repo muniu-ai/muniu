@@ -12,6 +12,16 @@ const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 let active = 0;
 const waiting: { start: () => void }[] = [];
 
+export function linuxPdfMemorySample(status: string, expectedPid: number): { state: 'exited' } | { state: 'running'; rssKiB: number } {
+  const pid = /^Pid:[ \t]*(\d+)[ \t]*$/mu.exec(status), state = /^State:[ \t]*([A-Za-z])[ \t]+\([^\r\n]+\)[ \t]*$/mu.exec(status);
+  const unavailable = () => new DocumentExtractionError('PDF_ISOLATION_UNAVAILABLE', '无法核对 PDF 解析进程的内存限制');
+  if (!Number.isSafeInteger(expectedPid) || expectedPid < 1 || !pid || Number(pid[1]) !== expectedPid || !state) throw unavailable();
+  if (state[1] === 'Z' || state[1] === 'X') return { state: 'exited' };
+  const rss = /^VmRSS:[ \t]*(\d+)[ \t]+kB[ \t]*$/mu.exec(status);
+  if (!rss || !Number.isSafeInteger(Number(rss[1]))) throw unavailable();
+  return { state: 'running', rssKiB: Number(rss[1]) };
+}
+
 async function acquire(timeoutMs: number): Promise<void> {
   if (active < MAX_CONCURRENT_PDFS) { active++; return; }
   if (waiting.length >= MAX_QUEUED_PDFS) throw new DocumentExtractionError("DOCUMENT_BUSY", "PDF 解析任务已满，请稍后重试");
@@ -71,7 +81,14 @@ export async function isolatePdfExtraction(bytes: Uint8Array, limits: DocumentEx
         };
         if (process.platform === "linux") {
           void readFile(`/proc/${child.pid}/status`, "utf8")
-            .then(status => sampled(undefined, /^VmRSS:\s*(\d+)\s+kB$/mu.exec(status)?.[1] ?? ""), cause => sampled(cause, ""));
+            .then(status => {
+              try {
+                const sample = linuxPdfMemorySample(status, child.pid!);
+                // A zombie cannot allocate memory. Only the child's close event may validate its result.
+                if (sample.state === 'exited') { polling = false; return; }
+                sampled(undefined, String(sample.rssKiB));
+              } catch (cause) { sampled(cause, ""); }
+            }, cause => sampled(cause, ""));
         } else execFile("/bin/ps", ["-o", "rss=", "-p", String(child.pid)], { timeout: 500, maxBuffer: 1024, env: { LC_ALL: "C" } }, sampled);
       };
       const memory = setInterval(inspect, 25);
