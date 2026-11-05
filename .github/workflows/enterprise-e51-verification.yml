@@ -38,7 +38,7 @@ jobs:
       - name: Keep Node test files serial
         shell: bash
         run: |
-          echo "MN_VERIFY_NODE=$(command -v node)" >> "$GITHUB_ENV"
+          mn_verify_node="$(command -v node)"
           mkdir -p "$RUNNER_TEMP/enterprise-serial/bin"
           cat > "$RUNNER_TEMP/enterprise-serial/bin/node" <<'PY'
           #!/usr/bin/env python3
@@ -57,8 +57,13 @@ jobs:
                       filtered.append(arg)
               args = filtered
               args.insert(args.index('--test') + 1, '--test-concurrency=1')
-          real = os.environ['MN_VERIFY_NODE']
+          real = "__MN_PINNED_NODE__"
           os.execv(real, [real, *args])
+          PY
+          python3 - "$RUNNER_TEMP/enterprise-serial/bin/node" "$mn_verify_node" <<'PY'
+          import pathlib, sys
+          target = pathlib.Path(sys.argv[1])
+          target.write_text(target.read_text().replace('"__MN_PINNED_NODE__"', repr(sys.argv[2])))
           PY
           chmod 700 "$RUNNER_TEMP/enterprise-serial/bin/node"
           echo "$RUNNER_TEMP/enterprise-serial/bin" >> "$GITHUB_PATH"
