@@ -18,14 +18,32 @@ export function pdfProcessHasExited(pid: number | undefined, probe: (pid: number
   catch (cause) { return typeof cause === 'object' && cause !== null && 'code' in cause && cause.code === 'ESRCH'; }
 }
 
-export function linuxPdfMemorySample(status: string, expectedPid: number): { state: 'exited' } | { state: 'running'; rssKiB: number } {
+export function linuxPdfMemorySample(status: string, expectedPid: number, statm?: string): { state: 'exited' } | { state: 'running'; rssKiB: number } {
   const pid = /^Pid:[ \t]*(\d+)[ \t]*$/mu.exec(status), state = /^State:[ \t]*([A-Za-z])[ \t]+\([^\r\n]+\)[ \t]*$/mu.exec(status);
   const unavailable = (samplingReason: string) => Object.assign(new DocumentExtractionError('PDF_ISOLATION_UNAVAILABLE', '无法核对 PDF 解析进程的内存限制'), { samplingReason });
   if (!Number.isSafeInteger(expectedPid) || expectedPid < 1 || !pid || Number(pid[1]) !== expectedPid || !state) throw unavailable('INVALID_PROCESS_STATUS');
   if (state[1] === 'Z' || state[1] === 'X') return { state: 'exited' };
+  if (!/^VmRSS:/mu.test(status)) {
+    if (statm !== undefined && /^[ \t]*0(?:[ \t]+0){6}[ \t]*\n?$/u.test(statm)) return { state: 'running', rssKiB: 0 };
+    throw unavailable('MISSING_RSS_' + state[1]!.toUpperCase());
+  }
   const rss = /^VmRSS:[ \t]*(\d+)[ \t]+kB[ \t]*$/mu.exec(status);
   if (!rss || !Number.isSafeInteger(Number(rss[1]))) throw unavailable('INVALID_RSS_' + state[1]!.toUpperCase());
   return { state: 'running', rssKiB: Number(rss[1]) };
+}
+
+export async function readLinuxPdfMemorySample(pid: number, read: (kind: 'status' | 'statm') => Promise<string>) {
+  const status = await read('status');
+  try { return linuxPdfMemorySample(status, pid); }
+  catch (cause) {
+    if (!(cause instanceof DocumentExtractionError) || !('samplingReason' in cause) || typeof cause.samplingReason !== 'string' || !cause.samplingReason.startsWith('MISSING_RSS_')) throw cause;
+    const statm = await read('statm');
+    try { return linuxPdfMemorySample(status, pid, statm); }
+    catch (missing) {
+      if (!/^[ \t]*\d+(?:[ \t]+\d+){6}[ \t]*\n?$/u.test(statm)) throw missing;
+      return linuxPdfMemorySample(await read('status'), pid);
+    }
+  }
 }
 
 async function acquire(timeoutMs: number): Promise<void> {
@@ -91,14 +109,12 @@ export async function isolatePdfExtraction(bytes: Uint8Array, limits: DocumentEx
           if (Number(stdout.trim()) * 1024 > limits.pdfRssMiB * 1024 * 1024) stop("DOCUMENT_LIMIT", "PDF 解析超过内存限制");
         };
         if (process.platform === "linux") {
-          void readFile(`/proc/${child.pid}/status`, "utf8")
-            .then(status => {
-              try {
-                const sample = linuxPdfMemorySample(status, child.pid!);
-                // A zombie cannot allocate memory. Only the child's close event may validate its result.
-                if (sample.state === 'exited') { polling = false; return; }
-                sampled(undefined, String(sample.rssKiB));
-              } catch (cause) { sampled(cause, ""); }
+          const pid = child.pid;
+          void readLinuxPdfMemorySample(pid, kind => readFile(`/proc/${pid}/${kind}`, 'utf8'))
+            .then(sample => {
+              // A zombie cannot allocate memory. Only the child's close event may validate its result.
+              if (sample.state === 'exited') { polling = false; return; }
+              sampled(undefined, String(sample.rssKiB));
             }, cause => sampled(cause, ""));
         } else execFile("/bin/ps", ["-o", "rss=", "-p", String(child.pid)], { timeout: 500, maxBuffer: 1024, env: { LC_ALL: "C" } }, sampled);
       };
