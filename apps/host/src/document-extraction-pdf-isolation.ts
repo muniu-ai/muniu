@@ -12,13 +12,19 @@ const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 let active = 0;
 const waiting: { start: () => void }[] = [];
 
+export function pdfProcessHasExited(pid: number | undefined, probe: (pid: number) => unknown = value => process.kill(value, 0)): boolean {
+  if (!Number.isSafeInteger(pid) || !pid || pid < 1) return false;
+  try { probe(pid); return false; }
+  catch (cause) { return typeof cause === 'object' && cause !== null && 'code' in cause && cause.code === 'ESRCH'; }
+}
+
 export function linuxPdfMemorySample(status: string, expectedPid: number): { state: 'exited' } | { state: 'running'; rssKiB: number } {
   const pid = /^Pid:[ \t]*(\d+)[ \t]*$/mu.exec(status), state = /^State:[ \t]*([A-Za-z])[ \t]+\([^\r\n]+\)[ \t]*$/mu.exec(status);
-  const unavailable = () => new DocumentExtractionError('PDF_ISOLATION_UNAVAILABLE', '无法核对 PDF 解析进程的内存限制');
-  if (!Number.isSafeInteger(expectedPid) || expectedPid < 1 || !pid || Number(pid[1]) !== expectedPid || !state) throw unavailable();
+  const unavailable = (samplingReason: string) => Object.assign(new DocumentExtractionError('PDF_ISOLATION_UNAVAILABLE', '无法核对 PDF 解析进程的内存限制'), { samplingReason });
+  if (!Number.isSafeInteger(expectedPid) || expectedPid < 1 || !pid || Number(pid[1]) !== expectedPid || !state) throw unavailable('INVALID_PROCESS_STATUS');
   if (state[1] === 'Z' || state[1] === 'X') return { state: 'exited' };
   const rss = /^VmRSS:[ \t]*(\d+)[ \t]+kB[ \t]*$/mu.exec(status);
-  if (!rss || !Number.isSafeInteger(Number(rss[1]))) throw unavailable();
+  if (!rss || !Number.isSafeInteger(Number(rss[1]))) throw unavailable('INVALID_RSS_' + state[1]!.toUpperCase());
   return { state: 'running', rssKiB: Number(rss[1]) };
 }
 
@@ -76,7 +82,12 @@ export async function isolatePdfExtraction(bytes: Uint8Array, limits: DocumentEx
         const sampled = (cause: unknown, stdout: string) => {
           polling = false;
           if (closed || child.exitCode !== null || child.signalCode !== null) return;
-          if (cause || !/^\s*\d+\s*$/u.test(stdout)) { stop("PDF_ISOLATION_UNAVAILABLE", "无法核对 PDF 解析进程的内存限制"); return; }
+          if (cause || !/^\s*\d+\s*$/u.test(stdout)) {
+            if (pdfProcessHasExited(child.pid)) return;
+            const detail = typeof cause === 'object' && cause !== null ? 'samplingReason' in cause ? cause.samplingReason : 'code' in cause ? cause.code : undefined : undefined;
+            const reason = typeof detail === 'string' && /^[A-Z_]{1,64}$/u.test(detail) ? detail : 'INVALID_RSS';
+            stop("PDF_ISOLATION_UNAVAILABLE", "无法核对 PDF 解析进程的内存限制（" + reason + "）"); return;
+          }
           if (Number(stdout.trim()) * 1024 > limits.pdfRssMiB * 1024 * 1024) stop("DOCUMENT_LIMIT", "PDF 解析超过内存限制");
         };
         if (process.platform === "linux") {
