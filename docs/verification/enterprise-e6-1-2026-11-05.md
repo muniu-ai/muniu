@@ -29,3 +29,5 @@
 ## 尚未完成
 
 完整工程回归、其余平台门禁和最终视觉证据仍在补齐。本机与 CI 中的合成登录不代表真实企业 OIDC 验收；真实模型质量、Sales 两模式五流程、企业微信及试点观察不在本包已通过范围内。E6.1 尚未因页面或局部测试通过而标记整包完成。
+
+首次整合 [CI 42017560964](https://github.com/muniu-ai/muniu/actions/runs/42017560964)完成 Node 与类型检查后，因 Ubuntu 的 AppArmor 用户命名空间限制而无法启动浏览器。验收配置按 [Chromium 的受限路径配置方式](https://chromium.googlesource.com/chromium/src/+/main/docs/security/apparmor-userns-restrictions.md)处理：将锁定浏览器放在本次 CI 独有的 root 所有目录，仅为两个实际二进制登记命名空间权限，作业结束移除该配置。浏览器继续使用 `chromiumSandbox: true`，本机服务与系统配置未变。此次浏览器检查不计通过，待重新验收。

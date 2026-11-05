@@ -88,7 +88,30 @@ jobs:
         run: npm test
       - run: npm run typecheck
       - name: Install the pinned Chromium runtime
-        run: node node_modules/playwright-core/cli.js install --with-deps chromium
+        shell: bash
+        run: |
+          set -euo pipefail
+          browser_root="/opt/muniu-ci-browsers-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          profile_file="/etc/apparmor.d/muniu-ci-browser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          sudo install -d -o "$(id -un)" -g "$(id -gn)" "$browser_root"
+          PLAYWRIGHT_BROWSERS_PATH="$browser_root" node node_modules/playwright-core/cli.js install --with-deps chromium
+          sudo chown -R root:root "$browser_root"
+          sudo chmod -R go-w "$browser_root"
+          python3 - "$browser_root" > "$RUNNER_TEMP/muniu-browser.apparmor" <<'PY'
+          import pathlib, sys
+          root = pathlib.Path(sys.argv[1]).resolve()
+          executables = sorted(path for path in root.rglob('*') if path.is_file() and path.name in ('chrome', 'chrome-headless-shell'))
+          assert len(executables) >= 2
+          print('abi <abi/4.0>,\ninclude <tunables/global>')
+          for index, executable in enumerate(executables):
+              target = executable.resolve()
+              assert root in target.parents and target.stat().st_uid == 0
+              print(f'profile {root.name}-{index} "{target}" flags=(unconfined) {{\n  userns,\n}}')
+          PY
+          sudo install -m 0644 "$RUNNER_TEMP/muniu-browser.apparmor" "$profile_file"
+          echo "MUNIU_CI_APPARMOR_PROFILE=$profile_file" >> "$GITHUB_ENV"
+          sudo apparmor_parser -r "$profile_file"
+          echo "PLAYWRIGHT_BROWSERS_PATH=$browser_root" >> "$GITHUB_ENV"
       - name: Verify enterprise Web permissions and business workflows
         run: npm run verify:web-ui
       - name: Prepare the PostgreSQL verification image
@@ -105,6 +128,14 @@ jobs:
         run: |
           docker compose -f docker-compose.enterprise.yml logs --no-color --tail 100
           docker compose -f docker-compose.enterprise.yml down --volumes --remove-orphans
+      - name: Remove only this run's browser profile
+        if: always()
+        shell: bash
+        run: |
+          if [ -n "${MUNIU_CI_APPARMOR_PROFILE:-}" ] && [ -f "$MUNIU_CI_APPARMOR_PROFILE" ]; then
+            sudo apparmor_parser -R "$MUNIU_CI_APPARMOR_PROFILE"
+            sudo rm "$MUNIU_CI_APPARMOR_PROFILE"
+          fi
       - name: Confirm generated sources are unchanged
         run: |
           npm run docs:check
