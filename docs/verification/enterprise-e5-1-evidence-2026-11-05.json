@@ -3,7 +3,7 @@
   "date": "2026-11-05",
   "baseCommit": "860905a986cae9e257576e2ad52acadce72d7d73",
   "branch": "codex/enterprise-e5-1",
-  "status": "acceptance_pending",
+  "status": "local_engineering_and_synthetic_passed",
   "scope": "local_engineering_and_synthetic_acceptance",
   "toolchain": {
     "node": "22.19.0",
@@ -36,6 +36,21 @@
       "status": "passed",
       "logSha256": "6d8c5c8f3d7684adb070417bd608d01ae90aa3dc26a65af03ffda4955f38d9a3",
       "completedAt": "2026-11-05T00:42:32.586593+00:00"
+    },
+    {
+      "name": "bundle-candidate",
+      "command": [
+        "node",
+        "/Users/xiaomingwang/ChatGPT/muniu-enterprise-provider-contracts/e5-1-737b773/verify.mjs"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 5.2,
+      "peakProcessTreeRSSMiB": 0.0,
+      "minimumHostFreePercent": 30,
+      "status": "passed",
+      "logSha256": "9fa02a7872fbadc2667e34d063ce4d0c1d81646bb88ee1f52416a4d94b250af3",
+      "completedAt": "2026-11-05T01:35:01.650309+00:00"
     },
     {
       "name": "bundle-tools",
@@ -284,6 +299,23 @@
       "status": "passed",
       "logSha256": "fd72b3436493c97179b8b0f0d51a02d34c6653e931e58fce54c79ac6c8584086",
       "completedAt": "2026-11-05T01:28:28.508126+00:00"
+    },
+    {
+      "name": "export-candidate",
+      "command": [
+        "node",
+        "scripts/export-provider-contracts.mjs",
+        "--out",
+        "/Users/xiaomingwang/ChatGPT/muniu-enterprise-provider-contracts/e5-1-737b773"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 5.0,
+      "peakProcessTreeRSSMiB": 0.2,
+      "minimumHostFreePercent": 28,
+      "status": "passed",
+      "logSha256": "a51f4ebe08c8fd7e81fb4ed241b15399a3df36452a6b846b84ea1090c1e278da",
+      "completedAt": "2026-11-05T01:34:35.061072+00:00"
     },
     {
       "name": "focused",
@@ -832,7 +864,6 @@
     "sampleLimit": "Periodic RSS and container samples may miss short-lived peaks; not a capacity result."
   },
   "pending": [
-    "complete composition deployment recheck when resources are available",
     "Kind full-platform verification in E7",
     "Sales implementation and dual-mode acceptance in E5.2",
     "real OIDC, WeCom, human evaluation baseline and E8 pilots"
@@ -843,5 +874,169 @@
     "scope": "connectivity_and_small_sample_validation",
     "paidCallsStarted": 0,
     "supersedesEarlierLimitMinorUnits": "2000"
+  },
+  "implementationCommit": "737b77343cdd26e72eca09a8b0ee6e1bf006e4bc",
+  "remoteVerification": {
+    "databaseId": 41953938972,
+    "headSha": "c75ee7c2df2aea5f42573bf3f63e5bf624039264",
+    "headBranch": "codex/enterprise-e5-1-ci",
+    "status": "completed",
+    "conclusion": "success",
+    "url": "https://github.com/muniu-ai/muniu/actions/runs/41953938972",
+    "createdAt": "2026-11-05T02:14:57Z",
+    "startedAt": "2026-11-05T02:14:57Z",
+    "updatedAt": "2026-11-05T02:20:56Z",
+    "jobs": [
+      {
+        "completedAt": "2026-11-05T02:20:55Z",
+        "conclusion": "success",
+        "databaseId": 127004187230,
+        "name": "Serial provider and enterprise dependency verification",
+        "startedAt": "2026-11-05T02:15:00Z",
+        "status": "completed",
+        "steps": [
+          {
+            "completedAt": "2026-11-05T02:15:01Z",
+            "conclusion": "success",
+            "name": "Set up job",
+            "number": 1,
+            "startedAt": "2026-11-05T02:15:01Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T02:15:04Z",
+            "conclusion": "success",
+            "name": "Run actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd",
+            "number": 2,
+            "startedAt": "2026-11-05T02:15:01Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T02:15:09Z",
+            "conclusion": "success",
+            "name": "Run actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e",
+            "number": 3,
+            "startedAt": "2026-11-05T02:15:04Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T02:15:12Z",
+            "conclusion": "success",
+            "name": "Install the pinned npm version",
+            "number": 4,
+            "startedAt": "2026-11-05T02:15:09Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T02:15:12Z",
+            "conclusion": "success",
+            "name": "Keep Node test files serial",
+            "number": 5,
+            "startedAt": "2026-11-05T02:15:12Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T02:15:12Z",
+            "conclusion": "success",
+            "name": "Record the exact checkout and available resources",
+            "number": 6,
+            "startedAt": "2026-11-05T02:15:12Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T02:15:18Z",
+            "conclusion": "success",
+            "name": "Run npm ci",
+            "number": 7,
+            "startedAt": "2026-11-05T02:15:12Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T02:15:18Z",
+            "conclusion": "success",
+            "name": "Run npm run verify:contracts",
+            "number": 8,
+            "startedAt": "2026-11-05T02:15:18Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T02:16:14Z",
+            "conclusion": "success",
+            "name": "Run npm run verify:provider-contracts",
+            "number": 9,
+            "startedAt": "2026-11-05T02:15:18Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T02:16:32Z",
+            "conclusion": "success",
+            "name": "Run npm run verify:provider-contracts-postgres",
+            "number": 10,
+            "startedAt": "2026-11-05T02:16:14Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T02:20:49Z",
+            "conclusion": "success",
+            "name": "Verify real PostgreSQL, S3, Vault and two Host/Worker instances",
+            "number": 11,
+            "startedAt": "2026-11-05T02:16:32Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T02:20:49Z",
+            "conclusion": "success",
+            "name": "Collect fixture diagnostics and remove only this Compose project",
+            "number": 12,
+            "startedAt": "2026-11-05T02:20:49Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T02:20:49Z",
+            "conclusion": "success",
+            "name": "Confirm generated sources are unchanged",
+            "number": 13,
+            "startedAt": "2026-11-05T02:20:49Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T02:20:53Z",
+            "conclusion": "success",
+            "name": "Post Run actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e",
+            "number": 25,
+            "startedAt": "2026-11-05T02:20:49Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T02:20:53Z",
+            "conclusion": "success",
+            "name": "Post Run actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd",
+            "number": 26,
+            "startedAt": "2026-11-05T02:20:53Z",
+            "status": "completed"
+          },
+          {
+            "completedAt": "2026-11-05T02:20:53Z",
+            "conclusion": "success",
+            "name": "Complete job",
+            "number": 27,
+            "startedAt": "2026-11-05T02:20:53Z",
+            "status": "completed"
+          }
+        ],
+        "url": "https://github.com/muniu-ai/muniu/actions/runs/41953938972/job/127004187230"
+      }
+    ],
+    "logSha256": "462b9dd74c35e688389f69f977278a675da98d1f684e024c1d8ae1578a71c3b4",
+    "implementationDifferences": [
+      ".github/workflows/enterprise-e51-verification.yml"
+    ],
+    "reportedMemoryTotalMiB": 15983,
+    "scope": "provider contracts, PostgreSQL E3/E4/E5.1 faults, full PostgreSQL/S3/Vault two Host/Worker composition"
+  },
+  "contractBundle": {
+    "sourceCommit": "737b77343cdd26e72eca09a8b0ee6e1bf006e4bc",
+    "manifestSha256": "95293c3d39823138e4ba284a70603893a78d682c013211c94fd49040df971885",
+    "acceptedForE52Integration": true
   }
 }
