@@ -8531,6 +8531,7 @@ components:
               $ref: "#/components/schemas/BusinessObjectRef"
             amountMinor: *a14
             dueDate: *a15
+            businessDate: *a15
           additionalProperties: false
           required:
             - type

@@ -19,7 +19,7 @@ export const ENTERPRISE_FULFILLMENT_COMMANDS: readonly JsonObject[] = [
     command('delivery.receive', update),
     command('acceptance.prepare', { delivery: ref('BusinessObjectRef'), lines: units }),
     command('acceptance.confirm', proof),
-    command('payment_schedule.create', { order: ref('BusinessObjectRef'), amountMinor: positive, dueDate: date }),
+    command('payment_schedule.create', { order: ref('BusinessObjectRef'), amountMinor: positive, dueDate: date, businessDate: date }, ['businessDate']),
     command('payment_schedule.confirm', proof),
     command('receipt.prepare', { order: ref('BusinessObjectRef'), amountMinor: positive, businessDate: date, allocations: allocation }),
     command('receipt.confirm', proof), command('receipt.cancel', update),

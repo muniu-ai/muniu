@@ -48,7 +48,7 @@ test('付款期修订须独立批准且不得低于已分配资金；冲销不�
 });
 test('补录减免不能让较早日期的已分配金额超额；付款期修订保留旧金额口径', () => {
     const f = project();
-    f.execute({ type: 'payment_schedule.create', id: 's', order: f.ref('order', 'order'), amountMinor: 1000000, dueDate: '2026-11-01' }, 'finance-a');
+    f.execute({ type: 'payment_schedule.create', id: 's', order: f.ref('order', 'order'), amountMinor: 1000000, dueDate: '2026-11-01', businessDate: '2026-11-01' }, 'finance-a');
     f.execute({ type: 'payment_schedule.confirm', id: 's', expectedStreamVersion: 1, evidence: f.proof(f.ref('payment_schedule', 's')) }, 'finance-b');
     f.execute({ type: 'receipt.prepare', id: 'r', order: f.ref('order', 'order'), amountMinor: 1000000, businessDate: '2026-11-01', allocations: [{ schedule: f.ref('payment_schedule', 's'), amountMinor: 1000000 }] }, 'finance-a');
     f.execute({ type: 'receipt.confirm', id: 'r', expectedStreamVersion: 1, evidence: f.proof(f.ref('receipt', 'r')) }, 'finance-b');

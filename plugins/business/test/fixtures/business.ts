@@ -2,7 +2,7 @@
 import { decideBusinessCommand,reduceBusinessEvents,type BusinessEvent } from '../../src/index.js';
 import type { BusinessObjectRef, EvidenceRef } from '@mn/contracts';
 export function businessFixture() {
- const events:BusinessEvent[]=[]; const now='2026-11-02T01:00:00.000Z';
+ const events:BusinessEvent[]=[]; let now='2026-11-02T01:00:00.000Z';
  const execute=(command:unknown,actorId='maker',actorKind:'human'|'agent'='human')=>{
   const result=decideBusinessCommand(reduceBusinessEvents(events),command as never,{tenantId:'tenant',workspaceId:'workspace',actorId,actorKind,now,revisionSalt:'a'.repeat(64),assertCurrent:()=>{},assertEvidence:()=>{}});
   events.push(...result.events); return reduceBusinessEvents(events).objects.get(result.primaryObjectKey)!;
@@ -21,5 +21,5 @@ export function businessFixture() {
   execute({type:'order.create',id:'order',contract:ref('contract','contract'),lines:[{quoteLineId:'line-1',quantity}]});
   return execute({type:'order.activate',id:'order',expectedStreamVersion:1},'manager');
  };
- return {events,execute,ref,proof,order,state:()=>reduceBusinessEvents(events)};
+ return {events,execute,ref,proof,order,state:()=>reduceBusinessEvents(events),advance:(value:string)=>{now=value;}};
 }

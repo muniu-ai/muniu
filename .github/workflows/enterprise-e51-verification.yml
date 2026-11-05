@@ -74,6 +74,13 @@ jobs:
           helm version --short
       - run: npm ci
       - run: npm run verify:contracts
+      - name: Verify all Node suites serially
+        run: npm test
+      - run: npm run typecheck
+      - name: Prepare the PostgreSQL verification image
+        run: docker pull postgres:16-alpine
+      - name: Verify payment period history with real PostgreSQL
+        run: npm run verify:business-postgres
       - run: npm run verify:provider-contracts
       - run: npm run verify:provider-contracts-postgres
       - name: Verify real PostgreSQL, S3, Vault and two Host/Worker instances
@@ -85,4 +92,9 @@ jobs:
           docker compose -f docker-compose.enterprise.yml logs --no-color --tail 100
           docker compose -f docker-compose.enterprise.yml down --volumes --remove-orphans
       - name: Confirm generated sources are unchanged
-        run: git diff --exit-code
+        run: |
+          npm run docs:check
+          npm run docs:links
+          npm run docs:build
+          git diff --check
+          git diff --exit-code

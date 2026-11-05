@@ -119,7 +119,9 @@ export function decideFulfillmentCommand(state: BusinessState, command: Business
         }
         case 'payment_schedule.create': {
             const target = order(command.order, ['totalMinor']);
-            create('payment_schedule', command.id, 'created', { ...parent(target), order: json(target.reference), amountMinor: command.amountMinor, dueDate: command.dueDate, currency: 'CNY', status: 'draft' });
+            const effectiveDate = command.businessDate ?? businessDate(context.now); actualDate(effectiveDate);
+            create('payment_schedule', command.id, 'created', { ...parent(target), order: json(target.reference), amountMinor: command.amountMinor, dueDate: command.dueDate, businessDate: effectiveDate,
+                termsHistory: [{ effectiveDate, amountMinor: command.amountMinor, dueDate: command.dueDate }], currency: 'CNY', status: 'draft' });
             return finish('payment_schedule');
         }
         case 'receipt.prepare': {
@@ -182,7 +184,7 @@ export function decideFulfillmentCommand(state: BusinessState, command: Business
         case 'adjustment.confirm':
         case 'expense.confirm': {
             const type = command.type.split('.')[0] as BusinessObjectType;
-            const fields = type === 'payment_schedule' ? ['amountMinor', 'dueDate'] : type === 'expense' ? ['amountMinor', 'description'] : ['amountMinor', 'businessDate'];
+            const fields = type === 'payment_schedule' ? ['amountMinor', 'dueDate', 'businessDate'] : type === 'expense' ? ['amountMinor', 'description'] : ['amountMinor', 'businessDate'];
             const { object, approvalId, evidence: proof } = confirmation(type, fields), target = order(cast<BusinessObjectRef>(object.value.order), ['totalMinor']);
             if (type === 'receipt')
                 allocations(cast<{
@@ -209,7 +211,8 @@ export function decideFulfillmentCommand(state: BusinessState, command: Business
                 }[]>(schedule.value.termsHistory ?? []).at(-1);
                 if (last && String(object.value.businessDate) < last.effectiveDate)
                     fail('ADJUSTMENT_DATE_CONFLICT');
-                event('payment_schedule', schedule.reference.objectId, schedule.reference.streamVersion, 'payment_schedule.revised', { amountMinor: object.value.proposedAmountMinor, dueDate: object.value.proposedDueDate, adjustmentId: command.id, termsHistory: [...cast<unknown[]>(schedule.value.termsHistory ?? [{ effectiveDate: '0001-01-01', amountMinor: schedule.value.amountMinor, dueDate: schedule.value.dueDate }]), { effectiveDate: object.value.businessDate, amountMinor: object.value.proposedAmountMinor, dueDate: object.value.proposedDueDate }] });
+                if (!last) fail('PAYMENT_SCHEDULE_HISTORY_INVALID');
+                event('payment_schedule', schedule.reference.objectId, schedule.reference.streamVersion, 'payment_schedule.revised', { amountMinor: object.value.proposedAmountMinor, dueDate: object.value.proposedDueDate, adjustmentId: command.id, termsHistory: [...cast<unknown[]>(schedule.value.termsHistory), { effectiveDate: object.value.businessDate, amountMinor: object.value.proposedAmountMinor, dueDate: object.value.proposedDueDate }] });
             }
             event(type, command.id, command.expectedStreamVersion, `${type}.confirmed`, { status: 'confirmed', approvalId, evidence: proof, confirmedAt: context.now });
             validateFunds(target.reference.objectId);

@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 import { verifyFulfillment } from './lib/enterprise-fulfillment-fixture.mjs';
+import { createActionsFixtureCleanup } from './enterprise-actions-e2e.mjs';
 import { waitForFixturePort } from './lib/fixture-network.mjs';
 import assert from 'node:assert/strict';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -15,18 +16,20 @@ import { EnterpriseBusinessService } from '../apps/host/dist/enterprise-business
 import { createEnterpriseEventRepository } from '../apps/host/dist/enterprise-event-repository.js';
 import { PostgresKernelStore } from './lib/postgres-kernel-store.mjs';
 import { createPostgresPool } from './lib/postgres-pool.mjs';
-const execute = promisify(execFile), name = `mn-enterprise-business-${randomUUID()}`;
+const execute = promisify(execFile), runId = randomUUID(), name = `mn-enterprise-business-${runId}`;
 const root = await mkdtemp(join(tmpdir(), 'mn-enterprise-business-'));
-const docker = async (...args) => (await execute('docker', args, { maxBuffer: 1024 * 1024 })).stdout.trim();
-let container; const pools = [];
+const docker = async (...args) => (await execute('docker', args, { maxBuffer: 1024 * 1024, timeout: 15000, killSignal: 'SIGKILL' })).stdout.trim();
+const lifecycle = createActionsFixtureCleanup({ root, name, runId, docker });
+let container;
 try {
-  container = await docker('run', '--detach', '--name', name, '--label', 'com.muniu.fixture=enterprise-business',
+  container = await lifecycle.setContainerCreation(docker('run', '--detach', '--name', name, '--label', 'com.muniu.fixture=enterprise-business', '--label', 'com.muniu.fixture.run-id=' + runId,
     '--memory', '192m', '--cpus', '0.5', '--tmpfs', '/var/lib/postgresql/data:rw,size=256m',
-    '-p', '127.0.0.1::5432', '-e', 'POSTGRES_USER=mn', '-e', 'POSTGRES_PASSWORD=synthetic-only', '-e', 'POSTGRES_DB=enterprise_fixture', 'postgres:16-alpine');
+    '-p', '127.0.0.1::5432', '-e', 'POSTGRES_USER=mn', '-e', 'POSTGRES_PASSWORD=synthetic-only', '-e', 'POSTGRES_DB=enterprise_fixture', 'postgres:16-alpine',
+    '-c', 'shared_buffers=16MB', '-c', 'work_mem=1MB', '-c', 'maintenance_work_mem=16MB', '-c', 'max_connections=12'));
   const address = await waitForFixturePort(() => docker('port', container, '5432/tcp'));
   assert.match(address, /^127\.0\.0\.1:\d+$/u);
   const connectionString = `postgres://mn:synthetic-only@${address}/enterprise_fixture`;
-  const makePool = () => { const pool = createPostgresPool({ connectionString, max: 2 }); pools.push(pool); return pool; };
+  const makePool = () => { lifecycle.assertRunning(); const pool = createPostgresPool({ connectionString, max: 2 }); lifecycle.trackSession({ close: () => pool.end() }); return pool; };
   const firstPool = makePool(); let ready = false, connectionFailure;
   for (let i = 0; i < 60; i++) { try { await firstPool.query('select 1'); ready = true; break; } catch (error) { connectionFailure = error.code ?? error.name; await delay(1000); } }
   if (!ready) { process.stderr.write(`PostgreSQL readiness: ${connectionFailure}\n`); process.stderr.write(await docker('logs', container)); }
@@ -94,7 +97,5 @@ try {
   }
   throw error;
 } finally {
-  await Promise.allSettled(pools.map(pool => pool.end()));
-  if (container) await docker('rm', '--force', container);
-  await rm(root, { recursive: true, force: true });
+  try { await lifecycle.stop(); } finally { lifecycle.dispose(); }
 }
