@@ -45,10 +45,12 @@ node --test scripts/test/enterprise-acceptance-spec.test.mjs
 
 ## CI 与后续工作包
 
-当前 Node CI 执行规格检查，`test:boundaries` 同时运行校验器测试。`ciGroups` 记录后续分组，`gates` 记录原方案要求的 12 个新命令及负责包。这些字段保留 E0.2 冻结时的未实施状态，不回填后续结果。`verify:business-domain` 已由 E2 接入真实领域、持久权限和 HTTP 断言；当前结果见[E2.2 验收记录](../verification/enterprise-e2-2-2026-11-04.md)。`verify:enterprise-operating` 与 `verify:enterprise-operating-postgres` 由 E4.1 提供；后者包含 E3 故障断言并接入 Node CI，结果见[E4.1 验收记录](../verification/enterprise-e4-1-2026-11-04.md)。`verify:agent-coordination` 已由 E4.2 接入动态计划、预算及持久执行断言；PostgreSQL 变体在同一命令中复验 E3/E4.1 并接入 CI，见[E4.2 验收记录](../verification/enterprise-e4-2-2026-11-05.md)。E4.3 提供知识、成果和流程断言，当前 CI 的 `verify:enterprise-knowledge-postgres` 同时复验 E3/E4.1/E4.2。`verify:operating-evaluation` 校验冻结记录、原始日志与计分；`--self-test` 只验证合成记录，不能作为真实模型质量成绩。说明见[知识、成果与流程](../enterprise-knowledge-workflows.md)。其他门禁按各负责工作包登记，没有添加空脚本或成功占位任务。
+当前 Node CI 执行规格检查，`test:boundaries` 同时运行校验器测试。`ciGroups` 记录后续分组，`gates` 记录原方案要求的 12 个新命令及负责包。这些字段保留 E0.2 冻结时的未实施状态，不回填后续结果。`verify:business-domain` 已由 E2 接入真实领域、持久权限和 HTTP 断言；当前结果见[E2.2 验收记录](../verification/enterprise-e2-2-2026-11-04.md)。`verify:enterprise-operating` 与 `verify:enterprise-operating-postgres` 由 E4.1 提供；后者包含 E3 故障断言并接入 Node CI，结果见[E4.1 验收记录](../verification/enterprise-e4-1-2026-11-04.md)。`verify:agent-coordination` 已由 E4.2 接入动态计划、预算及持久执行断言；PostgreSQL 变体在同一命令中复验 E3/E4.1 并接入 CI，见[E4.2 验收记录](../verification/enterprise-e4-2-2026-11-05.md)。E4.3 提供知识、成果和流程断言，`verify:enterprise-knowledge-postgres` 同时复验 E3/E4.1/E4.2。`verify:operating-evaluation` 校验冻结记录、原始日志与计分；`--self-test` 只验证合成记录，不能作为真实模型质量成绩。说明见[知识、成果与流程](../enterprise-knowledge-workflows.md)。其他门禁按各负责工作包登记，没有添加空脚本或成功占位任务。
 
 真实运行条件逐项记录在 `executionPrerequisites`。人员、模型配置及试点企业尚未绑定；测试 OIDC、Sales 部署、企业微信测试企业、容量及联合恢复环境尚未核验。每项列明受影响门禁；“尚未核验”不表示相应资源一定不存在。后续包须记录真实就绪证据，不能据现有代码推断环境已具备。
 
 E1/E2 实现身份、权限及领域规则，E3/E4 实现执行和评估，E5 实现提供方与真实连接，E6 实现 Web，E7 执行真实依赖、质量和容量验收。每组只有具备真实断言后才能接入 CI；环境不足须记录未运行及原因。
 
 变更基线必须显式发布新版本，保留旧版本及改变理由，通过相同校验与独立复核后更新摘要。已经开始评估的留出集、评分口径和失败结果不能为提高成绩而修改。实际复核人员、外部测试账号和模型配置是后续执行条件，不能用合成身份或模型替身代替。
+
+E5.1 提供 `verify:provider-contracts` 与 `verify:provider-contracts-postgres`。前者接入内置真实实现、Host 接口和可移植套件；后者在隔离 PostgreSQL 上串行覆盖 E3、E4 及内置动作故障。Node CI 执行这两项检查；可移植套件自测与中断清理测试也包含在第一项中。Sales 实现和两系统同一套件验收仍由 E5.2 完成，不能据内置结果推断 Sales 通过。接口和导出说明见[内置业务提供方](../enterprise-builtin-provider.md)及[提供方契约套件](../enterprise-provider-contracts.md)。

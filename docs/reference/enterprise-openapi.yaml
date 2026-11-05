@@ -3,6 +3,742 @@ info:
   title: Muniu Enterprise API
   version: 0.2.0
 paths:
+  /v2/workspaces/{workspaceId}/providers/receipts/reads:
+    post:
+      operationId: readEnterpriseProviderReceiptEvidence
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: header
+          name: X-CSRF-Token
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnterpriseProviderContentQuery"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EnterpriseProviderReceiptEvidence"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "410":
+          description: 资料已撤回或内容不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+  /v2/workspaces/{workspaceId}/providers/initializations:
+    post:
+      operationId: initializeEnterpriseProvider
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: header
+          name: X-CSRF-Token
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnterpriseProviderInitialization"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/ProviderBinding"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "410":
+          description: 资料已撤回或内容不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+  /v2/workspaces/{workspaceId}/providers/snapshots:
+    post:
+      operationId: readEnterpriseProviderSnapshot
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: header
+          name: X-CSRF-Token
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnterpriseProviderObjectReference"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EnterpriseProviderSnapshot"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "410":
+          description: 资料已撤回或内容不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+  /v2/workspaces/{workspaceId}/providers/changes:
+    post:
+      operationId: listEnterpriseProviderChanges
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: header
+          name: X-CSRF-Token
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnterpriseProviderChangesQuery"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EnterpriseProviderChanges"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "410":
+          description: 资料已撤回或内容不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+  /v2/workspaces/{workspaceId}/providers/content/reads:
+    post:
+      operationId: readEnterpriseProviderContent
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: header
+          name: X-CSRF-Token
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnterpriseProviderContentQuery"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EnterpriseBusinessObjectView"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "410":
+          description: 资料已撤回或内容不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+  /v2/workspaces/{workspaceId}/providers/actions:
+    post:
+      operationId: createEnterpriseProviderAction
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: header
+          name: X-CSRF-Token
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnterpriseProviderActionCreate"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EnterpriseActionView"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "410":
+          description: 资料已撤回或内容不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+  /v2/actions/{actionId}/preview:
+    get:
+      operationId: previewEnterpriseProviderAction
+      parameters:
+        - in: path
+          name: actionId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EnterpriseProviderActionPreview"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "410":
+          description: 资料已撤回或内容不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+  /v2/workspaces/{workspaceId}/providers/packages/reads:
+    post:
+      operationId: readEnterpriseProviderPackage
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: header
+          name: X-CSRF-Token
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnterpriseProviderContentQuery"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EnterpriseProviderPackageContent"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "410":
+          description: 资料已撤回或内容不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
   /v2/workspaces/{workspaceId}/knowledge/business-snapshots:
     post:
       operationId: snapshotEnterpriseBusinessFact
@@ -8702,6 +9438,7 @@ components:
                       - customer
                       - contact
                       - opportunity
+                      - followup_task
                       - service_version
                       - quote_version
                       - contract
@@ -10753,6 +11490,349 @@ components:
         - expectedStreamVersion
         - reference
       additionalProperties: false
+    EnterpriseProviderObjectReference: &a82
+      oneOf:
+        - $ref: "#/components/schemas/BusinessObjectRef"
+        - $ref: "#/components/schemas/ExternalObjectRef"
+    EnterpriseProviderChangesQuery:
+      type: object
+      properties:
+        cursor:
+          oneOf:
+            - type: string
+              minLength: 1
+              maxLength: 4096
+            - type: "null"
+      required:
+        - cursor
+      additionalProperties: false
+    EnterpriseProviderContentQuery:
+      type: object
+      properties:
+        reference: &a83
+          type: string
+          minLength: 1
+          maxLength: 200
+          pattern: ^(?=.*\S)[^\u0000-\u001f\u007f]+$
+      required:
+        - reference
+      additionalProperties: false
+    EnterpriseProviderInitialization:
+      type: object
+      properties:
+        expectedStreamVersion:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+      required:
+        - expectedStreamVersion
+      additionalProperties: false
+    EnterpriseProviderActionCreate:
+      oneOf:
+        - type: object
+          properties:
+            target: *a82
+            responsibilityId: *a83
+            expiresAt: &a84
+              type: string
+              format: date-time
+            policyId: *a83
+            action:
+              const: create_followup_task
+            input:
+              type: object
+              properties:
+                title: *a83
+                dueAt: *a84
+                description:
+                  type: string
+                  maxLength: 2000
+              required:
+                - title
+                - dueAt
+              additionalProperties: false
+          required:
+            - target
+            - responsibilityId
+            - expiresAt
+            - action
+            - input
+          additionalProperties: false
+        - type: object
+          properties:
+            target: *a82
+            responsibilityId: *a83
+            expiresAt: *a84
+            policyId: *a83
+            action:
+              const: update_followup_date
+            input:
+              type: object
+              properties:
+                nextFollowupAt: *a84
+              required:
+                - nextFollowupAt
+              additionalProperties: false
+          required:
+            - target
+            - responsibilityId
+            - expiresAt
+            - action
+            - input
+          additionalProperties: false
+        - type: object
+          properties:
+            target: *a82
+            responsibilityId: *a83
+            expiresAt: *a84
+            policyId: *a83
+            action:
+              const: issue_quote_package
+            businessApprovalRef: *a83
+            input:
+              type: object
+              properties:
+                format:
+                  type: string
+                  enum:
+                    - docx
+                    - pdf
+                    - xlsx
+              required:
+                - format
+              additionalProperties: false
+          required:
+            - target
+            - responsibilityId
+            - expiresAt
+            - action
+            - businessApprovalRef
+            - input
+          additionalProperties: false
+    EnterpriseProviderActionPreparation:
+      oneOf:
+        - type: object
+          properties:
+            tenantId: *a83
+            workspaceId: *a83
+            operationKey: *a83
+            providerBindingVersion: &a85
+              type: integer
+              minimum: 1
+              maximum: 9007199254740991
+            target: *a82
+            expiresAt: *a84
+            action:
+              const: create_followup_task
+            input:
+              type: object
+              properties:
+                title: *a83
+                dueAt: *a84
+                description:
+                  type: string
+                  maxLength: 2000
+              required:
+                - title
+                - dueAt
+              additionalProperties: false
+          required:
+            - tenantId
+            - workspaceId
+            - operationKey
+            - providerBindingVersion
+            - target
+            - expiresAt
+            - action
+            - input
+          additionalProperties: false
+        - type: object
+          properties:
+            tenantId: *a83
+            workspaceId: *a83
+            operationKey: *a83
+            providerBindingVersion: *a85
+            target: *a82
+            expiresAt: *a84
+            action:
+              const: update_followup_date
+            input:
+              type: object
+              properties:
+                nextFollowupAt: *a84
+              required:
+                - nextFollowupAt
+              additionalProperties: false
+          required:
+            - tenantId
+            - workspaceId
+            - operationKey
+            - providerBindingVersion
+            - target
+            - expiresAt
+            - action
+            - input
+          additionalProperties: false
+        - type: object
+          properties:
+            tenantId: *a83
+            workspaceId: *a83
+            operationKey: *a83
+            providerBindingVersion: *a85
+            target: *a82
+            expiresAt: *a84
+            action:
+              const: issue_quote_package
+            businessApprovalRef: *a83
+            input:
+              type: object
+              properties:
+                format:
+                  type: string
+                  enum:
+                    - docx
+                    - pdf
+                    - xlsx
+              required:
+                - format
+              additionalProperties: false
+          required:
+            - tenantId
+            - workspaceId
+            - operationKey
+            - providerBindingVersion
+            - target
+            - expiresAt
+            - action
+            - businessApprovalRef
+            - input
+          additionalProperties: false
+    EnterpriseProviderQuoteFile:
+      type: object
+      properties:
+        protectedContentRef: *a83
+        digest:
+          type: string
+          pattern: ^[a-f0-9]{64}$
+        mediaType:
+          type: string
+          enum:
+            - application/pdf
+            - application/vnd.openxmlformats-officedocument.wordprocessingml.document
+            - application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+      required:
+        - protectedContentRef
+        - digest
+        - mediaType
+      additionalProperties: false
+    EnterpriseProviderReceiptEvidence:
+      type: object
+      properties:
+        receipt:
+          $ref: "#/components/schemas/ActionReceipt"
+        target: *a82
+        result: *a82
+      required:
+        - receipt
+        - target
+      additionalProperties: false
+    EnterpriseProviderActionPreview:
+      type: object
+      properties:
+        request:
+          $ref: "#/components/schemas/EnterpriseProviderActionPreparation"
+        inputDigest:
+          type: string
+          pattern: ^[a-f0-9]{64}$
+        document:
+          $ref: "#/components/schemas/EnterpriseProviderQuoteFile"
+      required:
+        - request
+        - inputDigest
+      additionalProperties: false
+    EnterpriseProviderPackageContent:
+      type: object
+      properties:
+        reference: *a83
+        source: *a82
+        mediaType: *a83
+        digest:
+          type: string
+          pattern: ^[a-f0-9]{64}$
+        bytesBase64:
+          type: string
+          minLength: 1
+        official:
+          type: boolean
+      required:
+        - reference
+        - source
+        - mediaType
+        - digest
+        - bytesBase64
+        - official
+      additionalProperties: false
+    EnterpriseProviderPreparedAction:
+      type: object
+      properties:
+        preparedInputRef: *a83
+        inputDigest:
+          type: string
+          pattern: ^[a-f0-9]{64}$
+        target: *a82
+        expiresAt: *a84
+      required:
+        - preparedInputRef
+        - inputDigest
+        - target
+        - expiresAt
+      additionalProperties: false
+    EnterpriseProviderSnapshot:
+      type: object
+      properties:
+        objectRef: *a82
+        protectedContentRef: *a83
+        observedAt: *a84
+      required:
+        - objectRef
+        - protectedContentRef
+        - observedAt
+      additionalProperties: false
+    EnterpriseProviderChanges:
+      type: object
+      properties:
+        changes:
+          type: array
+          maxItems: 500
+          items:
+            type: object
+            properties:
+              sourceEventId: *a83
+              sourceEventType: *a83
+              sourceOccurredAt: *a84
+              snapshot:
+                $ref: "#/components/schemas/EnterpriseProviderSnapshot"
+              origin:
+                type: string
+                enum:
+                  - external
+                  - muniu
+              causedByOperationKey: *a83
+              causedByGoalId: *a83
+            required:
+              - sourceEventId
+              - sourceEventType
+              - sourceOccurredAt
+              - snapshot
+            additionalProperties: false
+        nextCursor:
+          type: string
+          minLength: 1
+          maxLength: 4096
+      required:
+        - changes
+        - nextCursor
+      additionalProperties: false
     EnterpriseGoalStatus:
       type: string
       enum:
@@ -10770,10 +11850,10 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: &a82
+        tenantId: &a86
           type: string
           minLength: 1
-        workspaceId: *a82
+        workspaceId: *a86
         objectType:
           type: string
           enum:
@@ -10783,6 +11863,7 @@ components:
             - customer
             - contact
             - opportunity
+            - followup_task
             - service_version
             - quote_version
             - contract
@@ -10802,12 +11883,12 @@ components:
             - evidence_ref
             - decision_record
             - memory_entry
-        objectId: *a82
-        streamVersion: &a84
+        objectId: *a86
+        streamVersion: &a88
           type: integer
           minimum: 1
           maximum: 9007199254740991
-        digest: &a83
+        digest: &a87
           type: string
           pattern: ^[0-9a-f]{64}$
       required:
@@ -10821,9 +11902,9 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a82
-        workspaceId: *a82
-        provider: *a82
+        tenantId: *a86
+        workspaceId: *a86
+        provider: *a86
         objectType:
           type: string
           enum:
@@ -10833,6 +11914,7 @@ components:
             - customer
             - contact
             - opportunity
+            - followup_task
             - service_version
             - quote_version
             - contract
@@ -10852,13 +11934,13 @@ components:
             - evidence_ref
             - decision_record
             - memory_entry
-        objectId: *a82
-        sourceVersion: *a82
-        digest: *a83
-        observedAt: &a86
+        objectId: *a86
+        sourceVersion: *a86
+        digest: *a87
+        observedAt: &a90
           type: string
           format: date-time
-        permissionRef: *a82
+        permissionRef: *a86
       required:
         - tenantId
         - workspaceId
@@ -10873,10 +11955,10 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a82
-        workspaceId: *a82
-        id: *a82
-        streamVersion: *a84
+        tenantId: *a86
+        workspaceId: *a86
+        id: *a86
+        streamVersion: *a88
         mode:
           type: string
           enum:
@@ -10897,6 +11979,7 @@ components:
                   - customer
                   - contact
                   - opportunity
+                  - followup_task
                   - service_version
                   - quote_version
                   - contract
@@ -10916,10 +11999,10 @@ components:
                   - evidence_ref
                   - decision_record
                   - memory_entry
-              provider: *a82
+              provider: *a86
               allowedActions:
                 type: array
-                items: &a87
+                items: &a91
                   type: string
                   enum:
                     - create_followup_task
@@ -10955,19 +12038,19 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a82
-        workspaceId: *a82
-        id: *a82
-        streamVersion: *a84
-        periodStart: &a85
+        tenantId: *a86
+        workspaceId: *a86
+        id: *a86
+        streamVersion: *a88
+        periodStart: &a89
           type: string
           format: date
-        periodEnd: *a85
+        periodEnd: *a89
         metricDefinition:
           $ref: "#/components/schemas/BusinessObjectRef"
         targetValue:
           type: number
-        responsiblePrincipalId: *a82
+        responsiblePrincipalId: *a86
         sourceRefs:
           type: array
           items:
@@ -10988,12 +12071,12 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a82
-        workspaceId: *a82
-        id: *a82
-        streamVersion: *a84
-        responsiblePrincipalId: *a82
-        authorityRevisionId: *a82
+        tenantId: *a86
+        workspaceId: *a86
+        id: *a86
+        streamVersion: *a88
+        responsiblePrincipalId: *a86
+        authorityRevisionId: *a86
         mode:
           type: string
           enum:
@@ -11007,23 +12090,23 @@ components:
             - closed
         sourceScopes:
           type: array
-          items: *a82
+          items: *a86
           minItems: 1
         triggerTypes:
           type: array
-          items: *a82
+          items: *a86
           minItems: 1
         objectRefs:
           type: array
           items:
             $ref: "#/components/schemas/BusinessObjectRef"
           minItems: 0
-        validUntil: *a86
+        validUntil: *a90
         budget:
           $ref: "#/components/schemas/EnterpriseExecutionBudget"
         evaluationBudget:
           $ref: "#/components/schemas/EvaluationBudget"
-        notificationPolicyVersion: *a82
+        notificationPolicyVersion: *a86
       required:
         - tenantId
         - workspaceId
@@ -11044,10 +12127,10 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a82
-        workspaceId: *a82
-        id: *a82
-        streamVersion: *a84
+        tenantId: *a86
+        workspaceId: *a86
+        id: *a86
+        streamVersion: *a88
         source:
           type: string
           enum:
@@ -11057,14 +12140,14 @@ components:
             - business
             - sales
             - timer
-        sourceInstanceId: *a82
-        sourceEventId: *a82
-        sourceEventType: *a82
-        deduplicationKey: *a82
-        senderPrincipalId: *a82
-        sourceOccurredAt: *a86
-        receivedAt: *a86
-        protectedPayloadRef: *a82
+        sourceInstanceId: *a86
+        sourceEventId: *a86
+        sourceEventType: *a86
+        deduplicationKey: *a86
+        senderPrincipalId: *a86
+        sourceOccurredAt: *a90
+        receivedAt: *a90
+        protectedPayloadRef: *a86
         status:
           type: string
           enum:
@@ -11072,7 +12155,7 @@ components:
             - quarantined
             - unevaluated
             - evaluated
-        policyId: *a82
+        policyId: *a86
       required:
         - tenantId
         - workspaceId
@@ -11091,12 +12174,12 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a82
-        workspaceId: *a82
-        id: *a82
-        authorityId: *a82
-        revision: *a84
-        responsiblePrincipalId: *a82
+        tenantId: *a86
+        workspaceId: *a86
+        id: *a86
+        authorityId: *a86
+        revision: *a88
+        responsiblePrincipalId: *a86
         objectRefs:
           type: array
           items:
@@ -11104,25 +12187,25 @@ components:
           minItems: 0
         capabilityIds:
           type: array
-          items: *a82
+          items: *a86
           minItems: 1
         modelBindingIds:
           type: array
-          items: *a82
+          items: *a86
           minItems: 0
         allowedFields:
           type: array
-          items: *a82
+          items: *a86
           minItems: 0
         allowedDestinations:
           type: array
-          items: *a82
+          items: *a86
           minItems: 0
-        policyVersion: *a82
+        policyVersion: *a86
         budget:
           $ref: "#/components/schemas/EnterpriseExecutionBudget"
-        validUntil: *a86
-        commitmentDigest: *a83
+        validUntil: *a90
+        commitmentDigest: *a87
       required:
         - tenantId
         - workspaceId
@@ -11143,13 +12226,13 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a82
-        workspaceId: *a82
-        id: *a82
-        goalId: *a82
-        revision: *a84
-        authorityRevisionId: *a82
-        reason: *a82
+        tenantId: *a86
+        workspaceId: *a86
+        id: *a86
+        goalId: *a86
+        revision: *a88
+        authorityRevisionId: *a86
+        reason: *a86
         nodes:
           type: array
           items:
@@ -11164,9 +12247,9 @@ components:
           $ref: "#/components/schemas/EnterpriseExecutionBudget"
         acceptanceCriteria:
           type: array
-          items: *a82
+          items: *a86
           minItems: 1
-        createdAt: *a86
+        createdAt: *a90
       required:
         - tenantId
         - workspaceId
@@ -11184,15 +12267,15 @@ components:
       type: object
       additionalProperties: false
       properties:
-        id: *a82
+        id: *a86
         dependsOn:
           type: array
-          items: *a82
+          items: *a86
           minItems: 0
           uniqueItems: true
-        capabilityId: *a82
-        capabilityVersion: *a82
-        modelBindingId: *a82
+        capabilityId: *a86
+        capabilityVersion: *a86
+        modelBindingId: *a86
         inputRefs:
           type: array
           items:
@@ -11202,7 +12285,7 @@ components:
           $ref: "#/components/schemas/EnterpriseExecutionBudget"
         acceptanceCriteria:
           type: array
-          items: *a82
+          items: *a86
           minItems: 1
         effect:
           type: string
@@ -11224,32 +12307,32 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a82
-        workspaceId: *a82
-        id: *a82
-        streamVersion: *a84
-        operationKey: *a82
-        goalId: *a82
-        nodeId: *a82
-        attemptId: *a82
-        generation: &a88
+        tenantId: *a86
+        workspaceId: *a86
+        id: *a86
+        streamVersion: *a88
+        operationKey: *a86
+        goalId: *a86
+        nodeId: *a86
+        attemptId: *a86
+        generation: &a92
           type: integer
           minimum: 0
           maximum: 9007199254740991
-        provider: *a82
-        action: *a87
+        provider: *a86
+        action: *a91
         target:
           oneOf:
             - $ref: "#/components/schemas/BusinessObjectRef"
             - $ref: "#/components/schemas/ExternalObjectRef"
-        authorityRevisionId: *a82
-        providerBindingVersion: *a84
-        preparedInputRef: *a82
-        inputDigest: *a83
-        businessApprovalRef: *a82
-        executionApprovalRef: *a82
-        reservationId: *a82
-        expiresAt: *a86
+        authorityRevisionId: *a86
+        providerBindingVersion: *a88
+        preparedInputRef: *a86
+        inputDigest: *a87
+        businessApprovalRef: *a86
+        executionApprovalRef: *a86
+        reservationId: *a86
+        expiresAt: *a90
         status:
           type: string
           enum:
@@ -11283,13 +12366,13 @@ components:
         - type: object
           additionalProperties: false
           properties:
-            tenantId: *a82
-            workspaceId: *a82
-            id: *a82
-            operationKey: *a82
-            actionDigest: *a83
-            provider: *a82
-            receivedAt: *a86
+            tenantId: *a86
+            workspaceId: *a86
+            id: *a86
+            operationKey: *a86
+            actionDigest: *a87
+            provider: *a86
+            receivedAt: *a90
             status:
               const: succeeded
             evidenceRefs:
@@ -11297,7 +12380,7 @@ components:
               items:
                 $ref: "#/components/schemas/EvidenceRef"
               minItems: 1
-            completedAt: *a86
+            completedAt: *a90
           required:
             - tenantId
             - workspaceId
@@ -11312,13 +12395,13 @@ components:
         - type: object
           additionalProperties: false
           properties:
-            tenantId: *a82
-            workspaceId: *a82
-            id: *a82
-            operationKey: *a82
-            actionDigest: *a83
-            provider: *a82
-            receivedAt: *a86
+            tenantId: *a86
+            workspaceId: *a86
+            id: *a86
+            operationKey: *a86
+            actionDigest: *a87
+            provider: *a86
+            receivedAt: *a90
             status:
               type: string
               enum:
@@ -11336,16 +12419,16 @@ components:
         - type: object
           additionalProperties: false
           properties:
-            tenantId: *a82
-            workspaceId: *a82
-            id: *a82
-            operationKey: *a82
-            actionDigest: *a83
-            provider: *a82
-            receivedAt: *a86
+            tenantId: *a86
+            workspaceId: *a86
+            id: *a86
+            operationKey: *a86
+            actionDigest: *a87
+            provider: *a86
+            receivedAt: *a90
             status:
               const: not_executed
-            reasonCode: *a82
+            reasonCode: *a86
           required:
             - tenantId
             - workspaceId
@@ -11360,10 +12443,10 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a82
-        workspaceId: *a82
-        id: *a82
-        streamVersion: *a84
+        tenantId: *a86
+        workspaceId: *a86
+        id: *a86
+        streamVersion: *a88
         kind:
           type: string
           enum:
@@ -11371,18 +12454,18 @@ components:
             - question
             - conflict
             - reconciliation
-        subjectRef: *a82
-        subjectVersion: *a84
+        subjectRef: *a86
+        subjectVersion: *a88
         assignedPrincipalIds:
           type: array
-          items: *a82
+          items: *a86
           minItems: 1
         status:
           type: string
           enum:
             - open
             - resolved
-        createdAt: *a86
+        createdAt: *a90
       required:
         - tenantId
         - workspaceId
@@ -11398,9 +12481,9 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a82
-        workspaceId: *a82
-        id: *a82
+        tenantId: *a86
+        workspaceId: *a86
+        id: *a86
         sourceKind:
           type: string
           enum:
@@ -11408,29 +12491,29 @@ components:
             - business_fact
             - human_decision
             - candidate_experience
-        protectedContentRef: *a82
-        sourceVersion: *a82
-        digest: *a83
-        permissionRef: *a82
+        protectedContentRef: *a86
+        sourceVersion: *a86
+        digest: *a87
+        permissionRef: *a86
         locator:
           oneOf:
             - type: object
               additionalProperties: false
               properties:
-                page: *a84
+                page: *a88
               required:
                 - page
             - type: object
               additionalProperties: false
               properties:
-                paragraph: *a82
+                paragraph: *a86
               required:
                 - paragraph
             - type: object
               additionalProperties: false
               properties:
-                sheet: *a82
-                cell: *a82
+                sheet: *a86
+                cell: *a86
               required:
                 - sheet
                 - cell
@@ -11448,11 +12531,11 @@ components:
       type: object
       additionalProperties: false
       properties:
-        maxTokens: *a88
-        maxCostMinor: *a88
+        maxTokens: *a92
+        maxCostMinor: *a92
         currency:
           const: CNY
-        deadline: *a86
+        deadline: *a90
       required:
         - maxTokens
         - maxCostMinor
@@ -11462,9 +12545,9 @@ components:
       type: object
       additionalProperties: false
       properties:
-        dailyCostMinor: *a88
-        perAttemptCostMinor: *a88
-        maxTokensPerAttempt: *a88
+        dailyCostMinor: *a92
+        perAttemptCostMinor: *a92
+        maxTokensPerAttempt: *a92
       required:
         - dailyCostMinor
         - perAttemptCostMinor
@@ -11473,13 +12556,13 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a82
-        workspaceId: *a82
-        id: *a82
-        streamVersion: *a84
-        principalId: *a82
-        issuer: *a82
-        subject: *a82
+        tenantId: *a86
+        workspaceId: *a86
+        id: *a86
+        streamVersion: *a88
+        principalId: *a86
+        issuer: *a86
+        subject: *a86
         status:
           type: string
           enum:
@@ -11489,7 +12572,7 @@ components:
             - removed
         departmentIds:
           type: array
-          items: *a82
+          items: *a86
           minItems: 0
       required:
         - tenantId
@@ -11505,11 +12588,11 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a82
-        workspaceId: *a82
-        id: *a82
-        streamVersion: *a84
-        principalId: *a82
+        tenantId: *a86
+        workspaceId: *a86
+        id: *a86
+        streamVersion: *a88
+        principalId: *a86
         objectRef:
           $ref: "#/components/schemas/BusinessObjectRef"
         actions:
@@ -11526,13 +12609,13 @@ components:
           minItems: 1
         readableFields:
           type: array
-          items: *a82
+          items: *a86
           minItems: 0
         writableFields:
           type: array
-          items: *a82
+          items: *a86
           minItems: 0
-        validUntil: *a86
+        validUntil: *a90
       required:
         - tenantId
         - workspaceId
@@ -11548,21 +12631,21 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a82
-        workspaceId: *a82
-        id: *a82
-        streamVersion: *a84
+        tenantId: *a86
+        workspaceId: *a86
+        id: *a86
+        streamVersion: *a88
         subjectRef:
           $ref: "#/components/schemas/BusinessObjectRef"
-        actionDigest: *a83
-        preparedByPrincipalId: *a82
-        approvedByPrincipalId: *a82
+        actionDigest: *a87
+        preparedByPrincipalId: *a86
+        approvedByPrincipalId: *a86
         decision:
           type: string
           enum:
             - approve
             - reject
-        decidedAt: *a86
+        decidedAt: *a90
       required:
         - tenantId
         - workspaceId
@@ -11578,20 +12661,20 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a82
-        workspaceId: *a82
-        id: *a82
-        streamVersion: *a84
-        authorityRevisionId: *a82
-        actionIntentId: *a82
-        actionDigest: *a83
-        approvedByPrincipalId: *a82
+        tenantId: *a86
+        workspaceId: *a86
+        id: *a86
+        streamVersion: *a88
+        authorityRevisionId: *a86
+        actionIntentId: *a86
+        actionDigest: *a87
+        approvedByPrincipalId: *a86
         decision:
           type: string
           enum:
             - approve_once
             - deny
-        validUntil: *a86
+        validUntil: *a90
       required:
         - tenantId
         - workspaceId
@@ -11607,11 +12690,11 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a82
-        workspaceId: *a82
-        id: *a82
-        streamVersion: *a84
-        responsiblePrincipalId: *a82
+        tenantId: *a86
+        workspaceId: *a86
+        id: *a86
+        streamVersion: *a88
+        responsiblePrincipalId: *a86
         status:
           type: string
           enum:
@@ -11627,15 +12710,15 @@ components:
             - cancelled
         objectiveRef:
           $ref: "#/components/schemas/BusinessObjectRef"
-        activePlanRevisionId: *a82
-        authorityRevisionId: *a82
+        activePlanRevisionId: *a86
+        authorityRevisionId: *a86
         requiredArtifactIds:
           type: array
-          items: *a82
+          items: *a86
           minItems: 0
         acceptanceCriteria:
           type: array
-          items: *a82
+          items: *a86
           minItems: 1
         budget:
           $ref: "#/components/schemas/EnterpriseExecutionBudget"

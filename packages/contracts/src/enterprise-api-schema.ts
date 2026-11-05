@@ -2,6 +2,14 @@
 import { ENTERPRISE_SCHEMAS } from './enterprise-schema.js';
 import type { JsonObject } from './json.js';
 export const ENTERPRISE_HTTP_OPERATIONS = [
+  { id: 'readEnterpriseProviderReceiptEvidence', method: 'post', path: '/v2/workspaces/{workspaceId}/providers/receipts/reads', body: 'EnterpriseProviderContentQuery', response: 'EnterpriseProviderReceiptEvidence', mutation: false },
+  { id: 'initializeEnterpriseProvider', method: 'post', path: '/v2/workspaces/{workspaceId}/providers/initializations', body: 'EnterpriseProviderInitialization', response: 'ProviderBinding', mutation: true },
+  { id: 'readEnterpriseProviderSnapshot', method: 'post', path: '/v2/workspaces/{workspaceId}/providers/snapshots', body: 'EnterpriseProviderObjectReference', response: 'EnterpriseProviderSnapshot', mutation: false },
+  { id: 'listEnterpriseProviderChanges', method: 'post', path: '/v2/workspaces/{workspaceId}/providers/changes', body: 'EnterpriseProviderChangesQuery', response: 'EnterpriseProviderChanges', mutation: false },
+  { id: 'readEnterpriseProviderContent', method: 'post', path: '/v2/workspaces/{workspaceId}/providers/content/reads', body: 'EnterpriseProviderContentQuery', response: 'EnterpriseBusinessObjectView', mutation: false },
+  { id: 'createEnterpriseProviderAction', method: 'post', path: '/v2/workspaces/{workspaceId}/providers/actions', body: 'EnterpriseProviderActionCreate', response: 'EnterpriseActionView', mutation: true },
+  { id: 'previewEnterpriseProviderAction', method: 'get', path: '/v2/actions/{actionId}/preview', response: 'EnterpriseProviderActionPreview', mutation: false },
+  { id: 'readEnterpriseProviderPackage', method: 'post', path: '/v2/workspaces/{workspaceId}/providers/packages/reads', body: 'EnterpriseProviderContentQuery', response: 'EnterpriseProviderPackageContent', mutation: false },
   { id: 'snapshotEnterpriseBusinessFact', method: 'post', path: '/v2/workspaces/{workspaceId}/knowledge/business-snapshots', body: 'EnterpriseSourceScope', response: 'EnterpriseKnowledgeView', mutation: true },
   { id: 'materializeEnterpriseDecision', method: 'post', path: '/v2/artifacts/decision-materials', body: 'EnterpriseArtifactDecisionMaterial', response: 'EnterpriseKnowledgeView', mutation: true },
   { id: 'listEnterpriseWorkflows', method: 'get', path: '/v2/workspaces/{workspaceId}/workflows', response: 'EnterpriseWorkflowCatalog', mutation: false },

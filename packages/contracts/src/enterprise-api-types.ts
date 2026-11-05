@@ -2,6 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 import type * as Types from "./enterprise-types.js";
 export interface EnterpriseApiInputs {
+  readonly readEnterpriseProviderReceiptEvidence: { readonly path: { readonly workspaceId: string; }; readonly body: Types.EnterpriseProviderContentQuery; readonly headers: { readonly "X-CSRF-Token": string; }; };
+  readonly initializeEnterpriseProvider: { readonly path: { readonly workspaceId: string; }; readonly body: Types.EnterpriseProviderInitialization; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
+  readonly readEnterpriseProviderSnapshot: { readonly path: { readonly workspaceId: string; }; readonly body: Types.EnterpriseProviderObjectReference; readonly headers: { readonly "X-CSRF-Token": string; }; };
+  readonly listEnterpriseProviderChanges: { readonly path: { readonly workspaceId: string; }; readonly body: Types.EnterpriseProviderChangesQuery; readonly headers: { readonly "X-CSRF-Token": string; }; };
+  readonly readEnterpriseProviderContent: { readonly path: { readonly workspaceId: string; }; readonly body: Types.EnterpriseProviderContentQuery; readonly headers: { readonly "X-CSRF-Token": string; }; };
+  readonly createEnterpriseProviderAction: { readonly path: { readonly workspaceId: string; }; readonly body: Types.EnterpriseProviderActionCreate; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
+  readonly previewEnterpriseProviderAction: { readonly path: { readonly actionId: string; }; };
+  readonly readEnterpriseProviderPackage: { readonly path: { readonly workspaceId: string; }; readonly body: Types.EnterpriseProviderContentQuery; readonly headers: { readonly "X-CSRF-Token": string; }; };
   readonly snapshotEnterpriseBusinessFact: { readonly path: { readonly workspaceId: string; }; readonly body: Types.EnterpriseSourceScope; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
   readonly materializeEnterpriseDecision: { readonly path?: Record<string, never>; readonly body: Types.EnterpriseArtifactDecisionMaterial; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
   readonly listEnterpriseWorkflows: { readonly path: { readonly workspaceId: string; }; };
@@ -82,6 +90,14 @@ export interface EnterpriseApiInputs {
   readonly commandOrganizationMember: { readonly path: { readonly organizationId: string; readonly memberId: string; }; readonly body: Types.OrganizationMemberCommand; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
 }
 export interface EnterpriseApiOutputs {
+  readonly readEnterpriseProviderReceiptEvidence: Types.EnterpriseProviderReceiptEvidence;
+  readonly initializeEnterpriseProvider: Types.ProviderBinding;
+  readonly readEnterpriseProviderSnapshot: Types.EnterpriseProviderSnapshot;
+  readonly listEnterpriseProviderChanges: Types.EnterpriseProviderChanges;
+  readonly readEnterpriseProviderContent: Types.EnterpriseBusinessObjectView;
+  readonly createEnterpriseProviderAction: Types.EnterpriseActionView;
+  readonly previewEnterpriseProviderAction: Types.EnterpriseProviderActionPreview;
+  readonly readEnterpriseProviderPackage: Types.EnterpriseProviderPackageContent;
   readonly snapshotEnterpriseBusinessFact: Types.EnterpriseKnowledgeView;
   readonly materializeEnterpriseDecision: Types.EnterpriseKnowledgeView;
   readonly listEnterpriseWorkflows: Types.EnterpriseWorkflowCatalog;

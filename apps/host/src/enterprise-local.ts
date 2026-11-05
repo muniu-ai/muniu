@@ -16,6 +16,7 @@ import { join, resolve, isAbsolute } from 'node:path';
 import { mkdir, readdir, readFile, writeFile, lstat } from 'node:fs/promises';
 import { acquireLocalStateLock, FileCas, MacOsKeychainKeyProvider, SqliteStorage, DEFAULT_PROJECTION_JOURNAL_NAMESPACES, runKeychainCommand, type KeyProvider } from '@mn/storage';
 import { EnterpriseExecutionRuntime } from './enterprise-execution-runtime.js';
+import { EnterpriseProviderService } from './enterprise-provider-service.js';
 import { EnterpriseError } from '@mn/enterprise-services';
 import { createEnterpriseEventRepository } from './enterprise-event-repository.js';
 import { createEnterpriseHost, type EnterpriseHostOptions } from './enterprise-host.js';
@@ -34,7 +35,7 @@ async function hmacKey(account: string, existing: boolean): Promise<Buffer> {
   if (key.length !== 32) throw new Error('ENTERPRISE_KEY_INVALID');
   return key;
 }
-export interface StartEnterpriseLocalOptions extends Omit<EnterpriseHostOptions, 'repository' | 'executionRuntime' | 'operating' | 'evaluation' | 'goals'> {
+export interface StartEnterpriseLocalOptions extends Omit<EnterpriseHostOptions, 'repository' | 'executionRuntime' | 'businessProviders' | 'operating' | 'evaluation' | 'goals'> {
   readonly operatingBackground?: boolean;
   readonly evaluationOptions?: Omit<ConstructorParameters<typeof EnterpriseEvaluationRuntime>[0], 'operating' | 'protection'> & { readonly modelsFor?: (tenantId: string, workspaceId: string) => readonly EvaluationModel[] };
   readonly executionProviders?: Pick<ConstructorParameters<typeof EnterpriseExecutionRuntime>[0], 'resolveProvider' | 'usageForReceipt'>;
@@ -77,11 +78,16 @@ export async function startEnterpriseLocalHost(options: StartEnterpriseLocalOpti
     const keys = options.keys ?? { hmacKey: await hmacKey(`${marker.instanceId}:event-hmac`, existing),
       keyProvider: new MacOsKeychainKeyProvider({ account: `${marker.instanceId}:wrapping-key`, service: ENTERPRISE_KEYCHAIN_SERVICE }) };
     const cas = new FileCas({ rootDir: join(root, 'objects') });
-    store = new SqliteStorage({ databaseFile, hmacKey: keys.hmacKey, projectionJournal:{cas,keyProvider:keys.keyProvider,namespaces:DEFAULT_PROJECTION_JOURNAL_NAMESPACES} });
+    store = new SqliteStorage({ databaseFile, hmacKey: keys.hmacKey, now: () => new Date(options.now?.() ?? new Date().toISOString()), projectionJournal:{cas,keyProvider:keys.keyProvider,namespaces:DEFAULT_PROJECTION_JOURNAL_NAMESPACES} });
     const repository = createEnterpriseEventRepository({ store, cas, keyProvider: keys.keyProvider, allowExecutionEvents:true });
+    let businessProviders: EnterpriseProviderService;
     const executionRuntime = new EnterpriseExecutionRuntime({store,repository,now:options.now,
-      resolveProvider:options.executionProviders?.resolveProvider??(async()=>{throw new EnterpriseError('PROVIDER_NOT_CONFIGURED',409);}),
-      usageForReceipt:options.executionProviders?.usageForReceipt??(()=>{throw new EnterpriseError('USAGE_METER_UNCONFIGURED',503);})});
+      resolveProvider: options.executionProviders?.resolveProvider ?? ((tenantId, workspaceId, id) => businessProviders.resolveRuntime(tenantId, workspaceId, id)),
+      usageForReceipt: options.executionProviders?.usageForReceipt ?? ((receipt, action) => {
+        if (action.provider !== 'builtin' || receipt.provider !== 'builtin') throw new EnterpriseError('USAGE_METER_UNCONFIGURED', 503);
+        return { tokens: 0, costMinorUnits: '0', currency: 'CNY' };
+      }) });
+    businessProviders = new EnterpriseProviderService({ store, repository, execution: executionRuntime, protection: { cas, keyProvider: keys.keyProvider }, now: options.now });
     const operating = new EnterpriseOperatingService({ store, repository, now: options.now });
     const evaluation = new EnterpriseEvaluationRuntime({ operating, protection: { cas, keyProvider: keys.keyProvider }, modelFor: options.evaluationOptions?.modelFor ?? (() => undefined), secretStore: options.evaluationOptions?.secretStore ?? { async read() { throw new EnterpriseError('MODEL_CREDENTIAL_UNAVAILABLE', 503); } }, ...options.evaluationOptions });
     const goals = new EnterpriseGoalService({ operating, modelsFor: options.evaluationOptions?.modelsFor ?? ((tenant, workspace) => { const model = options.evaluationOptions?.modelFor(tenant, workspace); return model ? [model] : []; }) });
@@ -89,7 +95,7 @@ export async function startEnterpriseLocalHost(options: StartEnterpriseLocalOpti
     const workflows = new EnterpriseWorkflowService({ operating });
     const knowledge = new EnterpriseKnowledgeService({ operating, protection: { cas, keyProvider: keys.keyProvider } });
     const artifacts = new EnterpriseArtifactService({ goals, knowledge }), experiences = new EnterpriseExperienceService({ artifacts, knowledge });
-    host = createEnterpriseHost({ ...options, repository, executionRuntime, operating, evaluation, goals, workflows, knowledge, artifacts, experiences });
+    host = createEnterpriseHost({ ...options, repository, executionRuntime, businessProviders, operating, evaluation, goals, workflows, knowledge, artifacts, experiences });
     for (const organization of options.organizations) {
       if (options.providers[organization.tenantId]?.issuer !== organization.issuer) throw new Error('OIDC_PROVISIONING_ISSUER_MISMATCH');
       await host.identity.provision(organization);
@@ -100,7 +106,7 @@ export async function startEnterpriseLocalHost(options: StartEnterpriseLocalOpti
     let closed = false, cycle: Promise<void> | undefined;
     const stop = new AbortController();
     const worker = new AgentOsWorker({ id: 'enterprise-local-' + marker.instanceId, store: evaluation.workerStore(activeStore), now: () => new Date(options.now?.() ?? new Date().toISOString()),
-      lock: { engineLockDigest: 'in-process', expectedEngineLockDigest: 'in-process', pluginLockDigest: 'in-process', expectedPluginLockDigest: 'in-process' }, handlers: { 'enterprise.evaluation': evaluation.workerHandler(), 'enterprise.task': taskRuntime.workerHandler() }, kinds: ['enterprise.evaluation', 'enterprise.task'] });
+      lock: { engineLockDigest: 'in-process', expectedEngineLockDigest: 'in-process', pluginLockDigest: 'in-process', expectedPluginLockDigest: 'in-process' }, handlers: { 'enterprise.evaluation': evaluation.workerHandler(), 'enterprise.task': taskRuntime.workerHandler(), 'provider.action.execute': executionRuntime.workerHandler() }, kinds: ['enterprise.evaluation', 'enterprise.task', 'provider.action.execute'] });
     const runOperatingCycle = () => {
       if (closed) return Promise.resolve();
       if (cycle) return cycle;
@@ -122,7 +128,7 @@ export async function startEnterpriseLocalHost(options: StartEnterpriseLocalOpti
     let operatingError: string | undefined;
     const timer = options.operatingBackground ? setInterval(() => { void runOperatingCycle().then(() => { operatingError = undefined; }, () => { operatingError = 'OPERATING_CYCLE_FAILED'; }); }, 5000) : undefined;
     timer?.unref();
-    return { ...host, operating, evaluation, goals, workflows, knowledge, artifacts, experiences, taskRuntime, runOperatingCycle, operatingHealth: () => ({ ready: !operatingError, ...(operatingError ? { code: operatingError } : {}) }), address, stateRoot: root, async close() {
+    return { ...host, businessProviders, operating, evaluation, goals, workflows, knowledge, artifacts, experiences, taskRuntime, runOperatingCycle, operatingHealth: () => ({ ready: !operatingError, ...(operatingError ? { code: operatingError } : {}) }), address, stateRoot: root, async close() {
       if (closed) return; closed = true; if (timer) clearInterval(timer); stop.abort(); await cycle?.catch(() => {});
       try { await activeHost.close(); } finally { try { await activeStore.close(); } finally { lock.release(); } }
     } };

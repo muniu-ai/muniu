@@ -28,6 +28,7 @@ export function parseEnterpriseContract<K extends keyof EnterpriseContractTypes>
     if (schema.anyOf) return schema.anyOf.some(child => matches(child, item, depth + 1));
     if (Object.hasOwn(schema, 'const')) return item === schema.const;
     if (schema.enum && !schema.enum.includes(item)) return false;
+    if (schema.type === 'null') return item === null;
     if (schema.type === 'boolean') return typeof item === 'boolean';
     if (schema.type === 'string') {
       if (typeof item !== 'string' || (schema.minLength !== undefined && item.length < schema.minLength)

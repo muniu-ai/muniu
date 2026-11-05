@@ -167,3 +167,5 @@ E3.1 的动作、预算与 Worker 检查入口为 `npm run verify:enterprise-act
 动态计划与监督由 E4.2 维护，执行 `npm run verify:agent-coordination` 和 `npm run verify:agent-coordination-postgres`。后者包含 E3/E4.1 故障断言，按[资源约束](verification/enterprise-e4-2-2026-11-05.md)串行运行。
 
 知识、成果与流程由 E4.3 维护，执行 `npm run verify:enterprise-knowledge`。离线评测使用 `npm run verify:operating-evaluation -- --evidence <记录文件>`；`--self-test` 仅验计分逻辑，不能计为真实模型质量通过。记录与限制见[知识、成果与流程](enterprise-knowledge-workflows.md)。
+
+E5.1 的对象归属、Host 接口、报价批准和回执核对见[内置业务提供方](enterprise-builtin-provider.md)。聚焦检查为 `npm run verify:provider-contracts`；完成构建后单独执行 `npm run verify:provider-contracts-postgres`，使用隔离 PostgreSQL 复验。两项保持串行。Sales 共用断言及冻结包的导出、接收要求见[提供方契约套件](enterprise-provider-contracts.md)，其工具自测不能替代 Sales 真实实现验收。

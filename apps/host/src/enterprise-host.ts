@@ -15,6 +15,8 @@ import { KernelError } from '@mn/kernel';
 import { EnterpriseExecutionConfigurationService } from './enterprise-execution-config.js';
 import type { EnterpriseExecutionRuntime } from './enterprise-execution-runtime.js';
 import { dispatchEnterpriseExecution } from './enterprise-execution-api.js';
+import { dispatchEnterpriseProviders } from './enterprise-providers-api.js';
+import type { EnterpriseProviderService } from './enterprise-provider-service.js';
 import { randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { ENTERPRISE_HTTP_OPERATIONS, createEnterpriseOpenApiDocument } from '@mn/contracts';
@@ -34,6 +36,7 @@ export interface EnterpriseHostOptions {
   readonly operating?: EnterpriseOperatingService;
   readonly evaluation?: EnterpriseEvaluationRuntime;
   readonly executionRuntime?: EnterpriseExecutionRuntime;
+  readonly businessProviders?: EnterpriseProviderService;
   readonly repository: EnterpriseRepository;
   readonly origin: string;
   readonly profile: 'development' | 'hosted';
@@ -171,6 +174,8 @@ export function createEnterpriseHost(options: EnterpriseHostOptions) {
       if (businessResult.handled) return reply(businessResult.value, 200, traceId, op.response);
       const executionResult = await dispatchEnterpriseExecution({operationId:op.id,params,input,actor:current.actor,key,configuration:executionConfiguration,runtime:options.executionRuntime});
       if(executionResult.handled)return reply(executionResult.value,200,traceId,op.response);
+      const providerResult = await dispatchEnterpriseProviders({ operationId: op.id, params, input, actor: current.actor, key, businessProviders: options.businessProviders });
+      if (providerResult.handled) return reply(providerResult.value, 200, traceId, op.response);
       const operatingResult = await dispatchEnterpriseOperating({ operationId: op.id, params, input, actor: current.actor, key, operating: options.operating, evaluation: options.evaluation });
       if (operatingResult.handled) return reply(operatingResult.value, 200, traceId, op.response);
       const goalsResult = await dispatchEnterpriseGoals({ operationId: op.id, params, input, actor: current.actor, key, goals: options.goals });
@@ -185,7 +190,11 @@ export function createEnterpriseHost(options: EnterpriseHostOptions) {
           status: current.member.status, organizationAdmin: current.member.organizationAdmin, csrfToken: current.session.csrfToken, expiresAt: current.session.expiresAt, profile: options.profile }; break;
         case 'listOrganizations': data = [await identity.organization(current.actor)]; break;
         case 'listEnterpriseWorkspaces': data = await identity.listWorkspaces(current.actor); break;
-        case 'createEnterpriseWorkspace': data = await identity.createWorkspace(current.actor, key!, input as EnterpriseContractTypes['EnterpriseWorkspaceCreate']); break;
+        case 'createEnterpriseWorkspace': {
+          const workspace = await identity.createWorkspace(current.actor, key!, input as EnterpriseContractTypes['EnterpriseWorkspaceCreate']);
+          if (options.businessProviders) await options.businessProviders.initialize(current.actor, workspace.id, 0, 'workspace-binding:' + opaqueHash(canonicalJson([current.actor.principalId, workspace.id, key])));
+          data = workspace; break;
+        }
         case 'listOrganizationMembers': data = await identity.listMembers(current.actor); break;
         case 'inviteOrganizationMember': data = await identity.invite(current.actor, key!, { ...input as EnterpriseContractTypes['OrganizationInvitationCreate'],
           id: opaqueHash(canonicalJson(['member', current.actor.tenantId, current.actor.principalId, key])) }); break;
@@ -212,7 +221,7 @@ export function createEnterpriseHost(options: EnterpriseHostOptions) {
         retryable: code === 'STREAM_VERSION_CONFLICT' || code === 'CONCURRENT_COMMAND_RETRY' || code === 'SERVICE_UNAVAILABLE' }), { status, headers: h });
     }
   };
-  return { identity, permissions, quotas, executionConfiguration, executionRuntime:options.executionRuntime, operating: options.operating, dispatch,
+  return { identity, permissions, quotas, executionConfiguration, executionRuntime:options.executionRuntime, businessProviders: options.businessProviders, operating: options.operating, dispatch,
     async listen(input: { host?: string; port: number }) {
       if (server) throw new Error('Host 已启动');
       server = createServer({ requestTimeout: 30000, headersTimeout: 10000, maxHeaderSize: 16384 }, async (incoming, outgoing) => {

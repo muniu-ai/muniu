@@ -104,7 +104,6 @@ export class ActionCoordinator {
     const resourceKey = sha256([input.tenantId, input.workspaceId, input.provider, input.target.objectType, input.target.objectId]);
       const execution = this.execution(tx, { ...input, status: 'prepared', streamVersion: 1, reservationId: 'pending', executionId: options.executionId });
       if (execution.initiatedBy !== options.actorId) fail('ACTION_ACTOR_MISMATCH');
-      assertCurrentExecutionAuthorization(tx, execution);
       const records = tx.listProjections<CoordinatedAction>(PROVIDER_ACTION_NAMESPACE);
       const cached = tx.getIdempotency(`action.prepare:${options.actorId}`, options.idempotencyKey);
       const duplicate = cached ? this.require(tx, input.tenantId, (cached.response as { id: string }).id) : records.find(item => item.operationKey === input.operationKey);
@@ -120,6 +119,7 @@ export class ActionCoordinator {
         }
         return duplicate;
       }
+      assertCurrentExecutionAuthorization(tx, execution);
       if (records.some(item => item.resourceKey === resourceKey && ['committed', 'needs_reconciliation'].includes(item.status))) fail('ACTION_RECONCILIATION_REQUIRED');
       if (records.some(item => item.executionId === execution.id) || tx.getProjection(PROVIDER_ACTION_NAMESPACE, input.id)) fail('ACTION_EXECUTION_ALREADY_BOUND');
       if (!['queued', 'running'].includes(execution.status)) fail('ACTION_EXECUTION_INACTIVE');

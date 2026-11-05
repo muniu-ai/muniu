@@ -10,7 +10,7 @@ import { FileCas, InMemoryKeyProvider, SqliteStorage, DEFAULT_PROJECTION_JOURNAL
 import type { BusinessCommand } from '@mn/plugin-business';
 import { createEnterpriseEventRepository } from '../../src/enterprise-event-repository.js';
 import { EnterpriseBusinessService } from '../../src/enterprise-business.js';
-export async function fixture(t: test.TestContext, runtime = false, memoryObjects = false, issuer = 'https://issuer.test/') {
+export async function fixture(t: Pick<test.TestContext, 'after'>, runtime = false, memoryObjects = false, issuer = 'https://issuer.test/') {
   const root = await mkdtemp(join(tmpdir(), 'mn-enterprise-business-'));
   let clock = '2026-11-02T01:00:00.000Z'; const now = () => clock;
   const objects=new Map<string,{bytes:Buffer;created:Date}>();

@@ -7,7 +7,7 @@ export function fail(code: string, status = 409): never { throw new BusinessDoma
 export const valueAs = <T>(value: unknown): T => value as T;
 export function money(value: bigint): number { if (value < 0n || value > BigInt(Number.MAX_SAFE_INTEGER))
     fail('MONEY_OUT_OF_RANGE', 400); return Number(value); }
-export function businessCommandTools(state: BusinessState, command: BusinessCommand, context: BusinessCommandContext) {
+export function businessCommandTools(state: BusinessState, command: { readonly type: string }, context: BusinessCommandContext) {
     if (!context.actorId || !Number.isFinite(Date.parse(context.now)) || !/^[a-f0-9]{64}$/u.test(context.revisionSalt))
         fail('BUSINESS_CONTEXT_INVALID', 503);
     const events: BusinessEvent[] = [];

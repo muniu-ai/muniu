@@ -5,6 +5,8 @@ import { BusinessDomainError, type BusinessEvent, type BusinessObject, type Busi
 export const businessObjectKey = (type: string, id: string) => `${type}:${id}`;
 export function businessDigest(value: unknown): string { return createHash('sha256').update(canonicalJson(value)).digest('hex'); }
 const patches: Readonly<Record<string, readonly string[]>> = {
+    'customer.followup_scheduled': ['nextFollowupAt', 'nextStep'], 'opportunity.followup_scheduled': ['nextFollowupAt', 'nextStep'],
+    'quote_version.package_issued': ['packageRefs'],
     'customer.renamed': ['name'], 'contact.updated': ['name', 'email', 'phone'], 'opportunity.updated': ['customer', 'title', 'departmentId'],
     'service_version.superseded': ['status', 'supersededBy'], 'quote_version.approved': ['status', 'approvalId'],
     'quote_version.accepted': ['status', 'acceptanceId'], 'contract.activated': ['status', 'approvalId', 'signatureEvidence'],
@@ -25,6 +27,7 @@ const patches: Readonly<Record<string, readonly string[]>> = {
     'contract.amended': ['lines', 'scopeLines', 'totalMinor', 'changeRequestId'], 'order.amended': ['termsHistory', 'lines', 'scopeLines', 'totalMinor', 'contract', 'changeRequestId'],
 };
 const creations: Readonly<Record<string, string>> = {
+    'followup_task.created': 'followup_task',
     'customer.created': 'customer', 'contact.created': 'contact', 'opportunity.created': 'opportunity', 'service_version.published': 'service_version',
     'project.created': 'project', 'milestone.created': 'milestone', 'delivery_version.reported': 'delivery_version',
     'customer_acceptance.prepared': 'customer_acceptance', 'payment_schedule.created': 'payment_schedule',

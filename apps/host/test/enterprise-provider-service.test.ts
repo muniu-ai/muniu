@@ -1,0 +1,41 @@
+// SPDX-License-Identifier: Apache-2.0
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { fixture } from './fixtures/business.js';
+import { EnterpriseExecutionRuntime } from '../src/enterprise-execution-runtime.js';
+import { EnterpriseExecutionConfigurationService } from '../src/enterprise-execution-config.js';
+import { EnterpriseProviderService } from '../src/enterprise-provider-service.js';
+test('Host 固定各对象负责系统，普通成员不能改绑定，人工动作通过统一执行链', async t => {
+  const f = await fixture(t, true, true), base = await f.base(); let providers: EnterpriseProviderService;
+  const runtime = new EnterpriseExecutionRuntime({ store: f.store, repository: f.repository, now: f.now, resolveProvider: (tenantId, workspaceId, id) => providers.resolveRuntime(tenantId, workspaceId, id), usageForReceipt: () => ({ tokens: 0, costMinorUnits: '0', currency: 'CNY' }) });
+  providers = new EnterpriseProviderService({ store: f.store, repository: f.repository, protection: { cas: f.cas, keyProvider: f.keyProvider }, execution: runtime, now: f.now });
+  await assert.rejects(providers.initialize(f.actor('sales'), f.workspace.id, 0, 'denied'), { code: 'ORGANIZATION_ADMIN_REQUIRED' });
+  const binding = await providers.initialize(f.admin, f.workspace.id, 0, 'initialize');
+  assert.equal(binding.mode, 'builtin'); assert.equal(new Set(binding.bindings.map(b => b.objectType)).size, binding.bindings.length);
+  assert.ok(binding.bindings.every(b => b.provider === 'builtin'));
+  const config = new EnterpriseExecutionConfigurationService({ repository: f.repository, now: f.now });
+  await config.configure(f.admin, f.workspace.id, 'settings', { expectedStreamVersion: 0, responsibilities: [{ id: 'followup', capabilities: ['create_followup_task','update_followup_date'], fieldClasses: ['public'] }] });
+  await f.permissions.grantRole(f.admin, 'execution', { id: 'execution', workspaceId: f.workspace.id, principalId: 'manager', role: 'sales_manager', scope: { kind: 'workspace' }, operations: ['read','execution_approve'], fieldClasses: ['public'], expiresAt: '2027-01-01T00:00:00.000Z' });
+  const input = { target: base.customer.reference, responsibilityId: 'followup', action: 'update_followup_date' as const, expiresAt: '2026-11-02T02:00:00.000Z', input: { nextFollowupAt: '2026-11-06T00:00:00.000Z' } };
+  const view = await providers.createAction(f.actor('sales'), f.workspace.id, 'action', input);
+  assert.equal(view.action.status, 'awaiting_approval');
+  await runtime.decide(f.actor('manager'), 'approve', view.approval!.id, view.approval!.streamVersion, view.approval!.actionDigest, 'approve_once');
+  const worker = runtime.createWorker({ id: 'provider-worker', jobs: f.store, lock: { engineLockDigest: 'fixture', expectedEngineLockDigest: 'fixture', pluginLockDigest: 'fixture', expectedPluginLockDigest: 'fixture' } });
+  assert.equal((await worker.pollOnce()).status, 'completed');
+  assert.equal((await f.get('customer','customer')).values.nextFollowupAt, '2026-11-06T00:00:00.000Z');
+  assert.equal((await providers.createAction(f.actor('sales'), f.workspace.id, 'action', input)).action.id, view.action.id);
+  f.advance('2026-11-02T02:00:01.000Z');
+  assert.equal((await providers.createAction(f.actor('sales'), f.workspace.id, 'action', input)).action.status, 'settled');
+});
+test('连接模式先固定 Sales 与木牛的归属，未接通的端口不标为可用', async t => {
+  const f = await fixture(t, true, true);
+  await f.identity.provision({ tenantId: 'sales-tenant', name: '连接企业', issuer: 'https://issuer.test/', maxMembers: 2, administrator: { id: 'admin', subject: 'admin', displayName: '管理员' } });
+  const admin = { tenantId: 'sales-tenant', principalId: 'admin', sessionEpoch: 1 }, workspace = await f.identity.createWorkspace(admin, 'sales-mode', { name: '连接模式', mode: 'sales' }); let providers: EnterpriseProviderService;
+  const execution = new EnterpriseExecutionRuntime({ store: f.store, repository: f.repository, now: f.now, resolveProvider: (tenant, ws, id) => providers.resolveRuntime(tenant, ws, id), usageForReceipt: () => ({ tokens: 0, costMinorUnits: '0', currency: 'CNY' }) });
+  providers = new EnterpriseProviderService({ store: f.store, repository: f.repository, execution, protection: { cas: f.cas, keyProvider: f.keyProvider }, now: f.now });
+  const binding = await providers.initialize(admin, workspace.id, 0, 'binding');
+  assert.equal(binding.bindings.find(b => b.objectType === 'order')!.provider, 'sales');
+  assert.equal(binding.bindings.find(b => b.objectType === 'project')!.provider, 'builtin');
+  assert.ok(binding.bindings.every(b => b.supportedPorts.length === 0));
+  await assert.rejects(providers.resolveRuntime('sales-tenant', workspace.id, 'sales'), { code: 'PROVIDER_CONNECTION_UNCONFIGURED' });
+});
