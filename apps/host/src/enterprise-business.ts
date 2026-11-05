@@ -1,15 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
 import { randomBytes } from 'node:crypto';
-import { canonicalJson, parseEnterpriseContract, type BusinessObjectRef, type EvidenceRef, type EnterpriseContractTypes, type JsonObject } from '@mn/contracts';
+import { canonicalJson, parseEnterpriseContract, type BusinessObjectRef, type EvidenceRef, type EnterpriseContractTypes, type JsonObject, type JsonValue } from '@mn/contracts';
 import { BUSINESS_FIELD_CLASSES, BusinessDomainError, businessDigest, businessObjectKey, decideBusinessCommand, reduceBusinessEvents,
   orderFinancials, projectProgress, projectCosts, type BusinessCommand, type BusinessCommandContext, type BusinessEvent, type BusinessObject, type BusinessObjectType, type BusinessState } from '@mn/plugin-business';
 import { EnterpriseError, opaqueHash, reduceAccessEvents, reduceIdentityEvents, requireActor, resolveObjectAccess, assertBusinessDecisionAccess,
   type EnterpriseActor, type EnterpriseRecord, type EnterpriseRepository, type FieldClass, type ObjectAccessDescriptor } from '@mn/enterprise-services';
+import type { EnterpriseEventRepository } from './enterprise-event-repository.js';
 type ObjectView = EnterpriseContractTypes['EnterpriseBusinessObjectView'];
 type EvidenceInput = EnterpriseContractTypes['EnterpriseBusinessEvidenceCreate'];
 type StoredEvidence = EnterpriseContractTypes['EnterpriseBusinessEvidenceView'] & { readonly withdrawnAt?: string };
 const json = (value: unknown): JsonObject => JSON.parse(JSON.stringify(value)) as JsonObject;
 const key = (workspaceId: string, id: string) => canonicalJson([workspaceId, id]);
+const personFields: Readonly<Record<string, readonly string[]>> = {
+  operating_objective: ['responsiblePrincipalId'], delivery_version: ['receivedBy'], customer_acceptance: ['confirmedByPrincipalId'],
+  change_request: ['commercialPreparedByPrincipalId', 'projectConfirmedBy'],
+};
 function facts(records: readonly EnterpriseRecord[], tenantId: string, workspaceId: string): BusinessEvent[] {
   return records.filter(record => record.type.startsWith('enterprise.business.') && record.payload.fact).flatMap(record => {
     const fact = record.payload.fact as unknown as BusinessEvent;
@@ -130,6 +135,92 @@ export class EnterpriseBusinessService {
     if (!idempotencyKey.trim() || idempotencyKey.length > 200) throw new EnterpriseError('IDEMPOTENCY_KEY_REQUIRED', 400);
     return opaqueHash(canonicalJson([actor.principalId, workspaceId, idempotencyKey]));
   }
+  private decide(records: readonly EnterpriseRecord[], state: BusinessState, actor: EnterpriseActor, actorKind: BusinessCommandContext['actorKind'], workspaceId: string, command: BusinessCommand, salt: string) {
+    const context: BusinessCommandContext = { tenantId: actor.tenantId, workspaceId, actorId: actor.principalId, actorKind, now: this.now(), revisionSalt: salt,
+      assertCurrent: requirement => this.allow(records, actor, requirement.object, requirement.operation, requirement.fields, requirement.preparedByPrincipalId),
+      assertEvidence: (evidence, subject) => this.assertEvidence(records, actor, state, evidence, subject) };
+    return decideBusinessCommand(state, command, context);
+  }
+  private readCurrent<T extends JsonValue>(tenantId: string, project: (records: readonly EnterpriseRecord[]) => T): Promise<T> {
+    const repository = this.options.repository as EnterpriseRepository & Partial<Pick<EnterpriseEventRepository, 'readCurrent'>>;
+    if (typeof repository.readCurrent !== 'function') throw new EnterpriseError('CONSISTENT_READ_REQUIRED', 503);
+    return repository.readCurrent(tenantId, project);
+  }
+  async capabilities(actor: EnterpriseActor, workspaceId: string, type: string, id: string): Promise<EnterpriseContractTypes['EnterpriseBusinessCapabilities']> {
+    if (!Object.hasOwn(BUSINESS_FIELD_CLASSES, type)) throw new EnterpriseError('BUSINESS_OBJECT_TYPE_UNSUPPORTED', 404);
+    return this.readCurrent(actor.tenantId, records => this.projectCapabilities(records, actor, workspaceId, type, id));
+  }
+  private projectCapabilities(records: readonly EnterpriseRecord[], actor: EnterpriseActor, workspaceId: string, type: string, id: string): EnterpriseContractTypes['EnterpriseBusinessCapabilities'] {
+    this.bound(records, actor, workspaceId);
+    const object = this.object(reduceBusinessEvents(facts(records, actor.tenantId, workspaceId)), type, id);
+    const visible = this.view(records, actor, object), mapping = descriptor(object);
+    const readableClasses = resolveObjectAccess(records, actor, mapping, 'read', this.now());
+    const readableFields = Object.entries(mapping.fieldClasses).filter(([field, classification]) => readableClasses.has(classification)
+      && (!Object.hasOwn(object.value, field) || Object.hasOwn(visible.values, field))).map(([field]) => field).sort();
+    const members = reduceIdentityEvents(records).members;
+    const referencedPeople = new Set(['ownerPrincipalId', 'preparedByPrincipalId', ...(personFields[type] ?? [])]
+      .map(field => visible.values[field]).filter((value): value is string => typeof value === 'string' && value.length > 0));
+    const people = [...referencedPeople].sort().flatMap(principalId => {
+      const member = members.get(principalId);
+      return member?.tenantId === actor.tenantId ? [{ principalId, displayName: member.displayName }] : [];
+    });
+    const fields = (operation: 'write' | 'business_approve') => {
+      try {
+        this.allow(records, actor, object, operation, []);
+        const permitted = resolveObjectAccess(records, actor, mapping, operation, this.now());
+        const readable = operation === 'business_approve' ? resolveObjectAccess(records, actor, mapping, 'read', this.now()) : undefined;
+        return Object.entries(mapping.fieldClasses).filter(([, classification]) => permitted.has(classification) && (!readable || readable.has(classification))).map(([field]) => field).sort();
+      } catch (error) {
+        if (error instanceof EnterpriseError && ['OBJECT_ACCESS_DENIED', 'FIELD_ACCESS_DENIED', 'DEPARTMENT_NOT_FOUND'].includes(error.code)) return [];
+        throw error;
+      }
+    };
+    let canRecordEvidence = false;
+    try {
+      this.allowEvidence(records, actor, object);
+      const readable = resolveObjectAccess(records, actor, mapping, 'read', this.now());
+      canRecordEvidence = Object.entries(mapping.fieldClasses).every(([field, classification]) => !Object.hasOwn(object.value, field) || readable.has(classification));
+    } catch (error) {
+      if (!(error instanceof EnterpriseError) || !['OBJECT_ACCESS_DENIED', 'FIELD_ACCESS_DENIED', 'DEPARTMENT_NOT_FOUND'].includes(error.code)) throw error;
+    }
+    return { reference: object.reference, readableFields, writableFields: fields('write'), businessApprovalFields: fields('business_approve'), canRecordEvidence, people };
+  }
+  async checkCommand(actor: EnterpriseActor, workspaceId: string, raw: BusinessCommand): Promise<EnterpriseContractTypes['EnterpriseBusinessCommandCheck']> {
+    const command = parseEnterpriseContract('EnterpriseBusinessCommand', raw);
+    const records = await this.options.repository.read(actor.tenantId); this.bound(records, actor, workspaceId);
+    const state = reduceBusinessEvents(facts(records, actor.tenantId, workspaceId));
+    try {
+      this.decide(records, state, actor, 'human', workspaceId, command, randomBytes(32).toString('hex'));
+      return { allowedNow: true };
+    } catch (error) {
+      if (error instanceof BusinessDomainError && error.status < 500) return { allowedNow: false, reasonCode: error.code };
+      if (error instanceof EnterpriseError && ['OBJECT_ACCESS_DENIED', 'FIELD_ACCESS_DENIED', 'DEPARTMENT_NOT_FOUND', 'SEPARATION_OF_DUTIES_REQUIRED', 'EVIDENCE_REFERENCE_INVALID', 'EVIDENCE_SUBJECT_MISMATCH'].includes(error.code)) return { allowedNow: false, reasonCode: error.code };
+      throw error;
+    }
+  }
+  async customerCreationDepartments(actor: EnterpriseActor, workspaceId: string, raw: EnterpriseContractTypes['EnterpriseCustomerCreationQuery']): Promise<EnterpriseContractTypes['EnterpriseCustomerCreationDepartments']> {
+    const command = parseEnterpriseContract('EnterpriseCustomerCreationQuery', raw);
+    return this.readCurrent(actor.tenantId, records => {
+      this.bound(records, actor, workspaceId);
+      const state = reduceBusinessEvents(facts(records, actor.tenantId, workspaceId));
+      const allowed = (departmentId?: string): boolean => {
+        try {
+          this.decide(records, state, actor, 'human', workspaceId,
+            { ...command, ...(departmentId === undefined ? {} : { departmentId }) }, '0'.repeat(64));
+          return true;
+        } catch (error) {
+          if (error instanceof BusinessDomainError && error.status < 500) return false;
+          if (error instanceof EnterpriseError && ['OBJECT_ACCESS_DENIED', 'FIELD_ACCESS_DENIED', 'DEPARTMENT_NOT_FOUND'].includes(error.code)) return false;
+          throw error;
+        }
+      };
+      const allowUnassigned = allowed();
+      const departments = [...reduceAccessEvents(records).departments.values()]
+        .filter(department => department.tenantId === actor.tenantId && department.workspaceId === workspaceId && !department.revokedAt && allowed(department.id))
+        .map(department => ({ id: department.id, name: department.name })).sort((a, b) => a.id.localeCompare(b.id));
+      return { departments, allowUnassigned };
+    });
+  }
   async execute(input: { actor: EnterpriseActor; actorKind: 'human' | 'agent' | 'service'; workspaceId: string; idempotencyKey: string; command: BusinessCommand }): Promise<ObjectView> {
     const { actor, actorKind, workspaceId } = input;
     const command = parseEnterpriseContract('EnterpriseBusinessCommand', input.command);
@@ -147,12 +238,7 @@ export class EnterpriseBusinessService {
           this.allow(records, actor, current, formal ? 'business_approve' : 'write', []);
           return { events: [], value: ref };
         }
-        const decide = () => {
-          const context: BusinessCommandContext = { tenantId: actor.tenantId, workspaceId, actorId: actor.principalId, actorKind, now: this.now(), revisionSalt: salt,
-            assertCurrent: requirement => this.allow(records, actor, requirement.object, requirement.operation, requirement.fields, requirement.preparedByPrincipalId),
-            assertEvidence: (evidence, subject) => this.assertEvidence(records, actor, state, evidence, subject) };
-          return decideBusinessCommand(state, command, context);
-        };
+        const decide = () => this.decide(records, state, actor, actorKind, workspaceId, command, salt);
         const change = decide(), updated = reduceBusinessEvents([...history, ...change.events]).objects.get(change.primaryObjectKey)!;
         const events = change.events.map(fact => this.record(`enterprise.business.${fact.type}`, `enterprise.business.${fact.objectType}`,
           key(workspaceId, fact.objectId), fact.expectedStreamVersion, actor, { fact }));

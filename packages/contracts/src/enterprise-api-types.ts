@@ -2,6 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 import type * as Types from "./enterprise-types.js";
 export interface EnterpriseApiInputs {
+  readonly listEnterpriseLoginOrganizations: { readonly path?: Record<string, never>; };
+  readonly getEnterpriseBusinessCapabilities: { readonly path: { readonly workspaceId: string; readonly objectType: string; readonly objectId: string; }; };
+  readonly checkEnterpriseBusinessCommand: { readonly path: { readonly workspaceId: string; }; readonly body: Types.EnterpriseBusinessCommand; readonly headers: { readonly "X-CSRF-Token": string; }; };
+  readonly queryEnterpriseCustomerCreationDepartments: { readonly path: { readonly workspaceId: string; }; readonly body: Types.EnterpriseCustomerCreationQuery; readonly headers: { readonly "X-CSRF-Token": string; }; };
   readonly snapshotEnterpriseBusinessFact: { readonly path: { readonly workspaceId: string; }; readonly body: Types.EnterpriseSourceScope; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
   readonly materializeEnterpriseDecision: { readonly path?: Record<string, never>; readonly body: Types.EnterpriseArtifactDecisionMaterial; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
   readonly listEnterpriseWorkflows: { readonly path: { readonly workspaceId: string; }; };
@@ -82,6 +86,10 @@ export interface EnterpriseApiInputs {
   readonly commandOrganizationMember: { readonly path: { readonly organizationId: string; readonly memberId: string; }; readonly body: Types.OrganizationMemberCommand; readonly headers: { readonly "Idempotency-Key": string; readonly "X-CSRF-Token": string; }; };
 }
 export interface EnterpriseApiOutputs {
+  readonly listEnterpriseLoginOrganizations: Types.EnterpriseLoginDirectory;
+  readonly getEnterpriseBusinessCapabilities: Types.EnterpriseBusinessCapabilities;
+  readonly checkEnterpriseBusinessCommand: Types.EnterpriseBusinessCommandCheck;
+  readonly queryEnterpriseCustomerCreationDepartments: Types.EnterpriseCustomerCreationDepartments;
   readonly snapshotEnterpriseBusinessFact: Types.EnterpriseKnowledgeView;
   readonly materializeEnterpriseDecision: Types.EnterpriseKnowledgeView;
   readonly listEnterpriseWorkflows: Types.EnterpriseWorkflowCatalog;

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { randomUUID, createHash } from 'node:crypto';
-import { canonicalJson } from '@mn/contracts';
+import { canonicalJson, type JsonValue } from '@mn/contracts';
 import type { KernelStore, KernelTransaction } from '@mn/kernel';
 import { EnterpriseError, type EnterpriseRecord, type EnterpriseRepository } from '@mn/enterprise-services';
 import { EnvelopeCipher, type ContentAddressedStorage, type EncryptedEnvelopeV1, type KeyProvider } from '@mn/storage';
@@ -10,6 +10,7 @@ export interface EnterpriseEventRepository extends EnterpriseRepository {
   readonly acceptsExecutionEvents: boolean;
   readSnapshot(tenantId: string): Promise<EnterpriseSnapshot>;
   assertSnapshot(tenantId: string, tx: KernelTransaction, snapshot: EnterpriseSnapshot): void;
+  readCurrent<T extends JsonValue>(tenantId: string, project: (records: readonly EnterpriseRecord[]) => T): Promise<T>;
 }
 
 /** Domain events are authoritative. This adapter never reads product projections. */
@@ -63,13 +64,43 @@ export function createEnterpriseEventRepository(options: { store: KernelStore; c
     snapshots.set(tenantId, next);
     return next;
   }
-  return {
+  const repository: EnterpriseEventRepository = {
     acceptsExecutionEvents: options.allowExecutionEvents === true,
     async readSnapshot(tenantId) { return serial(tenantId, async () => structuredClone({tenantId, ...await load(tenantId)})); },
     assertSnapshot(tenantId, tx, snapshot) {
       if (!tx.getStreamVersion) throw new EnterpriseError('EXECUTION_STORE_REQUIRED', 503);
       if (snapshot.tenantId !== tenantId) throw new EnterpriseError('OBJECT_SCOPE_MISMATCH');
       if (tx.getStreamVersion('enterprise.batch',tenantId) !== snapshot.revision) throw new EnterpriseError('ENTERPRISE_SNAPSHOT_CHANGED',409);
+    },
+    async readCurrent<T extends JsonValue>(tenantId: string, project: (records: readonly EnterpriseRecord[]) => T): Promise<T> {
+      if (typeof project !== 'function' || project.constructor.name === 'AsyncFunction') throw new EnterpriseError('CONSISTENT_READ_INVALID', 503);
+      for (let attempt = 0; attempt < 8; attempt++) {
+        // Snapshot loading releases the tenant queue before entering the native transaction.
+        const snapshot = await repository.readSnapshot(tenantId);
+        const evaluate = (): T => {
+          const value: unknown = project(structuredClone(snapshot.records));
+          if (value && (typeof value === 'object' || typeof value === 'function') && 'then' in value && typeof value.then === 'function') {
+            if (value instanceof Promise) void value.catch(() => {});
+            throw new EnterpriseError('CONSISTENT_READ_INVALID', 503);
+          }
+          return structuredClone(value) as T;
+        };
+        try {
+          return await options.store.transact(tenantId, tx => {
+            if (typeof tx.beforeCommit !== 'function' || typeof tx.getStreamVersion !== 'function') throw new EnterpriseError('CONSISTENT_READ_REQUIRED', 503);
+            repository.assertSnapshot(tenantId, tx, snapshot);
+            const value = evaluate(), fingerprint = canonicalJson(value);
+            tx.beforeCommit(() => {
+              repository.assertSnapshot(tenantId, tx, snapshot);
+              if (canonicalJson(evaluate()) !== fingerprint) throw new EnterpriseError('ENTERPRISE_READ_CHANGED', 409);
+            });
+            return value;
+          });
+        } catch (error) {
+          if (!(error instanceof EnterpriseError) || !['ENTERPRISE_SNAPSHOT_CHANGED', 'ENTERPRISE_READ_CHANGED'].includes(error.code)) throw error;
+        }
+      }
+      throw new EnterpriseError('CONCURRENT_READ_RETRY', 409);
     },
     async read(tenantId) { return serial(tenantId, async () => structuredClone((await load(tenantId)).records)); },
     async transact(tenantId, work) {
@@ -123,4 +154,5 @@ export function createEnterpriseEventRepository(options: { store: KernelStore; c
       });
     },
   };
+  return repository;
 }

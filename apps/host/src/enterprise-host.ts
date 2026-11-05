@@ -24,6 +24,7 @@ import { EnterpriseBusinessService } from './enterprise-business.js';
 import { dispatchEnterpriseBusiness } from './enterprise-business-api.js';
 import { dispatchEnterpriseAccess } from './enterprise-access-api.js';
 import { createEnterpriseOidc, type EnterpriseOidcProvider } from './enterprise-oidc.js';
+import { createEnterpriseWeb } from './enterprise-web.js';
 
 export interface EnterpriseHostOptions {
   readonly workflows?: EnterpriseWorkflowService;
@@ -38,6 +39,8 @@ export interface EnterpriseHostOptions {
   readonly origin: string;
   readonly profile: 'development' | 'hosted';
   readonly providers: Readonly<Record<string, EnterpriseOidcProvider>>;
+  readonly loginOrganizations?: EnterpriseContractTypes['EnterpriseLoginDirectory']['organizations'];
+  readonly webRoot?: string;
   readonly now?: () => string;
 }
 const base64 = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
@@ -58,7 +61,7 @@ function cookieValue(request: Request, name: string): string | undefined {
 const requestBodyLimit = (path: string) => {
   if (/^\/v2\/workspaces\/[^/]+\/knowledge$/u.test(path)) return 13 * 1024 * 1024;
   if (/^\/v2\/workspaces\/[^/]+\/workflows\/versions$/u.test(path) || /^\/v2\/artifacts\/[^/]+\/experiences$/u.test(path)) return 1024 * 1024;
-  if (/^\/v2\/workspaces\/[^/]+\/(business\/commands|goals)$/u.test(path) || /^\/v2\/goals\/[^/]+\/(plans|scope-revisions)$/u.test(path) || /^\/v2\/artifacts\/[^/]+\/acceptances$/u.test(path)) return 262144;
+  if (/^\/v2\/workspaces\/[^/]+\/(business\/commands|business-command-checks|goals)$/u.test(path) || /^\/v2\/goals\/[^/]+\/(plans|scope-revisions)$/u.test(path) || /^\/v2\/artifacts\/[^/]+\/acceptances$/u.test(path)) return 262144;
   return 16384;
 };
 async function body(request: Request): Promise<unknown> {
@@ -87,6 +90,14 @@ export function createEnterpriseHost(options: EnterpriseHostOptions) {
     || (origin.protocol !== 'https:' && !(options.profile === 'development' && origin.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(origin.hostname))))
     throw new Error('企业 Host 需要明确的安全来源；开发 HTTP 仅限回环地址');
   const secure = origin.protocol === 'https:';
+  let loginOrganizations: EnterpriseContractTypes['EnterpriseLoginDirectory']['organizations'];
+  try {
+    const directory = parseEnterpriseContract('EnterpriseLoginDirectory', { organizations: options.loginOrganizations === undefined ? [] : options.loginOrganizations });
+    if (new Set(directory.organizations.map(item => item.id)).size !== directory.organizations.length
+      || directory.organizations.some(item => !Object.hasOwn(options.providers, item.id))) throw new Error();
+    loginOrganizations = structuredClone(directory.organizations);
+  } catch { throw new EnterpriseError('LOGIN_DIRECTORY_INVALID', 503); }
+  const web = options.webRoot === undefined ? undefined : createEnterpriseWeb(options.webRoot);
   const sessionName = secure ? '__Host-mn-enterprise-session' : 'mn-enterprise-dev-session';
   const loginName = secure ? '__Host-mn-enterprise-login' : 'mn-enterprise-dev-login';
   const cookie = (name: string, value: string, age: number) => `${name}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${age}${secure ? '; Secure' : ''}`;
@@ -110,6 +121,11 @@ export function createEnterpriseHost(options: EnterpriseHostOptions) {
     try {
       const url = new URL(request.url);
       if (url.origin !== options.origin) throw new EnterpriseError('REQUEST_ORIGIN_INVALID', 400);
+      if (web && !url.pathname.startsWith('/v2')) return await web(request);
+      if (request.method === 'GET' && url.pathname === '/v2/auth/organizations') {
+        if (url.search) throw new EnterpriseError('INVALID_QUERY', 400);
+        return reply({ organizations: loginOrganizations }, 200, traceId, 'EnterpriseLoginDirectory');
+      }
       if (request.method === 'GET' && url.pathname === '/v2/openapi.json') {
         const h = headers(); h.set('Content-Type', 'application/json'); return new Response(JSON.stringify(createEnterpriseOpenApiDocument()), { headers: h });
       }
@@ -209,7 +225,7 @@ export function createEnterpriseHost(options: EnterpriseHostOptions) {
       if (callback) h.append('Set-Cookie', cookie(loginName, '', 0));
       return new Response(JSON.stringify({ code, message: status === 401 ? '登录已失效，请重新登录' : '请求未完成，请核对权限、版本或服务状态',
         action: status === 401 ? '重新登录' : '核对当前数据、权限和配置', fieldIssues: [], traceId,
-        retryable: code === 'STREAM_VERSION_CONFLICT' || code === 'CONCURRENT_COMMAND_RETRY' || code === 'SERVICE_UNAVAILABLE' }), { status, headers: h });
+        retryable: code === 'STREAM_VERSION_CONFLICT' || code === 'CONCURRENT_COMMAND_RETRY' || code === 'CONCURRENT_READ_RETRY' || code === 'SERVICE_UNAVAILABLE' }), { status, headers: h });
     }
   };
   return { identity, permissions, quotas, executionConfiguration, executionRuntime:options.executionRuntime, operating: options.operating, dispatch,

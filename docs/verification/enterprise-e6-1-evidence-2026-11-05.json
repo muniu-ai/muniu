@@ -1,0 +1,341 @@
+{
+  "package": "E6.1",
+  "status": "local_checkpoint_pending_full_integration",
+  "baseline": "860905a986cae9e257576e2ad52acadce72d7d73",
+  "acceptedDependencyFix": "8750b47",
+  "checks": [
+    {
+      "name": "customer-department-green",
+      "command": [
+        "npm",
+        "run",
+        "test:web-unit"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 10.1,
+      "peakProcessTreeRSSMiB": 275.5,
+      "minimumHostFreePercent": 26,
+      "log": "/tmp/muniu-e61-customer-department-green.log",
+      "containerSamples": [],
+      "logSha256": "6fc4d4a48f421ae21fb870e8cc9a01a31d32b6abb6028d59e2f5256aa9a9ce5e"
+    },
+    {
+      "name": "accepted-fixes-build",
+      "command": [
+        "sh",
+        "-c",
+        "npm run generate:contracts && npm run build -w @mn/contracts && npm run build -w @mn/plugin-business && npm run build -w @mn/host && npm run test -w @mn/product-ui && npm run build:web"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 15.1,
+      "peakProcessTreeRSSMiB": 353.5,
+      "minimumHostFreePercent": 28,
+      "log": "/tmp/muniu-e61-accepted-fixes-build.log",
+      "containerSamples": [],
+      "logSha256": "d09768b915738ba9b4ac4f273714bc8a1c631c68c17b68e9c6da5eab5c02d941"
+    },
+    {
+      "name": "final-browser-suite",
+      "command": [
+        "node",
+        "apps/web/scripts/verify-enterprise-web-suite.mjs"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 60.5,
+      "peakProcessTreeRSSMiB": 513.0,
+      "minimumHostFreePercent": 29,
+      "log": "/tmp/muniu-e61-final-browser-suite.log",
+      "containerSamples": [],
+      "logSha256": "0701336975589165581ed02307e59259e610c8d49c248eef90f06086a149c40f"
+    },
+    {
+      "name": "host-web-regression",
+      "command": [
+        "sh",
+        "-c",
+        "node node_modules/typescript/bin/tsc -p apps/host/tsconfig.test.json && node --test --test-concurrency=1 apps/host/dist-test/test/enterprise-business-capabilities-http.test.js apps/host/dist-test/test/enterprise-web-host.test.js apps/host/dist-test/test/enterprise-event-repository.test.js scripts/test/enterprise-web-fixture.test.mjs scripts/test/enterprise-platform-config.test.mjs"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 15.1,
+      "peakProcessTreeRSSMiB": 404.4,
+      "minimumHostFreePercent": 26,
+      "log": "/tmp/muniu-e61-host-web-regression.log",
+      "containerSamples": [],
+      "logSha256": "594bfe27a5c3cb09b86c7668470e09c1d1987b9b2296ecc9854f79de28f2ca1d"
+    },
+    {
+      "name": "boundaries",
+      "command": [
+        "npm",
+        "run",
+        "test:boundaries"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 5.0,
+      "peakProcessTreeRSSMiB": 0.0,
+      "minimumHostFreePercent": 30,
+      "log": "/tmp/muniu-e61-boundaries.log",
+      "containerSamples": [],
+      "logSha256": "7860cc5ee38fe0d791b989ae170e0509b524f1ee6d216d06d9e470adf3f13a2d"
+    },
+    {
+      "name": "web-types-docs",
+      "command": [
+        "sh",
+        "-c",
+        "npm run typecheck:web && npm run docs:generate && npm run docs:check && npm run docs:links && npm run docs:build && git diff --check"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 15.1,
+      "peakProcessTreeRSSMiB": 484.8,
+      "minimumHostFreePercent": 29,
+      "log": "/tmp/muniu-e61-web-types-docs.log",
+      "containerSamples": [],
+      "logSha256": "f749e45ace8303f5683429f7cbddee5c5954c7415ab36123f52b2ed4d20d01b5"
+    },
+    {
+      "name": "full-types",
+      "command": [
+        "npm",
+        "run",
+        "typecheck"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 55.4,
+      "peakProcessTreeRSSMiB": 463.8,
+      "minimumHostFreePercent": 26,
+      "log": "/tmp/muniu-e61-full-types.log",
+      "containerSamples": [],
+      "logSha256": "0919626c69efc73938f4291befbb930767b431a6acd3689de5ef27c70006cb87"
+    },
+    {
+      "name": "desktop",
+      "command": [
+        "sh",
+        "-c",
+        "npm run typecheck:desktop && npm run build:desktop"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 10.1,
+      "peakProcessTreeRSSMiB": 309.9,
+      "minimumHostFreePercent": 27,
+      "log": "/tmp/muniu-e61-desktop.log",
+      "containerSamples": [],
+      "logSha256": "db0109a7b4699077147f76213c47a959bdc6844fee720e11769205243b575d65"
+    },
+    {
+      "name": "sidecar",
+      "command": [
+        "node",
+        "scripts/build-host-sidecar.mjs"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 30.4,
+      "peakProcessTreeRSSMiB": 259.6,
+      "minimumHostFreePercent": 25,
+      "log": "/tmp/muniu-e61-sidecar.log",
+      "containerSamples": [],
+      "logSha256": "a822966a5de94b51922dd9672926f7bfb57bd529c7ff539487974b889a56a240"
+    },
+    {
+      "name": "rust",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "apps/desktop-mac/src-tauri/Cargo.toml",
+        "--config",
+        "profile.dev.package.muniu-desktop.debug=0",
+        "--config",
+        "profile.dev.package.muniu-desktop.codegen-units=1"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 20.2,
+      "peakProcessTreeRSSMiB": 474.3,
+      "minimumHostFreePercent": 26,
+      "log": "/tmp/muniu-e61-rust.log",
+      "containerSamples": [],
+      "logSha256": "6ae39e93a15c8834f776c0b869472d462a8dc034cc16880c429e7e4de60e9eea"
+    },
+    {
+      "name": "keyboard-funds-visual",
+      "command": [
+        "sh",
+        "-c",
+        "node apps/web/scripts/verify-enterprise-web-ui.mjs --scenario smoke && node apps/web/scripts/verify-enterprise-web-ui.mjs --scenario metrics"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 10.1,
+      "peakProcessTreeRSSMiB": 176.2,
+      "minimumHostFreePercent": 33,
+      "log": "/tmp/muniu-e61-keyboard-funds-visual.log",
+      "containerSamples": [],
+      "logSha256": "b635b7b568e6e343184ef8f0a8e6adbeb9e6d3d9f48e6034c539a6925a4fdc17"
+    },
+    {
+      "name": "checkpoint-checks",
+      "command": [
+        "sh",
+        "-c",
+        "npm run verify:contracts && npm run docs:check && npm run docs:links && npm audit --omit=dev && python3 /Users/xiaomingwang/.codex/skills/chinese-skill/scripts/chinese_lint.py docs/enterprise-web.md docs/verification/enterprise-e6-1-2026-11-05.md && git diff --check"
+      ],
+      "exitCode": 0,
+      "resourceStopped": false,
+      "elapsedSeconds": 5.0,
+      "peakProcessTreeRSSMiB": 0.2,
+      "minimumHostFreePercent": 28,
+      "log": "/tmp/muniu-e61-checkpoint-checks.log",
+      "containerSamples": [],
+      "logSha256": "8eec0a1f50fd9765c691114b13236cff6ef9f8761224ed8574554fde0007520d"
+    }
+  ],
+  "browser": {
+    "scenarios": 12,
+    "businessCommands": 43,
+    "identity": "synthetic OIDC, actual authorization-code and PKCE flow",
+    "qaInventory": "../enterprise-acceptance/enterprise-web-qa-2026-11-05.json"
+  },
+  "exploratory": {
+    "status": "passed",
+    "checks": [
+      "knowledge-empty-and-restore",
+      "new-customer-escape-no-write",
+      "missing-contact-values-stay-empty",
+      "mobile-attention-to-real-records",
+      "mobile-width-fit",
+      "logout"
+    ],
+    "elapsedSeconds": 68,
+    "errors": [],
+    "samples": [
+      {
+        "at": "2026-11-05T10:54:05.337Z",
+        "freePercent": 27,
+        "ownRSSMiB": 228
+      },
+      {
+        "at": "2026-11-05T10:54:08.434Z",
+        "freePercent": 35,
+        "ownRSSMiB": 249
+      },
+      {
+        "at": "2026-11-05T10:54:11.327Z",
+        "freePercent": 33,
+        "ownRSSMiB": 227
+      },
+      {
+        "at": "2026-11-05T10:54:14.321Z",
+        "freePercent": 30,
+        "ownRSSMiB": 205
+      },
+      {
+        "at": "2026-11-05T10:54:17.322Z",
+        "freePercent": 27,
+        "ownRSSMiB": 124
+      },
+      {
+        "at": "2026-11-05T10:54:20.444Z",
+        "freePercent": 34,
+        "ownRSSMiB": 121
+      },
+      {
+        "at": "2026-11-05T10:54:23.350Z",
+        "freePercent": 34,
+        "ownRSSMiB": 111
+      },
+      {
+        "at": "2026-11-05T10:54:26.357Z",
+        "freePercent": 30,
+        "ownRSSMiB": 119
+      },
+      {
+        "at": "2026-11-05T10:54:29.356Z",
+        "freePercent": 27,
+        "ownRSSMiB": 176
+      },
+      {
+        "at": "2026-11-05T10:54:32.395Z",
+        "freePercent": 34,
+        "ownRSSMiB": 171
+      },
+      {
+        "at": "2026-11-05T10:54:35.358Z",
+        "freePercent": 34,
+        "ownRSSMiB": 174
+      },
+      {
+        "at": "2026-11-05T10:54:38.445Z",
+        "freePercent": 30,
+        "ownRSSMiB": 168
+      },
+      {
+        "at": "2026-11-05T10:54:41.363Z",
+        "freePercent": 27,
+        "ownRSSMiB": 166
+      },
+      {
+        "at": "2026-11-05T10:54:44.385Z",
+        "freePercent": 34,
+        "ownRSSMiB": 168
+      },
+      {
+        "at": "2026-11-05T10:54:47.389Z",
+        "freePercent": 29,
+        "ownRSSMiB": 166
+      },
+      {
+        "at": "2026-11-05T10:54:50.380Z",
+        "freePercent": 32,
+        "ownRSSMiB": 161
+      },
+      {
+        "at": "2026-11-05T10:54:53.368Z",
+        "freePercent": 27,
+        "ownRSSMiB": 148
+      },
+      {
+        "at": "2026-11-05T10:54:56.410Z",
+        "freePercent": 33,
+        "ownRSSMiB": 145
+      },
+      {
+        "at": "2026-11-05T10:54:59.399Z",
+        "freePercent": 33,
+        "ownRSSMiB": 130
+      },
+      {
+        "at": "2026-11-05T10:55:02.364Z",
+        "freePercent": 28,
+        "ownRSSMiB": 90
+      },
+      {
+        "at": "2026-11-05T10:55:05.366Z",
+        "freePercent": 27,
+        "ownRSSMiB": 97
+      },
+      {
+        "at": "2026-11-05T10:55:08.446Z",
+        "freePercent": 32,
+        "ownRSSMiB": 98
+      }
+    ]
+  },
+  "notCompleted": [
+    "Full integrated Node and enterprise dependency gates",
+    "Real enterprise identity federation",
+    "E6.2 agent and Sales UI",
+    "E7 evaluation and E8 pilot"
+  ]
+}

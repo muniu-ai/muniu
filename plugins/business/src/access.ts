@@ -7,7 +7,7 @@ export const BUSINESS_FIELD_CLASSES: Readonly<Record<BusinessObjectType, Readonl
     project: { ...common, order: 'public', title: 'public', scopeLines: 'public', scopeHistory:'public',costReportId: 'cost', changeRequestId: 'public' },
     milestone: { ...common, project: 'public', order: 'public', title: 'public', dueDate: 'public', lines: 'public' },
     delivery_version: { ...common, project: 'public', order: 'public', milestone: 'public', summary: 'public', lines: 'public', receivedBy: 'public', receivedAt: 'public' },
-    payment_schedule: { ...common, termsHistory: 'price', adjustmentId: 'public', order: 'public', amountMinor: 'price', dueDate: 'public', currency: 'public', approvalId: 'public', evidence: 'public', confirmedAt: 'public' },
+    payment_schedule: { ...common, termsHistory: 'price', adjustmentId: 'public', order: 'public', amountMinor: 'price', dueDate: 'public', businessDate: 'public', currency: 'public', approvalId: 'public', evidence: 'public', confirmedAt: 'public' },
     receipt: { ...common, order: 'public', amountMinor: 'price', businessDate: 'public', allocations: 'price', currency: 'public', approvalId: 'public', evidence: 'public', confirmedAt: 'public' },
     refund: { ...common, order: 'public', receipt: 'public', amountMinor: 'price', businessDate: 'public', releasedAllocations: 'price', currency: 'public', approvalId: 'public', evidence: 'public', confirmedAt: 'public' },
     adjustment: { ...common, proposedAmountMinor: 'price', proposedDueDate: 'public', order: 'public', kind: 'public', receipt: 'public', schedule: 'public', amountMinor: 'price', businessDate: 'public', reason: 'price', releasedAllocations: 'price', currency: 'public', approvalId: 'public', evidence: 'public', confirmedAt: 'public' },

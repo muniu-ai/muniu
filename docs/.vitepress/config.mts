@@ -68,6 +68,7 @@ export default defineConfig({
           { text: "企业验收基线", link: "/enterprise-acceptance/README" },
           { text: "企业身份与本地入口", link: "/enterprise-identity" },
           { text: "企业权限与额度", link: "/enterprise-access" },
+          { text: "企业浏览器工作台", link: "/enterprise-web" },
           { text: "客户到订单", link: "/enterprise-sales-chain" },
           { text: "项目、交付与资金", link: "/enterprise-fulfillment" },
           { text: "OPC 经营管理体系", link: "/proposals/opc-business-management-2026-10-09" },

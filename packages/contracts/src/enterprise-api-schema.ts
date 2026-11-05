@@ -2,6 +2,10 @@
 import { ENTERPRISE_SCHEMAS } from './enterprise-schema.js';
 import type { JsonObject } from './json.js';
 export const ENTERPRISE_HTTP_OPERATIONS = [
+  { id: 'listEnterpriseLoginOrganizations', method: 'get', path: '/v2/auth/organizations', response: 'EnterpriseLoginDirectory', mutation: false },
+  { id: 'getEnterpriseBusinessCapabilities', method: 'get', path: '/v2/workspaces/{workspaceId}/business-capabilities/{objectType}/{objectId}', response: 'EnterpriseBusinessCapabilities', mutation: false },
+  { id: 'checkEnterpriseBusinessCommand', method: 'post', path: '/v2/workspaces/{workspaceId}/business-command-checks', body: 'EnterpriseBusinessCommand', response: 'EnterpriseBusinessCommandCheck', mutation: false },
+  { id: 'queryEnterpriseCustomerCreationDepartments', method: 'post', path: '/v2/workspaces/{workspaceId}/customer-creation-departments/queries', body: 'EnterpriseCustomerCreationQuery', response: 'EnterpriseCustomerCreationDepartments', mutation: false },
   { id: 'snapshotEnterpriseBusinessFact', method: 'post', path: '/v2/workspaces/{workspaceId}/knowledge/business-snapshots', body: 'EnterpriseSourceScope', response: 'EnterpriseKnowledgeView', mutation: true },
   { id: 'materializeEnterpriseDecision', method: 'post', path: '/v2/artifacts/decision-materials', body: 'EnterpriseArtifactDecisionMaterial', response: 'EnterpriseKnowledgeView', mutation: true },
   { id: 'listEnterpriseWorkflows', method: 'get', path: '/v2/workspaces/{workspaceId}/workflows', response: 'EnterpriseWorkflowCatalog', mutation: false },

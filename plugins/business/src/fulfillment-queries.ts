@@ -57,11 +57,17 @@ export function orderFinancials(state: BusinessState, orderId: string, asOfDate:
     const fact = (object: BusinessObject) => ({ id: object.reference.objectId, orderId, status: 'confirmed' as const, amountMinor: Number(object.value.amountMinor) });
     const adjustments = related(state, 'adjustment', 'order', orderId).filter(included);
     return deriveOrderBalance({ orderId, totalMinor: orderTerms?.totalMinor ?? Number(order.value.totalMinor), asOfDate,
-        schedules: related(state, 'payment_schedule', 'order', orderId).filter(object => object.value.status === 'confirmed').map(object => { const term = cast<{
+        schedules: related(state, 'payment_schedule', 'order', orderId).filter(object => {
+            if (object.value.status !== 'confirmed') return false;
+            if (typeof object.value.businessDate !== 'string') throw new BusinessDomainError('PAYMENT_SCHEDULE_HISTORY_INVALID');
+            return object.value.businessDate <= asOfDate;
+        }).map(object => { const term = cast<{
             effectiveDate: string;
             amountMinor: number;
             dueDate: string;
-        }[]>(object.value.termsHistory ?? []).filter(term => term.effectiveDate <= asOfDate).at(-1); return { id: object.reference.objectId, orderId, amountMinor: term?.amountMinor ?? Number(object.value.amountMinor), dueDate: term?.dueDate ?? String(object.value.dueDate) }; }),
+        }[]>(object.value.termsHistory ?? []).filter(term => term.effectiveDate <= asOfDate).at(-1);
+            if (!term) throw new BusinessDomainError('PAYMENT_SCHEDULE_HISTORY_INVALID');
+            return { id: object.reference.objectId, orderId, amountMinor: term.amountMinor, dueDate: term.dueDate }; }),
         receipts: related(state, 'receipt', 'order', orderId).filter(included).map(object => ({ ...fact(object), allocations: receiptAllocations(object) })),
         refunds: related(state, 'refund', 'order', orderId).filter(included).map(object => ({ ...fact(object), receiptId: referenceId(object.value.receipt)!, releasedAllocations: allocations(object.value.releasedAllocations) })),
         reversals: adjustments.filter(object => object.value.kind === 'receipt_reversal').map(object => ({ ...fact(object), receiptId: referenceId(object.value.receipt)!, releasedAllocations: allocations(object.value.releasedAllocations) })),

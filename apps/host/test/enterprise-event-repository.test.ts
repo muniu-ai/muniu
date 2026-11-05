@@ -136,3 +136,19 @@ test('另一实例在加密等待期间注销会话，原命令不能靠旧成�
   await assert.rejects(identity.createWorkspace(actor, 'workspace', { name: '不应提交', mode: 'builtin' }), { code: 'AUTHENTICATION_REQUIRED' });
   assert.equal((await repository.read('tenant')).filter(event => event.type === 'enterprise.workspace.created').length, 0);
 });
+
+test('一致性只读投影拒绝异步回调及缺失提交检查点，变化只重试八轮且不写事实', async t => {
+  const { fixture } = await import('./fixtures/business.js');
+  const f = await fixture(t, false, true), before = await f.repository.read('tenant');
+  await assert.rejects(f.repository.readCurrent('tenant', (async () => ({ allowed: true })) as never), { code: 'CONSISTENT_READ_INVALID', status: 503 });
+  await assert.rejects(f.repository.readCurrent('tenant', (() => Promise.reject(new Error('synthetic-projection-failure'))) as never), { code: 'CONSISTENT_READ_INVALID', status: 503 });
+  let calculations = 0;
+  await assert.rejects(f.repository.readCurrent('tenant', () => ({ changing: ++calculations })), { code: 'CONCURRENT_READ_RETRY', status: 409 });
+  assert.equal(calculations, 16);
+  const missingGuardRepository = createEnterpriseEventRepository({ cas: f.cas, keyProvider: f.keyProvider, store: {
+    readEvents: f.store.readEvents.bind(f.store), readEventHistory: f.store.readEventHistory.bind(f.store),
+    transact: (tenant, work) => f.store.transact(tenant, tx => { const { beforeCommit: _beforeCommit, ...withoutGuard } = tx; return work(withoutGuard); }),
+  } });
+  await assert.rejects(missingGuardRepository.readCurrent('tenant', () => ({ allowed: true })), { code: 'CONSISTENT_READ_REQUIRED', status: 503 });
+  assert.deepEqual(await f.repository.read('tenant'), before);
+});

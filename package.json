@@ -108,7 +108,11 @@
     "verify:operating-evaluation": "node scripts/verify-operating-evaluation.mjs",
     "test:operating-evaluation": "node --test --test-concurrency=1 scripts/test/operating-evaluation.test.mjs",
     "verify:enterprise-knowledge": "npm run build && tsc -p apps/host/tsconfig.test.json && node --test --test-concurrency=1 apps/host/dist-test/test/enterprise-knowledge*.test.js apps/host/dist-test/test/enterprise-artifacts.test.js apps/host/dist-test/test/enterprise-workflow*.test.js apps/host/dist-test/test/enterprise-report-citations.test.js apps/host/dist-test/test/enterprise-export-resources.test.js apps/host/dist-test/test/goal-export*.test.js",
-    "verify:enterprise-knowledge-postgres": "node scripts/enterprise-actions-e2e.mjs --with-enterprise-knowledge"
+    "verify:enterprise-knowledge-postgres": "node scripts/enterprise-actions-e2e.mjs --with-enterprise-knowledge",
+    "typecheck:web": "npm run build -w @mn/contracts && npm run build -w @mn/product-ui && npm run typecheck -w @mn/web",
+    "build:web": "npm run build -w @mn/contracts && npm run build -w @mn/product-ui && npm run build -w @mn/web",
+    "test:web-unit": "npm run build -w @mn/contracts && npm run test -w @mn/product-ui",
+    "verify:web-ui": "npm run build && npm run test:web-unit && npm run build:web && tsc -p apps/host/tsconfig.test.json && node apps/web/scripts/verify-enterprise-web-suite.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",

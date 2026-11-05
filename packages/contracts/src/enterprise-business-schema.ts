@@ -14,8 +14,10 @@ const object = (properties: Record<string, JsonObject>, optional: string[] = [])
 const command = (type: string, properties: Record<string, JsonObject>, optional: string[] = []) => object({ type: { const: type }, id: identifier, ...properties }, optional);
 const update = { expectedStreamVersion: positive };
 const lines = (items: JsonObject) => ({ type: 'array', items, minItems: 1, maxItems: 100 });
+const customerCreateFields = { name: text };
 export const ENTERPRISE_BUSINESS_SCHEMAS: Readonly<Record<string, JsonObject>> = {
   ...ENTERPRISE_BUSINESS_QUERY_SCHEMAS,
+  EnterpriseCustomerCreationQuery: command('customer.create', customerCreateFields),
   EnterpriseBusinessEvidenceWithdraw: object({ expectedStreamVersion: positive }),
   EnterpriseBusinessEvidenceWithdrawn: object({ id: text, streamVersion: positive }),
   EnterpriseBusinessEvidenceCreate: object({ subject: ref('BusinessObjectRef'), attestation: detail,
@@ -24,7 +26,7 @@ export const ENTERPRISE_BUSINESS_SCHEMAS: Readonly<Record<string, JsonObject>> =
     requiredClasses: { type: 'array', items: { type: 'string', enum: ['public', 'price', 'cost', 'contact'] } }, recordedBy: text, recordedAt: timestamp, streamVersion: positive }),
   EnterpriseBusinessCommand: { oneOf: [
     ...ENTERPRISE_FULFILLMENT_COMMANDS,
-    command('customer.create', { name: text, departmentId: text }, ['departmentId']),
+    command('customer.create', { ...customerCreateFields, departmentId: text }, ['departmentId']),
     command('customer.rename', { ...update, name: text }),
     command('contact.create', { customer: ref('BusinessObjectRef'), name: text, email: text, phone: text }, ['email', 'phone']),
     command('contact.update', { ...update, name: text, email: text, phone: text }, ['email', 'phone']),

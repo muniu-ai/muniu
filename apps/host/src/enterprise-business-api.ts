@@ -6,6 +6,9 @@ export async function dispatchEnterpriseBusiness(options: { operationId: string;
   const { operationId, params, actor, input, key, business } = options, workspaceId = params.workspaceId!;
   let value: unknown;
   switch(operationId) {
+    case 'getEnterpriseBusinessCapabilities': value = await business.capabilities(actor, workspaceId, params.objectType!, params.objectId!); break;
+    case 'checkEnterpriseBusinessCommand': value = await business.checkCommand(actor, workspaceId, input as EnterpriseContractTypes['EnterpriseBusinessCommand']); break;
+    case 'queryEnterpriseCustomerCreationDepartments': value = await business.customerCreationDepartments(actor, workspaceId, input as EnterpriseContractTypes['EnterpriseCustomerCreationQuery']); break;
     case 'getBusinessBalance': value=await business.summary(actor,workspaceId,'balance',params.orderId!,params.asOfDate!);break;
     case 'getBusinessProgress': value=await business.summary(actor,workspaceId,'progress',params.projectId!);break;
     case 'getBusinessCosts': value=await business.summary(actor,workspaceId,'costs',params.projectId!);break;

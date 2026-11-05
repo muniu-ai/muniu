@@ -3,6 +3,356 @@ info:
   title: Muniu Enterprise API
   version: 0.2.0
 paths:
+  /v2/auth/organizations:
+    get:
+      operationId: listEnterpriseLoginOrganizations
+      parameters: []
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EnterpriseLoginDirectory"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "410":
+          description: 资料已撤回或内容不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+  /v2/workspaces/{workspaceId}/business-capabilities/{objectType}/{objectId}:
+    get:
+      operationId: getEnterpriseBusinessCapabilities
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: path
+          name: objectType
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: path
+          name: objectId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EnterpriseBusinessCapabilities"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "410":
+          description: 资料已撤回或内容不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+  /v2/workspaces/{workspaceId}/business-command-checks:
+    post:
+      operationId: checkEnterpriseBusinessCommand
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: header
+          name: X-CSRF-Token
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnterpriseBusinessCommand"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EnterpriseBusinessCommandCheck"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "410":
+          description: 资料已撤回或内容不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+  /v2/workspaces/{workspaceId}/customer-creation-departments/queries:
+    post:
+      operationId: queryEnterpriseCustomerCreationDepartments
+      parameters:
+        - in: path
+          name: workspaceId
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - in: header
+          name: X-CSRF-Token
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnterpriseCustomerCreationQuery"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - data
+                  - traceId
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EnterpriseCustomerCreationDepartments"
+                  traceId:
+                    type: string
+        "400":
+          description: 请求格式无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "401":
+          description: 登录或会话无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "403":
+          description: 当前权限或跨站防护拒绝
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "404":
+          description: 当前作用域不存在该对象
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "409":
+          description: 版本或幂等键冲突
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "410":
+          description: 资料已撤回或内容不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "413":
+          description: 请求过大
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "415":
+          description: 正文类型无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
+        "503":
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnterpriseApiError"
   /v2/workspaces/{workspaceId}/knowledge/business-snapshots:
     post:
       operationId: snapshotEnterpriseBusinessFact
@@ -7589,11 +7939,31 @@ components:
         - reference
         - values
       additionalProperties: false
+    EnterpriseCustomerCreationQuery:
+      type: object
+      additionalProperties: false
+      properties:
+        type:
+          const: customer.create
+        id: &a20
+          type: string
+          minLength: 1
+          maxLength: 200
+          pattern: ^(?!\.{1,2}$)(?=.*\S)[^\u0000-\u001f\u007f]+$
+        name: &a8
+          type: string
+          minLength: 1
+          maxLength: 200
+          pattern: ^(?=.*\S)[^\u0000-\u001f\u007f]+$
+      required:
+        - type
+        - id
+        - name
     EnterpriseBusinessEvidenceWithdraw:
       type: object
       additionalProperties: false
       properties:
-        expectedStreamVersion: &a8
+        expectedStreamVersion: &a9
           type: integer
           minimum: 1
           maximum: 9007199254740991
@@ -7603,12 +7973,8 @@ components:
       type: object
       additionalProperties: false
       properties:
-        id: &a10
-          type: string
-          minLength: 1
-          maxLength: 200
-          pattern: ^(?=.*\S)[^\u0000-\u001f\u007f]+$
-        streamVersion: *a8
+        id: *a8
+        streamVersion: *a9
       required:
         - id
         - streamVersion
@@ -7618,7 +7984,7 @@ components:
       properties:
         subject:
           $ref: "#/components/schemas/BusinessObjectRef"
-        attestation: &a9
+        attestation: &a10
           type: string
           minLength: 1
           maxLength: 4000
@@ -7645,7 +8011,7 @@ components:
           $ref: "#/components/schemas/EvidenceRef"
         subject:
           $ref: "#/components/schemas/BusinessObjectRef"
-        attestation: *a9
+        attestation: *a10
         requiredClasses:
           type: array
           items:
@@ -7655,11 +8021,11 @@ components:
               - price
               - cost
               - contact
-        recordedBy: *a10
+        recordedBy: *a8
         recordedAt: &a21
           type: string
           format: date-time
-        streamVersion: *a8
+        streamVersion: *a9
       required:
         - reference
         - subject
@@ -7795,6 +8161,7 @@ components:
               $ref: "#/components/schemas/BusinessObjectRef"
             amountMinor: *a14
             dueDate: *a15
+            businessDate: *a15
           additionalProperties: false
           required:
             - type
@@ -8268,13 +8635,9 @@ components:
           properties:
             type:
               const: customer.create
-            id: &a20
-              type: string
-              minLength: 1
-              maxLength: 200
-              pattern: ^(?!\.{1,2}$)(?=.*\S)[^\u0000-\u001f\u007f]+$
-            name: *a10
-            departmentId: *a10
+            id: *a20
+            name: *a8
+            departmentId: *a8
           required:
             - type
             - id
@@ -8285,8 +8648,8 @@ components:
             type:
               const: customer.rename
             id: *a20
-            expectedStreamVersion: *a8
-            name: *a10
+            expectedStreamVersion: *a9
+            name: *a8
           required:
             - type
             - id
@@ -8300,9 +8663,9 @@ components:
             id: *a20
             customer:
               $ref: "#/components/schemas/BusinessObjectRef"
-            name: *a10
-            email: *a10
-            phone: *a10
+            name: *a8
+            email: *a8
+            phone: *a8
           required:
             - type
             - id
@@ -8314,10 +8677,10 @@ components:
             type:
               const: contact.update
             id: *a20
-            expectedStreamVersion: *a8
-            name: *a10
-            email: *a10
-            phone: *a10
+            expectedStreamVersion: *a9
+            name: *a8
+            email: *a8
+            phone: *a8
           required:
             - type
             - id
@@ -8331,7 +8694,7 @@ components:
             id: *a20
             customer:
               $ref: "#/components/schemas/BusinessObjectRef"
-            title: *a10
+            title: *a8
           required:
             - type
             - id
@@ -8343,10 +8706,10 @@ components:
             type:
               const: opportunity.update
             id: *a20
-            expectedStreamVersion: *a8
+            expectedStreamVersion: *a9
             customer:
               $ref: "#/components/schemas/BusinessObjectRef"
-            title: *a10
+            title: *a8
           required:
             - type
             - id
@@ -8359,14 +8722,14 @@ components:
             type:
               const: service.publish
             id: *a20
-            serviceCode: *a10
-            title: *a10
-            unit: *a10
-            unitPriceMinor: *a8
-            scope: *a9
+            serviceCode: *a8
+            title: *a8
+            unit: *a8
+            unitPriceMinor: *a9
+            scope: *a10
             acceptanceCriteria:
               type: array
-              items: *a9
+              items: *a10
               minItems: 1
               maxItems: 100
             validFrom: *a21
@@ -8375,8 +8738,8 @@ components:
               type: object
               additionalProperties: false
               properties:
-                id: *a10
-                expectedStreamVersion: *a8
+                id: *a8
+                expectedStreamVersion: *a9
               required:
                 - id
                 - expectedStreamVersion
@@ -8407,7 +8770,7 @@ components:
                 properties:
                   service:
                     $ref: "#/components/schemas/BusinessObjectRef"
-                  quantity: *a8
+                  quantity: *a9
                 required:
                   - service
                   - quantity
@@ -8426,7 +8789,7 @@ components:
             type:
               const: quote.approve
             id: *a20
-            expectedStreamVersion: *a8
+            expectedStreamVersion: *a9
           required:
             - type
             - id
@@ -8437,7 +8800,7 @@ components:
             type:
               const: quote.record_acceptance
             id: *a20
-            expectedStreamVersion: *a8
+            expectedStreamVersion: *a9
             evidence:
               $ref: "#/components/schemas/EvidenceRef"
           required:
@@ -8453,7 +8816,7 @@ components:
             id: *a20
             quote:
               $ref: "#/components/schemas/BusinessObjectRef"
-            title: *a10
+            title: *a8
           required:
             - type
             - id
@@ -8465,7 +8828,7 @@ components:
             type:
               const: contract.activate
             id: *a20
-            expectedStreamVersion: *a8
+            expectedStreamVersion: *a9
             evidence:
               $ref: "#/components/schemas/EvidenceRef"
           required:
@@ -8487,8 +8850,8 @@ components:
                 type: object
                 additionalProperties: false
                 properties:
-                  quoteLineId: *a10
-                  quantity: *a8
+                  quoteLineId: *a8
+                  quantity: *a9
                 required:
                   - quoteLineId
                   - quantity
@@ -8505,7 +8868,7 @@ components:
             type:
               const: order.activate
             id: *a20
-            expectedStreamVersion: *a8
+            expectedStreamVersion: *a9
           required:
             - type
             - id
@@ -8526,57 +8889,143 @@ components:
       type: array
       items:
         $ref: "#/components/schemas/EnterpriseBusinessObjectView"
+    EnterpriseLoginDirectory:
+      type: object
+      properties:
+        organizations:
+          type: array
+          maxItems: 1000
+          items:
+            type: object
+            properties:
+              id: &a22
+                type: string
+                minLength: 1
+                maxLength: 200
+                pattern: ^(?=.*\S)[^\u0000-\u001f\u007f]+$
+              name: *a22
+            required:
+              - id
+              - name
+            additionalProperties: false
+      required:
+        - organizations
+      additionalProperties: false
+    EnterpriseBusinessCapabilities:
+      type: object
+      properties:
+        reference:
+          $ref: "#/components/schemas/BusinessObjectRef"
+        readableFields: &a23
+          type: array
+          maxItems: 200
+          uniqueItems: true
+          items: *a22
+        writableFields: *a23
+        businessApprovalFields: *a23
+        canRecordEvidence:
+          type: boolean
+        people:
+          type: array
+          maxItems: 7
+          uniqueItems: true
+          items:
+            type: object
+            properties:
+              principalId: *a22
+              displayName: *a22
+            required:
+              - principalId
+              - displayName
+            additionalProperties: false
+      required:
+        - reference
+        - readableFields
+        - writableFields
+        - businessApprovalFields
+        - canRecordEvidence
+        - people
+      additionalProperties: false
+    EnterpriseBusinessCommandCheck:
+      type: object
+      properties:
+        allowedNow:
+          type: boolean
+        reasonCode: *a22
+      required:
+        - allowedNow
+      additionalProperties: false
+    EnterpriseCustomerCreationDepartments:
+      type: object
+      properties:
+        departments:
+          type: array
+          items:
+            type: object
+            properties:
+              id: *a22
+              name: *a22
+            required:
+              - id
+              - name
+            additionalProperties: false
+        allowUnassigned:
+          type: boolean
+      required:
+        - departments
+        - allowUnassigned
+      additionalProperties: false
     EnterpriseQuotaConfigure:
       type: object
       additionalProperties: false
       properties:
-        parallelNodes: &a23
+        parallelNodes: &a25
           type: integer
           minimum: 0
           maximum: 9007199254740991
-        totalNodes: &a24
+        totalNodes: &a26
           type: integer
           minimum: 0
           maximum: 9007199254740991
-        totalAttempts: &a25
+        totalAttempts: &a27
           type: integer
           minimum: 0
           maximum: 9007199254740991
-        automaticReplans: &a26
+        automaticReplans: &a28
           type: integer
           minimum: 0
           maximum: 9007199254740991
-        tenantRunningNodes: &a27
+        tenantRunningNodes: &a29
           type: integer
           minimum: 0
           maximum: 9007199254740991
-        tokens: &a28
+        tokens: &a30
           type: integer
           minimum: 0
           maximum: 9007199254740991
-        evaluationDailyTokens: &a29
+        evaluationDailyTokens: &a31
           type: integer
           minimum: 0
           maximum: 9007199254740991
-        singleEvaluationTokens: &a30
+        singleEvaluationTokens: &a32
           type: integer
           minimum: 0
           maximum: 9007199254740991
-        costMinorUnits: &a31
+        costMinorUnits: &a33
           type: string
           pattern: ^(0|[1-9][0-9]{0,17})$
-        evaluationDailyCostMinorUnits: &a32
+        evaluationDailyCostMinorUnits: &a34
           type: string
           pattern: ^(0|[1-9][0-9]{0,17})$
-        singleEvaluationCostMinorUnits: &a33
+        singleEvaluationCostMinorUnits: &a35
           type: string
           pattern: ^(0|[1-9][0-9]{0,17})$
-        currency: &a34
+        currency: &a36
           const: CNY
-        validFrom: &a22
+        validFrom: &a24
           type: string
           format: date-time
-        expiresAt: *a22
+        expiresAt: *a24
         expectedStreamVersion:
           type: integer
           minimum: 0
@@ -8601,30 +9050,30 @@ components:
       type: object
       additionalProperties: false
       properties:
-        parallelNodes: *a23
-        totalNodes: *a24
-        totalAttempts: *a25
-        automaticReplans: *a26
-        tenantRunningNodes: *a27
-        tokens: *a28
-        evaluationDailyTokens: *a29
-        singleEvaluationTokens: *a30
-        costMinorUnits: *a31
-        evaluationDailyCostMinorUnits: *a32
-        singleEvaluationCostMinorUnits: *a33
-        currency: *a34
-        validFrom: *a22
-        expiresAt: *a22
-        tenantId: &a35
+        parallelNodes: *a25
+        totalNodes: *a26
+        totalAttempts: *a27
+        automaticReplans: *a28
+        tenantRunningNodes: *a29
+        tokens: *a30
+        evaluationDailyTokens: *a31
+        singleEvaluationTokens: *a32
+        costMinorUnits: *a33
+        evaluationDailyCostMinorUnits: *a34
+        singleEvaluationCostMinorUnits: *a35
+        currency: *a36
+        validFrom: *a24
+        expiresAt: *a24
+        tenantId: &a37
           type: string
           minLength: 1
           maxLength: 200
-        workspaceId: *a35
-        streamVersion: &a36
+        workspaceId: *a37
+        streamVersion: &a38
           type: integer
           minimum: 1
           maximum: 9007199254740991
-        capacityEvidenceDigest: *a35
+        capacityEvidenceDigest: *a37
       required:
         - parallelNodes
         - totalNodes
@@ -8678,7 +9127,7 @@ components:
           properties:
             kind:
               const: department
-            departmentId: *a35
+            departmentId: *a37
           required:
             - kind
             - departmentId
@@ -8693,7 +9142,7 @@ components:
                 type: object
                 additionalProperties: false
                 properties:
-                  objectType: &a40
+                  objectType: &a42
                     type: string
                     enum:
                       - operating_objective
@@ -8721,7 +9170,7 @@ components:
                       - evidence_ref
                       - decision_record
                       - memory_entry
-                  objectId: *a35
+                  objectId: *a37
                 required:
                   - objectType
                   - objectId
@@ -8735,21 +9184,21 @@ components:
       type: object
       additionalProperties: false
       properties:
-        name: *a35
-        parentId: *a35
+        name: *a37
+        parentId: *a37
       required:
         - name
     EnterpriseDepartmentView:
       type: object
       additionalProperties: false
       properties:
-        id: *a35
-        tenantId: *a35
-        workspaceId: *a35
-        streamVersion: *a36
-        revokedAt: *a22
-        name: *a35
-        parentId: *a35
+        id: *a37
+        tenantId: *a37
+        workspaceId: *a37
+        streamVersion: *a38
+        revokedAt: *a24
+        name: *a37
+        parentId: *a37
       required:
         - id
         - tenantId
@@ -8760,8 +9209,8 @@ components:
       type: object
       additionalProperties: false
       properties:
-        principalId: *a35
-        operations: &a37
+        principalId: *a37
+        operations: &a39
           type: array
           items:
             type: string
@@ -8774,7 +9223,7 @@ components:
               - audit
           minItems: 1
           uniqueItems: true
-        fieldClasses: &a38
+        fieldClasses: &a40
           type: array
           items:
             type: string
@@ -8785,8 +9234,8 @@ components:
               - contact
           minItems: 1
           uniqueItems: true
-        expiresAt: *a22
-        role: &a39
+        expiresAt: *a24
+        role: &a41
           type: string
           enum:
             - sales
@@ -8807,16 +9256,16 @@ components:
       type: object
       additionalProperties: false
       properties:
-        id: *a35
-        tenantId: *a35
-        workspaceId: *a35
-        streamVersion: *a36
-        revokedAt: *a22
-        principalId: *a35
-        operations: *a37
-        fieldClasses: *a38
-        expiresAt: *a22
-        role: *a39
+        id: *a37
+        tenantId: *a37
+        workspaceId: *a37
+        streamVersion: *a38
+        revokedAt: *a24
+        principalId: *a37
+        operations: *a39
+        fieldClasses: *a40
+        expiresAt: *a24
+        role: *a41
         scope:
           $ref: "#/components/schemas/BusinessAccessScope"
       required:
@@ -8834,12 +9283,12 @@ components:
       type: object
       additionalProperties: false
       properties:
-        principalId: *a35
-        operations: *a37
-        fieldClasses: *a38
-        expiresAt: *a22
-        objectType: *a40
-        objectId: *a35
+        principalId: *a37
+        operations: *a39
+        fieldClasses: *a40
+        expiresAt: *a24
+        objectType: *a42
+        objectId: *a37
       required:
         - principalId
         - operations
@@ -8851,17 +9300,17 @@ components:
       type: object
       additionalProperties: false
       properties:
-        id: *a35
-        tenantId: *a35
-        workspaceId: *a35
-        streamVersion: *a36
-        revokedAt: *a22
-        principalId: *a35
-        operations: *a37
-        fieldClasses: *a38
-        expiresAt: *a22
-        objectType: *a40
-        objectId: *a35
+        id: *a37
+        tenantId: *a37
+        workspaceId: *a37
+        streamVersion: *a38
+        revokedAt: *a24
+        principalId: *a37
+        operations: *a39
+        fieldClasses: *a40
+        expiresAt: *a24
+        objectType: *a42
+        objectId: *a37
       required:
         - id
         - tenantId
@@ -8877,7 +9326,7 @@ components:
       type: object
       additionalProperties: false
       properties:
-        expectedStreamVersion: *a36
+        expectedStreamVersion: *a38
       required:
         - expectedStreamVersion
     EnterpriseAccessConfiguration:
@@ -8903,7 +9352,7 @@ components:
     EnterpriseExecutionApprovalDecision:
       type: object
       properties:
-        expectedStreamVersion: &a42
+        expectedStreamVersion: &a44
           type: integer
           minimum: 1
           maximum: 9007199254740991
@@ -8923,19 +9372,19 @@ components:
     EnterpriseExecutionApprovalView:
       type: object
       properties:
-        tenantId: &a41
+        tenantId: &a43
           type: string
           minLength: 1
           maxLength: 200
           pattern: ^(?!\.{1,2}$)(?=.*\S)[^\u0000-\u001f\u007f]+$
-        workspaceId: *a41
-        id: *a41
-        streamVersion: *a42
-        actionId: *a41
+        workspaceId: *a43
+        id: *a43
+        streamVersion: *a44
+        actionId: *a43
         actionDigest:
           type: string
           pattern: ^[a-f0-9]{64}$
-        authorityRevisionId: *a41
+        authorityRevisionId: *a43
         status:
           type: string
           enum:
@@ -8943,16 +9392,16 @@ components:
             - approved_once
             - denied
             - expired
-        initiatedByPrincipalId: *a41
-        approvedByPrincipalId: *a41
+        initiatedByPrincipalId: *a43
+        approvedByPrincipalId: *a43
         origin:
           type: string
           enum:
             - manual
             - policy
-        policyId: *a41
-        policyVersion: *a42
-        validUntil: &a45
+        policyId: *a43
+        policyVersion: *a44
+        validUntil: &a47
           type: string
           format: date-time
         canDecide:
@@ -8976,7 +9425,7 @@ components:
       properties:
         action:
           $ref: "#/components/schemas/ActionIntent"
-        executionId: *a41
+        executionId: *a43
         executionStatus:
           type: string
         approval:
@@ -8996,15 +9445,15 @@ components:
     EnterpriseActionControl:
       type: object
       properties:
-        expectedStreamVersion: *a42
+        expectedStreamVersion: *a44
       required:
         - expectedStreamVersion
       additionalProperties: false
     EnterpriseActionControlResult:
       type: object
       properties:
-        actionId: *a41
-        streamVersion: *a42
+        actionId: *a43
+        streamVersion: *a44
         status:
           type: string
           enum:
@@ -9026,16 +9475,16 @@ components:
     EnterpriseExecutionSettingsWrite:
       type: object
       properties:
-        expectedStreamVersion: &a44
+        expectedStreamVersion: &a46
           type: integer
           minimum: 0
           maximum: 9007199254740991
-        responsibilities: &a43
+        responsibilities: &a45
           type: array
           items:
             type: object
             properties:
-              id: *a41
+              id: *a43
               capabilities:
                 type: array
                 items:
@@ -9074,10 +9523,10 @@ components:
     EnterpriseExecutionSettings:
       type: object
       properties:
-        tenantId: *a41
-        workspaceId: *a41
-        streamVersion: *a42
-        responsibilities: *a43
+        tenantId: *a43
+        workspaceId: *a43
+        streamVersion: *a44
+        responsibilities: *a45
       required:
         - tenantId
         - workspaceId
@@ -9087,22 +9536,22 @@ components:
     EnterpriseExecutionPolicyWrite:
       type: object
       properties:
-        expectedStreamVersion: *a44
-        id: *a41
-        responsiblePrincipalId: *a41
-        responsibilityId: *a41
-        action: &a46
+        expectedStreamVersion: *a46
+        id: *a43
+        responsiblePrincipalId: *a43
+        responsibilityId: *a43
+        action: &a48
           type: string
           enum:
             - create_followup_task
             - update_followup_date
-        target: &a47
+        target: &a49
           $ref: "#/components/schemas/BusinessObjectRef"
-        maxActions: &a48
+        maxActions: &a50
           type: integer
           minimum: 1
           maximum: 10000
-        validUntil: *a45
+        validUntil: *a47
       required:
         - expectedStreamVersion
         - id
@@ -9116,25 +9565,25 @@ components:
     EnterpriseExecutionPolicyView:
       type: object
       properties:
-        tenantId: *a41
-        workspaceId: *a41
-        streamVersion: *a42
-        id: *a41
-        responsiblePrincipalId: *a41
-        responsibilityId: *a41
-        action: *a46
-        target: *a47
-        maxActions: *a48
-        validUntil: *a45
-        providerId: *a41
-        providerBindingVersion: *a42
+        tenantId: *a43
+        workspaceId: *a43
+        streamVersion: *a44
+        id: *a43
+        responsiblePrincipalId: *a43
+        responsibilityId: *a43
+        action: *a48
+        target: *a49
+        maxActions: *a50
+        validUntil: *a47
+        providerId: *a43
+        providerBindingVersion: *a44
         status:
           type: string
           enum:
             - awaiting_acceptance
             - active
             - revoked
-        acceptedAt: *a45
+        acceptedAt: *a47
       required:
         - tenantId
         - workspaceId
@@ -9153,7 +9602,7 @@ components:
     EnterpriseExecutionPolicyCommand:
       type: object
       properties:
-        expectedStreamVersion: *a42
+        expectedStreamVersion: *a44
       required:
         - expectedStreamVersion
       additionalProperties: false
@@ -9181,7 +9630,7 @@ components:
           $ref: "#/components/schemas/BusinessObjectRef"
         fields:
           type: array
-          items: &a49
+          items: &a51
             type: string
             minLength: 1
             maxLength: 200
@@ -9200,39 +9649,39 @@ components:
           type: integer
           minimum: 0
           maximum: 9007199254740991
-        id: *a49
-        responsiblePrincipalId: *a49
-        sourceIds: &a51
+        id: *a51
+        responsiblePrincipalId: *a51
+        sourceIds: &a53
           type: array
-          items: *a49
+          items: *a51
           minItems: 1
           maxItems: 100
           uniqueItems: true
-        eventTypes: &a52
+        eventTypes: &a54
           type: array
-          items: *a49
+          items: *a51
           minItems: 1
           maxItems: 100
           uniqueItems: true
-        sources: &a53
+        sources: &a55
           type: array
           items:
             $ref: "#/components/schemas/EnterpriseSourceScope"
           minItems: 1
           maxItems: 100
           uniqueItems: true
-        mode: &a54
+        mode: &a56
           type: string
           enum:
             - observe
             - execute
-        validUntil: &a55
+        validUntil: &a57
           type: string
           format: date-time
-        evaluation: &a56
+        evaluation: &a58
           type: object
           properties:
-            tokens: &a50
+            tokens: &a52
               type: integer
               minimum: 1
               maximum: 9007199254740991
@@ -9246,14 +9695,14 @@ components:
             - costMinorUnits
             - currency
           additionalProperties: false
-        notification: &a57
+        notification: &a59
           type: string
           enum:
             - none
             - source
-        work: &a58
+        work: &a60
           $ref: "#/components/schemas/EnterpriseGoalSpec"
-        intervalMinutes: &a59
+        intervalMinutes: &a61
           type: integer
           minimum: 1
           maximum: 525600
@@ -9272,20 +9721,20 @@ components:
     EnterpriseOperatingPolicyView:
       type: object
       properties:
-        tenantId: *a49
-        workspaceId: *a49
-        streamVersion: *a50
-        id: *a49
-        responsiblePrincipalId: *a49
-        sourceIds: *a51
-        eventTypes: *a52
-        sources: *a53
-        mode: *a54
-        validUntil: *a55
-        evaluation: *a56
-        notification: *a57
-        work: *a58
-        intervalMinutes: *a59
+        tenantId: *a51
+        workspaceId: *a51
+        streamVersion: *a52
+        id: *a51
+        responsiblePrincipalId: *a51
+        sourceIds: *a53
+        eventTypes: *a54
+        sources: *a55
+        mode: *a56
+        validUntil: *a57
+        evaluation: *a58
+        notification: *a59
+        work: *a60
+        intervalMinutes: *a61
         status:
           type: string
           enum:
@@ -9293,7 +9742,7 @@ components:
             - active
             - paused
             - closed
-        reasonCode: *a49
+        reasonCode: *a51
       required:
         - tenantId
         - workspaceId
@@ -9312,7 +9761,7 @@ components:
     EnterpriseOperatingPolicyControl:
       type: object
       properties:
-        expectedStreamVersion: *a50
+        expectedStreamVersion: *a52
         command:
           type: string
           enum:
@@ -9326,11 +9775,11 @@ components:
     EnterpriseEvaluationView:
       type: object
       properties:
-        id: *a49
-        tenantId: *a49
-        workspaceId: *a49
-        streamVersion: *a50
-        batchId: *a49
+        id: *a51
+        tenantId: *a51
+        workspaceId: *a51
+        streamVersion: *a52
+        batchId: *a51
         mode:
           type: string
           enum:
@@ -9355,7 +9804,7 @@ components:
         costNanoMinorUnits:
           type: string
           pattern: ^(0|[1-9][0-9]{0,29})$
-        reasonCode: *a49
+        reasonCode: *a51
         result:
           type: object
           properties:
@@ -9370,7 +9819,7 @@ components:
               items:
                 type: object
                 properties:
-                  triggerId: *a49
+                  triggerId: *a51
                 required:
                   - triggerId
                 additionalProperties: false
@@ -9395,8 +9844,8 @@ components:
     EnterpriseOperatingBatchRef:
       type: object
       properties:
-        batchId: *a49
-        streamVersion: *a50
+        batchId: *a51
+        streamVersion: *a52
       required:
         - batchId
         - streamVersion
@@ -9404,15 +9853,15 @@ components:
     EnterpriseOperatingBatchControl:
       type: object
       properties:
-        expectedStreamVersion: *a50
+        expectedStreamVersion: *a52
       required:
         - expectedStreamVersion
       additionalProperties: false
     EnterpriseOperatingBatchResult:
       type: object
       properties:
-        batchId: *a49
-        streamVersion: *a50
+        batchId: *a51
+        streamVersion: *a52
         status:
           type: string
           enum:
@@ -9430,7 +9879,7 @@ components:
     EnterpriseOperatingSubscriptionRef:
       type: object
       properties:
-        subscriptionId: *a49
+        subscriptionId: *a51
       required:
         - subscriptionId
       additionalProperties: false
@@ -9439,7 +9888,7 @@ components:
       properties:
         triggerIds:
           type: array
-          items: *a49
+          items: *a51
           maxItems: 10000
           uniqueItems: true
       required:
@@ -9453,9 +9902,9 @@ components:
           items:
             type: object
             properties:
-              id: *a49
-              tenantId: *a49
-              workspaceId: *a49
+              id: *a51
+              tenantId: *a51
+              workspaceId: *a51
               kind:
                 type: string
                 enum:
@@ -9485,8 +9934,8 @@ components:
           items:
             type: object
             properties:
-              id: *a49
-              sourceEventId: *a49
+              id: *a51
+              sourceEventId: *a51
               status:
                 type: string
                 enum:
@@ -9507,8 +9956,8 @@ components:
           items:
             type: object
             properties:
-              id: *a49
-              streamVersion: *a50
+              id: *a51
+              streamVersion: *a52
               status:
                 type: string
                 enum:
@@ -9520,9 +9969,9 @@ components:
                   - needs_reconciliation
               triggerIds:
                 type: array
-                items: *a49
+                items: *a51
                 maxItems: 10000
-              reasonCode: *a49
+              reasonCode: *a51
             required:
               - id
               - streamVersion
@@ -9544,13 +9993,13 @@ components:
     EnterpriseOperatingRequest:
       type: object
       properties:
-        sources: *a53
+        sources: *a55
         message:
           type: string
           minLength: 1
           maxLength: 12000
-        evaluation: *a56
-        validUntil: *a55
+        evaluation: *a58
+        validUntil: *a57
       required:
         - sources
         - message
@@ -9560,12 +10009,12 @@ components:
     EnterpriseInitialEvaluation:
       type: object
       properties:
-        id: &a60
+        id: &a62
           type: string
           minLength: 1
           maxLength: 200
           pattern: ^(?=.*\S)[^\u0000-\u001f\u007f]+$
-        tokens: &a72
+        tokens: &a74
           type: integer
           minimum: 0
           maximum: 9007199254740991
@@ -9584,35 +10033,35 @@ components:
     EnterpriseGoalAdopt:
       type: object
       properties:
-        evaluationId: *a60
-        workflow: &a63
+        evaluationId: *a62
+        workflow: &a65
           $ref: "#/components/schemas/EnterpriseWorkflowRef"
-        title: *a60
-        message: &a64
+        title: *a62
+        message: &a66
           type: string
           minLength: 1
           maxLength: 12000
-        sources: &a65
+        sources: &a67
           type: array
           items:
             $ref: "#/components/schemas/EnterpriseSourceScope"
           minItems: 1
           uniqueItems: true
-        acceptanceCriteria: &a66
+        acceptanceCriteria: &a68
           type: array
-          items: *a60
+          items: *a62
           minItems: 1
           uniqueItems: true
-        budget: &a67
+        budget: &a69
           $ref: "#/components/schemas/EnterpriseExecutionBudget"
-        capabilityIds: &a68
+        capabilityIds: &a70
           type: array
-          items: *a60
+          items: *a62
           minItems: 1
           uniqueItems: true
-        modelBindingIds: &a69
+        modelBindingIds: &a71
           type: array
-          items: *a60
+          items: *a62
           minItems: 1
           uniqueItems: true
       required:
@@ -9642,13 +10091,13 @@ components:
     EnterpriseWorkModelView:
       type: object
       properties:
-        id: *a60
-        version: &a62
+        id: *a62
+        version: &a64
           type: integer
           minimum: 1
           maximum: 9007199254740991
-        providerId: *a60
-        modelId: *a60
+        providerId: *a62
+        modelId: *a62
         mode:
           type: string
           enum:
@@ -9672,8 +10121,8 @@ components:
           items:
             type: object
             properties:
-              id: *a60
-              version: *a60
+              id: *a62
+              version: *a62
               effect:
                 type: string
                 enum:
@@ -9705,13 +10154,13 @@ components:
       oneOf:
         - type: object
           properties:
-            id: *a60
-            goalId: *a60
+            id: *a62
+            goalId: *a62
             kind:
               const: task
             candidate:
               const: true
-            createdAt: &a61
+            createdAt: &a63
               type: string
               format: date-time
             model:
@@ -9729,13 +10178,13 @@ components:
           additionalProperties: false
         - type: object
           properties:
-            id: *a60
-            goalId: *a60
+            id: *a62
+            goalId: *a62
             kind:
               const: planning
             candidate:
               const: true
-            createdAt: *a61
+            createdAt: *a63
             model:
               $ref: "#/components/schemas/EnterpriseWorkModelView"
             content:
@@ -9751,13 +10200,13 @@ components:
           additionalProperties: false
         - type: object
           properties:
-            id: *a60
-            goalId: *a60
+            id: *a62
+            goalId: *a62
             kind:
               const: diagnostic
             candidate:
               const: true
-            createdAt: *a61
+            createdAt: *a63
             model:
               $ref: "#/components/schemas/EnterpriseWorkModelView"
             content:
@@ -9784,7 +10233,7 @@ components:
             - continue_waiting
             - request_replan
             - request_review
-        progressDigest: &a71
+        progressDigest: &a73
           type: string
           pattern: ^[a-f0-9]{64}$
       required:
@@ -9795,21 +10244,21 @@ components:
     EnterprisePlanSuggestion:
       type: object
       properties:
-        reason: *a60
+        reason: *a62
         nodes:
           type: array
           items:
             type: object
             properties:
-              id: *a60
+              id: *a62
               dependsOn:
                 type: array
-                items: *a60
+                items: *a62
                 minItems: 0
                 uniqueItems: true
-              capabilityId: *a60
-              capabilityVersion: *a60
-              modelBindingId: *a60
+              capabilityId: *a62
+              capabilityVersion: *a62
+              modelBindingId: *a62
               sourceIds:
                 type: array
                 items:
@@ -9821,7 +10270,7 @@ components:
                 $ref: "#/components/schemas/EnterpriseExecutionBudget"
               acceptanceCriteria:
                 type: array
-                items: *a60
+                items: *a62
                 minItems: 1
                 uniqueItems: true
               effect:
@@ -9850,8 +10299,8 @@ components:
     EnterpriseGoalPlanningRequest:
       type: object
       properties:
-        expectedStreamVersion: *a62
-        modelBindingId: *a60
+        expectedStreamVersion: *a64
+        modelBindingId: *a62
       required:
         - expectedStreamVersion
       additionalProperties: false
@@ -9900,7 +10349,7 @@ components:
           items:
             type: object
             properties:
-              criterion: *a60
+              criterion: *a62
               status:
                 type: string
                 enum:
@@ -9928,7 +10377,7 @@ components:
           uniqueItems: true
         unknown:
           type: array
-          items: *a60
+          items: *a62
           minItems: 0
           uniqueItems: true
         decomposition:
@@ -9942,15 +10391,15 @@ components:
       additionalProperties: false
     EnterpriseGoalSpec:
       type: object
-      properties: &a70
-        workflow: *a63
-        title: *a60
-        message: *a64
-        sources: *a65
-        acceptanceCriteria: *a66
-        budget: *a67
-        capabilityIds: *a68
-        modelBindingIds: *a69
+      properties: &a72
+        workflow: *a65
+        title: *a62
+        message: *a66
+        sources: *a67
+        acceptanceCriteria: *a68
+        budget: *a69
+        capabilityIds: *a70
+        modelBindingIds: *a71
       required:
         - title
         - message
@@ -9963,15 +10412,15 @@ components:
     EnterpriseGoalRevise:
       type: object
       properties:
-        expectedStreamVersion: *a62
-        workflow: *a63
-        title: *a60
-        message: *a64
-        sources: *a65
-        acceptanceCriteria: *a66
-        budget: *a67
-        capabilityIds: *a68
-        modelBindingIds: *a69
+        expectedStreamVersion: *a64
+        workflow: *a65
+        title: *a62
+        message: *a66
+        sources: *a67
+        acceptanceCriteria: *a68
+        budget: *a69
+        capabilityIds: *a70
+        modelBindingIds: *a71
       required:
         - expectedStreamVersion
         - title
@@ -9984,7 +10433,7 @@ components:
       additionalProperties: false
     EnterpriseGoalCreate:
       type: object
-      properties: *a70
+      properties: *a72
       required:
         - title
         - message
@@ -9997,8 +10446,8 @@ components:
     EnterpriseGoalAuthorize:
       type: object
       properties:
-        expectedStreamVersion: *a62
-        scopeDigest: *a71
+        expectedStreamVersion: *a64
+        scopeDigest: *a73
       required:
         - expectedStreamVersion
         - scopeDigest
@@ -10006,8 +10455,8 @@ components:
     EnterpriseGoalPlanWrite:
       type: object
       properties:
-        expectedStreamVersion: *a62
-        reason: *a60
+        expectedStreamVersion: *a64
+        reason: *a62
         nodes:
           type: array
           items:
@@ -10022,8 +10471,8 @@ components:
     EnterpriseGoalControlResult:
       type: object
       properties:
-        goalId: *a60
-        streamVersion: *a62
+        goalId: *a62
+        streamVersion: *a64
         status:
           $ref: "#/components/schemas/EnterpriseGoalStatus"
         paused:
@@ -10040,7 +10489,7 @@ components:
     EnterpriseGoalControl:
       type: object
       properties:
-        expectedStreamVersion: *a62
+        expectedStreamVersion: *a64
         command:
           type: string
           enum:
@@ -10054,17 +10503,17 @@ components:
     EnterpriseGoalAttemptView:
       type: object
       properties:
-        id: *a60
+        id: *a62
         kind:
           type: string
           enum:
             - task
             - planning
             - diagnostic
-        nodeId: *a60
-        ordinal: *a62
-        executionId: *a60
-        planRevision: *a62
+        nodeId: *a62
+        ordinal: *a64
+        executionId: *a62
+        planRevision: *a64
         status:
           type: string
           enum:
@@ -10074,12 +10523,12 @@ components:
             - failed
             - cancelled
             - needs_reconciliation
-        reasonCode: *a60
-        tokens: *a72
+        reasonCode: *a62
+        tokens: *a74
         costNanoMinorUnits:
           type: string
           pattern: ^(0|[1-9][0-9]{0,29})$
-        updatedAt: *a61
+        updatedAt: *a63
       required:
         - id
         - kind
@@ -10093,18 +10542,18 @@ components:
     EnterpriseGoalView:
       type: object
       properties:
-        id: *a60
-        tenantId: *a60
-        workspaceId: *a60
-        streamVersion: *a62
-        ownerPrincipalId: *a60
+        id: *a62
+        tenantId: *a62
+        workspaceId: *a62
+        streamVersion: *a64
+        ownerPrincipalId: *a62
         status:
           $ref: "#/components/schemas/EnterpriseGoalStatus"
         paused:
           type: boolean
         cancelRequested:
           type: boolean
-        scopeDigest: *a71
+        scopeDigest: *a73
         spec:
           $ref: "#/components/schemas/EnterpriseGoalSpec"
         initialEvaluation:
@@ -10112,8 +10561,8 @@ components:
         policyOrigin:
           type: object
           properties:
-            id: *a60
-            version: *a62
+            id: *a62
+            version: *a64
           required:
             - id
             - version
@@ -10129,14 +10578,14 @@ components:
         attention:
           type: object
           properties:
-            code: *a60
-            proposalDigest: *a71
+            code: *a62
+            proposalDigest: *a73
           required:
             - code
           additionalProperties: false
-        authorityRevisionId: *a60
-        createdAt: *a61
-        updatedAt: *a61
+        authorityRevisionId: *a62
+        createdAt: *a63
+        updatedAt: *a63
       required:
         - id
         - tenantId
@@ -10155,7 +10604,7 @@ components:
     EnterpriseDocumentImport:
       type: object
       properties:
-        documentId: &a73
+        documentId: &a75
           type: string
           minLength: 1
           maxLength: 200
@@ -10164,9 +10613,9 @@ components:
           type: integer
           minimum: 0
           maximum: 9007199254740991
-        title: *a73
-        fileName: *a73
-        mediaType: *a73
+        title: *a75
+        fileName: *a75
+        mediaType: *a75
         contentBase64:
           type: string
           minLength: 1
@@ -10178,7 +10627,7 @@ components:
           minItems: 1
           maxItems: 100
           uniqueItems: true
-        classification: &a76
+        classification: &a78
           type: array
           items:
             type: string
@@ -10209,8 +10658,8 @@ components:
     EnterpriseKnowledgeDocumentState:
       type: object
       properties:
-        documentId: *a73
-        streamVersion: &a74
+        documentId: *a75
+        streamVersion: &a76
           type: integer
           minimum: 1
           maximum: 9007199254740991
@@ -10229,7 +10678,7 @@ components:
       properties:
         reference:
           $ref: "#/components/schemas/BusinessObjectRef"
-        expectedStreamVersion: *a74
+        expectedStreamVersion: *a76
         enabled:
           type: boolean
       required:
@@ -10240,8 +10689,8 @@ components:
     EnterpriseKnowledgeSharing:
       type: object
       properties:
-        documentId: *a73
-        streamVersion: *a74
+        documentId: *a75
+        streamVersion: *a76
         shared:
           type: boolean
       required:
@@ -10269,7 +10718,7 @@ components:
       properties:
         reference:
           $ref: "#/components/schemas/BusinessObjectRef"
-        mediaType: *a73
+        mediaType: *a75
         bytesBase64:
           type: string
           minLength: 1
@@ -10281,27 +10730,27 @@ components:
     EnterpriseKnowledgeControl:
       type: object
       properties:
-        expectedStreamVersion: *a74
+        expectedStreamVersion: *a76
       required:
         - expectedStreamVersion
       additionalProperties: false
     EnterpriseKnowledgeBlock:
       type: object
       properties:
-        id: *a73
+        id: *a75
         text:
           type: string
           minLength: 1
           maxLength: 20000
-        locator: &a75
+        locator: &a77
           type: object
           properties:
-            page: *a74
-            paragraph: *a74
-            sheet: *a73
-            cell: *a73
-            row: *a74
-            column: *a74
+            page: *a76
+            paragraph: *a76
+            sheet: *a75
+            cell: *a75
+            row: *a76
+            column: *a76
             part:
               type: string
               maxLength: 4000
@@ -10335,12 +10784,12 @@ components:
           items:
             type: object
             properties:
-              code: *a73
+              code: *a75
               message:
                 type: string
                 minLength: 1
                 maxLength: 2000
-              locator: *a75
+              locator: *a77
             required:
               - code
               - message
@@ -10359,9 +10808,9 @@ components:
       properties:
         reference:
           $ref: "#/components/schemas/BusinessObjectRef"
-        documentId: *a73
-        revision: *a74
-        title: *a73
+        documentId: *a75
+        revision: *a76
+        title: *a75
         sourceKind:
           type: string
           enum:
@@ -10369,7 +10818,7 @@ components:
             - business_fact
             - human_decision
             - candidate_experience
-        classification: *a76
+        classification: *a78
         sources:
           type: array
           items:
@@ -10417,7 +10866,7 @@ components:
             properties:
               reference:
                 $ref: "#/components/schemas/BusinessObjectRef"
-              title: *a73
+              title: *a75
               text:
                 type: string
                 minLength: 1
@@ -10441,7 +10890,7 @@ components:
       properties:
         reference:
           $ref: "#/components/schemas/BusinessObjectRef"
-        title: *a73
+        title: *a75
         text:
           type: string
           minLength: 1
@@ -10457,7 +10906,7 @@ components:
     EnterpriseExperienceDecision:
       type: object
       properties:
-        expectedStreamVersion: &a78
+        expectedStreamVersion: &a80
           type: integer
           minimum: 1
           maximum: 9007199254740991
@@ -10474,11 +10923,11 @@ components:
     EnterpriseExperienceProposal:
       type: object
       properties:
-        id: &a77
+        id: &a79
           type: string
           minLength: 1
           maxLength: 200
-        title: *a77
+        title: *a79
         text:
           type: string
           minLength: 1
@@ -10491,11 +10940,11 @@ components:
     EnterpriseExperienceView:
       type: object
       properties:
-        id: *a77
-        tenantId: *a77
-        workspaceId: *a77
-        streamVersion: *a78
-        artifactId: *a77
+        id: *a79
+        tenantId: *a79
+        workspaceId: *a79
+        streamVersion: *a80
+        artifactId: *a79
         reference:
           $ref: "#/components/schemas/BusinessObjectRef"
         status:
@@ -10504,8 +10953,8 @@ components:
             - proposed
             - enabled
             - disabled
-        proposedBy: *a77
-        decidedBy: *a77
+        proposedBy: *a79
+        decidedBy: *a79
         createdAt:
           type: string
           format: date-time
@@ -10523,15 +10972,15 @@ components:
     EnterpriseArtifactDecisionMaterial:
       type: object
       properties:
-        artifactId: *a77
+        artifactId: *a79
       required:
         - artifactId
       additionalProperties: false
     EnterpriseArtifactFreeze:
       type: object
       properties:
-        goalId: *a77
-        attemptId: *a77
+        goalId: *a79
+        attemptId: *a79
       required:
         - goalId
         - attemptId
@@ -10539,12 +10988,12 @@ components:
     EnterpriseArtifactView:
       type: object
       properties:
-        id: *a77
-        tenantId: *a77
-        workspaceId: *a77
-        streamVersion: *a78
-        goalId: *a77
-        attemptId: *a77
+        id: *a79
+        tenantId: *a79
+        workspaceId: *a79
+        streamVersion: *a80
+        goalId: *a79
+        attemptId: *a79
         reference:
           $ref: "#/components/schemas/BusinessObjectRef"
         status:
@@ -10552,8 +11001,8 @@ components:
           enum:
             - candidate
             - accepted
-        title: *a77
-        decisionId: *a77
+        title: *a79
+        decisionId: *a79
         createdAt:
           type: string
           format: date-time
@@ -10572,11 +11021,11 @@ components:
     EnterpriseArtifactAccept:
       type: object
       properties:
-        expectedStreamVersion: *a78
-        expectedGoalVersion: *a78
+        expectedStreamVersion: *a80
+        expectedGoalVersion: *a80
         criteria:
           type: array
-          items: *a77
+          items: *a79
           minItems: 1
           maxItems: 100
           uniqueItems: true
@@ -10593,7 +11042,7 @@ components:
     EnterpriseWorkflowRef:
       type: object
       properties:
-        id: &a79
+        id: &a81
           type: string
           enum:
             - opportunity
@@ -10601,7 +11050,7 @@ components:
             - delivery
             - receivable
             - review
-        version: &a81
+        version: &a83
           type: integer
           minimum: 1
           maximum: 9007199254740991
@@ -10616,26 +11065,26 @@ components:
     EnterpriseWorkflowDefinition:
       type: object
       properties:
-        flowId: *a79
-        title: &a80
+        flowId: *a81
+        title: &a82
           type: string
           minLength: 1
           maxLength: 200
         sourceTypes:
           type: array
-          items: *a80
+          items: *a82
           minItems: 1
           maxItems: 100
           uniqueItems: true
         acceptanceCriteria:
           type: array
-          items: *a80
+          items: *a82
           minItems: 1
           maxItems: 100
           uniqueItems: true
         humanDecisions:
           type: array
-          items: *a80
+          items: *a82
           minItems: 1
           maxItems: 100
           uniqueItems: true
@@ -10644,7 +11093,7 @@ components:
           items:
             type: object
             properties:
-              id: *a80
+              id: *a82
               capabilityId:
                 type: string
                 enum:
@@ -10674,11 +11123,11 @@ components:
     EnterpriseWorkflowState:
       type: object
       properties:
-        id: *a80
-        tenantId: *a80
-        workspaceId: *a80
-        streamVersion: *a81
-        flowId: *a79
+        id: *a82
+        tenantId: *a82
+        workspaceId: *a82
+        streamVersion: *a83
+        flowId: *a81
         versions:
           type: array
           items:
@@ -10744,7 +11193,7 @@ components:
     EnterpriseWorkflowSelect:
       type: object
       properties:
-        expectedStreamVersion: *a81
+        expectedStreamVersion: *a83
         reference:
           oneOf:
             - $ref: "#/components/schemas/EnterpriseWorkflowRef"
@@ -10770,10 +11219,10 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: &a82
+        tenantId: &a84
           type: string
           minLength: 1
-        workspaceId: *a82
+        workspaceId: *a84
         objectType:
           type: string
           enum:
@@ -10802,12 +11251,12 @@ components:
             - evidence_ref
             - decision_record
             - memory_entry
-        objectId: *a82
-        streamVersion: &a84
+        objectId: *a84
+        streamVersion: &a86
           type: integer
           minimum: 1
           maximum: 9007199254740991
-        digest: &a83
+        digest: &a85
           type: string
           pattern: ^[0-9a-f]{64}$
       required:
@@ -10821,9 +11270,9 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a82
-        workspaceId: *a82
-        provider: *a82
+        tenantId: *a84
+        workspaceId: *a84
+        provider: *a84
         objectType:
           type: string
           enum:
@@ -10852,13 +11301,13 @@ components:
             - evidence_ref
             - decision_record
             - memory_entry
-        objectId: *a82
-        sourceVersion: *a82
-        digest: *a83
-        observedAt: &a86
+        objectId: *a84
+        sourceVersion: *a84
+        digest: *a85
+        observedAt: &a88
           type: string
           format: date-time
-        permissionRef: *a82
+        permissionRef: *a84
       required:
         - tenantId
         - workspaceId
@@ -10873,10 +11322,10 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a82
-        workspaceId: *a82
-        id: *a82
-        streamVersion: *a84
+        tenantId: *a84
+        workspaceId: *a84
+        id: *a84
+        streamVersion: *a86
         mode:
           type: string
           enum:
@@ -10916,10 +11365,10 @@ components:
                   - evidence_ref
                   - decision_record
                   - memory_entry
-              provider: *a82
+              provider: *a84
               allowedActions:
                 type: array
-                items: &a87
+                items: &a89
                   type: string
                   enum:
                     - create_followup_task
@@ -10955,19 +11404,19 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a82
-        workspaceId: *a82
-        id: *a82
-        streamVersion: *a84
-        periodStart: &a85
+        tenantId: *a84
+        workspaceId: *a84
+        id: *a84
+        streamVersion: *a86
+        periodStart: &a87
           type: string
           format: date
-        periodEnd: *a85
+        periodEnd: *a87
         metricDefinition:
           $ref: "#/components/schemas/BusinessObjectRef"
         targetValue:
           type: number
-        responsiblePrincipalId: *a82
+        responsiblePrincipalId: *a84
         sourceRefs:
           type: array
           items:
@@ -10988,12 +11437,12 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a82
-        workspaceId: *a82
-        id: *a82
-        streamVersion: *a84
-        responsiblePrincipalId: *a82
-        authorityRevisionId: *a82
+        tenantId: *a84
+        workspaceId: *a84
+        id: *a84
+        streamVersion: *a86
+        responsiblePrincipalId: *a84
+        authorityRevisionId: *a84
         mode:
           type: string
           enum:
@@ -11007,23 +11456,23 @@ components:
             - closed
         sourceScopes:
           type: array
-          items: *a82
+          items: *a84
           minItems: 1
         triggerTypes:
           type: array
-          items: *a82
+          items: *a84
           minItems: 1
         objectRefs:
           type: array
           items:
             $ref: "#/components/schemas/BusinessObjectRef"
           minItems: 0
-        validUntil: *a86
+        validUntil: *a88
         budget:
           $ref: "#/components/schemas/EnterpriseExecutionBudget"
         evaluationBudget:
           $ref: "#/components/schemas/EvaluationBudget"
-        notificationPolicyVersion: *a82
+        notificationPolicyVersion: *a84
       required:
         - tenantId
         - workspaceId
@@ -11044,10 +11493,10 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a82
-        workspaceId: *a82
-        id: *a82
-        streamVersion: *a84
+        tenantId: *a84
+        workspaceId: *a84
+        id: *a84
+        streamVersion: *a86
         source:
           type: string
           enum:
@@ -11057,14 +11506,14 @@ components:
             - business
             - sales
             - timer
-        sourceInstanceId: *a82
-        sourceEventId: *a82
-        sourceEventType: *a82
-        deduplicationKey: *a82
-        senderPrincipalId: *a82
-        sourceOccurredAt: *a86
-        receivedAt: *a86
-        protectedPayloadRef: *a82
+        sourceInstanceId: *a84
+        sourceEventId: *a84
+        sourceEventType: *a84
+        deduplicationKey: *a84
+        senderPrincipalId: *a84
+        sourceOccurredAt: *a88
+        receivedAt: *a88
+        protectedPayloadRef: *a84
         status:
           type: string
           enum:
@@ -11072,7 +11521,7 @@ components:
             - quarantined
             - unevaluated
             - evaluated
-        policyId: *a82
+        policyId: *a84
       required:
         - tenantId
         - workspaceId
@@ -11091,12 +11540,12 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a82
-        workspaceId: *a82
-        id: *a82
-        authorityId: *a82
-        revision: *a84
-        responsiblePrincipalId: *a82
+        tenantId: *a84
+        workspaceId: *a84
+        id: *a84
+        authorityId: *a84
+        revision: *a86
+        responsiblePrincipalId: *a84
         objectRefs:
           type: array
           items:
@@ -11104,25 +11553,25 @@ components:
           minItems: 0
         capabilityIds:
           type: array
-          items: *a82
+          items: *a84
           minItems: 1
         modelBindingIds:
           type: array
-          items: *a82
+          items: *a84
           minItems: 0
         allowedFields:
           type: array
-          items: *a82
+          items: *a84
           minItems: 0
         allowedDestinations:
           type: array
-          items: *a82
+          items: *a84
           minItems: 0
-        policyVersion: *a82
+        policyVersion: *a84
         budget:
           $ref: "#/components/schemas/EnterpriseExecutionBudget"
-        validUntil: *a86
-        commitmentDigest: *a83
+        validUntil: *a88
+        commitmentDigest: *a85
       required:
         - tenantId
         - workspaceId
@@ -11143,13 +11592,13 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a82
-        workspaceId: *a82
-        id: *a82
-        goalId: *a82
-        revision: *a84
-        authorityRevisionId: *a82
-        reason: *a82
+        tenantId: *a84
+        workspaceId: *a84
+        id: *a84
+        goalId: *a84
+        revision: *a86
+        authorityRevisionId: *a84
+        reason: *a84
         nodes:
           type: array
           items:
@@ -11164,9 +11613,9 @@ components:
           $ref: "#/components/schemas/EnterpriseExecutionBudget"
         acceptanceCriteria:
           type: array
-          items: *a82
+          items: *a84
           minItems: 1
-        createdAt: *a86
+        createdAt: *a88
       required:
         - tenantId
         - workspaceId
@@ -11184,15 +11633,15 @@ components:
       type: object
       additionalProperties: false
       properties:
-        id: *a82
+        id: *a84
         dependsOn:
           type: array
-          items: *a82
+          items: *a84
           minItems: 0
           uniqueItems: true
-        capabilityId: *a82
-        capabilityVersion: *a82
-        modelBindingId: *a82
+        capabilityId: *a84
+        capabilityVersion: *a84
+        modelBindingId: *a84
         inputRefs:
           type: array
           items:
@@ -11202,7 +11651,7 @@ components:
           $ref: "#/components/schemas/EnterpriseExecutionBudget"
         acceptanceCriteria:
           type: array
-          items: *a82
+          items: *a84
           minItems: 1
         effect:
           type: string
@@ -11224,32 +11673,32 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a82
-        workspaceId: *a82
-        id: *a82
-        streamVersion: *a84
-        operationKey: *a82
-        goalId: *a82
-        nodeId: *a82
-        attemptId: *a82
-        generation: &a88
+        tenantId: *a84
+        workspaceId: *a84
+        id: *a84
+        streamVersion: *a86
+        operationKey: *a84
+        goalId: *a84
+        nodeId: *a84
+        attemptId: *a84
+        generation: &a90
           type: integer
           minimum: 0
           maximum: 9007199254740991
-        provider: *a82
-        action: *a87
+        provider: *a84
+        action: *a89
         target:
           oneOf:
             - $ref: "#/components/schemas/BusinessObjectRef"
             - $ref: "#/components/schemas/ExternalObjectRef"
-        authorityRevisionId: *a82
-        providerBindingVersion: *a84
-        preparedInputRef: *a82
-        inputDigest: *a83
-        businessApprovalRef: *a82
-        executionApprovalRef: *a82
-        reservationId: *a82
-        expiresAt: *a86
+        authorityRevisionId: *a84
+        providerBindingVersion: *a86
+        preparedInputRef: *a84
+        inputDigest: *a85
+        businessApprovalRef: *a84
+        executionApprovalRef: *a84
+        reservationId: *a84
+        expiresAt: *a88
         status:
           type: string
           enum:
@@ -11283,13 +11732,13 @@ components:
         - type: object
           additionalProperties: false
           properties:
-            tenantId: *a82
-            workspaceId: *a82
-            id: *a82
-            operationKey: *a82
-            actionDigest: *a83
-            provider: *a82
-            receivedAt: *a86
+            tenantId: *a84
+            workspaceId: *a84
+            id: *a84
+            operationKey: *a84
+            actionDigest: *a85
+            provider: *a84
+            receivedAt: *a88
             status:
               const: succeeded
             evidenceRefs:
@@ -11297,7 +11746,7 @@ components:
               items:
                 $ref: "#/components/schemas/EvidenceRef"
               minItems: 1
-            completedAt: *a86
+            completedAt: *a88
           required:
             - tenantId
             - workspaceId
@@ -11312,13 +11761,13 @@ components:
         - type: object
           additionalProperties: false
           properties:
-            tenantId: *a82
-            workspaceId: *a82
-            id: *a82
-            operationKey: *a82
-            actionDigest: *a83
-            provider: *a82
-            receivedAt: *a86
+            tenantId: *a84
+            workspaceId: *a84
+            id: *a84
+            operationKey: *a84
+            actionDigest: *a85
+            provider: *a84
+            receivedAt: *a88
             status:
               type: string
               enum:
@@ -11336,16 +11785,16 @@ components:
         - type: object
           additionalProperties: false
           properties:
-            tenantId: *a82
-            workspaceId: *a82
-            id: *a82
-            operationKey: *a82
-            actionDigest: *a83
-            provider: *a82
-            receivedAt: *a86
+            tenantId: *a84
+            workspaceId: *a84
+            id: *a84
+            operationKey: *a84
+            actionDigest: *a85
+            provider: *a84
+            receivedAt: *a88
             status:
               const: not_executed
-            reasonCode: *a82
+            reasonCode: *a84
           required:
             - tenantId
             - workspaceId
@@ -11360,10 +11809,10 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a82
-        workspaceId: *a82
-        id: *a82
-        streamVersion: *a84
+        tenantId: *a84
+        workspaceId: *a84
+        id: *a84
+        streamVersion: *a86
         kind:
           type: string
           enum:
@@ -11371,18 +11820,18 @@ components:
             - question
             - conflict
             - reconciliation
-        subjectRef: *a82
-        subjectVersion: *a84
+        subjectRef: *a84
+        subjectVersion: *a86
         assignedPrincipalIds:
           type: array
-          items: *a82
+          items: *a84
           minItems: 1
         status:
           type: string
           enum:
             - open
             - resolved
-        createdAt: *a86
+        createdAt: *a88
       required:
         - tenantId
         - workspaceId
@@ -11398,9 +11847,9 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a82
-        workspaceId: *a82
-        id: *a82
+        tenantId: *a84
+        workspaceId: *a84
+        id: *a84
         sourceKind:
           type: string
           enum:
@@ -11408,29 +11857,29 @@ components:
             - business_fact
             - human_decision
             - candidate_experience
-        protectedContentRef: *a82
-        sourceVersion: *a82
-        digest: *a83
-        permissionRef: *a82
+        protectedContentRef: *a84
+        sourceVersion: *a84
+        digest: *a85
+        permissionRef: *a84
         locator:
           oneOf:
             - type: object
               additionalProperties: false
               properties:
-                page: *a84
+                page: *a86
               required:
                 - page
             - type: object
               additionalProperties: false
               properties:
-                paragraph: *a82
+                paragraph: *a84
               required:
                 - paragraph
             - type: object
               additionalProperties: false
               properties:
-                sheet: *a82
-                cell: *a82
+                sheet: *a84
+                cell: *a84
               required:
                 - sheet
                 - cell
@@ -11448,11 +11897,11 @@ components:
       type: object
       additionalProperties: false
       properties:
-        maxTokens: *a88
-        maxCostMinor: *a88
+        maxTokens: *a90
+        maxCostMinor: *a90
         currency:
           const: CNY
-        deadline: *a86
+        deadline: *a88
       required:
         - maxTokens
         - maxCostMinor
@@ -11462,9 +11911,9 @@ components:
       type: object
       additionalProperties: false
       properties:
-        dailyCostMinor: *a88
-        perAttemptCostMinor: *a88
-        maxTokensPerAttempt: *a88
+        dailyCostMinor: *a90
+        perAttemptCostMinor: *a90
+        maxTokensPerAttempt: *a90
       required:
         - dailyCostMinor
         - perAttemptCostMinor
@@ -11473,13 +11922,13 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a82
-        workspaceId: *a82
-        id: *a82
-        streamVersion: *a84
-        principalId: *a82
-        issuer: *a82
-        subject: *a82
+        tenantId: *a84
+        workspaceId: *a84
+        id: *a84
+        streamVersion: *a86
+        principalId: *a84
+        issuer: *a84
+        subject: *a84
         status:
           type: string
           enum:
@@ -11489,7 +11938,7 @@ components:
             - removed
         departmentIds:
           type: array
-          items: *a82
+          items: *a84
           minItems: 0
       required:
         - tenantId
@@ -11505,11 +11954,11 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a82
-        workspaceId: *a82
-        id: *a82
-        streamVersion: *a84
-        principalId: *a82
+        tenantId: *a84
+        workspaceId: *a84
+        id: *a84
+        streamVersion: *a86
+        principalId: *a84
         objectRef:
           $ref: "#/components/schemas/BusinessObjectRef"
         actions:
@@ -11526,13 +11975,13 @@ components:
           minItems: 1
         readableFields:
           type: array
-          items: *a82
+          items: *a84
           minItems: 0
         writableFields:
           type: array
-          items: *a82
+          items: *a84
           minItems: 0
-        validUntil: *a86
+        validUntil: *a88
       required:
         - tenantId
         - workspaceId
@@ -11548,21 +11997,21 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a82
-        workspaceId: *a82
-        id: *a82
-        streamVersion: *a84
+        tenantId: *a84
+        workspaceId: *a84
+        id: *a84
+        streamVersion: *a86
         subjectRef:
           $ref: "#/components/schemas/BusinessObjectRef"
-        actionDigest: *a83
-        preparedByPrincipalId: *a82
-        approvedByPrincipalId: *a82
+        actionDigest: *a85
+        preparedByPrincipalId: *a84
+        approvedByPrincipalId: *a84
         decision:
           type: string
           enum:
             - approve
             - reject
-        decidedAt: *a86
+        decidedAt: *a88
       required:
         - tenantId
         - workspaceId
@@ -11578,20 +12027,20 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a82
-        workspaceId: *a82
-        id: *a82
-        streamVersion: *a84
-        authorityRevisionId: *a82
-        actionIntentId: *a82
-        actionDigest: *a83
-        approvedByPrincipalId: *a82
+        tenantId: *a84
+        workspaceId: *a84
+        id: *a84
+        streamVersion: *a86
+        authorityRevisionId: *a84
+        actionIntentId: *a84
+        actionDigest: *a85
+        approvedByPrincipalId: *a84
         decision:
           type: string
           enum:
             - approve_once
             - deny
-        validUntil: *a86
+        validUntil: *a88
       required:
         - tenantId
         - workspaceId
@@ -11607,11 +12056,11 @@ components:
       type: object
       additionalProperties: false
       properties:
-        tenantId: *a82
-        workspaceId: *a82
-        id: *a82
-        streamVersion: *a84
-        responsiblePrincipalId: *a82
+        tenantId: *a84
+        workspaceId: *a84
+        id: *a84
+        streamVersion: *a86
+        responsiblePrincipalId: *a84
         status:
           type: string
           enum:
@@ -11627,15 +12076,15 @@ components:
             - cancelled
         objectiveRef:
           $ref: "#/components/schemas/BusinessObjectRef"
-        activePlanRevisionId: *a82
-        authorityRevisionId: *a82
+        activePlanRevisionId: *a84
+        authorityRevisionId: *a84
         requiredArtifactIds:
           type: array
-          items: *a82
+          items: *a84
           minItems: 0
         acceptanceCriteria:
           type: array
-          items: *a82
+          items: *a84
           minItems: 1
         budget:
           $ref: "#/components/schemas/EnterpriseExecutionBudget"

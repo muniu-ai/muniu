@@ -167,3 +167,7 @@ E3.1 的动作、预算与 Worker 检查入口为 `npm run verify:enterprise-act
 动态计划与监督由 E4.2 维护，执行 `npm run verify:agent-coordination` 和 `npm run verify:agent-coordination-postgres`。后者包含 E3/E4.1 故障断言，按[资源约束](verification/enterprise-e4-2-2026-11-05.md)串行运行。
 
 知识、成果与流程由 E4.3 维护，执行 `npm run verify:enterprise-knowledge`。离线评测使用 `npm run verify:operating-evaluation -- --evidence <记录文件>`；`--self-test` 仅验计分逻辑，不能计为真实模型质量通过。记录与限制见[知识、成果与流程](enterprise-knowledge-workflows.md)。
+
+E6.1 的公共登录白名单、对象能力、完整命令预检、静态目录配置与合成浏览器夹具见[企业经营工作台](enterprise-web.md)。对象能力只表示权限上限，具体业务批准仍须核对职责分离。共享 UI 与 Web 使用 `@mn/contracts/enterprise-client` 的浏览器安全入口，不复制角色或金额规则。
+
+Web 定向检查为 `npm run typecheck:web`、`npm run build:web`、`npm run test:web-unit` 和 `npm run verify:web-ui`。最后一项运行真实 Host、合成 OIDC 与浏览器全套场景，内部保持串行；测试所需 Chromium 版本由锁定的 Playwright 配套清单决定。工程检查与合成身份不能替代真实企业登录及试点验收。

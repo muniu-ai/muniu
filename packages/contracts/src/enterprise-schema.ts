@@ -6,6 +6,7 @@ import { ENTERPRISE_GOAL_SCHEMAS } from './enterprise-goals-schema.js';
 import { ENTERPRISE_OPERATING_SCHEMAS } from './enterprise-operating-schema.js';
 import type { JsonObject } from './json.js';
 import { ENTERPRISE_BUSINESS_SCHEMAS } from './enterprise-business-schema.js';
+import { ENTERPRISE_BUSINESS_CAPABILITY_SCHEMAS } from './enterprise-business-capabilities-schema.js';
 import { ENTERPRISE_OBJECT_TYPES } from './enterprise-object-types.js';
 export { ENTERPRISE_OBJECT_TYPES } from './enterprise-object-types.js';
 import { ENTERPRISE_EXECUTION_SCHEMAS } from './enterprise-execution-schema.js';
@@ -36,6 +37,7 @@ const receiptBase = { ...scope, id: text, operationKey: text, actionDigest: dige
 export const ENTERPRISE_SCHEMAS: Readonly<Record<string, JsonObject>> = {
   ...ENTERPRISE_IDENTITY_SCHEMAS,
   ...ENTERPRISE_BUSINESS_SCHEMAS,
+  ...ENTERPRISE_BUSINESS_CAPABILITY_SCHEMAS,
   ...ENTERPRISE_ACCESS_SCHEMAS,
   ...ENTERPRISE_EXECUTION_SCHEMAS,
   ...ENTERPRISE_OPERATING_SCHEMAS,

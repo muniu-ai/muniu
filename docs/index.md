@@ -8,6 +8,7 @@
 
 | 读者与目标 | 阅读路径 | 完成后得到什么 |
 | --- | --- | --- |
+| 开发验收：企业浏览器工作台 | [企业经营工作台](./enterprise-web.md) | 隔离的合成登录、业务与权限页面，以及实际浏览器验证入口 |
 | 使用者：第一次启动 | [快速开始](./quickstart.md) → [OPC 经营管理](./guides/business.md) 或 [Coding](./guides/coding.md) | 可连接的本机 Host、工作区与第一个任务 |
 | 脚本使用者：操作已有服务 | [CLI 使用](./guides/cli.md) → [CLI 参考](./reference/cli.md) 或 [API 路由](./reference/api-routes.md) | 明确的参数、返回格式与并发规则 |
 | 使用者：按目标执行并接收成果 | [目标与验收](./guides/goals.md) | 单 Agent 或显式固定团队计划、进度和逐项验收 |

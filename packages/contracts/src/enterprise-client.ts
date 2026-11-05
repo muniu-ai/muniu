@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 import { ENTERPRISE_HTTP_OPERATIONS } from './enterprise-api-schema.js';
 import { parseEnterpriseContract } from './enterprise-contracts.js';
+export { ENTERPRISE_HTTP_OPERATIONS } from './enterprise-api-schema.js';
+export { ENTERPRISE_SCHEMAS } from './enterprise-schema.js';
+export { parseEnterpriseContract } from './enterprise-contracts.js';
 import type { EnterpriseApiInputs, EnterpriseApiOutputs } from './enterprise-api-types.js';
 export type { EnterpriseApiInputs, EnterpriseApiOutputs } from './enterprise-api-types.js';
 export type EnterpriseOperationId = keyof EnterpriseApiInputs;

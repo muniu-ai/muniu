@@ -1,0 +1,1760 @@
+{
+  "package": "E6.1",
+  "scope": "local_real_host_synthetic_browser_acceptance",
+  "claims": [
+    "六个固定主入口和显式未开放能力",
+    "同源Cookie与真实OIDC Code+PKCE登录",
+    "业务操作由Host权限与原版本决定",
+    "只显示实际获准字段和真实业务事实",
+    "可用业务控制有操作结果与失败状态",
+    "桌面与移动布局可读且主操作可达"
+  ],
+  "scenarios": [
+    {
+      "id": "login",
+      "claim": "明确企业目录、真实OIDC登录、退出与会话失效",
+      "state": "sales/admin/reader",
+      "functionalStatus": "partial",
+      "visualStatus": "not_run",
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-Ell7Zb/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-GcdfrK/report.json"
+      ],
+      "remaining": "逐项完成业务控件、异常路径和最终构建后的视觉复验。"
+    },
+    {
+      "id": "initialization",
+      "claim": "无经营主体时由管理员建立；非管理员拒绝；模式固定",
+      "state": "uninitialized",
+      "functionalStatus": "partial",
+      "visualStatus": "not_run",
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-sKvHYf/report.json"
+      ],
+      "remaining": "逐项完成业务控件、异常路径和最终构建后的视觉复验。"
+    },
+    {
+      "id": "navigation",
+      "claim": "六主导航、管理区、总览入口与分类、前进后退",
+      "state": "desktop/mobile",
+      "functionalStatus": "partial",
+      "visualStatus": "not_run",
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-Ell7Zb/report.json"
+      ],
+      "remaining": "逐项完成业务控件、异常路径和最终构建后的视觉复验。"
+    },
+    {
+      "id": "customer",
+      "claim": "客户创建与改名、过期版本、未知结果保留原请求",
+      "state": "sales",
+      "functionalStatus": "partial",
+      "visualStatus": "not_run",
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-Ell7Zb/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-yioox1/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-GcdfrK/report.json"
+      ],
+      "remaining": "逐项完成业务控件、异常路径和最终构建后的视觉复验。"
+    },
+    {
+      "id": "contact",
+      "claim": "缺少值与隐藏值区分，编辑不清除无权字段",
+      "state": "sales/reader",
+      "functionalStatus": "not_run",
+      "visualStatus": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "quote",
+      "claim": "真实明细选择、金额、制单人不能自批、经理批准",
+      "state": "sales/manager",
+      "functionalStatus": "partial",
+      "visualStatus": "not_run",
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-HJ8ebl/report.json"
+      ],
+      "remaining": "逐项完成业务控件、异常路径和最终构建后的视觉复验。"
+    },
+    {
+      "id": "delivery",
+      "claim": "项目/里程碑/交付与客户验收事实分离",
+      "state": "manager",
+      "functionalStatus": "not_run",
+      "visualStatus": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "finance",
+      "claim": "部分到账、付款期、费用与调整，金额来自Host",
+      "state": "finance/manager",
+      "functionalStatus": "partial",
+      "visualStatus": "not_run",
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-v08FL3/report.json"
+      ],
+      "remaining": "逐项完成业务控件、异常路径和最终构建后的视觉复验。"
+    },
+    {
+      "id": "knowledge",
+      "claim": "来源绑定、检索/正文/引用/导出、受限资料不可见",
+      "state": "sales/reader",
+      "functionalStatus": "partial",
+      "visualStatus": "not_run",
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-WetkeI/report.json"
+      ],
+      "remaining": "逐项完成业务控件、异常路径和最终构建后的视觉复验。"
+    },
+    {
+      "id": "administration",
+      "claim": "成员邀请接受、权限/流程/连接/用量与审计的实际能力",
+      "state": "admin/invitee",
+      "functionalStatus": "partial",
+      "visualStatus": "not_run",
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-GcdfrK/report.json"
+      ],
+      "remaining": "逐项完成业务控件、异常路径和最终构建后的视觉复验。"
+    },
+    {
+      "id": "forbidden",
+      "claim": "撤权、跨工作区迟到请求及直接不可用页面",
+      "state": "reader/revoked",
+      "functionalStatus": "partial",
+      "visualStatus": "not_run",
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-GcdfrK/report.json"
+      ],
+      "remaining": "逐项完成业务控件、异常路径和最终构建后的视觉复验。"
+    },
+    {
+      "id": "visual",
+      "claim": "桌面1440x1000与移动390x844，密集表单、空态、错误态、焦点及溢出",
+      "state": "all visible regions",
+      "functionalStatus": "partial",
+      "visualStatus": "not_run",
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-Ell7Zb/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-GcdfrK/report.json"
+      ],
+      "remaining": "逐项完成业务控件、异常路径和最终构建后的视觉复验。"
+    }
+  ],
+  "businessActions": [
+    {
+      "command": "customer.create",
+      "objectType": "customer",
+      "label": "新建客户",
+      "status": "partial",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-Ell7Zb/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-GcdfrK/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-1W9eiF/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-LHfaJ4/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-necCwB/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-IWhNRJ/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "customer.rename",
+      "objectType": "customer",
+      "label": "修改客户名称",
+      "status": "partial",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-Ell7Zb/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-GcdfrK/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-1W9eiF/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-LHfaJ4/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-necCwB/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-IWhNRJ/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "contact.create",
+      "objectType": "contact",
+      "label": "添加联系人",
+      "status": "partial",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-1W9eiF/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-LHfaJ4/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-necCwB/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-IWhNRJ/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "contact.update",
+      "objectType": "contact",
+      "label": "修改联系人",
+      "status": "partial",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-1W9eiF/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-LHfaJ4/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-necCwB/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-IWhNRJ/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "opportunity.create",
+      "objectType": "opportunity",
+      "label": "新建商机",
+      "status": "partial",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-1W9eiF/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-LHfaJ4/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-necCwB/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-IWhNRJ/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "opportunity.update",
+      "objectType": "opportunity",
+      "label": "修改商机",
+      "status": "partial",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-1W9eiF/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-LHfaJ4/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-necCwB/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-IWhNRJ/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "service.publish",
+      "objectType": "service_version",
+      "label": "发布服务版本",
+      "status": "partial",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-1W9eiF/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-LHfaJ4/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-necCwB/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-IWhNRJ/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "quote.prepare",
+      "objectType": "quote_version",
+      "label": "准备报价",
+      "status": "partial",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-1W9eiF/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-LHfaJ4/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-necCwB/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-IWhNRJ/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "quote.approve",
+      "objectType": "quote_version",
+      "label": "批准报价",
+      "status": "partial",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-HJ8ebl/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-1W9eiF/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-LHfaJ4/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-necCwB/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-IWhNRJ/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "quote.record_acceptance",
+      "objectType": "quote_version",
+      "label": "登记客户接受",
+      "status": "partial",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-1W9eiF/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-LHfaJ4/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-necCwB/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-IWhNRJ/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "contract.create",
+      "objectType": "contract",
+      "label": "起草合同",
+      "status": "partial",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-1W9eiF/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-LHfaJ4/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-necCwB/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-IWhNRJ/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "contract.activate",
+      "objectType": "contract",
+      "label": "确认合同生效",
+      "status": "partial",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-1W9eiF/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-LHfaJ4/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-necCwB/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-IWhNRJ/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "order.create",
+      "objectType": "order",
+      "label": "起草订单",
+      "status": "partial",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-1W9eiF/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-LHfaJ4/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-necCwB/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-IWhNRJ/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "order.activate",
+      "objectType": "order",
+      "label": "确认订单生效",
+      "status": "partial",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-1W9eiF/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-LHfaJ4/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-necCwB/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-IWhNRJ/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "project.create",
+      "objectType": "project",
+      "label": "建立项目",
+      "status": "partial",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-LHfaJ4/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-IWhNRJ/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "project.costs.confirm",
+      "objectType": "project",
+      "label": "确认成本完整",
+      "status": "not_run",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-73Ld1E/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "milestone.create",
+      "objectType": "milestone",
+      "label": "添加里程碑",
+      "status": "partial",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-LHfaJ4/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-IWhNRJ/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "delivery.report",
+      "objectType": "delivery_version",
+      "label": "登记交付",
+      "status": "partial",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-LHfaJ4/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-IWhNRJ/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "delivery.receive",
+      "objectType": "delivery_version",
+      "label": "内部接收交付",
+      "status": "partial",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-LHfaJ4/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-IWhNRJ/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "acceptance.prepare",
+      "objectType": "customer_acceptance",
+      "label": "准备客户验收",
+      "status": "partial",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-LHfaJ4/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-IWhNRJ/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "acceptance.confirm",
+      "objectType": "customer_acceptance",
+      "label": "确认客户验收",
+      "status": "partial",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-LHfaJ4/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-IWhNRJ/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "payment_schedule.create",
+      "objectType": "payment_schedule",
+      "label": "安排付款期",
+      "status": "not_run",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-73Ld1E/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "payment_schedule.confirm",
+      "objectType": "payment_schedule",
+      "label": "确认付款安排",
+      "status": "not_run",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-73Ld1E/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "receipt.prepare",
+      "objectType": "receipt",
+      "label": "登记收款草稿",
+      "status": "not_run",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-73Ld1E/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "receipt.confirm",
+      "objectType": "receipt",
+      "label": "确认实际到账",
+      "status": "not_run",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-73Ld1E/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "receipt.cancel",
+      "objectType": "receipt",
+      "label": "取消收款草稿",
+      "status": "not_run",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-73Ld1E/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "refund.prepare",
+      "objectType": "refund",
+      "label": "登记退款草稿",
+      "status": "not_run",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-73Ld1E/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "refund.confirm",
+      "objectType": "refund",
+      "label": "确认退款",
+      "status": "not_run",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-73Ld1E/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "refund.cancel",
+      "objectType": "refund",
+      "label": "取消退款草稿",
+      "status": "not_run",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-73Ld1E/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "expense.prepare",
+      "objectType": "expense",
+      "label": "登记费用草稿",
+      "status": "not_run",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-73Ld1E/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "expense.confirm",
+      "objectType": "expense",
+      "label": "确认费用",
+      "status": "not_run",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-73Ld1E/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "expense.cancel",
+      "objectType": "expense",
+      "label": "取消费用草稿",
+      "status": "not_run",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-73Ld1E/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "adjustment.prepare",
+      "objectType": "adjustment",
+      "label": "登记金额调整",
+      "status": "not_run",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-73Ld1E/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "adjustment.confirm",
+      "objectType": "adjustment",
+      "label": "确认金额调整",
+      "status": "not_run",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-73Ld1E/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "adjustment.cancel",
+      "objectType": "adjustment",
+      "label": "取消调整草稿",
+      "status": "not_run",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-73Ld1E/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "metric.publish",
+      "objectType": "metric_definition",
+      "label": "发布经营指标",
+      "status": "partial",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-E5Bd5K/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-Yhu1aJ/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "objective.create",
+      "objectType": "operating_objective",
+      "label": "设定经营目标",
+      "status": "partial",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-E5Bd5K/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-Yhu1aJ/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "business_review.snapshot",
+      "objectType": "business_review",
+      "label": "形成经营复盘",
+      "status": "partial",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-E5Bd5K/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-Yhu1aJ/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "change_request.prepare",
+      "objectType": "change_request",
+      "label": "提出范围变更",
+      "status": "partial",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-fONZVe/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-kmJxY9/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "change_request.price",
+      "objectType": "change_request",
+      "label": "核对变更价格",
+      "status": "partial",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-fONZVe/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-kmJxY9/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "change_request.approve",
+      "objectType": "change_request",
+      "label": "批准范围变更",
+      "status": "partial",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-fONZVe/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-kmJxY9/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "change_request.project_confirm",
+      "objectType": "change_request",
+      "label": "确认项目新范围",
+      "status": "partial",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-fONZVe/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-kmJxY9/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    },
+    {
+      "command": "change_request.cancel",
+      "objectType": "change_request",
+      "label": "取消变更草稿",
+      "status": "partial",
+      "requiredChecks": [
+        "meaningful labeled inputs",
+        "current-actor permission and business precheck",
+        "visible result matches Host facts",
+        "rejection preserves facts"
+      ],
+      "evidence": [
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-fONZVe/report.json",
+        "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-kmJxY9/report.json"
+      ],
+      "normalBrowserFlow": "passed",
+      "remaining": "完整工程门禁及最终视觉检查尚未结束。"
+    }
+  ],
+  "exploratoryScenarios": [
+    "提交前另一主体改变原对象，界面须显示冲突且不覆盖",
+    "已打开记录后撤销权限，后续读取和写入拒绝且页面不保留新返回的受限内容",
+    "最大金额、长名称和密集明细下不截断操作或错误信息"
+  ],
+  "intentionalExclusions": [
+    "E6.2集中Agent待办、执行批准及双模式完整流程",
+    "真实OIDC发行方与真实Sales环境",
+    "生产容量与试点质量"
+  ],
+  "verificationRuns": [
+    {
+      "run": "browser-smoke",
+      "status": "passed",
+      "checks": [
+        "real-oidc-login:sales",
+        "customer-create-and-rename-real-facts",
+        "filter-empty-and-restore",
+        "overview-category-history",
+        "logout-clears-business-view"
+      ],
+      "report": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-Ell7Zb/report.json",
+      "reportSha256": "7b430bb1bca17454eee48cf586cbf84011cf510a4c11ccd3e5b5a6c803bea05f",
+      "cleanup": "passed",
+      "browserVersion": "151.0.7922.34"
+    },
+    {
+      "run": "browser-permissions",
+      "status": "passed",
+      "checks": [
+        "real-oidc-login:reader",
+        "reader-price-and-write-isolation",
+        "real-oidc-login:manager",
+        "different-actor-business-approval"
+      ],
+      "report": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-HJ8ebl/report.json",
+      "reportSha256": "ad44d2b52994fe575eaaa088cd4daad26377a6548290760edbc53881babe3e40",
+      "cleanup": "passed",
+      "browserVersion": "151.0.7922.34"
+    },
+    {
+      "run": "browser-cancellation-fixed",
+      "status": "passed",
+      "checks": [
+        "real-oidc-login:sales",
+        "submission-abort-and-original-ticket-reconciliation"
+      ],
+      "report": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-yioox1/report.json",
+      "reportSha256": "f0c3655c92838b9c40f09f94573ccdde943925953461a24f947c3b0baaea3c43",
+      "cleanup": "passed",
+      "browserVersion": "151.0.7922.34"
+    },
+    {
+      "run": "browser-initialization-fixed",
+      "status": "passed",
+      "checks": [
+        "real-oidc-login:admin",
+        "administrator-workspace-initialization",
+        "administrator-does-not-inherit-business-rights",
+        "unavailable-sales-mode-disabled"
+      ],
+      "report": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-sKvHYf/report.json",
+      "reportSha256": "3ec90384c7d2815cdc2b97eea9d931617f814804c9705bc3a44842e4eae19fb2",
+      "cleanup": "passed",
+      "browserVersion": "151.0.7922.34"
+    },
+    {
+      "run": "browser-knowledge",
+      "status": "passed",
+      "checks": [
+        "real-oidc-login:sales",
+        "knowledge-import-with-real-source",
+        "knowledge-search-and-read",
+        "permission-checked-document-download",
+        "real-oidc-login:reader",
+        "private-document-hidden-from-other-member"
+      ],
+      "report": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-WetkeI/report.json",
+      "reportSha256": "224bf91b6539d239c033116310d4e0e590c4d136a1b56746e2c9b2c769b25c5c",
+      "cleanup": "passed",
+      "browserVersion": "151.0.7922.34"
+    },
+    {
+      "run": "browser-finance-fixed",
+      "status": "passed",
+      "checks": [
+        "real-oidc-login:finance",
+        "partial-receipt-order-balance-from-host",
+        "missing-cost-does-not-display-margin"
+      ],
+      "report": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-v08FL3/report.json",
+      "reportSha256": "35d1b72440d64c51aa2b89642fe124cf325949fc54e603d7054ddd3280ac21d8",
+      "cleanup": "passed",
+      "browserVersion": "151.0.7922.34"
+    },
+    {
+      "run": "browser-department-management",
+      "status": "passed",
+      "checks": [
+        "real-oidc-login:admin",
+        "real-oidc-login:invitee",
+        "invite-and-accept-with-bound-oidc-person",
+        "real-oidc-login:admin",
+        "real-oidc-login:invitee",
+        "department-only-customer-creation-and-draft-reset",
+        "real-oidc-login:admin",
+        "create-department-and-grant-revoke-scoped-role",
+        "real-oidc-login:invitee",
+        "revoked-department-membership-hides-and-blocks-customer",
+        "real-oidc-login:admin",
+        "member-disable-reactivate-remove",
+        "last-active-administrator-cannot-disable-self",
+        "workflow-publish-select-real-state",
+        "missing-model-and-quota-honest-empty-states"
+      ],
+      "report": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-GcdfrK/report.json",
+      "reportSha256": "4f3017e5a64f4fa5c9e0ef50f321c40ca36c41311fa9067c8e9c9b8d702a5f9a",
+      "cleanup": "passed",
+      "browserVersion": "151.0.7922.34"
+    },
+    {
+      "run": "browser-sales-label-green",
+      "status": "passed",
+      "checks": [
+        "real-oidc-login:manager",
+        "business-command:service.publish",
+        "real-oidc-login:sales",
+        "business-command:customer.create",
+        "business-command:customer.rename",
+        "business-command:contact.create",
+        "business-command:contact.update",
+        "business-command:opportunity.create",
+        "business-command:opportunity.update",
+        "business-command:quote.prepare",
+        "real-oidc-login:manager",
+        "business-command:quote.prepare",
+        "business-refusal:SEPARATION_OF_DUTIES_REQUIRED",
+        "business-command:quote.approve",
+        "business-command:quote.record_acceptance",
+        "real-oidc-login:sales",
+        "business-command:contract.create",
+        "real-oidc-login:manager",
+        "business-command:contract.activate",
+        "real-oidc-login:sales",
+        "business-command:order.create",
+        "business-command:order.create",
+        "real-oidc-login:manager",
+        "business-command:order.activate",
+        "business-refusal:CONTRACT_ALLOCATION_EXCEEDED",
+        "sales-contract-quote-money-conservation",
+        "sales-partial-order-and-refused-over-allocation"
+      ],
+      "report": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-1W9eiF/report.json",
+      "reportSha256": "44fabc7f6bd7e73f70de3cdde3582574830f3628ecb8102d1454a50e517a66bd",
+      "cleanup": "passed",
+      "browserVersion": "151.0.7922.34"
+    },
+    {
+      "run": "browser-delivery-receive-fixed",
+      "status": "passed",
+      "checks": [
+        "real-oidc-login:manager",
+        "business-command:service.publish",
+        "real-oidc-login:sales",
+        "business-command:customer.create",
+        "business-command:customer.rename",
+        "business-command:contact.create",
+        "business-command:contact.update",
+        "business-command:opportunity.create",
+        "business-command:opportunity.update",
+        "business-command:quote.prepare",
+        "real-oidc-login:manager",
+        "business-command:quote.prepare",
+        "business-refusal:SEPARATION_OF_DUTIES_REQUIRED",
+        "business-command:quote.approve",
+        "business-command:quote.record_acceptance",
+        "real-oidc-login:sales",
+        "business-command:contract.create",
+        "real-oidc-login:manager",
+        "business-command:contract.activate",
+        "real-oidc-login:sales",
+        "business-command:order.create",
+        "business-command:order.create",
+        "real-oidc-login:manager",
+        "business-command:order.activate",
+        "business-refusal:CONTRACT_ALLOCATION_EXCEEDED",
+        "sales-contract-quote-money-conservation",
+        "sales-partial-order-and-refused-over-allocation",
+        "real-oidc-login:project-maker",
+        "business-command:project.create",
+        "business-command:milestone.create",
+        "business-command:delivery.report",
+        "business-command:delivery.receive",
+        "business-command:acceptance.prepare",
+        "business-refusal:SEPARATION_OF_DUTIES_REQUIRED",
+        "real-oidc-login:manager",
+        "business-command:acceptance.confirm",
+        "real-oidc-login:project-maker",
+        "business-command:delivery.report",
+        "business-refusal:DELIVERY_QUANTITY_EXCEEDED",
+        "business-command:acceptance.prepare",
+        "real-oidc-login:manager",
+        "business-refusal:ACCEPTANCE_QUANTITY_EXCEEDED",
+        "delivery-reported-is-not-received",
+        "delivery-partial-receipt-and-acceptance",
+        "delivery-refused-excess-keeps-quantities"
+      ],
+      "report": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-LHfaJ4/report.json",
+      "reportSha256": "bc43497fd42e8a28d47d15217de55ca771553b6ae0e324699157cc2d323c6e13",
+      "cleanup": "passed",
+      "browserVersion": "151.0.7922.34"
+    },
+    {
+      "run": "browser-metrics-layout",
+      "status": "passed",
+      "checks": [
+        "real-oidc-login:finance",
+        "business-command:metric.publish",
+        "business-command:objective.create",
+        "business-command:business_review.snapshot",
+        "metrics-period-snapshot-from-host",
+        "metrics-cost-fields-not-requested-not-shown",
+        "metrics-invalid-period-preserves-facts"
+      ],
+      "report": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-E5Bd5K/report.json",
+      "reportSha256": "704f0b09817abaa9047a5fda2f8207d7c91dd8133c9efedd25ee1edf56145023",
+      "cleanup": "passed",
+      "browserVersion": "151.0.7922.34"
+    },
+    {
+      "run": "browser-changes-context-fixed",
+      "status": "passed",
+      "checks": [
+        "real-oidc-login:project-maker",
+        "business-command:change_request.prepare",
+        "business-command:change_request.cancel",
+        "business-command:change_request.prepare",
+        "business-command:change_request.price",
+        "real-oidc-login:manager",
+        "business-command:change_request.approve",
+        "real-oidc-login:project-maker",
+        "changes-pending-project-blocks-delivery",
+        "business-command:change_request.project_confirm",
+        "changes-price-does-not-apply-commercial-facts",
+        "changes-contract-order-atomic-money-update",
+        "changes-project-scope-confirmation-is-separate"
+      ],
+      "report": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-fONZVe/report.json",
+      "reportSha256": "f5d21f258e5ffccfb7b34d8051be9a69b29070455d799a517c74e404549aed9c",
+      "cleanup": "passed",
+      "browserVersion": "151.0.7922.34"
+    },
+    {
+      "run": "browser-smoke-final",
+      "status": "passed",
+      "checks": [
+        "real-oidc-login:sales",
+        "customer-create-and-rename-real-facts",
+        "filter-empty-and-restore",
+        "overview-category-history",
+        "logout-clears-business-view"
+      ],
+      "report": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-jR8uDB/report.json",
+      "reportSha256": "84523064dd3b2afb87dcafb044d6e2e7698a854f95ef1ef935c49dec907f4b76",
+      "cleanup": "passed",
+      "browserVersion": "151.0.7922.34"
+    }
+  ],
+  "currentBlockers": [
+    {
+      "package": "E6.1",
+      "issue": "43种业务命令和12个浏览器场景已通过；工程出口及视觉证据补齐仍在进行。"
+    }
+  ],
+  "finalFunctionalRun": {
+    "scenarios": [
+      {
+        "scenario": "smoke",
+        "status": "passed",
+        "checks": [
+          "real-oidc-login:sales",
+          "customer-create-and-rename-real-facts",
+          "filter-empty-and-restore",
+          "overview-category-history",
+          "logout-clears-business-view"
+        ],
+        "report": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-ovmAyB/report.json",
+        "reportSha256": "67cda7522984cb6314dc8d57d70838ac078eff5defcfbced2a22a86fbc8d4d5c",
+        "cleanup": "passed",
+        "screenshots": [
+          {
+            "name": "customer-detail",
+            "file": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-ovmAyB/customer-detail.jpg",
+            "viewport": {
+              "width": 1440,
+              "height": 1000
+            }
+          },
+          {
+            "name": "customer-list-desktop",
+            "file": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-ovmAyB/customer-list-desktop.jpg",
+            "viewport": {
+              "width": 1440,
+              "height": 1000
+            }
+          },
+          {
+            "name": "customer-list-mobile",
+            "file": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-ovmAyB/customer-list-mobile.jpg",
+            "viewport": {
+              "width": 390,
+              "height": 844
+            }
+          }
+        ]
+      },
+      {
+        "scenario": "permissions",
+        "status": "passed",
+        "checks": [
+          "real-oidc-login:reader",
+          "reader-price-and-write-isolation",
+          "real-oidc-login:manager",
+          "different-actor-business-approval"
+        ],
+        "report": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-IKalQ7/report.json",
+        "reportSha256": "07e3eb864003e76b824252cdd61f022a00e3e62b88a64d6d0f9a182000f1eb61",
+        "cleanup": "passed",
+        "screenshots": [
+          {
+            "name": "reader-quote",
+            "file": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-IKalQ7/reader-quote.jpg",
+            "viewport": {
+              "width": 1440,
+              "height": 1000
+            }
+          },
+          {
+            "name": "manager-approved-quote",
+            "file": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-IKalQ7/manager-approved-quote.jpg",
+            "viewport": {
+              "width": 1440,
+              "height": 1000
+            }
+          }
+        ]
+      },
+      {
+        "scenario": "cancellation",
+        "status": "passed",
+        "checks": [
+          "real-oidc-login:sales",
+          "submission-abort-and-original-ticket-reconciliation"
+        ],
+        "report": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-40N5JD/report.json",
+        "reportSha256": "28b8089a0b54b85cc989f59ddf5a86aab8def136f30d17fa7c24bb97ee2484e5",
+        "cleanup": "passed",
+        "screenshots": []
+      },
+      {
+        "scenario": "initialization",
+        "status": "passed",
+        "checks": [
+          "real-oidc-login:admin",
+          "administrator-workspace-initialization",
+          "administrator-does-not-inherit-business-rights",
+          "unavailable-sales-mode-disabled"
+        ],
+        "report": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-4oijwc/report.json",
+        "reportSha256": "97e0776c4fd71d0febc3f04ad2187fb60f9111d2cc6e691280000c0991435f71",
+        "cleanup": "passed",
+        "screenshots": [
+          {
+            "name": "administrator-business-refusal",
+            "file": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-4oijwc/administrator-business-refusal.jpg",
+            "viewport": {
+              "width": 1440,
+              "height": 1000
+            }
+          }
+        ]
+      },
+      {
+        "scenario": "knowledge",
+        "status": "passed",
+        "checks": [
+          "real-oidc-login:sales",
+          "knowledge-import-with-real-source",
+          "knowledge-search-and-read",
+          "permission-checked-document-download",
+          "real-oidc-login:reader",
+          "private-document-hidden-from-other-member"
+        ],
+        "report": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-197G2A/report.json",
+        "reportSha256": "9920a77ef11baedb09dd2efa68e64fbda27d640e0247bcdc091bc7f77fd23d47",
+        "cleanup": "passed",
+        "screenshots": [
+          {
+            "name": "knowledge-read",
+            "file": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-197G2A/knowledge-read.jpg",
+            "viewport": {
+              "width": 1440,
+              "height": 1000
+            }
+          }
+        ]
+      },
+      {
+        "scenario": "finance",
+        "status": "passed",
+        "checks": [
+          "real-oidc-login:finance",
+          "partial-receipt-order-balance-from-host",
+          "missing-cost-does-not-display-margin"
+        ],
+        "report": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-IvvYuU/report.json",
+        "reportSha256": "a6d2a1ec89d5c743b10351ba9f70da80c32c99a11f61a4e5340ec7876196ada9",
+        "cleanup": "passed",
+        "screenshots": [
+          {
+            "name": "partial-receipt-balance",
+            "file": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-IvvYuU/partial-receipt-balance.jpg",
+            "viewport": {
+              "width": 1440,
+              "height": 1000
+            }
+          },
+          {
+            "name": "project-cost-incomplete",
+            "file": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-IvvYuU/project-cost-incomplete.jpg",
+            "viewport": {
+              "width": 1440,
+              "height": 1000
+            }
+          }
+        ]
+      },
+      {
+        "scenario": "management",
+        "status": "passed",
+        "checks": [
+          "real-oidc-login:admin",
+          "real-oidc-login:invitee",
+          "invite-and-accept-with-bound-oidc-person",
+          "real-oidc-login:admin",
+          "real-oidc-login:invitee",
+          "department-only-customer-creation-and-draft-reset",
+          "real-oidc-login:admin",
+          "create-department-and-grant-revoke-scoped-role",
+          "real-oidc-login:invitee",
+          "revoked-department-membership-hides-and-blocks-customer",
+          "real-oidc-login:admin",
+          "member-disable-reactivate-remove",
+          "last-active-administrator-cannot-disable-self",
+          "workflow-publish-select-real-state",
+          "missing-model-and-quota-honest-empty-states"
+        ],
+        "report": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-AHc0lq/report.json",
+        "reportSha256": "84ea21a75694c3038339716fcca18fd02f29a454f914ef1a0f8762a1db7d0619",
+        "cleanup": "passed",
+        "screenshots": [
+          {
+            "name": "organization-granted-department",
+            "file": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-AHc0lq/organization-granted-department.jpg",
+            "viewport": {
+              "width": 1440,
+              "height": 1000
+            }
+          },
+          {
+            "name": "customer-department-selection",
+            "file": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-AHc0lq/customer-department-selection.jpg",
+            "viewport": {
+              "width": 1440,
+              "height": 1000
+            }
+          },
+          {
+            "name": "last-administrator-refusal",
+            "file": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-AHc0lq/last-administrator-refusal.jpg",
+            "viewport": {
+              "width": 1440,
+              "height": 1000
+            }
+          },
+          {
+            "name": "workflow-selected",
+            "file": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-AHc0lq/workflow-selected.jpg",
+            "viewport": {
+              "width": 1440,
+              "height": 1000
+            }
+          }
+        ]
+      },
+      {
+        "scenario": "sales",
+        "status": "passed",
+        "checks": [
+          "real-oidc-login:manager",
+          "business-command:service.publish",
+          "real-oidc-login:sales",
+          "business-command:customer.create",
+          "business-command:customer.rename",
+          "business-command:contact.create",
+          "business-command:contact.update",
+          "business-command:opportunity.create",
+          "business-command:opportunity.update",
+          "business-command:quote.prepare",
+          "real-oidc-login:manager",
+          "business-command:quote.prepare",
+          "business-refusal:SEPARATION_OF_DUTIES_REQUIRED",
+          "business-command:quote.approve",
+          "business-command:quote.record_acceptance",
+          "real-oidc-login:sales",
+          "business-command:contract.create",
+          "real-oidc-login:manager",
+          "business-command:contract.activate",
+          "real-oidc-login:sales",
+          "business-command:order.create",
+          "business-command:order.create",
+          "real-oidc-login:manager",
+          "business-command:order.activate",
+          "business-refusal:CONTRACT_ALLOCATION_EXCEEDED",
+          "sales-contract-quote-money-conservation",
+          "sales-partial-order-and-refused-over-allocation"
+        ],
+        "report": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-necCwB/report.json",
+        "reportSha256": "f2ea96a760c2afdd9db6b2afcbdbec7ecc348fa1bab795136d2c5974990cd97f",
+        "cleanup": "passed",
+        "screenshots": [
+          {
+            "name": "sales-self-approval-refused",
+            "file": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-necCwB/sales-self-approval-refused.jpg",
+            "viewport": {
+              "width": 1440,
+              "height": 1000
+            }
+          },
+          {
+            "name": "sales-customer-accepted-quote",
+            "file": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-necCwB/sales-customer-accepted-quote.jpg",
+            "viewport": {
+              "width": 1440,
+              "height": 1000
+            }
+          },
+          {
+            "name": "sales-contract-allocation-refused",
+            "file": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-necCwB/sales-contract-allocation-refused.jpg",
+            "viewport": {
+              "width": 1440,
+              "height": 1000
+            }
+          }
+        ]
+      },
+      {
+        "scenario": "delivery",
+        "status": "passed",
+        "checks": [
+          "real-oidc-login:manager",
+          "business-command:service.publish",
+          "real-oidc-login:sales",
+          "business-command:customer.create",
+          "business-command:customer.rename",
+          "business-command:contact.create",
+          "business-command:contact.update",
+          "business-command:opportunity.create",
+          "business-command:opportunity.update",
+          "business-command:quote.prepare",
+          "real-oidc-login:manager",
+          "business-command:quote.prepare",
+          "business-refusal:SEPARATION_OF_DUTIES_REQUIRED",
+          "business-command:quote.approve",
+          "business-command:quote.record_acceptance",
+          "real-oidc-login:sales",
+          "business-command:contract.create",
+          "real-oidc-login:manager",
+          "business-command:contract.activate",
+          "real-oidc-login:sales",
+          "business-command:order.create",
+          "business-command:order.create",
+          "real-oidc-login:manager",
+          "business-command:order.activate",
+          "business-refusal:CONTRACT_ALLOCATION_EXCEEDED",
+          "sales-contract-quote-money-conservation",
+          "sales-partial-order-and-refused-over-allocation",
+          "real-oidc-login:project-maker",
+          "business-command:project.create",
+          "business-command:milestone.create",
+          "business-command:delivery.report",
+          "business-command:delivery.receive",
+          "business-command:acceptance.prepare",
+          "business-refusal:SEPARATION_OF_DUTIES_REQUIRED",
+          "real-oidc-login:manager",
+          "business-command:acceptance.confirm",
+          "real-oidc-login:project-maker",
+          "business-command:delivery.report",
+          "business-refusal:DELIVERY_QUANTITY_EXCEEDED",
+          "business-command:acceptance.prepare",
+          "real-oidc-login:manager",
+          "business-refusal:ACCEPTANCE_QUANTITY_EXCEEDED",
+          "delivery-reported-is-not-received",
+          "delivery-partial-receipt-and-acceptance",
+          "delivery-refused-excess-keeps-quantities"
+        ],
+        "report": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-IWhNRJ/report.json",
+        "reportSha256": "9a67d1a35eb72c9dc24571afa4abbae580eed24042712bf09a5bb93d80828694",
+        "cleanup": "passed",
+        "screenshots": [
+          {
+            "name": "sales-self-approval-refused",
+            "file": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-IWhNRJ/sales-self-approval-refused.jpg",
+            "viewport": {
+              "width": 1440,
+              "height": 1000
+            }
+          },
+          {
+            "name": "sales-customer-accepted-quote",
+            "file": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-IWhNRJ/sales-customer-accepted-quote.jpg",
+            "viewport": {
+              "width": 1440,
+              "height": 1000
+            }
+          },
+          {
+            "name": "sales-contract-allocation-refused",
+            "file": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-IWhNRJ/sales-contract-allocation-refused.jpg",
+            "viewport": {
+              "width": 1440,
+              "height": 1000
+            }
+          },
+          {
+            "name": "delivery-self-acceptance-refused",
+            "file": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-IWhNRJ/delivery-self-acceptance-refused.jpg",
+            "viewport": {
+              "width": 1440,
+              "height": 1000
+            }
+          },
+          {
+            "name": "delivery-partial-progress",
+            "file": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-IWhNRJ/delivery-partial-progress.jpg",
+            "viewport": {
+              "width": 1440,
+              "height": 1000
+            }
+          }
+        ]
+      },
+      {
+        "scenario": "metrics",
+        "status": "passed",
+        "checks": [
+          "real-oidc-login:finance",
+          "business-command:metric.publish",
+          "business-command:objective.create",
+          "business-command:business_review.snapshot",
+          "metrics-period-snapshot-from-host",
+          "metrics-cost-fields-not-requested-not-shown",
+          "metrics-invalid-period-preserves-facts"
+        ],
+        "report": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-Yhu1aJ/report.json",
+        "reportSha256": "bdca7d6b89ea8c8096b884c8660165acf4e80743be855f959b3b6c7b7e6128e9",
+        "cleanup": "passed",
+        "screenshots": [
+          {
+            "name": "metrics-native-review",
+            "file": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-Yhu1aJ/metrics-native-review.jpg",
+            "viewport": {
+              "width": 1440,
+              "height": 1000
+            }
+          },
+          {
+            "name": "metrics-invalid-period-refused",
+            "file": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-Yhu1aJ/metrics-invalid-period-refused.jpg",
+            "viewport": {
+              "width": 1440,
+              "height": 1000
+            }
+          }
+        ]
+      },
+      {
+        "scenario": "finance-actions",
+        "status": "passed",
+        "checks": [
+          "real-oidc-login:finance",
+          "business-command:adjustment.prepare",
+          "real-oidc-login:manager",
+          "business-command:adjustment.confirm",
+          "real-oidc-login:finance",
+          "business-command:payment_schedule.create",
+          "real-oidc-login:manager",
+          "business-command:payment_schedule.confirm",
+          "real-oidc-login:finance",
+          "business-command:receipt.prepare",
+          "business-refusal:SEPARATION_OF_DUTIES_REQUIRED",
+          "real-oidc-login:manager",
+          "business-command:receipt.confirm",
+          "real-oidc-login:finance",
+          "business-command:adjustment.prepare",
+          "real-oidc-login:manager",
+          "business-command:adjustment.confirm",
+          "real-oidc-login:finance",
+          "business-command:refund.prepare",
+          "real-oidc-login:manager",
+          "business-command:refund.confirm",
+          "real-oidc-login:finance",
+          "business-command:adjustment.prepare",
+          "real-oidc-login:manager",
+          "business-command:adjustment.confirm",
+          "real-oidc-login:finance",
+          "business-command:adjustment.prepare",
+          "real-oidc-login:manager",
+          "business-command:adjustment.confirm",
+          "real-oidc-login:finance",
+          "business-command:receipt.prepare",
+          "business-command:receipt.cancel",
+          "business-command:refund.prepare",
+          "business-command:refund.cancel",
+          "business-command:adjustment.prepare",
+          "business-command:adjustment.cancel",
+          "business-command:expense.prepare",
+          "business-command:expense.prepare",
+          "business-command:expense.cancel",
+          "real-oidc-login:manager",
+          "business-command:expense.confirm",
+          "real-oidc-login:finance",
+          "business-command:project.costs.confirm",
+          "business-command:refund.prepare",
+          "real-oidc-login:manager",
+          "business-refusal:RECEIPT_REDUCTION_EXCEEDED",
+          "finance-all-four-adjustments-from-ui",
+          "finance-money-conservation",
+          "finance-cancelled-drafts-have-no-balance-effect",
+          "finance-cost-completeness-controls-margin",
+          "finance-excess-refund-preserves-facts"
+        ],
+        "report": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-73Ld1E/report.json",
+        "reportSha256": "8c61a0644f8b9d71a96121b781c7a53c906b2926a09667dec2eaae350ef875f0",
+        "cleanup": "passed",
+        "screenshots": [
+          {
+            "name": "finance-complete-project-cost",
+            "file": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-73Ld1E/finance-complete-project-cost.jpg",
+            "viewport": {
+              "width": 1440,
+              "height": 1000
+            }
+          },
+          {
+            "name": "finance-excess-refund-refused",
+            "file": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-73Ld1E/finance-excess-refund-refused.jpg",
+            "viewport": {
+              "width": 1440,
+              "height": 1000
+            }
+          }
+        ]
+      },
+      {
+        "scenario": "changes",
+        "status": "passed",
+        "checks": [
+          "real-oidc-login:project-maker",
+          "business-command:change_request.prepare",
+          "business-command:change_request.cancel",
+          "business-command:change_request.prepare",
+          "business-command:change_request.price",
+          "real-oidc-login:manager",
+          "business-command:change_request.approve",
+          "real-oidc-login:project-maker",
+          "changes-pending-project-blocks-delivery",
+          "business-command:change_request.project_confirm",
+          "changes-price-does-not-apply-commercial-facts",
+          "changes-contract-order-atomic-money-update",
+          "changes-project-scope-confirmation-is-separate"
+        ],
+        "report": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-kmJxY9/report.json",
+        "reportSha256": "3bed7b11dce1c942acaac5c47069d661fa4008a7120d99b6e9499fdac3b3f888",
+        "cleanup": "passed",
+        "screenshots": [
+          {
+            "name": "changes-commercial-approved-awaiting-project",
+            "file": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-kmJxY9/changes-commercial-approved-awaiting-project.jpg",
+            "viewport": {
+              "width": 1440,
+              "height": 1000
+            }
+          },
+          {
+            "name": "changes-project-scope-confirmed",
+            "file": "/var/folders/f6/5l75qx151zndj3_qk8yjt7280000gn/T/mn-e61-ui-evidence-kmJxY9/changes-project-scope-confirmed.jpg",
+            "viewport": {
+              "width": 1440,
+              "height": 1000
+            }
+          }
+        ]
+      }
+    ],
+    "resourceRecord": "/tmp/muniu-e61-final-browser-suite.json"
+  },
+  "exploratoryEvidence": {
+    "report": "/tmp/muniu-e61-final-explore.json",
+    "status": "passed",
+    "checks": [
+      "knowledge-empty-and-restore",
+      "new-customer-escape-no-write",
+      "missing-contact-values-stay-empty",
+      "mobile-attention-to-real-records",
+      "mobile-width-fit",
+      "logout"
+    ],
+    "elapsedSeconds": 68,
+    "cleanup": "completed"
+  }
+}
